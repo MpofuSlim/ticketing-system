@@ -1,3 +1,118 @@
 spring:
   application:
     name: api-gateway
+  cloud:
+    gateway:
+      server:
+        webflux:
+          routes:
+            - id: user-auth-route
+              uri: ${USER_SERVICE_URI:http://localhost:8081}
+              predicates:
+                - Path=/auth/**
+            - id: user-agent-route
+              uri: ${USER_SERVICE_URI:http://localhost:8081}
+              predicates:
+                - Path=/agent/**
+
+            - id: event-service-route
+              uri: ${EVENT_SERVICE_URI:http://localhost:8082}
+              predicates:
+                - Path=/events/**
+
+            - id: seat-service-seat-route
+              uri: ${SEAT_SERVICE_URI:http://localhost:8083}
+              predicates:
+                - Path=/seats/**
+            - id: seat-service-category-route
+              uri: ${SEAT_SERVICE_URI:http://localhost:8083}
+              predicates:
+                - Path=/seat-categories/**
+
+            - id: booking-service-route
+              uri: ${BOOKING_SERVICE_URI:http://localhost:8084}
+              predicates:
+                - Path=/bookings/**
+
+            - id: payment-service-route
+              uri: ${PAYMENT_SERVICE_URI:http://localhost:8085}
+              predicates:
+                - Path=/payments/**
+
+            - id: user-service-proxy-route
+              uri: ${USER_SERVICE_URI:http://localhost:8081}
+              predicates:
+                - Path=/user-service/**
+              filters:
+                - StripPrefix=1
+
+            - id: event-service-proxy-route
+              uri: ${EVENT_SERVICE_URI:http://localhost:8082}
+              predicates:
+                - Path=/event-service/**
+              filters:
+                - StripPrefix=1
+
+            - id: seat-service-proxy-route
+              uri: ${SEAT_SERVICE_URI:http://localhost:8083}
+              predicates:
+                - Path=/seat-service/**
+              filters:
+                - StripPrefix=1
+
+            - id: booking-service-proxy-route
+              uri: ${BOOKING_SERVICE_URI:http://localhost:8084}
+              predicates:
+                - Path=/booking-service/**
+              filters:
+                - StripPrefix=1
+
+            - id: payment-service-proxy-route
+              uri: ${PAYMENT_SERVICE_URI:http://localhost:8085}
+              predicates:
+                - Path=/payment-service/**
+              filters:
+                - StripPrefix=1
+
+          default-filters:
+            - DedupeResponseHeader=Access-Control-Allow-Credentials Access-Control-Allow-Origin Access-Control-Allow-Headers Access-Control-Allow-Methods, RETAIN_FIRST
+
+          globalcors:
+            add-to-simple-url-handler-mapping: true
+            cors-configurations:
+              '[/**]':
+                allowedOriginPatterns: "*"
+                allowedMethods:
+                  - GET
+                  - POST
+                  - PUT
+                  - PATCH
+                  - DELETE
+                  - OPTIONS
+                allowedHeaders: "*"
+                allowCredentials: true
+                maxAge: 3600
+
+eureka:
+  client:
+    enabled: ${EUREKA_ENABLED:false}
+    service-url:
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://localhost:8761/eureka/}
+
+server:
+  port: ${SERVER_PORT:8080}
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui/index.html
+    urls:
+      - name: user-service
+        url: /user-service/v3/api-docs
+      - name: event-service
+        url: /event-service/v3/api-docs
+      - name: seat-service
+        url: /seat-service/v3/api-docs
+      - name: booking-service
+        url: /booking-service/v3/api-docs
+      - name: payment-service
+        url: /payment-service/v3/api-docs

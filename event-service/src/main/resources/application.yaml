@@ -1,3 +1,39 @@
 spring:
   application:
     name: event-service
+
+  datasource:
+    url: ${DB_URL:jdbc:h2:file:./data/event_service_db;AUTO_SERVER=TRUE}
+    driver-class-name: ${DB_DRIVER:org.h2.Driver}
+    username: ${DB_USERNAME:sa}
+    password: ${DB_PASSWORD:}
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.H2Dialect}
+
+jwt:
+  secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
+  expiration: ${JWT_EXPIRATION_MS:86400000}
+
+eureka:
+  client:
+    enabled: ${EUREKA_ENABLED:false}
+    service-url:
+      defaultZone: ${EUREKA_DEFAULT_ZONE:http://localhost:8761/eureka/}
+
+server:
+  port: 8082
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui/index.html
+  api-docs:
+    path: /v3/api-docs
+
+seat-service:
+  base-url: ${SEAT_SERVICE_BASE_URL:http://localhost:8083}
