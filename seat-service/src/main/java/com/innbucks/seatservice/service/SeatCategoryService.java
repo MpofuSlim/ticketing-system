@@ -4,6 +4,7 @@ import com.innbucks.seatservice.dto.*;
 import com.innbucks.seatservice.entity.*;
 import com.innbucks.seatservice.repository.*;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,6 +20,7 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class SeatCategoryService {
 
     private final SeatCategoryRepository categoryRepository;
@@ -27,9 +29,13 @@ public class SeatCategoryService {
     // Agent creates a category for an event and auto-generates all seats
     @Transactional
     public CreateCategoryResponseDTO createCategory(CreateCategoryRequestDTO request) {
+        log.info("Creating seat category eventId={} name={} sections={}",
+                request.getEventId(), request.getName(), request.getSections().size());
 
         if (categoryRepository.existsByEventIdAndNameAndDeletedFalse(
                 request.getEventId(), request.getName())) {
+            log.warn("Category creation rejected, duplicate name eventId={} name={}",
+                    request.getEventId(), request.getName());
             throw new RuntimeException("Category '" + request.getName()
                     + "' already exists for this event");
         }
@@ -43,6 +49,8 @@ public class SeatCategoryService {
         for (SectionSeatConfigDTO sectionConfig : request.getSections()) {
             String normalized = sectionConfig.getSection().trim().toUpperCase(Locale.ROOT);
             if (!seenSections.add(normalized)) {
+                log.warn("Category creation rejected, duplicate section eventId={} name={} section={}",
+                        request.getEventId(), request.getName(), normalized);
                 throw new RuntimeException("Duplicate section '" + normalized + "' in request");
             }
         }
@@ -74,11 +82,14 @@ public class SeatCategoryService {
         }
         seatRepository.saveAll(seats);
 
+        log.info("Seat category created categoryId={} eventId={} name={} totalSeats={}",
+                category.getId(), request.getEventId(), request.getName(), totalSeats);
         return toCreateResponseDTO(category, request.getSections());
     }
 
     // Get all categories for an event
     public List<CreateCategoryResponseDTO> getCategoriesByEvent(UUID eventId) {
+        log.debug("Fetching seat categories eventId={}", eventId);
         List<SeatCategory> categories = categoryRepository.findByEventIdAndDeletedFalse(eventId);
         List<UUID> categoryIds = categories.stream()
                 .map(SeatCategory::getId)
@@ -118,10 +129,15 @@ public class SeatCategoryService {
     // Soft delete a category
     @Transactional
     public void deleteCategory(UUID categoryId) {
+        log.info("Soft-deleting seat category categoryId={}", categoryId);
         SeatCategory category = categoryRepository.findById(categoryId)
-                .orElseThrow(() -> new RuntimeException("Category not found"));
+                .orElseThrow(() -> {
+                    log.warn("Category delete failed, not found categoryId={}", categoryId);
+                    return new RuntimeException("Category not found");
+                });
         category.setDeleted(true);
         categoryRepository.save(category);
+        log.info("Seat category soft-deleted categoryId={} eventId={}", categoryId, category.getEventId());
     }
 
     private CategoryResponseDTO toDTO(SeatCategory c) {

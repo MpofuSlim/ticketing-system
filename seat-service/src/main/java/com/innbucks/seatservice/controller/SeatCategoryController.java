@@ -11,6 +11,7 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -29,6 +30,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/seat-categories")
 @RequiredArgsConstructor
+@Slf4j
 @Tag(name = "Seat Categories", description = "Manage seat categories for events.")
 public class SeatCategoryController {
 
@@ -44,6 +46,7 @@ public class SeatCategoryController {
             @Parameter(description = "Event UUID")
             @RequestParam UUID eventId
     ) {
+        log.debug("GET /seat-categories eventId={}", eventId);
         return ResponseEntity.ok(categoryService.getCategoriesByEvent(eventId));
     }
 
@@ -59,6 +62,7 @@ public class SeatCategoryController {
     public ResponseEntity<CreateCategoryResponseDTO> createCategory(
             @Valid @RequestBody CreateCategoryRequestDTO request
     ) {
+        log.info("POST /seat-categories eventId={} name={}", request.getEventId(), request.getName());
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(categoryService.createCategory(request));
     }
@@ -73,6 +77,7 @@ public class SeatCategoryController {
             @ApiResponse(responseCode = "400", description = "Category not found")
     })
     public ResponseEntity<Void> deleteCategory(@PathVariable UUID id) {
+        log.info("DELETE /seat-categories/{}", id);
         categoryService.deleteCategory(id);
         return ResponseEntity.noContent().build();
     }

@@ -7,6 +7,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
@@ -15,6 +16,7 @@ import org.springframework.web.bind.annotation.*;
 @CrossOrigin
 @RequestMapping("/agent")
 @RequiredArgsConstructor
+@Slf4j
 @Tag(name = "Agent", description = "Agent-specific profile endpoints.")
 public class AgentController {
 
@@ -28,8 +30,8 @@ public class AgentController {
             @ApiResponse(responseCode = "403", description = "Authenticated user is not an AGENT")
     })
     public ResponseEntity<AgentProfileDTO> getProfile(Authentication authentication) {
-
         String email = authentication.getName();
+        log.debug("GET /agent/profile email={}", email);
         return ResponseEntity.ok(agentService.getProfile(email));
     }
 }

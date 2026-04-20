@@ -45,6 +45,13 @@ public class AuthController {
             @ApiResponse(responseCode = "400", description = "Invalid credentials")
     })
     public ResponseEntity<AuthResponseDTO> login(@Valid @RequestBody LoginRequestDTO request) {
-        return ResponseEntity.ok(authService.login(request));
+        log.info("Received login request email={}", request.getEmail());
+        AuthResponseDTO response = authService.login(request);
+        if (response.isMfaRequired()) {
+            log.info("Login halted for MFA email={}", request.getEmail());
+        } else {
+            log.info("Login successful email={} role={}", response.getEmail(), response.getRole());
+        }
+        return ResponseEntity.ok(response);
     }
 }

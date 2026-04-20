@@ -7,6 +7,7 @@ import com.innbucks.seatservice.entity.SeatCategory;
 import com.innbucks.seatservice.repository.SeatCategoryRepository;
 import com.innbucks.seatservice.repository.SeatRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -16,6 +17,7 @@ import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class SeatService {
 
     private final SeatRepository seatRepository;
@@ -26,6 +28,7 @@ public class SeatService {
     private static final String LOCK_KEY_PREFIX = "seat:lock:";
 
     public List<SeatResponseDTO> getSeatsByCategory(UUID categoryId) {
+        log.debug("Fetching seats categoryId={}", categoryId);
         return seatRepository.findByCategoryId(categoryId)
                 .stream()
                 .map(this::toDTO)
@@ -33,6 +36,7 @@ public class SeatService {
     }
 
     public List<SeatResponseDTO> getAvailableSeats(UUID categoryId) {
+        log.debug("Fetching available seats categoryId={}", categoryId);
         return seatRepository
                 .findByCategoryIdAndStatus(categoryId, Seat.SeatStatus.AVAILABLE)
                 .stream()
@@ -42,10 +46,16 @@ public class SeatService {
 
     @Transactional
     public SeatLockResponseDTO lockSeat(UUID seatId, String userEmail) {
+        log.info("Locking seat seatId={} userEmail={}", seatId, userEmail);
         Seat seat = seatRepository.findById(seatId)
-                .orElseThrow(() -> new RuntimeException("Seat not found"));
+                .orElseThrow(() -> {
+                    log.warn("Lock failed, seat not found seatId={}", seatId);
+                    return new RuntimeException("Seat not found");
+                });
 
         if (seat.getStatus() != Seat.SeatStatus.AVAILABLE) {
+            log.warn("Lock rejected, seat not available seatId={} section={} number={} status={}",
+                    seatId, seat.getSectionLabel(), seat.getSeatNumber(), seat.getStatus());
             throw new RuntimeException("Seat " + seat.getSectionLabel()
                     + seat.getSeatNumber() + " is not available");
         }
@@ -60,6 +70,10 @@ public class SeatService {
         category.setAvailableSeats(category.getAvailableSeats() - 1);
         categoryRepository.save(category);
 
+        log.info("Seat locked seatId={} section={} number={} userEmail={} ttlSeconds={} categoryAvailable={}",
+                seatId, seat.getSectionLabel(), seat.getSeatNumber(), userEmail,
+                LOCK_TTL_SECONDS, category.getAvailableSeats());
+
         return SeatLockResponseDTO.builder()
                 .seatId(seat.getId())
                 .sectionLabel(seat.getSectionLabel())
@@ -73,13 +87,19 @@ public class SeatService {
 
     @Transactional
     public SeatResponseDTO confirmSeat(UUID seatId, String userEmail) {
+        log.info("Confirming seat seatId={} userEmail={}", seatId, userEmail);
         Seat seat = seatRepository.findById(seatId)
-                .orElseThrow(() -> new RuntimeException("Seat not found"));
+                .orElseThrow(() -> {
+                    log.warn("Confirm failed, seat not found seatId={}", seatId);
+                    return new RuntimeException("Seat not found");
+                });
 
         String lockKey = LOCK_KEY_PREFIX + seatId;
         String lockOwner = seatLockStore.get(lockKey);
 
         if (lockOwner == null || !lockOwner.equals(userEmail)) {
+            log.warn("Confirm rejected, lock expired or owned by another user seatId={} userEmail={} lockOwner={}",
+                    seatId, userEmail, lockOwner);
             throw new RuntimeException("Lock expired or belongs to a different user");
         }
 
@@ -87,18 +107,26 @@ public class SeatService {
         seatRepository.save(seat);
         seatLockStore.delete(lockKey);
 
+        log.info("Seat booked seatId={} section={} number={} userEmail={}",
+                seatId, seat.getSectionLabel(), seat.getSeatNumber(), userEmail);
         return toDTO(seat);
     }
 
     @Transactional
     public void releaseSeat(UUID seatId, String userEmail) {
+        log.info("Releasing seat seatId={} userEmail={}", seatId, userEmail);
         Seat seat = seatRepository.findById(seatId)
-                .orElseThrow(() -> new RuntimeException("Seat not found"));
+                .orElseThrow(() -> {
+                    log.warn("Release failed, seat not found seatId={}", seatId);
+                    return new RuntimeException("Seat not found");
+                });
 
         String lockKey = LOCK_KEY_PREFIX + seatId;
         String lockOwner = seatLockStore.get(lockKey);
 
         if (lockOwner != null && !lockOwner.equals(userEmail)) {
+            log.warn("Release rejected, lock owned by another user seatId={} userEmail={} lockOwner={}",
+                    seatId, userEmail, lockOwner);
             throw new RuntimeException("You cannot release a lock that belongs to another user");
         }
 
@@ -110,6 +138,8 @@ public class SeatService {
         categoryRepository.save(category);
 
         seatLockStore.delete(lockKey);
+        log.info("Seat released seatId={} section={} number={} userEmail={} categoryAvailable={}",
+                seatId, seat.getSectionLabel(), seat.getSeatNumber(), userEmail, category.getAvailableSeats());
     }
 
     private SeatResponseDTO toDTO(Seat seat) {
