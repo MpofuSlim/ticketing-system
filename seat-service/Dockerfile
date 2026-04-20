@@ -19,19 +19,15 @@ COPY payment-service/pom.xml payment-service/
 RUN ./mvnw -B -pl seat-service -am -DskipTests dependency:go-offline || true
 
 COPY seat-service/src seat-service/src
-RUN ./mvnw -B -pl seat-service -am -DskipTests package
-
-RUN java -Djarmode=tools -jar seat-service/target/*.jar extract --layers --destination /workspace/extracted
+RUN ./mvnw -B -pl seat-service -am -DskipTests package \
+    && cp seat-service/target/seat-service-*.jar /workspace/app.jar
 
 FROM eclipse-temurin:21-jre-alpine AS runtime
 RUN addgroup -S app && adduser -S -G app app
 WORKDIR /app
 USER app
 
-COPY --from=builder --chown=app:app /workspace/extracted/dependencies/ ./
-COPY --from=builder --chown=app:app /workspace/extracted/spring-boot-loader/ ./
-COPY --from=builder --chown=app:app /workspace/extracted/snapshot-dependencies/ ./
-COPY --from=builder --chown=app:app /workspace/extracted/application/ ./
+COPY --from=builder --chown=app:app /workspace/app.jar /app/app.jar
 
 EXPOSE 8083
-ENTRYPOINT ["java", "org.springframework.boot.loader.launch.JarLauncher"]
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]
