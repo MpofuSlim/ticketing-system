@@ -1,0 +1,163 @@
+# Local dev orchestration. Builds each service from its Dockerfile, wires them
+# to a single Postgres instance (one database per service), and exposes each
+# port on localhost so you can curl them directly or hit everything through
+# the gateway on http://localhost:8080.
+#
+#     docker compose up --build
+#     docker compose down            # stop
+#     docker compose down -v         # stop + wipe the Postgres volume
+
+name: innbucks
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: innbucks-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: innbucks
+      POSTGRES_PASSWORD: innbucks
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U innbucks"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  user-service:
+    build:
+      context: .
+      dockerfile: user-service/Dockerfile
+    image: ticketing-user-service:dev
+    container_name: innbucks-user-service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/user_service
+      DB_USERNAME: innbucks
+      DB_PASSWORD: innbucks
+      DB_DRIVER: org.postgresql.Driver
+      HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+      JPA_DDL_AUTO: update
+      JWT_SECRET: change-me-change-me-change-me-change-me-change-me
+      JWT_EXPIRATION_MS: 86400000
+      EUREKA_ENABLED: "false"
+    ports:
+      - "8081:8081"
+
+  event-service:
+    build:
+      context: .
+      dockerfile: event-service/Dockerfile
+    image: ticketing-event-service:dev
+    container_name: innbucks-event-service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/event_service
+      DB_USERNAME: innbucks
+      DB_PASSWORD: innbucks
+      DB_DRIVER: org.postgresql.Driver
+      HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+      JWT_SECRET: change-me-change-me-change-me-change-me-change-me
+      SEAT_SERVICE_BASE_URL: http://seat-service:8083
+      EUREKA_ENABLED: "false"
+    ports:
+      - "8082:8082"
+
+  seat-service:
+    build:
+      context: .
+      dockerfile: seat-service/Dockerfile
+    image: ticketing-seat-service:dev
+    container_name: innbucks-seat-service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/seat_service
+      DB_USERNAME: innbucks
+      DB_PASSWORD: innbucks
+      DB_DRIVER: org.postgresql.Driver
+      HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+      JWT_SECRET: change-me-change-me-change-me-change-me-change-me
+      EUREKA_ENABLED: "false"
+    ports:
+      - "8083:8083"
+
+  booking-service:
+    build:
+      context: .
+      dockerfile: booking-service/Dockerfile
+    image: ticketing-booking-service:dev
+    container_name: innbucks-booking-service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/booking_service
+      DB_USERNAME: innbucks
+      DB_PASSWORD: innbucks
+      DB_DRIVER: org.postgresql.Driver
+      HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+      JWT_SECRET: change-me-change-me-change-me-change-me-change-me
+      EUREKA_ENABLED: "false"
+    ports:
+      - "8084:8084"
+
+  payment-service:
+    build:
+      context: .
+      dockerfile: payment-service/Dockerfile
+    image: ticketing-payment-service:dev
+    container_name: innbucks-payment-service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/payment_service
+      SPRING_DATASOURCE_USERNAME: innbucks
+      SPRING_DATASOURCE_PASSWORD: innbucks
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      EUREKA_CLIENT_ENABLED: "false"
+    ports:
+      - "8085:8085"
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: api-gateway/Dockerfile
+    image: ticketing-api-gateway:dev
+    container_name: innbucks-api-gateway
+    restart: unless-stopped
+    depends_on:
+      - user-service
+      - event-service
+      - seat-service
+      - booking-service
+      - payment-service
+    environment:
+      USER_SERVICE_URI: http://user-service:8081
+      EVENT_SERVICE_URI: http://event-service:8082
+      SEAT_SERVICE_URI: http://seat-service:8083
+      BOOKING_SERVICE_URI: http://booking-service:8084
+      PAYMENT_SERVICE_URI: http://payment-service:8085
+      EUREKA_ENABLED: "false"
+    ports:
+      - "8080:8080"
+
+volumes:
+  postgres_data:
