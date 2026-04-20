@@ -15,9 +15,9 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.web.context.WebApplicationContext;
 
 import java.time.LocalDateTime;
-import java.util.UUID;
 
 import static org.hamcrest.Matchers.*;
+import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 import static org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppContextSetup;
@@ -36,14 +36,13 @@ class EventControllerTest {
 
     @BeforeEach
     void setUp() {
-        mockMvc = webAppContextSetup(wac).build();
+        mockMvc = webAppContextSetup(wac).apply(springSecurity()).build();
         eventRepository.deleteAll();
     }
 
     @Test
     void getAllEvents_isPublic_andReturnsLocalDateInDto() throws Exception {
         Event saved = eventRepository.save(Event.builder()
-                .eventId(UUID.randomUUID())
                 .agentId("agent-1")
                 .title("Test Event")
                 .description("desc")

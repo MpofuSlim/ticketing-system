@@ -10,7 +10,6 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -26,7 +25,6 @@ class EventRepositoryTest {
     @Test
     void findAllActive_filtersByDeletedDateRangeAndVenue() {
         Event e1 = eventRepository.save(Event.builder()
-                .eventId(UUID.randomUUID())
                 .agentId("a1")
                 .title("E1")
                 .venue("Harare Gardens")
@@ -38,7 +36,6 @@ class EventRepositoryTest {
                 .build());
 
         eventRepository.save(Event.builder()
-                .eventId(UUID.randomUUID())
                 .agentId("a1")
                 .title("E2")
                 .venue("Bulawayo Hall")
@@ -50,7 +47,6 @@ class EventRepositoryTest {
                 .build());
 
         eventRepository.save(Event.builder()
-                .eventId(UUID.randomUUID())
                 .agentId("a1")
                 .title("Deleted")
                 .venue("Harare Gardens")
