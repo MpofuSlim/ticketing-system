@@ -10,6 +10,7 @@ import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -27,6 +28,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/bookings")
 @RequiredArgsConstructor
+@Slf4j
 @Tag(name = "Bookings", description = "Create, query, confirm, and cancel bookings.")
 public class BookingController {
 
@@ -44,6 +46,8 @@ public class BookingController {
             Authentication authentication
     ) {
         String userEmail = authentication.getName();
+        log.info("POST /bookings userEmail={} eventId={} seats={}",
+                userEmail, request.getEventId(), request.getSeats().size());
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(bookingService.createBooking(userEmail, request));
     }
@@ -55,7 +59,9 @@ public class BookingController {
             @ApiResponse(responseCode = "401", description = "Missing/invalid JWT")
     })
     public ResponseEntity<List<BookingResponseDTO>> getMyBookings(Authentication authentication) {
-        return ResponseEntity.ok(bookingService.getMyBookings(authentication.getName()));
+        String userEmail = authentication.getName();
+        log.debug("GET /bookings/my userEmail={}", userEmail);
+        return ResponseEntity.ok(bookingService.getMyBookings(userEmail));
     }
 
     @GetMapping("/{id}")
@@ -69,7 +75,9 @@ public class BookingController {
             @PathVariable UUID id,
             Authentication authentication
     ) {
-        return ResponseEntity.ok(bookingService.getBookingById(id, authentication.getName()));
+        String userEmail = authentication.getName();
+        log.debug("GET /bookings/{} userEmail={}", id, userEmail);
+        return ResponseEntity.ok(bookingService.getBookingById(id, userEmail));
     }
 
     @GetMapping("/confirmation/{number}")
@@ -80,6 +88,7 @@ public class BookingController {
             @ApiResponse(responseCode = "400", description = "Confirmation number not found")
     })
     public ResponseEntity<BookingResponseDTO> getByConfirmationNumber(@PathVariable String number) {
+        log.debug("GET /bookings/confirmation/{}", number);
         return ResponseEntity.ok(bookingService.getByConfirmationNumber(number));
     }
 
@@ -94,7 +103,9 @@ public class BookingController {
             @PathVariable UUID id,
             Authentication authentication
     ) {
-        return ResponseEntity.ok(bookingService.cancelBooking(id, authentication.getName()));
+        String userEmail = authentication.getName();
+        log.info("PATCH /bookings/{}/cancel userEmail={}", id, userEmail);
+        return ResponseEntity.ok(bookingService.cancelBooking(id, userEmail));
     }
 
     @PatchMapping("/{id}/confirm")
@@ -105,6 +116,7 @@ public class BookingController {
             @ApiResponse(responseCode = "400", description = "Invalid booking state")
     })
     public ResponseEntity<BookingResponseDTO> confirmBooking(@PathVariable UUID id) {
+        log.info("PATCH /bookings/{}/confirm", id);
         return ResponseEntity.ok(bookingService.confirmBooking(id));
     }
 }

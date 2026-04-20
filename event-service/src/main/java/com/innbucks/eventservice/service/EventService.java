@@ -50,8 +50,12 @@ public class EventService {
     }
 
     public EventResponseDTO getEventById(UUID eventId) {
+        log.debug("Fetching event eventId={}", eventId);
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
-                .orElseThrow(() -> new RuntimeException("Event not found"));
+                .orElseThrow(() -> {
+                    log.warn("Event not found eventId={}", eventId);
+                    return new RuntimeException("Event not found");
+                });
         EventResponseDTO response = eventMapper.toDTO(event);
         response.setSeatCategories(fetchSeatCategoriesForEvent(eventId));
         return response;
@@ -72,6 +76,8 @@ public class EventService {
     }
 
     public EventResponseDTO createEvent(String agentId, CreateEventRequestDTO request) {
+        log.info("Creating event agentId={} title={} venue={} dateTime={} capacity={}",
+                agentId, request.getTitle(), request.getVenue(), request.getDateTime(), request.getTotalCapacity());
         Event event = Event.builder()
                 .agentId(agentId)
                 .title(request.getTitle())
@@ -84,14 +90,18 @@ public class EventService {
                 .deleted(false)
                 .build();
 
-        log.info("Event created agentId={} title={} venue={} dateTime={}",
-                agentId, event.getTitle(), event.getVenue(), event.getDateTime());
-        return eventMapper.toDTO(eventRepository.save(event));
+        Event saved = eventRepository.save(event);
+        log.info("Event created eventId={} agentId={}", saved.getEventId(), agentId);
+        return eventMapper.toDTO(saved);
     }
 
     public EventResponseDTO updateEvent(String agentId, String role, UUID eventId, UpdateEventRequestDTO request) {
+        log.info("Updating event eventId={} agentId={} role={}", eventId, agentId, role);
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
-                .orElseThrow(() -> new RuntimeException("Event not found"));
+                .orElseThrow(() -> {
+                    log.warn("Update failed, event not found eventId={} agentId={}", eventId, agentId);
+                    return new RuntimeException("Event not found");
+                });
 
         boolean isAdmin = "ROLE_ADMIN".equals(role);
 
@@ -114,9 +124,10 @@ public class EventService {
             event.setAvailableTickets(event.getAvailableTickets() + diff);
         }
 
+        Event saved = eventRepository.save(event);
         log.info("Event updated eventId={} agentId={} title={} venue={} dateTime={}",
-                eventId, agentId, event.getTitle(), event.getVenue(), event.getDateTime());
-        return eventMapper.toDTO(eventRepository.save(event));
+                eventId, agentId, saved.getTitle(), saved.getVenue(), saved.getDateTime());
+        return eventMapper.toDTO(saved);
     }
 
     public EventResponseDTO updateEvent(String agentId, UUID eventId, UpdateEventRequestDTO request) {
@@ -124,8 +135,12 @@ public class EventService {
     }
 
     public void deleteEvent(String agentId, String role, UUID eventId) {
+        log.info("Deleting event eventId={} agentId={} role={}", eventId, agentId, role);
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
-                .orElseThrow(() -> new RuntimeException("Event not found"));
+                .orElseThrow(() -> {
+                    log.warn("Delete failed, event not found eventId={} agentId={}", eventId, agentId);
+                    return new RuntimeException("Event not found");
+                });
 
         boolean isAdmin = "ROLE_ADMIN".equals(role);
 

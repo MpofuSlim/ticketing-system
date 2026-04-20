@@ -9,6 +9,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -24,6 +25,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/seats")
 @RequiredArgsConstructor
+@Slf4j
 @Tag(name = "Seats", description = "Seat discovery, locking, confirmation, and release operations.")
 public class SeatController {
 
@@ -38,6 +40,7 @@ public class SeatController {
             @Parameter(description = "Seat category UUID")
             @RequestParam UUID categoryId
     ) {
+        log.debug("GET /seats categoryId={}", categoryId);
         return ResponseEntity.ok(seatService.getSeatsByCategory(categoryId));
     }
 
@@ -50,6 +53,7 @@ public class SeatController {
             @Parameter(description = "Seat category UUID")
             @RequestParam UUID categoryId
     ) {
+        log.debug("GET /seats/available categoryId={}", categoryId);
         return ResponseEntity.ok(seatService.getAvailableSeats(categoryId));
     }
 
@@ -65,6 +69,7 @@ public class SeatController {
             Authentication authentication
     ) {
         String userEmail = authentication.getName();
+        log.info("POST /seats/{}/lock userEmail={}", id, userEmail);
         return ResponseEntity.ok(seatService.lockSeat(id, userEmail));
     }
 
@@ -80,6 +85,7 @@ public class SeatController {
             Authentication authentication
     ) {
         String userEmail = authentication.getName();
+        log.info("POST /seats/{}/confirm userEmail={}", id, userEmail);
         return ResponseEntity.ok(seatService.confirmSeat(id, userEmail));
     }
 
@@ -95,6 +101,7 @@ public class SeatController {
             Authentication authentication
     ) {
         String userEmail = authentication.getName();
+        log.info("POST /seats/{}/release userEmail={}", id, userEmail);
         seatService.releaseSeat(id, userEmail);
         return ResponseEntity.noContent().build();
     }
