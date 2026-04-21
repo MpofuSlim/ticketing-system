@@ -64,12 +64,12 @@ public class EventService {
     public Page<EventResponseDTO> getEventsByProvince(
             Province province,
             int page,
-            int size,
-            String sortBy
+            int size
     ) {
-        Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
-        log.debug("Fetching active events by province={} page={} size={} sortBy={}",
-                province, page, size, sortBy);
+        // Always sorted by dateTime ascending so the soonest-starting event
+        // for the province surfaces first.
+        Pageable pageable = PageRequest.of(page, size, Sort.by("dateTime").ascending());
+        log.debug("Fetching active events by province={} page={} size={}", province, page, size);
         return eventRepository
                 .findByProvinceAndDeletedFalse(province, pageable)
                 .map(eventMapper::toDTO);
@@ -90,8 +90,10 @@ public class EventService {
                 .deleted(false)
                 .build();
 
-        Event saved = eventRepository.save(event);
-        log.info("Event created eventId={} agentId={}", saved.getEventId(), agentId);
+        // saveAndFlush so the DB assigns the IDENTITY-generated eventNo
+        // before we build the response DTO — otherwise eventNo is null.
+        Event saved = eventRepository.saveAndFlush(event);
+        log.info("Event created eventId={} eventNo={} agentId={}", saved.getEventId(), saved.getEventNo(), agentId);
         return eventMapper.toDTO(saved);
     }
 

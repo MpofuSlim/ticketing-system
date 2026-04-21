@@ -10,6 +10,7 @@ public class EventMapper {
     public EventResponseDTO toDTO(Event event) {
         return EventResponseDTO.builder()
                 .eventId(event.getEventId())
+                .eventNo(event.getEventNo())
                 .agentId(event.getAgentId())
                 .title(event.getTitle())
                 .description(event.getDescription())
