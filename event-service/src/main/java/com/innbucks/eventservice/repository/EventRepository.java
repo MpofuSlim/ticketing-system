@@ -33,4 +33,10 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     Optional<Event> findByEventIdAndDeletedFalse(UUID eventId);
 
     Page<Event> findByProvinceAndDeletedFalse(Province province, Pageable pageable);
+
+    // Detects an already-created event by the same agent with identical title,
+    // venue, and scheduled dateTime. Used as a duplicate-create guard.
+    boolean existsByAgentIdAndTitleAndVenueAndDateTimeAndDeletedFalse(
+            String agentId, String title, String venue, LocalDateTime dateTime
+    );
 }

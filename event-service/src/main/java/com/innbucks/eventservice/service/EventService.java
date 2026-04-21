@@ -78,6 +78,14 @@ public class EventService {
     public EventResponseDTO createEvent(String agentId, CreateEventRequestDTO request) {
         log.info("Creating event agentId={} title={} venue={} dateTime={} capacity={}",
                 agentId, request.getTitle(), request.getVenue(), request.getDateTime(), request.getTotalCapacity());
+
+        if (eventRepository.existsByAgentIdAndTitleAndVenueAndDateTimeAndDeletedFalse(
+                agentId, request.getTitle(), request.getVenue(), request.getDateTime())) {
+            log.warn("Event create rejected, duplicate agentId={} title={} venue={} dateTime={}",
+                    agentId, request.getTitle(), request.getVenue(), request.getDateTime());
+            throw new RuntimeException("An event with the same title, venue and date already exists");
+        }
+
         Event event = Event.builder()
                 .agentId(agentId)
                 .title(request.getTitle())

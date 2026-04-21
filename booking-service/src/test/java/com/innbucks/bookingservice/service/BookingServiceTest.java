@@ -17,6 +17,7 @@ import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 class BookingServiceTest {
@@ -37,6 +38,25 @@ class BookingServiceTest {
         req.setEventId(UUID.randomUUID());
         req.setSeats(java.util.Arrays.stream(prices).map(this::seatItem).toList());
         return req;
+    }
+
+    @Test
+    void createBooking_rejectsWhenAnyRequestedSeatIsAlreadyInActiveBooking() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        BookingService service = new BookingService(bookingRepo, itemRepo);
+
+        CreateBookingRequestDTO req = request(new BigDecimal("20.00"));
+        UUID clashingSeatId = req.getSeats().get(0).getSeatId();
+        BookingItem existing = BookingItem.builder().seatId(clashingSeatId).build();
+        when(itemRepo.findActiveBySeatIds(any(), eq(Booking.BookingStatus.CANCELLED)))
+                .thenReturn(List.of(existing));
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> service.createBooking("user@example.com", req));
+        assertTrue(ex.getMessage().toLowerCase().contains("already booked"));
+        verify(bookingRepo, never()).save(any());
+        verify(itemRepo, never()).saveAll(any());
     }
 
     @Test
