@@ -15,6 +15,7 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -67,12 +68,26 @@ public class EventService {
             int size
     ) {
         // Always sorted by dateTime ascending so the soonest-starting event
-        // for the province surfaces first.
+        // for the province surfaces first. Only includes events that are
+        // non-deleted, agent-active, AND have not yet started.
         Pageable pageable = PageRequest.of(page, size, Sort.by("dateTime").ascending());
-        log.debug("Fetching active events by province={} page={} size={}", province, page, size);
-        return eventRepository
-                .findByProvinceAndDeletedFalse(province, pageable)
-                .map(eventMapper::toDTO);
+        LocalDateTime now = LocalDateTime.now();
+        log.debug("Fetching active upcoming events by province={} cutoff={} page={} size={}",
+                province, now, page, size);
+
+        Page<Event> entities = eventRepository
+                .findByProvinceAndDeletedFalseAndActiveTrueAndDateTimeGreaterThanEqual(
+                        province, now, pageable);
+
+        // Assign per-page eventNo 1..N in the order the entities appear (date asc).
+        List<EventResponseDTO> dtos = new ArrayList<>(entities.getNumberOfElements());
+        int n = 1;
+        for (Event event : entities.getContent()) {
+            EventResponseDTO dto = eventMapper.toDTO(event);
+            dto.setEventNo(n++);
+            dtos.add(dto);
+        }
+        return new PageImpl<>(dtos, pageable, entities.getTotalElements());
     }
 
     public EventResponseDTO createEvent(String agentId, CreateEventRequestDTO request) {
@@ -90,10 +105,8 @@ public class EventService {
                 .deleted(false)
                 .build();
 
-        // saveAndFlush so the DB assigns the IDENTITY-generated eventNo
-        // before we build the response DTO — otherwise eventNo is null.
-        Event saved = eventRepository.saveAndFlush(event);
-        log.info("Event created eventId={} eventNo={} agentId={}", saved.getEventId(), saved.getEventNo(), agentId);
+        Event saved = eventRepository.save(event);
+        log.info("Event created eventId={} agentId={}", saved.getEventId(), agentId);
         return eventMapper.toDTO(saved);
     }
 
