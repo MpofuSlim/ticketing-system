@@ -34,6 +34,12 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
 
     Page<Event> findByProvinceAndDeletedFalse(Province province, Pageable pageable);
 
+    // Upcoming events in a province: non-deleted, agent-active, and scheduled
+    // at or after the supplied cutoff (usually "now"). Used by /events/by-province.
+    Page<Event> findByProvinceAndDeletedFalseAndActiveTrueAndDateTimeGreaterThanEqual(
+            Province province, LocalDateTime cutoff, Pageable pageable
+    );
+
     // Detects an already-created event by the same agent with identical title,
     // venue, and scheduled dateTime. Used as a duplicate-create guard.
     boolean existsByAgentIdAndTitleAndVenueAndDateTimeAndDeletedFalse(

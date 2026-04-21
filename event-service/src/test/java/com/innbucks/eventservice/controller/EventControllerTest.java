@@ -152,13 +152,14 @@ class EventControllerTest {
                         .param("province", "HRE")
                         .accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.content", hasSize(3)))
-                .andExpect(jsonPath("$.content[0].title", is("First")))
-                .andExpect(jsonPath("$.content[0].eventNo", is(1)))
-                .andExpect(jsonPath("$.content[1].title", is("Second")))
-                .andExpect(jsonPath("$.content[1].eventNo", is(2)))
-                .andExpect(jsonPath("$.content[2].title", is("Third")))
-                .andExpect(jsonPath("$.content[2].eventNo", is(3)));
+                .andExpect(jsonPath("$.code", is("200 OK")))
+                .andExpect(jsonPath("$.data.content", hasSize(3)))
+                .andExpect(jsonPath("$.data.content[0].title", is("First")))
+                .andExpect(jsonPath("$.data.content[0].eventNo", is(1)))
+                .andExpect(jsonPath("$.data.content[1].title", is("Second")))
+                .andExpect(jsonPath("$.data.content[1].eventNo", is(2)))
+                .andExpect(jsonPath("$.data.content[2].title", is("Third")))
+                .andExpect(jsonPath("$.data.content[2].eventNo", is(3)));
     }
 
     private static Event.EventBuilder eventBuilder() {

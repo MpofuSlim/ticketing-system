@@ -132,9 +132,8 @@ public class EventController {
             @Parameter(description = "Page size")
             @RequestParam(defaultValue = "10") int size
     ) {
-        log.debug("GET /events/by-province province={} page={} size={} sortBy={}",
-                province, page, size, sortBy);
-        Page<EventResponseDTO> result = eventService.getEventsByProvince(province, page, size, sortBy);
+        log.debug("GET /events/by-province province={} page={} size={}", province, page, size);
+        Page<EventResponseDTO> result = eventService.getEventsByProvince(province, page, size);
         if (result.isEmpty()) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
                     .body(ApiResult.error(HttpStatus.NOT_FOUND, "Not found"));
