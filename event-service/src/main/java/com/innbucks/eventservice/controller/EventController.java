@@ -110,10 +110,13 @@ public class EventController {
     @SecurityRequirements()
     @Operation(
             summary = "List active events by province",
-            description = "Returns a paginated list of non-deleted events for a specific province."
+            description = """
+                    Returns a paginated list of non-deleted events for a specific province,
+                    ordered by `dateTime` ascending so the soonest-starting event is first.
+                    """
     )
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Paged list of events for the province")
+            @ApiResponse(responseCode = "200", description = "Paged list of events for the province, earliest first")
     })
     public ResponseEntity<Page<EventResponseDTO>> getEventsByProvince(
             @Parameter(description = "Province code, e.g. HRE")
@@ -123,14 +126,10 @@ public class EventController {
             @RequestParam(defaultValue = "0") int page,
 
             @Parameter(description = "Page size")
-            @RequestParam(defaultValue = "10") int size,
-
-            @Parameter(description = "Sort field name (must match an entity property), ascending")
-            @RequestParam(defaultValue = "dateTime") String sortBy
+            @RequestParam(defaultValue = "10") int size
     ) {
-        log.debug("GET /events/by-province province={} page={} size={} sortBy={}",
-                province, page, size, sortBy);
-        return ResponseEntity.ok(eventService.getEventsByProvince(province, page, size, sortBy));
+        log.debug("GET /events/by-province province={} page={} size={}", province, page, size);
+        return ResponseEntity.ok(eventService.getEventsByProvince(province, page, size));
     }
 
     @PostMapping

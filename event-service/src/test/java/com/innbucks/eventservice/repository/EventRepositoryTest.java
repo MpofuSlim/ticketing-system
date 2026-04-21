@@ -67,4 +67,29 @@ class EventRepositoryTest {
         assertEquals(1, page.getTotalElements());
         assertEquals(e1.getEventId(), page.getContent().get(0).getEventId());
     }
+
+    @Test
+    void eventNo_isAutoAssignedAndUniqueAcrossInserts() {
+        // saveAndFlush forces the INSERT to run so Hibernate reads the
+        // IDENTITY-generated eventNo back in the same transaction.
+        Event a = eventRepository.saveAndFlush(Event.builder()
+                .agentId("a1").title("A").venue("V1").province(Province.HRE)
+                .dateTime(LocalDateTime.of(2030, 1, 1, 10, 0))
+                .totalCapacity(10).availableTickets(10).deleted(false).build());
+        Event b = eventRepository.saveAndFlush(Event.builder()
+                .agentId("a1").title("B").venue("V2").province(Province.HRE)
+                .dateTime(LocalDateTime.of(2030, 2, 1, 10, 0))
+                .totalCapacity(10).availableTickets(10).deleted(false).build());
+        Event c = eventRepository.saveAndFlush(Event.builder()
+                .agentId("a1").title("C").venue("V3").province(Province.HRE)
+                .dateTime(LocalDateTime.of(2030, 3, 1, 10, 0))
+                .totalCapacity(10).availableTickets(10).deleted(false).build());
+
+        assertNotNull(a.getEventNo());
+        assertNotNull(b.getEventNo());
+        assertNotNull(c.getEventNo());
+        // Monotonically increasing, no duplicates.
+        assertTrue(a.getEventNo() < b.getEventNo());
+        assertTrue(b.getEventNo() < c.getEventNo());
+    }
 }
