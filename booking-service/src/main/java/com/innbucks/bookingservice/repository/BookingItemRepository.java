@@ -1,8 +1,26 @@
 package com.innbucks.bookingservice.repository;
 
+import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+
+import java.util.Collection;
+import java.util.List;
 import java.util.UUID;
 
 public interface BookingItemRepository extends JpaRepository<BookingItem, UUID> {
+
+    // Returns booking items for any of the given seats whose parent booking
+    // is still active (not CANCELLED). Used as a duplicate-create guard.
+    @Query("""
+        SELECT i FROM BookingItem i
+        WHERE i.seatId IN :seatIds
+          AND i.booking.status <> :cancelledStatus
+    """)
+    List<BookingItem> findActiveBySeatIds(
+            @Param("seatIds") Collection<UUID> seatIds,
+            @Param("cancelledStatus") Booking.BookingStatus cancelledStatus
+    );
 }

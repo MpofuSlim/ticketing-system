@@ -30,6 +30,21 @@ public class BookingService {
         log.info("Creating booking userEmail={} eventId={} seats={}",
                 userEmail, request.getEventId(), request.getSeats().size());
 
+        List<UUID> requestedSeatIds = request.getSeats().stream()
+                .map(CreateBookingRequestDTO.SeatItemRequest::getSeatId)
+                .toList();
+        List<BookingItem> existingActive = bookingItemRepository.findActiveBySeatIds(
+                requestedSeatIds, Booking.BookingStatus.CANCELLED);
+        if (!existingActive.isEmpty()) {
+            List<UUID> clashingSeats = existingActive.stream()
+                    .map(BookingItem::getSeatId)
+                    .distinct()
+                    .toList();
+            log.warn("Booking create rejected, seats already booked userEmail={} seatIds={}",
+                    userEmail, clashingSeats);
+            throw new RuntimeException("One or more seats are already booked: " + clashingSeats);
+        }
+
         BigDecimal total = request.getSeats().stream()
                 .map(CreateBookingRequestDTO.SeatItemRequest::getPriceAtBooking)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);

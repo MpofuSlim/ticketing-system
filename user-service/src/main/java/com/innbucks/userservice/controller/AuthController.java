@@ -3,7 +3,6 @@ package com.innbucks.userservice.controller;
 import com.innbucks.userservice.dto.*;
 import com.innbucks.userservice.service.AuthService;
 import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -27,31 +26,32 @@ public class AuthController {
     @SecurityRequirements()
     @Operation(summary = "Register user", description = "Creates a new user account. Returns profile context without JWT token.")
     @ApiResponses({
-            @ApiResponse(responseCode = "201", description = "User registered"),
-            @ApiResponse(responseCode = "400", description = "Validation failed or email already exists")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "201", description = "User registered"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Validation failed or email already exists")
     })
-    public ResponseEntity<AuthResponseDTO> register(@Valid @RequestBody RegisterRequestDTO request) {
-        log.info("Received registration request for email: {}", request.getEmail());
+    public ResponseEntity<ApiResult<AuthResponseDTO>> register(@Valid @RequestBody RegisterRequestDTO request) {
+        log.info("Received registration request email={}", request.getEmail());
         AuthResponseDTO response = authService.register(request);
-        log.info("Successfully registered user: {}", request.getEmail());
-        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+        log.info("Successfully registered user email={}", request.getEmail());
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResult.created("User registered successfully", response));
     }
 
     @PostMapping("/login")
     @SecurityRequirements()
     @Operation(summary = "Login user", description = "Authenticates a user and returns a JWT token.")
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Login successful"),
-            @ApiResponse(responseCode = "400", description = "Invalid credentials")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Login successful"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid credentials")
     })
-    public ResponseEntity<AuthResponseDTO> login(@Valid @RequestBody LoginRequestDTO request) {
+    public ResponseEntity<ApiResult<AuthResponseDTO>> login(@Valid @RequestBody LoginRequestDTO request) {
         log.info("Received login request email={}", request.getEmail());
         AuthResponseDTO response = authService.login(request);
         if (response.isMfaRequired()) {
             log.info("Login halted for MFA email={}", request.getEmail());
-        } else {
-            log.info("Login successful email={} role={}", response.getEmail(), response.getRole());
+            return ResponseEntity.ok(ApiResult.ok("MFA verification required", response));
         }
-        return ResponseEntity.ok(response);
+        log.info("Login successful email={} role={}", response.getEmail(), response.getRole());
+        return ResponseEntity.ok(ApiResult.ok("Login successful", response));
     }
 }

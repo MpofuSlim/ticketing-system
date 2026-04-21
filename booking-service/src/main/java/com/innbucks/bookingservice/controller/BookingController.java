@@ -1,10 +1,10 @@
 package com.innbucks.bookingservice.controller;
 
+import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.BookingResponseDTO;
 import com.innbucks.bookingservice.dto.CreateBookingRequestDTO;
 import com.innbucks.bookingservice.service.BookingService;
 import io.swagger.v3.oas.annotations.Operation;
-import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -37,86 +37,97 @@ public class BookingController {
     @PostMapping
     @Operation(summary = "Create booking", description = "Creates a new pending booking for the authenticated user.")
     @ApiResponses({
-            @ApiResponse(responseCode = "201", description = "Booking created"),
-            @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @ApiResponse(responseCode = "400", description = "Validation or domain error")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "201", description = "Booking created"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Validation or domain error")
     })
-    public ResponseEntity<BookingResponseDTO> createBooking(
+    public ResponseEntity<ApiResult<BookingResponseDTO>> createBooking(
             @Valid @RequestBody CreateBookingRequestDTO request,
             Authentication authentication
     ) {
         String userEmail = authentication.getName();
         log.info("POST /bookings userEmail={} eventId={} seats={}",
                 userEmail, request.getEventId(), request.getSeats().size());
+        BookingResponseDTO created = bookingService.createBooking(userEmail, request);
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(bookingService.createBooking(userEmail, request));
+                .body(ApiResult.created("Booking created successfully", created));
     }
 
     @GetMapping("/my")
     @Operation(summary = "List my bookings", description = "Returns all bookings for the authenticated user.")
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Bookings returned"),
-            @ApiResponse(responseCode = "401", description = "Missing/invalid JWT")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Bookings returned"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT")
     })
-    public ResponseEntity<List<BookingResponseDTO>> getMyBookings(Authentication authentication) {
+    public ResponseEntity<ApiResult<List<BookingResponseDTO>>> getMyBookings(Authentication authentication) {
         String userEmail = authentication.getName();
         log.debug("GET /bookings/my userEmail={}", userEmail);
-        return ResponseEntity.ok(bookingService.getMyBookings(userEmail));
+        List<BookingResponseDTO> result = bookingService.getMyBookings(userEmail);
+        if (result.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResult.error(HttpStatus.NOT_FOUND, "Not found"));
+        }
+        return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully", result));
     }
 
     @GetMapping("/{id}")
     @Operation(summary = "Get booking by id", description = "Returns a specific booking if it belongs to the authenticated user.")
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Booking returned"),
-            @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @ApiResponse(responseCode = "400", description = "Booking not found or access denied")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Booking returned"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Access denied"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Booking not found")
     })
-    public ResponseEntity<BookingResponseDTO> getBookingById(
+    public ResponseEntity<ApiResult<BookingResponseDTO>> getBookingById(
             @PathVariable UUID id,
             Authentication authentication
     ) {
         String userEmail = authentication.getName();
         log.debug("GET /bookings/{} userEmail={}", id, userEmail);
-        return ResponseEntity.ok(bookingService.getBookingById(id, userEmail));
+        return ResponseEntity.ok(ApiResult.ok("Booking retrieved successfully",
+                bookingService.getBookingById(id, userEmail)));
     }
 
     @GetMapping("/confirmation/{number}")
     @SecurityRequirements()
     @Operation(summary = "Lookup by confirmation number", description = "Public endpoint used to verify a booking by confirmation number.")
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Booking returned"),
-            @ApiResponse(responseCode = "400", description = "Confirmation number not found")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Booking returned"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Confirmation number not found")
     })
-    public ResponseEntity<BookingResponseDTO> getByConfirmationNumber(@PathVariable String number) {
+    public ResponseEntity<ApiResult<BookingResponseDTO>> getByConfirmationNumber(@PathVariable String number) {
         log.debug("GET /bookings/confirmation/{}", number);
-        return ResponseEntity.ok(bookingService.getByConfirmationNumber(number));
+        return ResponseEntity.ok(ApiResult.ok("Booking retrieved successfully",
+                bookingService.getByConfirmationNumber(number)));
     }
 
     @PatchMapping("/{id}/cancel")
     @Operation(summary = "Cancel booking", description = "Cancels a booking before payment confirmation.")
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Booking cancelled"),
-            @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @ApiResponse(responseCode = "400", description = "Cannot cancel in current state")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Booking cancelled"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Cannot cancel in current state")
     })
-    public ResponseEntity<BookingResponseDTO> cancelBooking(
+    public ResponseEntity<ApiResult<BookingResponseDTO>> cancelBooking(
             @PathVariable UUID id,
             Authentication authentication
     ) {
         String userEmail = authentication.getName();
         log.info("PATCH /bookings/{}/cancel userEmail={}", id, userEmail);
-        return ResponseEntity.ok(bookingService.cancelBooking(id, userEmail));
+        return ResponseEntity.ok(ApiResult.ok("Booking cancelled successfully",
+                bookingService.cancelBooking(id, userEmail)));
     }
 
     @PatchMapping("/{id}/confirm")
     @Operation(summary = "Confirm booking", description = "Marks a booking as confirmed (typically called by payment flow).")
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Booking confirmed"),
-            @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @ApiResponse(responseCode = "400", description = "Invalid booking state")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Booking confirmed"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid booking state")
     })
-    public ResponseEntity<BookingResponseDTO> confirmBooking(@PathVariable UUID id) {
+    public ResponseEntity<ApiResult<BookingResponseDTO>> confirmBooking(@PathVariable UUID id) {
         log.info("PATCH /bookings/{}/confirm", id);
-        return ResponseEntity.ok(bookingService.confirmBooking(id));
+        return ResponseEntity.ok(ApiResult.ok("Booking confirmed successfully",
+                bookingService.confirmBooking(id)));
     }
 }

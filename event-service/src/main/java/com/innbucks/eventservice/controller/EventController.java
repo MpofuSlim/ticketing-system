@@ -52,7 +52,7 @@ public class EventController {
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Paged list of events")
     })
-    public ResponseEntity<Page<EventResponseDTO>> getAllEvents(
+    public ResponseEntity<ApiResult<Page<EventResponseDTO>>> getAllEvents(
             @Parameter(description = "Inclusive lower bound date for events (maps to start of day)")
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
@@ -77,9 +77,13 @@ public class EventController {
         LocalDateTime toDateTime = to == null ? null : to.atTime(LocalTime.MAX);
         log.debug("GET /events from={} to={} venue={} page={} size={} sortBy={}",
                 from, to, venue, page, size, sortBy);
-        return ResponseEntity.ok(
-                eventService.getAllActiveEvents(fromDateTime, toDateTime, venue, page, size, sortBy)
-        );
+        Page<EventResponseDTO> result = eventService.getAllActiveEvents(
+                fromDateTime, toDateTime, venue, page, size, sortBy);
+        if (result.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResult.error(HttpStatus.NOT_FOUND, "Not found"));
+        }
+        return ResponseEntity.ok(ApiResult.ok("Events retrieved successfully", result));
     }
 
 
@@ -99,11 +103,11 @@ public class EventController {
             @ApiResponse(responseCode = "400", description = "Event not found",
                     content = @Content(schema = @Schema(example = "{\"error\":\"Event not found\"}")))
     })
-    public ResponseEntity<EventResponseDTO> getEventById(
+    public ResponseEntity<ApiResult<EventResponseDTO>> getEventById(
             @Parameter(description = "Event UUID") @PathVariable UUID id
     ) {
         log.debug("GET /events/{}", id);
-        return ResponseEntity.ok(eventService.getEventById(id));
+        return ResponseEntity.ok(ApiResult.ok("Event retrieved successfully", eventService.getEventById(id)));
     }
 
     @GetMapping("/by-province")
@@ -118,7 +122,7 @@ public class EventController {
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Paged list of events for the province, earliest first")
     })
-    public ResponseEntity<Page<EventResponseDTO>> getEventsByProvince(
+    public ResponseEntity<ApiResult<Page<EventResponseDTO>>> getEventsByProvince(
             @Parameter(description = "Province code, e.g. HRE")
             @RequestParam Province province,
 
@@ -129,7 +133,12 @@ public class EventController {
             @RequestParam(defaultValue = "10") int size
     ) {
         log.debug("GET /events/by-province province={} page={} size={}", province, page, size);
-        return ResponseEntity.ok(eventService.getEventsByProvince(province, page, size));
+        Page<EventResponseDTO> result = eventService.getEventsByProvince(province, page, size);
+        if (result.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResult.error(HttpStatus.NOT_FOUND, "Not found"));
+        }
+        return ResponseEntity.ok(ApiResult.ok("Events retrieved successfully", result));
     }
 
     @PostMapping
@@ -152,14 +161,15 @@ public class EventController {
             @ApiResponse(responseCode = "422", description = "Validation errors",
                     content = @Content(schema = @Schema(example = "{\"title\":\"Title is required\"}")))
     })
-    public ResponseEntity<EventResponseDTO> createEvent(
+    public ResponseEntity<ApiResult<EventResponseDTO>> createEvent(
             @Valid @RequestBody CreateEventRequestDTO request,
             Authentication authentication
     ) {
         String agentId = authentication.getName();
         log.info("Creating event agentId={} title={} venue={}", agentId, request.getTitle(), request.getVenue());
+        EventResponseDTO created = eventService.createEvent(agentId, request);
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(eventService.createEvent(agentId, request));
+                .body(ApiResult.created("Event created successfully", created));
     }
 
     @PutMapping("/{id}")
@@ -185,7 +195,7 @@ public class EventController {
             @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @ApiResponse(responseCode = "403", description = "Authenticated but not AGENT/ADMIN")
     })
-    public ResponseEntity<EventResponseDTO> updateEvent(
+    public ResponseEntity<ApiResult<EventResponseDTO>> updateEvent(
             @Parameter(description = "Event UUID") @PathVariable UUID id,
             @Valid @RequestBody UpdateEventRequestDTO request,
             Authentication authentication
@@ -193,7 +203,8 @@ public class EventController {
         String agentId = authentication.getName();
         String role = getCurrentRole(authentication);
         log.info("Updating event eventId={} agentId={}", id, agentId);
-        return ResponseEntity.ok(eventService.updateEvent(agentId, role, id, request));
+        EventResponseDTO updated = eventService.updateEvent(agentId, role, id, request);
+        return ResponseEntity.ok(ApiResult.ok("Event updated successfully", updated));
     }
 
     @DeleteMapping("/{id}")
@@ -215,7 +226,7 @@ public class EventController {
             @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @ApiResponse(responseCode = "403", description = "Authenticated but not AGENT/ADMIN")
     })
-    public ResponseEntity<Void> deleteEvent(
+    public ResponseEntity<ApiResult<Void>> deleteEvent(
             @Parameter(description = "Event UUID") @PathVariable UUID id,
             Authentication authentication
     ) {
@@ -223,7 +234,7 @@ public class EventController {
         String role = getCurrentRole(authentication);
         log.info("Deleting event eventId={} agentId={}", id, agentId);
         eventService.deleteEvent(agentId, role, id);
-        return ResponseEntity.noContent().build();
+        return ResponseEntity.ok(ApiResult.ok("Event deleted successfully", null));
     }
 
     private String getCurrentRole(Authentication authentication) {

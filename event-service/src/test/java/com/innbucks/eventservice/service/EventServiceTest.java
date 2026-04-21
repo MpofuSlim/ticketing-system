@@ -99,6 +99,8 @@ class EventServiceTest {
         req.setTitle("Concert"); req.setDescription("desc"); req.setVenue("Venue");
         req.setProvince(Province.HRE); req.setDateTime(LocalDateTime.now().plusDays(10));
         req.setTotalCapacity(200);
+        when(repo.existsByAgentIdAndTitleAndVenueAndDateTimeAndDeletedFalse(
+                any(), any(), any(), any())).thenReturn(false);
         when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
 
         service.createEvent("agent-9", req);
@@ -109,6 +111,25 @@ class EventServiceTest {
         assertEquals(200, saved.getValue().getTotalCapacity());
         assertEquals(200, saved.getValue().getAvailableTickets());
         assertFalse(saved.getValue().isDeleted());
+    }
+
+    @Test
+    void createEvent_rejectsDuplicateForSameAgentTitleVenueDate() {
+        EventRepository repo = mock(EventRepository.class);
+        EventService service = new EventService(repo, mock(EventMapper.class), mock(RestTemplate.class));
+
+        LocalDateTime when = LocalDateTime.now().plusDays(10);
+        CreateEventRequestDTO req = new CreateEventRequestDTO();
+        req.setTitle("Concert"); req.setVenue("Harare Gardens");
+        req.setProvince(Province.HRE); req.setDateTime(when); req.setTotalCapacity(100);
+
+        when(repo.existsByAgentIdAndTitleAndVenueAndDateTimeAndDeletedFalse(
+                "agent-1", "Concert", "Harare Gardens", when)).thenReturn(true);
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> service.createEvent("agent-1", req));
+        assertTrue(ex.getMessage().toLowerCase().contains("already exists"));
+        verify(repo, never()).save(any());
     }
 
     @Test

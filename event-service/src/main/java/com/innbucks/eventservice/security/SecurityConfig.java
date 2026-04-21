@@ -62,12 +62,14 @@ public class SecurityConfig {
                         .authenticationEntryPoint((request, response, authException) -> {
                             response.setContentType("application/json");
                             response.setStatus(401);
-                            response.getWriter().write("{\"error\": \"Unauthorized - token missing or invalid\"}");
+                            response.getWriter().write(
+                                    "{\"code\":\"401 UNAUTHORIZED\",\"message\":\"Invalid token\",\"data\":null}");
                         })
                         .accessDeniedHandler((request, response, accessDeniedException) -> {
                             response.setContentType("application/json");
                             response.setStatus(403);
-                            response.getWriter().write("{\"error\": \"Forbidden - you do not have the required role (AGENT or ADMIN)\"}");
+                            response.getWriter().write(
+                                    "{\"code\":\"403 FORBIDDEN\",\"message\":\"Forbidden - you do not have the required role (AGENT or ADMIN)\",\"data\":null}");
                         })
                 )
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);

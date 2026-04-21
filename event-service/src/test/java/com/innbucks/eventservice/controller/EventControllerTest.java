@@ -57,9 +57,10 @@ class EventControllerTest {
         mockMvc.perform(get("/events")
                         .accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.content", hasSize(greaterThanOrEqualTo(1))))
-                .andExpect(jsonPath("$.content[0].eventId", is(saved.getEventId().toString())))
-                .andExpect(jsonPath("$.content[0].dateTime", is("2030-04-18"))); // LocalDate in response
+                .andExpect(jsonPath("$.code", is("200 OK")))
+                .andExpect(jsonPath("$.data.content", hasSize(greaterThanOrEqualTo(1))))
+                .andExpect(jsonPath("$.data.content[0].eventId", is(saved.getEventId().toString())))
+                .andExpect(jsonPath("$.data.content[0].dateTime", is("2030-04-18"))); // LocalDate in response
     }
 
     @Test
@@ -93,9 +94,10 @@ class EventControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(req)))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.agentId", is("agent-99")))
-                .andExpect(jsonPath("$.title", is("Concert")))
-                .andExpect(jsonPath("$.availableTickets", is(50)));
+                .andExpect(jsonPath("$.code", is("201 CREATED")))
+                .andExpect(jsonPath("$.data.agentId", is("agent-99")))
+                .andExpect(jsonPath("$.data.title", is("Concert")))
+                .andExpect(jsonPath("$.data.availableTickets", is(50)));
     }
 
     @Test
@@ -150,13 +152,14 @@ class EventControllerTest {
                         .param("province", "HRE")
                         .accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.content", hasSize(3)))
-                .andExpect(jsonPath("$.content[0].title", is("First")))
-                .andExpect(jsonPath("$.content[0].eventNo", is(1)))
-                .andExpect(jsonPath("$.content[1].title", is("Second")))
-                .andExpect(jsonPath("$.content[1].eventNo", is(2)))
-                .andExpect(jsonPath("$.content[2].title", is("Third")))
-                .andExpect(jsonPath("$.content[2].eventNo", is(3)));
+                .andExpect(jsonPath("$.code", is("200 OK")))
+                .andExpect(jsonPath("$.data.content", hasSize(3)))
+                .andExpect(jsonPath("$.data.content[0].title", is("First")))
+                .andExpect(jsonPath("$.data.content[0].eventNo", is(1)))
+                .andExpect(jsonPath("$.data.content[1].title", is("Second")))
+                .andExpect(jsonPath("$.data.content[1].eventNo", is(2)))
+                .andExpect(jsonPath("$.data.content[2].title", is("Third")))
+                .andExpect(jsonPath("$.data.content[2].eventNo", is(3)));
     }
 
     private static Event.EventBuilder eventBuilder() {

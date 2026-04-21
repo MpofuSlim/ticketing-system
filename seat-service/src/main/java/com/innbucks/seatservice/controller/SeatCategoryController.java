@@ -1,11 +1,11 @@
 package com.innbucks.seatservice.controller;
 
+import com.innbucks.seatservice.dto.ApiResult;
 import com.innbucks.seatservice.dto.CreateCategoryRequestDTO;
 import com.innbucks.seatservice.dto.CreateCategoryResponseDTO;
 import com.innbucks.seatservice.service.SeatCategoryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
-import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -40,45 +40,50 @@ public class SeatCategoryController {
     @SecurityRequirements()
     @Operation(summary = "List categories by event", description = "Returns all active seat categories for a given event.")
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Categories returned")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Categories returned")
     })
-    public ResponseEntity<List<CreateCategoryResponseDTO>> getByEvent(
-            @Parameter(description = "Event UUID")
-            @RequestParam UUID eventId
+    public ResponseEntity<ApiResult<List<CreateCategoryResponseDTO>>> getByEvent(
+            @Parameter(description = "Event UUID") @RequestParam UUID eventId
     ) {
         log.debug("GET /seat-categories eventId={}", eventId);
-        return ResponseEntity.ok(categoryService.getCategoriesByEvent(eventId));
+        List<CreateCategoryResponseDTO> result = categoryService.getCategoriesByEvent(eventId);
+        if (result.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResult.error(HttpStatus.NOT_FOUND, "Not found"));
+        }
+        return ResponseEntity.ok(ApiResult.ok("Categories retrieved successfully", result));
     }
 
     @PostMapping
     @PreAuthorize("hasRole('AGENT')")
     @Operation(summary = "Create category", description = "Creates a seat category for an event. Requires AGENT role.")
     @ApiResponses({
-            @ApiResponse(responseCode = "201", description = "Category created"),
-            @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @ApiResponse(responseCode = "403", description = "Authenticated but not AGENT"),
-            @ApiResponse(responseCode = "400", description = "Validation or domain error")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "201", description = "Category created"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not AGENT"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Validation or domain error")
     })
-    public ResponseEntity<CreateCategoryResponseDTO> createCategory(
+    public ResponseEntity<ApiResult<CreateCategoryResponseDTO>> createCategory(
             @Valid @RequestBody CreateCategoryRequestDTO request
     ) {
         log.info("POST /seat-categories eventId={} name={}", request.getEventId(), request.getName());
+        CreateCategoryResponseDTO created = categoryService.createCategory(request);
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(categoryService.createCategory(request));
+                .body(ApiResult.created("Seat category created successfully", created));
     }
 
     @DeleteMapping("/{id}")
     @PreAuthorize("hasRole('AGENT')")
     @Operation(summary = "Delete category", description = "Soft-deletes a seat category. Requires AGENT role.")
     @ApiResponses({
-            @ApiResponse(responseCode = "204", description = "Category deleted"),
-            @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @ApiResponse(responseCode = "403", description = "Authenticated but not AGENT"),
-            @ApiResponse(responseCode = "400", description = "Category not found")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Category deleted"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not AGENT"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Category not found")
     })
-    public ResponseEntity<Void> deleteCategory(@PathVariable UUID id) {
+    public ResponseEntity<ApiResult<Void>> deleteCategory(@PathVariable UUID id) {
         log.info("DELETE /seat-categories/{}", id);
         categoryService.deleteCategory(id);
-        return ResponseEntity.noContent().build();
+        return ResponseEntity.ok(ApiResult.ok("Seat category deleted successfully", null));
     }
 }
