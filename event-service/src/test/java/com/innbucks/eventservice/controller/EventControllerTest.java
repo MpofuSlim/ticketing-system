@@ -104,4 +104,69 @@ class EventControllerTest {
                 .andExpect(status().is3xxRedirection())
                 .andExpect(header().string("Location", "/h2-console/"));
     }
+
+    @Test
+    void getEventsByProvince_onlyReturnsActiveUpcomingEvents_numberedFromOne() throws Exception {
+        // 3 upcoming events in HRE — earliest first, expected as eventNo 1..3
+        eventRepository.save(eventBuilder()
+                .title("Third")
+                .province(Province.HRE)
+                .dateTime(LocalDateTime.now().plusDays(30))
+                .build());
+        eventRepository.save(eventBuilder()
+                .title("First")
+                .province(Province.HRE)
+                .dateTime(LocalDateTime.now().plusDays(10))
+                .build());
+        eventRepository.save(eventBuilder()
+                .title("Second")
+                .province(Province.HRE)
+                .dateTime(LocalDateTime.now().plusDays(20))
+                .build());
+
+        // Past event — must be filtered out
+        eventRepository.save(eventBuilder()
+                .title("Past")
+                .province(Province.HRE)
+                .dateTime(LocalDateTime.now().minusDays(1))
+                .build());
+
+        // Inactive upcoming event — must be filtered out
+        eventRepository.save(eventBuilder()
+                .title("Inactive")
+                .province(Province.HRE)
+                .dateTime(LocalDateTime.now().plusDays(15))
+                .active(false)
+                .build());
+
+        // Different province — must be filtered out
+        eventRepository.save(eventBuilder()
+                .title("Other province")
+                .province(Province.BYO)
+                .dateTime(LocalDateTime.now().plusDays(5))
+                .build());
+
+        mockMvc.perform(get("/events/by-province")
+                        .param("province", "HRE")
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content", hasSize(3)))
+                .andExpect(jsonPath("$.content[0].title", is("First")))
+                .andExpect(jsonPath("$.content[0].eventNo", is(1)))
+                .andExpect(jsonPath("$.content[1].title", is("Second")))
+                .andExpect(jsonPath("$.content[1].eventNo", is(2)))
+                .andExpect(jsonPath("$.content[2].title", is("Third")))
+                .andExpect(jsonPath("$.content[2].eventNo", is(3)));
+    }
+
+    private static Event.EventBuilder eventBuilder() {
+        return Event.builder()
+                .agentId("agent-1")
+                .description("desc")
+                .venue("Venue")
+                .totalCapacity(100)
+                .availableTickets(100)
+                .deleted(false)
+                .active(true);
+    }
 }

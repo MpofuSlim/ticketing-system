@@ -33,4 +33,10 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     Optional<Event> findByEventIdAndDeletedFalse(UUID eventId);
 
     Page<Event> findByProvinceAndDeletedFalse(Province province, Pageable pageable);
+
+    // Upcoming events in a province: not soft-deleted, agent-active, and
+    // scheduled at or after the supplied cutoff (usually "now").
+    Page<Event> findByProvinceAndDeletedFalseAndActiveTrueAndDateTimeGreaterThanEqual(
+            Province province, LocalDateTime cutoff, Pageable pageable
+    );
 }

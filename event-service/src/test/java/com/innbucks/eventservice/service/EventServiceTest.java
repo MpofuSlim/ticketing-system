@@ -99,12 +99,12 @@ class EventServiceTest {
         req.setTitle("Concert"); req.setDescription("desc"); req.setVenue("Venue");
         req.setProvince(Province.HRE); req.setDateTime(LocalDateTime.now().plusDays(10));
         req.setTotalCapacity(200);
-        when(repo.saveAndFlush(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
 
         service.createEvent("agent-9", req);
 
         ArgumentCaptor<Event> saved = ArgumentCaptor.forClass(Event.class);
-        verify(repo).saveAndFlush(saved.capture());
+        verify(repo).save(saved.capture());
         assertEquals("agent-9", saved.getValue().getAgentId());
         assertEquals(200, saved.getValue().getTotalCapacity());
         assertEquals(200, saved.getValue().getAvailableTickets());

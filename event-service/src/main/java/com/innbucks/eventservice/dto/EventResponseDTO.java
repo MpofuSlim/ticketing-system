@@ -18,7 +18,7 @@ public class EventResponseDTO {
     @Schema(description = "Stable identifier for the event.")
     private UUID eventId;
 
-    @Schema(example = "42", description = "Public-facing sequential event number, starts at 1 and increments per event created.")
+    @Schema(example = "1", description = "1-based position of this event within the current /events/by-province response page. Not stored; null on other endpoints.")
     private Integer eventNo;
 
     @Schema(description = "Owning agent identifier (typically the JWT subject/username).")
