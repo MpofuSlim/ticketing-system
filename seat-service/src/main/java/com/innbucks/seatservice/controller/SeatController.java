@@ -10,6 +10,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -40,8 +41,12 @@ public class SeatController {
             @Parameter(description = "Seat category UUID") @RequestParam UUID categoryId
     ) {
         log.debug("GET /seats categoryId={}", categoryId);
-        return ResponseEntity.ok(ApiResult.ok("Seats retrieved successfully",
-                seatService.getSeatsByCategory(categoryId)));
+        List<SeatResponseDTO> result = seatService.getSeatsByCategory(categoryId);
+        if (result.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResult.error(HttpStatus.NOT_FOUND, "Not found"));
+        }
+        return ResponseEntity.ok(ApiResult.ok("Seats retrieved successfully", result));
     }
 
     @GetMapping("/available")
@@ -53,8 +58,12 @@ public class SeatController {
             @Parameter(description = "Seat category UUID") @RequestParam UUID categoryId
     ) {
         log.debug("GET /seats/available categoryId={}", categoryId);
-        return ResponseEntity.ok(ApiResult.ok("Available seats retrieved successfully",
-                seatService.getAvailableSeats(categoryId)));
+        List<SeatResponseDTO> result = seatService.getAvailableSeats(categoryId);
+        if (result.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResult.error(HttpStatus.NOT_FOUND, "Not found"));
+        }
+        return ResponseEntity.ok(ApiResult.ok("Available seats retrieved successfully", result));
     }
 
     @PostMapping("/{id}/lock")

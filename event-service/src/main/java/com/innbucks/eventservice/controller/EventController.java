@@ -79,6 +79,10 @@ public class EventController {
                 from, to, venue, page, size, sortBy);
         Page<EventResponseDTO> result = eventService.getAllActiveEvents(
                 fromDateTime, toDateTime, venue, page, size, sortBy);
+        if (result.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResult.error(HttpStatus.NOT_FOUND, "Not found"));
+        }
         return ResponseEntity.ok(ApiResult.ok("Events retrieved successfully", result));
     }
 
@@ -131,6 +135,10 @@ public class EventController {
         log.debug("GET /events/by-province province={} page={} size={} sortBy={}",
                 province, page, size, sortBy);
         Page<EventResponseDTO> result = eventService.getEventsByProvince(province, page, size, sortBy);
+        if (result.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResult.error(HttpStatus.NOT_FOUND, "Not found"));
+        }
         return ResponseEntity.ok(ApiResult.ok("Events retrieved successfully", result));
     }
 

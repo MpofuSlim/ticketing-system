@@ -62,8 +62,12 @@ public class BookingController {
     public ResponseEntity<ApiResult<List<BookingResponseDTO>>> getMyBookings(Authentication authentication) {
         String userEmail = authentication.getName();
         log.debug("GET /bookings/my userEmail={}", userEmail);
-        return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully",
-                bookingService.getMyBookings(userEmail)));
+        List<BookingResponseDTO> result = bookingService.getMyBookings(userEmail);
+        if (result.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResult.error(HttpStatus.NOT_FOUND, "Not found"));
+        }
+        return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully", result));
     }
 
     @GetMapping("/{id}")
