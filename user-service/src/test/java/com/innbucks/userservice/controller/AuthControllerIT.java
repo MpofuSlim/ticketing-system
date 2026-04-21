@@ -42,10 +42,11 @@ class AuthControllerIT {
                         .content(objectMapper.writeValueAsString(payload)))
                 .andExpect(status().isCreated())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.token").doesNotExist())
-                .andExpect(jsonPath("$.email").value("agent1@example.com"))
-                .andExpect(jsonPath("$.role").value("AGENT"))
-                .andExpect(jsonPath("$.mfaRequired").value(false));
+                .andExpect(jsonPath("$.code").value("201 CREATED"))
+                .andExpect(jsonPath("$.data.token").doesNotExist())
+                .andExpect(jsonPath("$.data.email").value("agent1@example.com"))
+                .andExpect(jsonPath("$.data.role").value("AGENT"))
+                .andExpect(jsonPath("$.data.mfaRequired").value(false));
     }
 
     @Test
@@ -73,10 +74,11 @@ class AuthControllerIT {
                         .content(objectMapper.writeValueAsString(login)))
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.token", not(blankOrNullString())))
-                .andExpect(jsonPath("$.email").value("user1@example.com"))
-                .andExpect(jsonPath("$.role").value("CUSTOMER"))
-                .andExpect(jsonPath("$.mfaRequired").value(false));
+                .andExpect(jsonPath("$.code").value("200 OK"))
+                .andExpect(jsonPath("$.data.token", not(blankOrNullString())))
+                .andExpect(jsonPath("$.data.email").value("user1@example.com"))
+                .andExpect(jsonPath("$.data.role").value("CUSTOMER"))
+                .andExpect(jsonPath("$.data.mfaRequired").value(false));
     }
 
     @Test
@@ -103,7 +105,8 @@ class AuthControllerIT {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(login)))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error", containsString("Invalid credentials")));
+                .andExpect(jsonPath("$.code").value("400 BAD_REQUEST"))
+                .andExpect(jsonPath("$.message", containsString("Invalid credentials")));
     }
 
     // Minimal JSON payloads for tests (avoid coupling to DTO classes)

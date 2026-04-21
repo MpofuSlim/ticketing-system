@@ -57,9 +57,10 @@ class EventControllerTest {
         mockMvc.perform(get("/events")
                         .accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.content", hasSize(greaterThanOrEqualTo(1))))
-                .andExpect(jsonPath("$.content[0].eventId", is(saved.getEventId().toString())))
-                .andExpect(jsonPath("$.content[0].dateTime", is("2030-04-18"))); // LocalDate in response
+                .andExpect(jsonPath("$.code", is("200 OK")))
+                .andExpect(jsonPath("$.data.content", hasSize(greaterThanOrEqualTo(1))))
+                .andExpect(jsonPath("$.data.content[0].eventId", is(saved.getEventId().toString())))
+                .andExpect(jsonPath("$.data.content[0].dateTime", is("2030-04-18"))); // LocalDate in response
     }
 
     @Test
@@ -93,9 +94,10 @@ class EventControllerTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(req)))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.agentId", is("agent-99")))
-                .andExpect(jsonPath("$.title", is("Concert")))
-                .andExpect(jsonPath("$.availableTickets", is(50)));
+                .andExpect(jsonPath("$.code", is("201 CREATED")))
+                .andExpect(jsonPath("$.data.agentId", is("agent-99")))
+                .andExpect(jsonPath("$.data.title", is("Concert")))
+                .andExpect(jsonPath("$.data.availableTickets", is(50)));
     }
 
     @Test

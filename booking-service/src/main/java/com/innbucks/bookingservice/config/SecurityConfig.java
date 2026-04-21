@@ -53,14 +53,14 @@ public class SecurityConfig {
                             res.setContentType("application/json");
                             res.setStatus(401);
                             res.getWriter().write(
-                                    "{\"error\": \"Unauthorized — token missing or invalid\"}"
+                                    "{\"code\":\"401 UNAUTHORIZED\",\"message\":\"Invalid token\",\"data\":null}"
                             );
                         })
                         .accessDeniedHandler((req, res, e) -> {
                             res.setContentType("application/json");
                             res.setStatus(403);
                             res.getWriter().write(
-                                    "{\"error\": \"Forbidden — insufficient role\"}"
+                                    "{\"code\":\"403 FORBIDDEN\",\"message\":\"Forbidden - insufficient role\",\"data\":null}"
                             );
                         })
                 )

@@ -1,8 +1,10 @@
 package com.innbucks.eventservice.exception;
 
+import com.innbucks.eventservice.dto.ApiResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.support.DefaultMessageSourceResolvable;
-import org.springframework.http.*;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
@@ -29,23 +31,27 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(RuntimeException.class)
-    public ResponseEntity<Map<String, String>> handleRuntime(RuntimeException ex) {
+    public ResponseEntity<ApiResult<Void>> handleRuntime(RuntimeException ex) {
         log.warn("RuntimeException: {}", ex.getMessage());
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(Map.of("error", ex.getMessage()));
+        HttpStatus status = ex.getMessage() != null && ex.getMessage().toLowerCase().contains("not found")
+                ? HttpStatus.NOT_FOUND
+                : HttpStatus.BAD_REQUEST;
+        return ResponseEntity.status(status)
+                .body(ApiResult.error(status, ex.getMessage()));
     }
 
-    // Returns field-level validation errors
+    // Returns field-level validation errors in the ApiResponse envelope.
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<Map<String, String>> handleValidation(MethodArgumentNotValidException ex) {
-        Map<String, String> errors = ex.getBindingResult()
+    public ResponseEntity<ApiResult<Map<String, String>>> handleValidation(MethodArgumentNotValidException ex) {
+        Map<String, String> fieldErrors = ex.getBindingResult()
                 .getFieldErrors()
                 .stream()
                 .collect(Collectors.toMap(
                         FieldError::getField,
                         DefaultMessageSourceResolvable::getDefaultMessage
                 ));
-        log.warn("Validation failed: {}", errors);
-        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(errors);
+        log.warn("Validation failed: {}", fieldErrors);
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
+                .body(ApiResult.of(HttpStatus.UNPROCESSABLE_ENTITY, "Validation failed", fieldErrors));
     }
 }
