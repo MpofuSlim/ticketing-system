@@ -15,6 +15,7 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.web.util.UriComponentsBuilder;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -64,15 +65,29 @@ public class EventService {
     public Page<EventResponseDTO> getEventsByProvince(
             Province province,
             int page,
-            int size,
-            String sortBy
+            int size
     ) {
-        Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
-        log.debug("Fetching active events by province={} page={} size={} sortBy={}",
-                province, page, size, sortBy);
-        return eventRepository
-                .findByProvinceAndDeletedFalse(province, pageable)
-                .map(eventMapper::toDTO);
+        // Always sorted by dateTime ascending so the soonest-starting event
+        // for the province surfaces first. Only includes events that are
+        // non-deleted, agent-active, AND have not yet started.
+        Pageable pageable = PageRequest.of(page, size, Sort.by("dateTime").ascending());
+        LocalDateTime now = LocalDateTime.now();
+        log.debug("Fetching active upcoming events by province={} cutoff={} page={} size={}",
+                province, now, page, size);
+
+        Page<Event> entities = eventRepository
+                .findByProvinceAndDeletedFalseAndActiveTrueAndDateTimeGreaterThanEqual(
+                        province, now, pageable);
+
+        // Assign per-page eventNo 1..N in the order the entities appear (date asc).
+        List<EventResponseDTO> dtos = new ArrayList<>(entities.getNumberOfElements());
+        int n = 1;
+        for (Event event : entities.getContent()) {
+            EventResponseDTO dto = eventMapper.toDTO(event);
+            dto.setEventNo(n++);
+            dtos.add(dto);
+        }
+        return new PageImpl<>(dtos, pageable, entities.getTotalElements());
     }
 
     public EventResponseDTO createEvent(String agentId, CreateEventRequestDTO request) {

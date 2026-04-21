@@ -48,7 +48,7 @@ public class GlobalExceptionHandler {
                 .stream()
                 .collect(Collectors.toMap(
                         FieldError::getField,
-                        DefaultMessageSourceResolvable::getDefaultMessage
+                        fe -> fe.getDefaultMessage() != null ? fe.getDefaultMessage() : "Invalid value"
                 ));
         log.warn("Validation failed: {}", fieldErrors);
         return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)

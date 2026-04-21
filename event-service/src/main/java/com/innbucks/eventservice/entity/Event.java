@@ -2,6 +2,7 @@ package com.innbucks.eventservice.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+
 import java.time.LocalDateTime;
 import java.util.UUID;
 
@@ -50,6 +51,13 @@ public class Event {
 
     @Column(nullable = false)
     private boolean deleted = false;
+
+    // Whether the event is still bookable/visible. Flipped to false by the
+    // agent (or by a future scheduler) when the event ends. Queries that
+    // surface upcoming events should check active=true AND dateTime>=now.
+    @Column(nullable = false)
+    @Builder.Default
+    private boolean active = true;
 
     @Column(updatable = false)
     private LocalDateTime createdAt;

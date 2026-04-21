@@ -31,3 +31,9 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Local secrets ###
+# Copy .env.example → .env and fill in real values. Must stay untracked.
+.env
+.env.local
+.env.*.local

@@ -46,7 +46,7 @@ services:
       DB_DRIVER: org.postgresql.Driver
       HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
       JPA_DDL_AUTO: update
-      JWT_SECRET: change-me-change-me-change-me-change-me-change-me
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       JWT_EXPIRATION_MS: 86400000
       EUREKA_ENABLED: "false"
     ports:
@@ -68,7 +68,7 @@ services:
       DB_PASSWORD: innbucks
       DB_DRIVER: org.postgresql.Driver
       HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
-      JWT_SECRET: change-me-change-me-change-me-change-me-change-me
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       SEAT_SERVICE_BASE_URL: http://seat-service:8083
       EUREKA_ENABLED: "false"
     ports:
@@ -90,7 +90,7 @@ services:
       DB_PASSWORD: innbucks
       DB_DRIVER: org.postgresql.Driver
       HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
-      JWT_SECRET: change-me-change-me-change-me-change-me-change-me
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       EUREKA_ENABLED: "false"
     ports:
       - "8083:8083"
@@ -111,7 +111,7 @@ services:
       DB_PASSWORD: innbucks
       DB_DRIVER: org.postgresql.Driver
       HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
-      JWT_SECRET: change-me-change-me-change-me-change-me-change-me
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       EUREKA_ENABLED: "false"
     ports:
       - "8084:8084"
