@@ -38,12 +38,15 @@ public class GlobalExceptionHandler {
     // Returns field-level validation errors
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<Map<String, String>> handleValidation(MethodArgumentNotValidException ex) {
+        // FieldError#getDefaultMessage can be null when a constraint has no
+        // message configured; Collectors.toMap rejects null values, so we
+        // fall back to a generic string instead of NPE'ing the whole response.
         Map<String, String> errors = ex.getBindingResult()
                 .getFieldErrors()
                 .stream()
                 .collect(Collectors.toMap(
                         FieldError::getField,
-                        DefaultMessageSourceResolvable::getDefaultMessage
+                        fe -> fe.getDefaultMessage() != null ? fe.getDefaultMessage() : "Invalid value"
                 ));
         log.warn("Validation failed: {}", errors);
         return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(errors);
