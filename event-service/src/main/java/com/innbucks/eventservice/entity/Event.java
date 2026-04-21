@@ -6,7 +6,13 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Entity
-@Table(name = "events")
+@Table(
+        name = "events",
+        uniqueConstraints = @UniqueConstraint(
+                name = "uk_events_natural_key",
+                columnNames = {"agent_id", "title", "venue", "date_time"}
+        )
+)
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
