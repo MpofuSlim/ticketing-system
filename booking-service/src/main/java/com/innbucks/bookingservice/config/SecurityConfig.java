@@ -45,6 +45,7 @@ public class SecurityConfig {
                         .requestMatchers("/error").permitAll()
                         // Confirmation lookup is public — agents scan at the gate
                         .requestMatchers("/bookings/confirmation/**").permitAll()
+                        .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                         // Everything else requires authentication
                         .anyRequest().authenticated()
                 )

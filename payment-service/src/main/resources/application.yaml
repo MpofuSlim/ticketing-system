@@ -1,6 +1,8 @@
 spring:
   application:
     name: payment-service
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
 
 eureka:
   client:
@@ -10,3 +12,19 @@ eureka:
 
 server:
   port: 8085
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+
+logging:
+  pattern:
+    level: "%5p [${spring.application.name:-},%X{traceId:-}]"

@@ -47,6 +47,7 @@ public class SecurityConfig {
                         // Public — anyone can view seats and categories
                         .requestMatchers(HttpMethod.GET, "/seats/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/seat-categories/**").permitAll()
+                        .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                         // Everything else requires authentication
                         .anyRequest().authenticated()
                 )

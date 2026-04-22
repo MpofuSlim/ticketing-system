@@ -9,10 +9,12 @@ spring:
   jpa:
     hibernate:
       ddl-auto: ${JPA_DDL_AUTO:update}
-    show-sql: true
+    show-sql: ${JPA_SHOW_SQL:false}
     properties:
       hibernate:
         dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.H2Dialect}
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
 
 jwt:
   secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
@@ -32,3 +34,19 @@ springdoc:
 
 server:
   port: 8081
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+
+logging:
+  pattern:
+    level: "%5p [${spring.application.name:-},%X{traceId:-}]"
