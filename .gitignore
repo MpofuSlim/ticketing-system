@@ -37,3 +37,6 @@ build/
 .env
 .env.local
 .env.*.local
+
+### H2 file-mode databases created by tests / local runs ###
+**/data/
