@@ -12,10 +12,6 @@ spring:
               uri: ${USER_SERVICE_URI:http://localhost:8081}
               predicates:
                 - Path=/auth/**
-            - id: user-tenant-route
-              uri: ${USER_SERVICE_URI:http://localhost:8081}
-              predicates:
-                - Path=/tenant/**
 
             - id: event-service-route
               uri: ${EVENT_SERVICE_URI:http://localhost:8082}
