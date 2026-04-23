@@ -52,13 +52,6 @@ class AuthControllerIT {
     @Test
     void register_systemUser_createsUser_andDoesNotReturnJwt() throws Exception {
         RegisterPayload payload = baseSystemPayload("tenant1@example.com", "0777000000", "TENANT");
-        payload.businessName = "Acme Events";
-        payload.businessAddress = "1 Main Street";
-        payload.businessEmail = "biz@example.com";
-        payload.businessPhoneNumber = "0777111222";
-        payload.registrationNumber = "REG-123";
-        payload.metaData = "path/to/file.pdf";
-
         mockMvc.perform(post("/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(payload)))
@@ -144,12 +137,6 @@ class AuthControllerIT {
         public String role;
         public Map<String, Object> device;
         public Map<String, Object> mfa;
-        public String businessName;
-        public String businessAddress;
-        public String businessEmail;
-        public String businessPhoneNumber;
-        public String registrationNumber;
-        public String metaData;
     }
 
     static class LoginPayload {

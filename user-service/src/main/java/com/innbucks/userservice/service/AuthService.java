@@ -83,12 +83,6 @@ public class AuthService {
             log.info("Role=TENANT, creating tenant profile userId={}", user.getId());
             TenantProfile profile = TenantProfile.builder()
                     .user(user)
-                    .businessName(request.getBusinessName())
-                    .businessAddress(request.getBusinessAddress())
-                    .businessEmail(request.getBusinessEmail())
-                    .businessPhoneNumber(request.getBusinessPhoneNumber())
-                    .registrationNumber(request.getRegistrationNumber())
-                    .metaDataFilePath(request.getMetaData())
                     .build();
             tenantProfileRepository.save(profile);
             log.info("Tenant profile saved userId={}", user.getId());

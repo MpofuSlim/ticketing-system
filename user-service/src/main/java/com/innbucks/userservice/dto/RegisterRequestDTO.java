@@ -36,12 +36,4 @@ public class RegisterRequestDTO {
     @Valid
     @NotNull(message = "MFA registration is required")
     private MfaRegistrationDTO mfa;
-
-    // Tenant-specific fields (only consumed when role=TENANT)
-    private String businessName;
-    private String businessAddress;
-    private String businessEmail;
-    private String businessPhoneNumber;
-    private String registrationNumber;
-    private String metaData;
 }

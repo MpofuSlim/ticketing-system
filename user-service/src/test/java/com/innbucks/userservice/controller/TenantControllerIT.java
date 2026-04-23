@@ -2,6 +2,8 @@ package com.innbucks.userservice.controller;
 
 import com.innbucks.userservice.entity.TenantProfile;
 import com.innbucks.userservice.entity.User;
+import com.innbucks.userservice.repository.CustomerProfileRepository;
+import com.innbucks.userservice.repository.DeviceRepository;
 import com.innbucks.userservice.repository.TenantProfileRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.security.JwtUtil;
@@ -28,11 +30,15 @@ class TenantControllerIT {
     @Autowired JwtUtil jwtUtil;
     @Autowired UserRepository userRepository;
     @Autowired TenantProfileRepository tenantProfileRepository;
+    @Autowired CustomerProfileRepository customerProfileRepository;
+    @Autowired DeviceRepository deviceRepository;
     @Autowired PasswordEncoder passwordEncoder;
 
     @BeforeEach
     void cleanDb() {
         tenantProfileRepository.deleteAll();
+        customerProfileRepository.deleteAll();
+        deviceRepository.deleteAll();
         userRepository.deleteAll();
     }
 

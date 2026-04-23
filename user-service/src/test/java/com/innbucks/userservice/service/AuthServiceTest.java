@@ -92,19 +92,12 @@ class AuthServiceTest {
         when(encoder.encode(any())).thenReturn("hashed");
 
         RegisterRequestDTO req = baseRequest("tenant@example.com", "0777111111", "TENANT");
-        req.setBusinessName("Acme");
-        req.setBusinessAddress("1 St");
-        req.setBusinessEmail("b@acme");
-        req.setBusinessPhoneNumber("1");
-        req.setRegistrationNumber("R1");
-        req.setMetaData("meta");
 
         newService(userRepo, tenantRepo, deviceRepo, encoder, jwt).register(req);
 
         ArgumentCaptor<TenantProfile> savedProfile = ArgumentCaptor.forClass(TenantProfile.class);
         verify(tenantRepo).save(savedProfile.capture());
-        assertEquals("Acme", savedProfile.getValue().getBusinessName());
-        assertEquals("R1", savedProfile.getValue().getRegistrationNumber());
+        assertSame(req.getEmail(), savedProfile.getValue().getUser().getEmail());
     }
 
     @Test
