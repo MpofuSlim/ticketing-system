@@ -6,7 +6,7 @@ import lombok.*;
 @Builder
 @AllArgsConstructor
 @NoArgsConstructor
-public class AgentProfileDTO {
+public class TenantProfileDTO {
     private Long id;
     private String businessName;
     private int totalEvents;

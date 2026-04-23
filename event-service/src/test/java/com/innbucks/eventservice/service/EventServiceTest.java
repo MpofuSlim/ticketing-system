@@ -24,7 +24,7 @@ import static org.mockito.Mockito.*;
 class EventServiceTest {
 
     @Test
-    void updateEvent_rejectsWhenAgentDoesNotMatch() {
+    void updateEvent_rejectsWhenTenantDoesNotMatch() {
         EventRepository repo = mock(EventRepository.class);
         EventMapper mapper = mock(EventMapper.class);
         RestTemplate restTemplate = mock(RestTemplate.class);
@@ -33,7 +33,7 @@ class EventServiceTest {
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder()
                 .eventId(eventId)
-                .agentId("owner-agent")
+                .tenantId("owner-tenant")
                 .title("Old")
                 .venue("Venue")
                 .province(Province.HRE)
@@ -46,7 +46,7 @@ class EventServiceTest {
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> service.updateEvent("other-agent", eventId, new UpdateEventRequestDTO()));
+                () -> service.updateEvent("other-tenant", eventId, new UpdateEventRequestDTO()));
 
         assertEquals("You are not authorized to update this event", ex.getMessage());
         verify(repo, never()).save(any());
@@ -62,7 +62,7 @@ class EventServiceTest {
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder()
                 .eventId(eventId)
-                .agentId("agent-1")
+                .tenantId("tenant-1")
                 .title("Old")
                 .venue("Venue")
                 .province(Province.HRE)
@@ -79,7 +79,7 @@ class EventServiceTest {
         UpdateEventRequestDTO req = new UpdateEventRequestDTO();
         req.setTotalCapacity(120); // diff +20
 
-        service.updateEvent("agent-1", eventId, req);
+        service.updateEvent("tenant-1", eventId, req);
 
         ArgumentCaptor<Event> savedCaptor = ArgumentCaptor.forClass(Event.class);
         verify(repo).save(savedCaptor.capture());
@@ -99,22 +99,22 @@ class EventServiceTest {
         req.setTitle("Concert"); req.setDescription("desc"); req.setVenue("Venue");
         req.setProvince(Province.HRE); req.setDateTime(LocalDateTime.now().plusDays(10));
         req.setTotalCapacity(200);
-        when(repo.existsByAgentIdAndTitleAndVenueAndDateTimeAndDeletedFalse(
+        when(repo.existsByTenantIdAndTitleAndVenueAndDateTimeAndDeletedFalse(
                 any(), any(), any(), any())).thenReturn(false);
         when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        service.createEvent("agent-9", req);
+        service.createEvent("tenant-9", req);
 
         ArgumentCaptor<Event> saved = ArgumentCaptor.forClass(Event.class);
         verify(repo).save(saved.capture());
-        assertEquals("agent-9", saved.getValue().getAgentId());
+        assertEquals("tenant-9", saved.getValue().getTenantId());
         assertEquals(200, saved.getValue().getTotalCapacity());
         assertEquals(200, saved.getValue().getAvailableTickets());
         assertFalse(saved.getValue().isDeleted());
     }
 
     @Test
-    void createEvent_rejectsDuplicateForSameAgentTitleVenueDate() {
+    void createEvent_rejectsDuplicateForSameTenantTitleVenueDate() {
         EventRepository repo = mock(EventRepository.class);
         EventService service = new EventService(repo, mock(EventMapper.class), mock(RestTemplate.class));
 
@@ -123,24 +123,24 @@ class EventServiceTest {
         req.setTitle("Concert"); req.setVenue("Harare Gardens");
         req.setProvince(Province.HRE); req.setDateTime(when); req.setTotalCapacity(100);
 
-        when(repo.existsByAgentIdAndTitleAndVenueAndDateTimeAndDeletedFalse(
-                "agent-1", "Concert", "Harare Gardens", when)).thenReturn(true);
+        when(repo.existsByTenantIdAndTitleAndVenueAndDateTimeAndDeletedFalse(
+                "tenant-1", "Concert", "Harare Gardens", when)).thenReturn(true);
 
         RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> service.createEvent("agent-1", req));
+                () -> service.createEvent("tenant-1", req));
         assertTrue(ex.getMessage().toLowerCase().contains("already exists"));
         verify(repo, never()).save(any());
     }
 
     @Test
-    void updateEvent_asAdmin_canEditEventOwnedByAnotherAgent() {
+    void updateEvent_asAdmin_canEditEventOwnedByAnotherTenant() {
         EventRepository repo = mock(EventRepository.class);
         EventMapper mapper = mock(EventMapper.class);
         EventService service = new EventService(repo, mapper, mock(RestTemplate.class));
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder()
-                .eventId(eventId).agentId("owner").title("Old").venue("V")
+                .eventId(eventId).tenantId("owner").title("Old").venue("V")
                 .province(Province.HRE).dateTime(LocalDateTime.now().plusDays(5))
                 .totalCapacity(100).availableTickets(100).deleted(false).build();
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
@@ -155,30 +155,30 @@ class EventServiceTest {
     }
 
     @Test
-    void deleteEvent_rejectsNonOwnerAgent() {
+    void deleteEvent_rejectsNonOwnerTenant() {
         EventRepository repo = mock(EventRepository.class);
         EventService service = new EventService(repo, mock(EventMapper.class), mock(RestTemplate.class));
 
         UUID eventId = UUID.randomUUID();
-        Event existing = Event.builder().eventId(eventId).agentId("owner-agent")
+        Event existing = Event.builder().eventId(eventId).tenantId("owner-tenant")
                 .title("T").venue("V").province(Province.HRE)
                 .dateTime(LocalDateTime.now().plusDays(5))
                 .totalCapacity(1).availableTickets(1).deleted(false).build();
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> service.deleteEvent("other-agent", "ROLE_AGENT", eventId));
+                () -> service.deleteEvent("other-tenant", "ROLE_TENANT", eventId));
         assertEquals("You are not authorized to delete this event", ex.getMessage());
         verify(repo, never()).save(any());
     }
 
     @Test
-    void deleteEvent_asAdmin_softDeletesEventOwnedByAnotherAgent() {
+    void deleteEvent_asAdmin_softDeletesEventOwnedByAnotherTenant() {
         EventRepository repo = mock(EventRepository.class);
         EventService service = new EventService(repo, mock(EventMapper.class), mock(RestTemplate.class));
 
         UUID eventId = UUID.randomUUID();
-        Event existing = Event.builder().eventId(eventId).agentId("owner-agent")
+        Event existing = Event.builder().eventId(eventId).tenantId("owner-tenant")
                 .title("T").venue("V").province(Province.HRE)
                 .dateTime(LocalDateTime.now().plusDays(5))
                 .totalCapacity(1).availableTickets(1).deleted(false).build();
@@ -209,7 +209,7 @@ class EventServiceTest {
         ReflectionTestUtils.setField(service, "seatServiceBaseUrl", "http://localhost:9999");
 
         UUID eventId = UUID.randomUUID();
-        Event existing = Event.builder().eventId(eventId).agentId("a").title("T")
+        Event existing = Event.builder().eventId(eventId).tenantId("a").title("T")
                 .venue("V").province(Province.HRE)
                 .dateTime(LocalDateTime.now().plusDays(1))
                 .totalCapacity(5).availableTickets(5).deleted(false).build();

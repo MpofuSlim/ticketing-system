@@ -9,6 +9,9 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.HashMap;
+import java.util.Map;
+
 import static org.hamcrest.Matchers.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -21,15 +24,34 @@ class AuthControllerIT {
     @Autowired MockMvc mockMvc;
     @Autowired ObjectMapper objectMapper;
 
-    @Test
-    void register_createsUser_andDoesNotReturnJwt() throws Exception {
-        var payload = new RegisterPayload();
+    private RegisterPayload baseSystemPayload(String email, String phone, String role) {
+        RegisterPayload payload = new RegisterPayload();
         payload.firstName = "Tawanda";
+        payload.middleName = "M";
         payload.lastName = "Mpofu";
-        payload.phoneNumber = "0777000000";
-        payload.email = "agent1@example.com";
+        payload.phoneNumber = phone;
+        payload.email = email;
         payload.password = "password123";
-        payload.role = "AGENT";
+        payload.role = role;
+
+        Map<String, Object> device = new HashMap<>();
+        device.put("deviceId", "device-" + phone);
+        device.put("deviceName", "iPhone");
+        device.put("platform", "iOS");
+        device.put("pushToken", "tok");
+        payload.device = device;
+
+        Map<String, Object> mfa = new HashMap<>();
+        mfa.put("method", "TOTP");
+        mfa.put("secret", "SECRET");
+        payload.mfa = mfa;
+
+        return payload;
+    }
+
+    @Test
+    void register_systemUser_createsUser_andDoesNotReturnJwt() throws Exception {
+        RegisterPayload payload = baseSystemPayload("tenant1@example.com", "0777000000", "TENANT");
         payload.businessName = "Acme Events";
         payload.businessAddress = "1 Main Street";
         payload.businessEmail = "biz@example.com";
@@ -44,30 +66,25 @@ class AuthControllerIT {
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.code").value("201 CREATED"))
                 .andExpect(jsonPath("$.data.token").doesNotExist())
-                .andExpect(jsonPath("$.data.email").value("agent1@example.com"))
-                .andExpect(jsonPath("$.data.role").value("AGENT"))
+                .andExpect(jsonPath("$.data.email").value("tenant1@example.com"))
+                .andExpect(jsonPath("$.data.role").value("TENANT"))
                 .andExpect(jsonPath("$.data.mfaRequired").value(false));
     }
 
     @Test
     void login_withValidCredentials_returnsJwt() throws Exception {
-        // register first
-        var register = new RegisterPayload();
-        register.firstName = "Jane";
-        register.lastName = "Doe";
-        register.phoneNumber = "0777000001";
-        register.email = "user1@example.com";
-        register.password = "password123";
-        register.role = "CUSTOMER";
+        RegisterPayload register = baseSystemPayload("user1@example.com", "0777000001", "SHOP_USER");
 
         mockMvc.perform(post("/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(register)))
                 .andExpect(status().isCreated());
 
-        var login = new LoginPayload();
+        // The registered user has MFA enabled by default; supply OTP to pass the gate.
+        LoginPayload login = new LoginPayload();
         login.email = "user1@example.com";
         login.password = "password123";
+        login.otpCode = "123456";
 
         mockMvc.perform(post("/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -77,27 +94,20 @@ class AuthControllerIT {
                 .andExpect(jsonPath("$.code").value("200 OK"))
                 .andExpect(jsonPath("$.data.token", not(blankOrNullString())))
                 .andExpect(jsonPath("$.data.email").value("user1@example.com"))
-                .andExpect(jsonPath("$.data.role").value("CUSTOMER"))
+                .andExpect(jsonPath("$.data.role").value("SHOP_USER"))
                 .andExpect(jsonPath("$.data.mfaRequired").value(false));
     }
 
     @Test
     void login_withWrongPassword_returns400() throws Exception {
-        // register first
-        var register = new RegisterPayload();
-        register.firstName = "Joe";
-        register.lastName = "Bloggs";
-        register.phoneNumber = "0777000002";
-        register.email = "user2@example.com";
-        register.password = "password123";
-        register.role = "CUSTOMER";
+        RegisterPayload register = baseSystemPayload("user2@example.com", "0777000002", "SHOP_USER");
 
         mockMvc.perform(post("/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(register)))
                 .andExpect(status().isCreated());
 
-        var login = new LoginPayload();
+        LoginPayload login = new LoginPayload();
         login.email = "user2@example.com";
         login.password = "wrong-password";
 
@@ -109,14 +119,31 @@ class AuthControllerIT {
                 .andExpect(jsonPath("$.message", containsString("Invalid credentials")));
     }
 
-    // Minimal JSON payloads for tests (avoid coupling to DTO classes)
+    @Test
+    void customerTier1_registersByPhoneAndPassword() throws Exception {
+        Map<String, Object> req = new HashMap<>();
+        req.put("phoneNumber", "0777000010");
+        req.put("password", "password123");
+
+        mockMvc.perform(post("/auth/customer/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(req)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.tier").value(1))
+                .andExpect(jsonPath("$.data.phoneNumber").value("0777000010"))
+                .andExpect(jsonPath("$.data.verified").value(false));
+    }
+
     static class RegisterPayload {
         public String firstName;
+        public String middleName;
         public String lastName;
         public String phoneNumber;
         public String email;
         public String password;
         public String role;
+        public Map<String, Object> device;
+        public Map<String, Object> mfa;
         public String businessName;
         public String businessAddress;
         public String businessEmail;
@@ -127,8 +154,8 @@ class AuthControllerIT {
 
     static class LoginPayload {
         public String email;
+        public String phoneNumber;
         public String password;
         public String otpCode;
     }
 }
-

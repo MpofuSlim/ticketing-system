@@ -8,41 +8,80 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.EnumSet;
+import java.util.Set;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class AuthService {
 
+    private static final Set<User.Role> SYSTEM_USER_ROLES = EnumSet.of(
+            User.Role.SYSTEM_MANAGER,
+            User.Role.TENANT,
+            User.Role.MERCHANT_ADMIN,
+            User.Role.SHOP_ADMIN,
+            User.Role.SHOP_USER,
+            User.Role.ADMIN
+    );
+
     private final UserRepository userRepository;
-    private final AgentProfileRepository agentProfileRepository;
+    private final TenantProfileRepository tenantProfileRepository;
+    private final DeviceRepository deviceRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
 
+    @Transactional
     public AuthResponseDTO register(RegisterRequestDTO request) {
-        log.info("Starting registration process for email: {}, role: {}", request.getEmail(), request.getRole());
-        if (userRepository.existsByEmail(request.getEmail())) {
-            log.warn("Registration failed: Email {} already registered", request.getEmail());
-            throw new RuntimeException("Email already registered");
+        log.info("Starting system user registration email={} role={}", request.getEmail(), request.getRole());
+
+        User.Role role = parseRole(request.getRole());
+        if (role == User.Role.CUSTOMER) {
+            throw new RuntimeException("Customers must register via the /auth/customer/register (tiered) flow");
+        }
+        if (!SYSTEM_USER_ROLES.contains(role)) {
+            throw new RuntimeException("Unsupported role for system registration: " + role);
         }
 
-        log.debug("Creating user entity for email: {}", request.getEmail());
+        if (userRepository.existsByEmail(request.getEmail())) {
+            log.warn("Registration failed, email already registered email={}", request.getEmail());
+            throw new RuntimeException("Email already registered");
+        }
+        if (userRepository.existsByPhoneNumber(request.getPhoneNumber())) {
+            log.warn("Registration failed, phone already registered phone={}", request.getPhoneNumber());
+            throw new RuntimeException("Phone number already registered");
+        }
+
         User user = User.builder()
                 .firstName(request.getFirstName())
+                .middleName(request.getMiddleName())
                 .lastName(request.getLastName())
                 .phoneNumber(request.getPhoneNumber())
                 .email(request.getEmail())
                 .password(passwordEncoder.encode(request.getPassword()))
-                .role(User.Role.valueOf(request.getRole().toUpperCase()))
+                .role(role)
+                .mfaEnabled(true)
+                .mfaSecret(request.getMfa().getSecret())
                 .build();
 
         userRepository.save(user);
-        log.info("User entity saved successfully for email: {}, assigned ID: {}", user.getEmail(), user.getId());
+        log.info("User entity saved email={} userId={} role={}", user.getEmail(), user.getId(), role);
 
-        // If registering as agent, create agent profile
-        if (user.getRole() == User.Role.AGENT) {
-            log.info("Registering as AGENT, creating agent profile for user ID: {}", user.getId());
-            AgentProfile profile = AgentProfile.builder()
+        Device device = Device.builder()
+                .user(user)
+                .deviceId(request.getDevice().getDeviceId())
+                .deviceName(request.getDevice().getDeviceName())
+                .platform(request.getDevice().getPlatform())
+                .pushToken(request.getDevice().getPushToken())
+                .build();
+        deviceRepository.save(device);
+        log.info("Device registered userId={} deviceId={}", user.getId(), device.getDeviceId());
+
+        if (role == User.Role.TENANT) {
+            log.info("Role=TENANT, creating tenant profile userId={}", user.getId());
+            TenantProfile profile = TenantProfile.builder()
                     .user(user)
                     .businessName(request.getBusinessName())
                     .businessAddress(request.getBusinessAddress())
@@ -51,11 +90,11 @@ public class AuthService {
                     .registrationNumber(request.getRegistrationNumber())
                     .metaDataFilePath(request.getMetaData())
                     .build();
-            agentProfileRepository.save(profile);
-            log.info("Agent profile saved successfully for user ID: {}", user.getId());
+            tenantProfileRepository.save(profile);
+            log.info("Tenant profile saved userId={}", user.getId());
         }
 
-        log.info("Registration completed successfully for email: {}", user.getEmail());
+        log.info("Registration complete email={} role={}", user.getEmail(), role);
         return AuthResponseDTO.builder()
                 .email(user.getEmail())
                 .role(user.getRole().name())
@@ -64,14 +103,13 @@ public class AuthService {
     }
 
     public AuthResponseDTO login(LoginRequestDTO request) {
-        User user = userRepository.findByEmail(request.getEmail())
+        User user = resolveUser(request)
                 .orElseThrow(() -> new RuntimeException("Invalid credentials"));
 
         if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
             throw new RuntimeException("Invalid credentials");
         }
 
-        // MFA check
         if (user.isMfaEnabled()) {
             if (request.getOtpCode() == null || request.getOtpCode().isBlank()) {
                 return AuthResponseDTO.builder()
@@ -81,12 +119,34 @@ public class AuthService {
             // TODO: validate OTP code against mfaSecret
         }
 
-        String token = jwtUtil.generateToken(user.getEmail(), user.getRole().name());
+        String subject = user.getEmail() != null ? user.getEmail() : user.getPhoneNumber();
+        String token = jwtUtil.generateToken(subject, user.getRole().name());
         return AuthResponseDTO.builder()
                 .token(token)
                 .email(user.getEmail())
                 .role(user.getRole().name())
                 .mfaRequired(false)
                 .build();
+    }
+
+    private java.util.Optional<User> resolveUser(LoginRequestDTO request) {
+        if (request.getEmail() != null && !request.getEmail().isBlank()) {
+            return userRepository.findByEmail(request.getEmail());
+        }
+        if (request.getPhoneNumber() != null && !request.getPhoneNumber().isBlank()) {
+            return userRepository.findByPhoneNumber(request.getPhoneNumber());
+        }
+        return java.util.Optional.empty();
+    }
+
+    private User.Role parseRole(String raw) {
+        if (raw == null || raw.isBlank()) {
+            throw new RuntimeException("Role is required");
+        }
+        try {
+            return User.Role.valueOf(raw.trim().toUpperCase());
+        } catch (IllegalArgumentException ex) {
+            throw new RuntimeException("Unknown role: " + raw);
+        }
     }
 }

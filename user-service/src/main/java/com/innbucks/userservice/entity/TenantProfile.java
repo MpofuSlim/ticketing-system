@@ -4,12 +4,12 @@ import jakarta.persistence.*;
 import lombok.*;
 
 @Entity
-@Table(name = "agent_profiles")
+@Table(name = "tenant_profiles")
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class AgentProfile {
+public class TenantProfile {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
@@ -25,7 +25,6 @@ public class AgentProfile {
     private String businessPhoneNumber;
     private String registrationNumber;
 
-    // File path/URL for uploaded company registration documents
     private String metaDataFilePath;
 
     private int totalEvents = 0;

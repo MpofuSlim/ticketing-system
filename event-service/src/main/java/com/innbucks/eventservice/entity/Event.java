@@ -11,7 +11,7 @@ import java.util.UUID;
         name = "events",
         uniqueConstraints = @UniqueConstraint(
                 name = "uk_events_natural_key",
-                columnNames = {"agent_id", "title", "venue", "date_time"}
+                columnNames = {"tenant_id", "title", "venue", "date_time"}
         )
 )
 @Data
@@ -24,8 +24,8 @@ public class Event {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID eventId;
 
-    @Column(nullable = false)
-    private String agentId;
+    @Column(name = "tenant_id", nullable = false)
+    private String tenantId;
 
     @Column(nullable = false)
     private String title;
@@ -53,8 +53,7 @@ public class Event {
     private boolean deleted = false;
 
     // Whether the event is still bookable/visible. Flipped to false by the
-    // agent (or by a future scheduler) when the event ends. Queries that
-    // surface upcoming events should check active=true AND dateTime>=now.
+    // tenant (or by a future scheduler) when the event ends.
     @Column(nullable = false)
     @Builder.Default
     private boolean active = true;

@@ -25,7 +25,7 @@ class EventRepositoryTest {
     @Test
     void findAllActive_filtersByDeletedDateRangeAndVenue() {
         Event e1 = eventRepository.save(Event.builder()
-                .agentId("a1")
+                .tenantId("a1")
                 .title("E1")
                 .venue("Harare Gardens")
                 .province(Province.HRE)
@@ -36,7 +36,7 @@ class EventRepositoryTest {
                 .build());
 
         eventRepository.save(Event.builder()
-                .agentId("a1")
+                .tenantId("a1")
                 .title("E2")
                 .venue("Bulawayo Hall")
                 .province(Province.BYO)
@@ -47,7 +47,7 @@ class EventRepositoryTest {
                 .build());
 
         eventRepository.save(Event.builder()
-                .agentId("a1")
+                .tenantId("a1")
                 .title("Deleted")
                 .venue("Harare Gardens")
                 .province(Province.HRE)

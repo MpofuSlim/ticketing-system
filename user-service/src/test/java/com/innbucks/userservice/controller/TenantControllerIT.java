@@ -1,8 +1,8 @@
 package com.innbucks.userservice.controller;
 
-import com.innbucks.userservice.entity.AgentProfile;
+import com.innbucks.userservice.entity.TenantProfile;
 import com.innbucks.userservice.entity.User;
-import com.innbucks.userservice.repository.AgentProfileRepository;
+import com.innbucks.userservice.repository.TenantProfileRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.security.JwtUtil;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,38 +22,38 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
-class AgentControllerIT {
+class TenantControllerIT {
 
     @Autowired MockMvc mockMvc;
     @Autowired JwtUtil jwtUtil;
     @Autowired UserRepository userRepository;
-    @Autowired AgentProfileRepository agentProfileRepository;
+    @Autowired TenantProfileRepository tenantProfileRepository;
     @Autowired PasswordEncoder passwordEncoder;
 
     @BeforeEach
     void cleanDb() {
-        agentProfileRepository.deleteAll();
+        tenantProfileRepository.deleteAll();
         userRepository.deleteAll();
     }
 
     @Test
     void getProfile_requiresAuth() throws Exception {
-        mockMvc.perform(get("/agent/profile"))
-                .andExpect(status().isForbidden());
+        mockMvc.perform(get("/tenant/profile"))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
-    void getProfile_withValidJwt_returnsAgentProfileDto() throws Exception {
+    void getProfile_withValidJwt_returnsTenantProfileDto() throws Exception {
         User user = userRepository.save(User.builder()
                 .firstName("A")
                 .lastName("B")
                 .phoneNumber("0777000003")
-                .email("agent2@example.com")
+                .email("tenant2@example.com")
                 .password(passwordEncoder.encode("password123"))
-                .role(User.Role.AGENT)
+                .role(User.Role.TENANT)
                 .build());
 
-        agentProfileRepository.save(AgentProfile.builder()
+        tenantProfileRepository.save(TenantProfile.builder()
                 .user(user)
                 .businessName("My Biz")
                 .totalEvents(7)
@@ -62,15 +62,14 @@ class AgentControllerIT {
 
         String token = jwtUtil.generateToken(user.getEmail(), user.getRole().name());
 
-        mockMvc.perform(get("/agent/profile")
+        mockMvc.perform(get("/tenant/profile")
                         .header("Authorization", "Bearer " + token)
                         .accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.id", notNullValue()))
-                .andExpect(jsonPath("$.businessName").value("My Biz"))
-                .andExpect(jsonPath("$.totalEvents").value(7))
-                .andExpect(jsonPath("$.rating").value(4.5));
+                .andExpect(jsonPath("$.data.id", notNullValue()))
+                .andExpect(jsonPath("$.data.businessName").value("My Biz"))
+                .andExpect(jsonPath("$.data.totalEvents").value(7))
+                .andExpect(jsonPath("$.data.rating").value(4.5));
     }
 }
-

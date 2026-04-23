@@ -33,7 +33,7 @@ public class EventService {
 
     @Value("${seat-service.base-url:http://localhost:8083}")
     private String seatServiceBaseUrl;
-    
+
     public Page<EventResponseDTO> getAllActiveEvents(
             LocalDateTime from,
             LocalDateTime to,
@@ -67,9 +67,6 @@ public class EventService {
             int page,
             int size
     ) {
-        // Always sorted by dateTime ascending so the soonest-starting event
-        // for the province surfaces first. Only includes events that are
-        // non-deleted, agent-active, AND have not yet started.
         Pageable pageable = PageRequest.of(page, size, Sort.by("dateTime").ascending());
         LocalDateTime now = LocalDateTime.now();
         log.debug("Fetching active upcoming events by province={} cutoff={} page={} size={}",
@@ -79,7 +76,6 @@ public class EventService {
                 .findByProvinceAndDeletedFalseAndActiveTrueAndDateTimeGreaterThanEqual(
                         province, now, pageable);
 
-        // Assign per-page eventNo 1..N in the order the entities appear (date asc).
         List<EventResponseDTO> dtos = new ArrayList<>(entities.getNumberOfElements());
         int n = 1;
         for (Event event : entities.getContent()) {
@@ -90,48 +86,48 @@ public class EventService {
         return new PageImpl<>(dtos, pageable, entities.getTotalElements());
     }
 
-    public EventResponseDTO createEvent(String agentId, CreateEventRequestDTO request) {
-        log.info("Creating event agentId={} title={} venue={} dateTime={} capacity={}",
-                agentId, request.getTitle(), request.getVenue(), request.getDateTime(), request.getTotalCapacity());
+    public EventResponseDTO createEvent(String tenantId, CreateEventRequestDTO request) {
+        log.info("Creating event tenantId={} title={} venue={} dateTime={} capacity={}",
+                tenantId, request.getTitle(), request.getVenue(), request.getDateTime(), request.getTotalCapacity());
 
-        if (eventRepository.existsByAgentIdAndTitleAndVenueAndDateTimeAndDeletedFalse(
-                agentId, request.getTitle(), request.getVenue(), request.getDateTime())) {
-            log.warn("Event create rejected, duplicate agentId={} title={} venue={} dateTime={}",
-                    agentId, request.getTitle(), request.getVenue(), request.getDateTime());
+        if (eventRepository.existsByTenantIdAndTitleAndVenueAndDateTimeAndDeletedFalse(
+                tenantId, request.getTitle(), request.getVenue(), request.getDateTime())) {
+            log.warn("Event create rejected, duplicate tenantId={} title={} venue={} dateTime={}",
+                    tenantId, request.getTitle(), request.getVenue(), request.getDateTime());
             throw new RuntimeException("An event with the same title, venue and date already exists");
         }
 
         Event event = Event.builder()
-                .agentId(agentId)
+                .tenantId(tenantId)
                 .title(request.getTitle())
                 .description(request.getDescription())
                 .venue(request.getVenue())
                 .province(request.getProvince())
                 .dateTime(request.getDateTime())
                 .totalCapacity(request.getTotalCapacity())
-                .availableTickets(request.getTotalCapacity()) // starts fully available
+                .availableTickets(request.getTotalCapacity())
                 .deleted(false)
                 .build();
 
         Event saved = eventRepository.save(event);
-        log.info("Event created eventId={} agentId={}", saved.getEventId(), agentId);
+        log.info("Event created eventId={} tenantId={}", saved.getEventId(), tenantId);
         return eventMapper.toDTO(saved);
     }
 
-    public EventResponseDTO updateEvent(String agentId, String role, UUID eventId, UpdateEventRequestDTO request) {
-        log.info("Updating event eventId={} agentId={} role={}", eventId, agentId, role);
+    public EventResponseDTO updateEvent(String tenantId, String role, UUID eventId, UpdateEventRequestDTO request) {
+        log.info("Updating event eventId={} tenantId={} role={}", eventId, tenantId, role);
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
                 .orElseThrow(() -> {
-                    log.warn("Update failed, event not found eventId={} agentId={}", eventId, agentId);
+                    log.warn("Update failed, event not found eventId={} tenantId={}", eventId, tenantId);
                     return new RuntimeException("Event not found");
                 });
 
         boolean isAdmin = "ROLE_ADMIN".equals(role);
 
-        // AGENT can update only own event; ADMIN can update any event
-        if (!isAdmin && !event.getAgentId().equals(agentId)) {
-            log.warn("Unauthorized update attempt eventId={} agentId={} ownerAgentId={}",
-                    eventId, agentId, event.getAgentId());
+        // TENANT can update only own event; ADMIN can update any event
+        if (!isAdmin && !event.getTenantId().equals(tenantId)) {
+            log.warn("Unauthorized update attempt eventId={} tenantId={} ownerTenantId={}",
+                    eventId, tenantId, event.getTenantId());
             throw new RuntimeException("You are not authorized to update this event");
         }
 
@@ -141,46 +137,45 @@ public class EventService {
         if (request.getProvince() != null)     event.setProvince(request.getProvince());
         if (request.getDateTime() != null)     event.setDateTime(request.getDateTime());
         if (request.getTotalCapacity() != null) {
-            // Adjust available tickets by the difference in capacity
             int diff = request.getTotalCapacity() - event.getTotalCapacity();
             event.setTotalCapacity(request.getTotalCapacity());
             event.setAvailableTickets(event.getAvailableTickets() + diff);
         }
 
         Event saved = eventRepository.save(event);
-        log.info("Event updated eventId={} agentId={} title={} venue={} dateTime={}",
-                eventId, agentId, saved.getTitle(), saved.getVenue(), saved.getDateTime());
+        log.info("Event updated eventId={} tenantId={} title={} venue={} dateTime={}",
+                eventId, tenantId, saved.getTitle(), saved.getVenue(), saved.getDateTime());
         return eventMapper.toDTO(saved);
     }
 
-    public EventResponseDTO updateEvent(String agentId, UUID eventId, UpdateEventRequestDTO request) {
-        return updateEvent(agentId, "ROLE_AGENT", eventId, request);
+    public EventResponseDTO updateEvent(String tenantId, UUID eventId, UpdateEventRequestDTO request) {
+        return updateEvent(tenantId, "ROLE_TENANT", eventId, request);
     }
 
-    public void deleteEvent(String agentId, String role, UUID eventId) {
-        log.info("Deleting event eventId={} agentId={} role={}", eventId, agentId, role);
+    public void deleteEvent(String tenantId, String role, UUID eventId) {
+        log.info("Deleting event eventId={} tenantId={} role={}", eventId, tenantId, role);
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
                 .orElseThrow(() -> {
-                    log.warn("Delete failed, event not found eventId={} agentId={}", eventId, agentId);
+                    log.warn("Delete failed, event not found eventId={} tenantId={}", eventId, tenantId);
                     return new RuntimeException("Event not found");
                 });
 
         boolean isAdmin = "ROLE_ADMIN".equals(role);
 
-        // AGENT can delete only own event; ADMIN can delete any event
-        if (!isAdmin && !event.getAgentId().equals(agentId)) {
-            log.warn("Unauthorized delete attempt eventId={} agentId={} ownerAgentId={}",
-                    eventId, agentId, event.getAgentId());
+        // TENANT can delete only own event; ADMIN can delete any event
+        if (!isAdmin && !event.getTenantId().equals(tenantId)) {
+            log.warn("Unauthorized delete attempt eventId={} tenantId={} ownerTenantId={}",
+                    eventId, tenantId, event.getTenantId());
             throw new RuntimeException("You are not authorized to delete this event");
         }
 
         event.setDeleted(true);
         eventRepository.save(event);
-        log.info("Event deleted (soft) eventId={} agentId={}", eventId, agentId);
+        log.info("Event deleted (soft) eventId={} tenantId={}", eventId, tenantId);
     }
 
-    public void deleteEvent(String agentId, UUID eventId) {
-        deleteEvent(agentId, "ROLE_AGENT", eventId);
+    public void deleteEvent(String tenantId, UUID eventId) {
+        deleteEvent(tenantId, "ROLE_TENANT", eventId);
     }
 
     private List<EventSeatCategoryResponseDTO> fetchSeatCategoriesForEvent(UUID eventId) {
