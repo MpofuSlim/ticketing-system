@@ -34,7 +34,7 @@ class JwtFilterTest {
 
     @Test
     void validBearerToken_populatesSecurityContext() throws Exception {
-        String token = jwtUtil.generateToken("user@example.com", "TENANT");
+        String token = jwtUtil.generateToken("user@example.com", "TENANT", 4, true);
         MockHttpServletRequest req = new MockHttpServletRequest("GET", "/agents/me");
         req.addHeader("Authorization", "Bearer " + token);
         MockHttpServletResponse res = new MockHttpServletResponse();
@@ -47,7 +47,29 @@ class JwtFilterTest {
         assertEquals("user@example.com", auth.getName());
         assertTrue(auth.getAuthorities().stream()
                 .anyMatch(a -> a.getAuthority().equals("ROLE_TENANT")));
+        assertTrue(auth.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals("TIER_4")));
+        assertTrue(auth.getAuthorities().stream()
+                .anyMatch(a -> a.getAuthority().equals("VERIFIED")));
         verify(chain).doFilter(req, res);
+    }
+
+    @Test
+    void tier2Customer_grantsTier1AndTier2_notTier3() throws Exception {
+        String token = jwtUtil.generateToken("c@example.com", "CUSTOMER", 2, false);
+        MockHttpServletRequest req = new MockHttpServletRequest("GET", "/customers/me");
+        req.addHeader("Authorization", "Bearer " + token);
+        MockHttpServletResponse res = new MockHttpServletResponse();
+        FilterChain chain = mock(FilterChain.class);
+
+        filter.doFilterInternal(req, res, chain);
+
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        assertNotNull(auth);
+        assertTrue(auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("TIER_1")));
+        assertTrue(auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("TIER_2")));
+        assertFalse(auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("TIER_3")));
+        assertFalse(auth.getAuthorities().stream().anyMatch(a -> a.getAuthority().equals("VERIFIED")));
     }
 
     @Test

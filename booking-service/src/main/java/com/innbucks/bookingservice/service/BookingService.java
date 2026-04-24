@@ -22,13 +22,26 @@ public class BookingService {
     private final BookingRepository bookingRepository;
     private final BookingItemRepository bookingItemRepository;
 
+    private static final int TIER_2_MAX_SEATS = 2;
+    private static final int TIER_3_MAX_SEATS = 6;
+    private static final int TIER_4_MAX_SEATS = 10;
+
     @Transactional
     public BookingResponseDTO createBooking(
             String userEmail,
+            int tier,
             CreateBookingRequestDTO request
     ) {
-        log.info("Creating booking userEmail={} eventId={} seats={}",
-                userEmail, request.getEventId(), request.getSeats().size());
+        log.info("Creating booking userEmail={} tier={} eventId={} seats={}",
+                userEmail, tier, request.getEventId(), request.getSeats().size());
+
+        int maxSeats = maxSeatsForTier(tier);
+        if (request.getSeats().size() > maxSeats) {
+            log.warn("Booking rejected, exceeds tier seat limit userEmail={} tier={} requested={} max={}",
+                    userEmail, tier, request.getSeats().size(), maxSeats);
+            throw new RuntimeException(
+                    "Tier " + tier + " customers may book at most " + maxSeats + " seats per booking");
+        }
 
         List<UUID> requestedSeatIds = request.getSeats().stream()
                 .map(CreateBookingRequestDTO.SeatItemRequest::getSeatId)
@@ -183,6 +196,15 @@ public class BookingService {
      * Generates a booking confirmation number
      * Format: INN-20260419-A3F9B2
      */
+    private int maxSeatsForTier(int tier) {
+        return switch (tier) {
+            case 2 -> TIER_2_MAX_SEATS;
+            case 3 -> TIER_3_MAX_SEATS;
+            case 4 -> TIER_4_MAX_SEATS;
+            default -> 0;
+        };
+    }
+
     private String generateConfirmationNumber() {
         String date = LocalDateTime.now()
                 .format(DateTimeFormatter.ofPattern("yyyyMMdd"));

@@ -29,6 +29,7 @@ public class AuthService {
 
     private final UserRepository userRepository;
     private final TenantProfileRepository tenantProfileRepository;
+    private final CustomerProfileRepository customerProfileRepository;
     private final DeviceRepository deviceRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
@@ -114,12 +115,28 @@ public class AuthService {
         }
 
         String subject = user.getEmail() != null ? user.getEmail() : user.getPhoneNumber();
-        String token = jwtUtil.generateToken(subject, user.getRole().name());
+
+        int tier;
+        boolean verified;
+        if (user.getRole() == User.Role.CUSTOMER) {
+            CustomerProfile profile = customerProfileRepository.findByUserId(user.getId())
+                    .orElseThrow(() -> new RuntimeException("Customer profile missing"));
+            tier = profile.getRegistrationTier();
+            verified = profile.isVerified();
+        } else {
+            // System users (TENANT/ADMIN/etc.) are implicitly fully trusted
+            tier = 4;
+            verified = true;
+        }
+
+        String token = jwtUtil.generateToken(subject, user.getRole().name(), tier, verified);
         return AuthResponseDTO.builder()
                 .token(token)
                 .email(user.getEmail())
                 .role(user.getRole().name())
                 .mfaRequired(false)
+                .tier(tier)
+                .verified(verified)
                 .build();
     }
 

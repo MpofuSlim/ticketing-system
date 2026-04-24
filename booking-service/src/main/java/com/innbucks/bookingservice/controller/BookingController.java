@@ -13,6 +13,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -35,10 +36,12 @@ public class BookingController {
     private final BookingService bookingService;
 
     @PostMapping
-    @Operation(summary = "Create booking", description = "Creates a new pending booking for the authenticated user.")
+    @PreAuthorize("hasAuthority('TIER_2')")
+    @Operation(summary = "Create booking", description = "Creates a new pending booking for the authenticated user. Requires tier 2 (ID-verified customers).")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "201", description = "Booking created"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Customer tier below minimum"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Validation or domain error")
     })
     public ResponseEntity<ApiResult<BookingResponseDTO>> createBooking(
@@ -46,11 +49,25 @@ public class BookingController {
             Authentication authentication
     ) {
         String userEmail = authentication.getName();
-        log.info("POST /bookings userEmail={} eventId={} seats={}",
-                userEmail, request.getEventId(), request.getSeats().size());
-        BookingResponseDTO created = bookingService.createBooking(userEmail, request);
+        int tier = extractTier(authentication);
+        log.info("POST /bookings userEmail={} tier={} eventId={} seats={}",
+                userEmail, tier, request.getEventId(), request.getSeats().size());
+        BookingResponseDTO created = bookingService.createBooking(userEmail, tier, request);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Booking created successfully", created));
+    }
+
+    private int extractTier(Authentication authentication) {
+        int tier = 0;
+        for (var authority : authentication.getAuthorities()) {
+            String name = authority.getAuthority();
+            if (name.startsWith("TIER_")) {
+                try {
+                    tier = Math.max(tier, Integer.parseInt(name.substring(5)));
+                } catch (NumberFormatException ignored) { }
+            }
+        }
+        return tier;
     }
 
     @GetMapping("/my")
@@ -102,7 +119,8 @@ public class BookingController {
     }
 
     @PatchMapping("/{id}/cancel")
-    @Operation(summary = "Cancel booking", description = "Cancels a booking before payment confirmation.")
+    @PreAuthorize("hasAuthority('TIER_2')")
+    @Operation(summary = "Cancel booking", description = "Cancels a booking before payment confirmation. Requires tier 2.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Booking cancelled"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),

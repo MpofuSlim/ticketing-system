@@ -12,6 +12,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -67,7 +68,8 @@ public class SeatController {
     }
 
     @PostMapping("/{id}/lock")
-    @Operation(summary = "Lock seat", description = "Locks an available seat for the authenticated user for a short TTL window.")
+    @PreAuthorize("hasAuthority('TIER_2')")
+    @Operation(summary = "Lock seat", description = "Locks an available seat for the authenticated user for a short TTL window. Requires tier 2.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Seat locked"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
@@ -84,7 +86,8 @@ public class SeatController {
     }
 
     @PostMapping("/{id}/confirm")
-    @Operation(summary = "Confirm seat", description = "Confirms a locked seat after successful payment.")
+    @PreAuthorize("hasAuthority('TIER_2')")
+    @Operation(summary = "Confirm seat", description = "Confirms a locked seat after successful payment. Requires tier 2.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Seat confirmed"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
@@ -101,7 +104,8 @@ public class SeatController {
     }
 
     @PostMapping("/{id}/release")
-    @Operation(summary = "Release seat lock", description = "Releases a seat lock owned by the authenticated user.")
+    @PreAuthorize("hasAuthority('TIER_2')")
+    @Operation(summary = "Release seat lock", description = "Releases a seat lock owned by the authenticated user. Requires tier 2.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Seat released"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),

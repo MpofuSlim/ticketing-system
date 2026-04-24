@@ -13,4 +13,6 @@ public class AuthResponseDTO {
     private String role;
     private String email;
     private boolean mfaRequired;
+    private Integer tier;
+    private Boolean verified;
 }
