@@ -17,13 +17,15 @@ class JwtFilterTest {
 
     private JwtUtil jwtUtil;
     private JwtFilter filter;
+    private com.innbucks.userservice.service.TokenRevocationService tokenRevocationService;
 
     @BeforeEach
     void setUp() {
         jwtUtil = new JwtUtil();
         ReflectionTestUtils.setField(jwtUtil, "secret", "test-test-test-test-test-test-test-test");
         ReflectionTestUtils.setField(jwtUtil, "expiration", 3_600_000L);
-        filter = new JwtFilter(jwtUtil);
+        tokenRevocationService = mock(com.innbucks.userservice.service.TokenRevocationService.class);
+        filter = new JwtFilter(jwtUtil, tokenRevocationService);
         SecurityContextHolder.clearContext();
     }
 
@@ -75,6 +77,21 @@ class JwtFilterTest {
     @Test
     void missingAuthHeader_leavesContextEmpty() throws Exception {
         MockHttpServletRequest req = new MockHttpServletRequest("GET", "/agents/me");
+        MockHttpServletResponse res = new MockHttpServletResponse();
+        FilterChain chain = mock(FilterChain.class);
+
+        filter.doFilterInternal(req, res, chain);
+
+        assertNull(SecurityContextHolder.getContext().getAuthentication());
+        verify(chain).doFilter(req, res);
+    }
+
+    @Test
+    void revokedToken_leavesContextEmpty_andStillChains() throws Exception {
+        String token = jwtUtil.generateToken("u@example.com", "CUSTOMER", 2, false);
+        when(tokenRevocationService.isRevoked(token)).thenReturn(true);
+        MockHttpServletRequest req = new MockHttpServletRequest("GET", "/agents/me");
+        req.addHeader("Authorization", "Bearer " + token);
         MockHttpServletResponse res = new MockHttpServletResponse();
         FilterChain chain = mock(FilterChain.class);
 

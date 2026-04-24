@@ -48,6 +48,10 @@ public class JwtUtil {
         return getClaims(token).get("verified", Boolean.class);
     }
 
+    public Date extractExpiration(String token) {
+        return getClaims(token).getExpiration();
+    }
+
     public boolean isTokenValid(String token) {
         try {
             getClaims(token);
