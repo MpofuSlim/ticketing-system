@@ -22,6 +22,7 @@ public class CustomerService {
     private final CustomerProfileRepository customerProfileRepository;
     private final DeviceRepository deviceRepository;
     private final PasswordEncoder passwordEncoder;
+    private final OtpService otpService;
 
     @Transactional
     public CustomerRegistrationResponseDTO registerTier1(CustomerTier1RegisterDTO request) {
@@ -44,15 +45,18 @@ public class CustomerService {
                 .user(user)
                 .registrationTier(1)
                 .verified(false)
+                .phoneVerified(false)
                 .build();
         customerProfileRepository.save(profile);
+
+        otpService.sendOtp(user.getPhoneNumber());
 
         return CustomerRegistrationResponseDTO.builder()
                 .userId(user.getId())
                 .phoneNumber(user.getPhoneNumber())
                 .tier(1)
                 .verified(false)
-                .nextStep("Submit personal details at /auth/customer/register/tier2")
+                .nextStep("Verify phone at /auth/otp/verify, then submit personal details at /auth/customer/register/tier2")
                 .build();
     }
 
