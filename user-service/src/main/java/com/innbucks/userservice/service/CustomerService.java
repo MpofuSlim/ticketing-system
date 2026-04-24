@@ -3,9 +3,11 @@ package com.innbucks.userservice.service;
 import com.innbucks.userservice.dto.*;
 import com.innbucks.userservice.entity.CustomerProfile;
 import com.innbucks.userservice.entity.Device;
+import com.innbucks.userservice.entity.PendingRegistration;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.repository.CustomerProfileRepository;
 import com.innbucks.userservice.repository.DeviceRepository;
+import com.innbucks.userservice.repository.PendingRegistrationRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -13,17 +15,28 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
+import java.time.Instant;
+
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class CustomerService {
 
+    static final Duration PENDING_REGISTRATION_TTL = Duration.ofMinutes(30);
+
     private final UserRepository userRepository;
     private final CustomerProfileRepository customerProfileRepository;
     private final DeviceRepository deviceRepository;
+    private final PendingRegistrationRepository pendingRegistrationRepository;
     private final PasswordEncoder passwordEncoder;
     private final OtpService otpService;
 
+    /**
+     * Tier 1 no longer creates a User or CustomerProfile. It stashes the phone + hashed password
+     * in a pending_registrations row and fires an OTP. The account is materialised later by
+     * {@link OtpService#verifyOtp} once the customer submits a valid code.
+     */
     @Transactional
     public CustomerRegistrationResponseDTO registerTier1(CustomerTier1RegisterDTO request) {
         log.info("Customer tier 1 registration phone={}", request.getPhoneNumber());
@@ -31,32 +44,26 @@ public class CustomerService {
             throw new RuntimeException("Phone number already registered");
         }
 
-        User user = User.builder()
-                .firstName("Customer")
-                .lastName("Pending")
+        // Replace any in-flight pending registration — lets users recover from a mistyped password.
+        pendingRegistrationRepository.deleteByPhoneNumber(request.getPhoneNumber());
+        pendingRegistrationRepository.flush();
+
+        Instant now = Instant.now();
+        PendingRegistration pending = PendingRegistration.builder()
                 .phoneNumber(request.getPhoneNumber())
-                .password(passwordEncoder.encode(request.getPassword()))
-                .role(User.Role.CUSTOMER)
-                .mfaEnabled(false)
+                .passwordHash(passwordEncoder.encode(request.getPassword()))
+                .createdAt(now)
+                .expiresAt(now.plus(PENDING_REGISTRATION_TTL))
                 .build();
-        userRepository.save(user);
+        pendingRegistrationRepository.save(pending);
 
-        CustomerProfile profile = CustomerProfile.builder()
-                .user(user)
-                .registrationTier(1)
-                .verified(false)
-                .phoneVerified(false)
-                .build();
-        customerProfileRepository.save(profile);
-
-        otpService.sendOtp(user.getPhoneNumber());
+        otpService.sendOtp(request.getPhoneNumber());
 
         return CustomerRegistrationResponseDTO.builder()
-                .userId(user.getId())
-                .phoneNumber(user.getPhoneNumber())
+                .phoneNumber(request.getPhoneNumber())
                 .tier(1)
                 .verified(false)
-                .nextStep("Verify phone at /auth/otp/verify, then submit personal details at /auth/customer/register/tier2")
+                .nextStep("Verify your phone at /auth/otp/verify to complete account creation, then proceed to /auth/customer/register/tier2")
                 .build();
     }
 

@@ -3,10 +3,12 @@ package com.innbucks.userservice.service;
 import com.innbucks.userservice.entity.CustomerProfile;
 import com.innbucks.userservice.entity.Otp;
 import com.innbucks.userservice.entity.OtpRetryAttempt;
+import com.innbucks.userservice.entity.PendingRegistration;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.repository.CustomerProfileRepository;
 import com.innbucks.userservice.repository.OtpRepository;
 import com.innbucks.userservice.repository.OtpRetryAttemptRepository;
+import com.innbucks.userservice.repository.PendingRegistrationRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -25,8 +27,9 @@ class OtpServiceTest {
     private OtpService newService(OtpRepository otpRepo,
                                   OtpRetryAttemptRepository retryRepo,
                                   UserRepository userRepo,
-                                  CustomerProfileRepository profileRepo) {
-        return new OtpService(otpRepo, retryRepo, userRepo, profileRepo);
+                                  CustomerProfileRepository profileRepo,
+                                  PendingRegistrationRepository pendingRepo) {
+        return new OtpService(otpRepo, retryRepo, userRepo, profileRepo, pendingRepo);
     }
 
     @Test
@@ -35,7 +38,7 @@ class OtpServiceTest {
         OtpRetryAttemptRepository retryRepo = mock(OtpRetryAttemptRepository.class);
         when(retryRepo.findByPhoneNumber(anyString())).thenReturn(Optional.empty());
 
-        newService(otpRepo, retryRepo, mock(UserRepository.class), mock(CustomerProfileRepository.class))
+        newService(otpRepo, retryRepo, mock(UserRepository.class), mock(CustomerProfileRepository.class), mock(PendingRegistrationRepository.class))
                 .sendOtp("+263771234567");
 
         verify(otpRepo).deleteByPhoneNumber("+263771234567");
@@ -57,7 +60,7 @@ class OtpServiceTest {
                 .build();
         when(retryRepo.findByPhoneNumber("+263771234567")).thenReturn(Optional.of(attempt));
 
-        OtpService service = newService(otpRepo, retryRepo, mock(UserRepository.class), mock(CustomerProfileRepository.class));
+        OtpService service = newService(otpRepo, retryRepo, mock(UserRepository.class), mock(CustomerProfileRepository.class), mock(PendingRegistrationRepository.class));
 
         OtpService.OtpRateLimitException ex = assertThrows(OtpService.OtpRateLimitException.class,
                 () -> service.sendOtp("+263771234567"));
@@ -79,7 +82,7 @@ class OtpServiceTest {
                 .build();
         when(retryRepo.findByPhoneNumber("+263771234567")).thenReturn(Optional.of(attempt));
 
-        OtpService service = newService(otpRepo, retryRepo, mock(UserRepository.class), mock(CustomerProfileRepository.class));
+        OtpService service = newService(otpRepo, retryRepo, mock(UserRepository.class), mock(CustomerProfileRepository.class), mock(PendingRegistrationRepository.class));
 
         assertThrows(OtpService.OtpRateLimitException.class, () -> service.sendOtp("+263771234567"));
         verify(otpRepo, never()).save(any());
@@ -97,7 +100,7 @@ class OtpServiceTest {
                 .build();
         when(retryRepo.findByPhoneNumber("+263771234567")).thenReturn(Optional.of(attempt));
 
-        newService(otpRepo, retryRepo, mock(UserRepository.class), mock(CustomerProfileRepository.class))
+        newService(otpRepo, retryRepo, mock(UserRepository.class), mock(CustomerProfileRepository.class), mock(PendingRegistrationRepository.class))
                 .sendOtp("+263771234567");
 
         // Window rolled over: counter reset to 1, OTP sent successfully
@@ -106,24 +109,60 @@ class OtpServiceTest {
     }
 
     @Test
-    void verifyOtp_onCorrectCode_consumesAndFlipsPhoneVerified() {
+    void verifyOtp_onCorrectCode_withPendingRegistration_materialisesAccount() {
         OtpRepository otpRepo = mock(OtpRepository.class);
         OtpRetryAttemptRepository retryRepo = mock(OtpRetryAttemptRepository.class);
         UserRepository userRepo = mock(UserRepository.class);
         CustomerProfileRepository profileRepo = mock(CustomerProfileRepository.class);
+        PendingRegistrationRepository pendingRepo = mock(PendingRegistrationRepository.class);
 
         when(otpRepo.consume(eq("+263771234567"), eq("000000"), any())).thenReturn(1);
+        PendingRegistration pending = PendingRegistration.builder()
+                .phoneNumber("+263771234567")
+                .passwordHash("hashed-pw")
+                .build();
+        when(pendingRepo.findByPhoneNumber("+263771234567")).thenReturn(Optional.of(pending));
+
+        boolean ok = newService(otpRepo, retryRepo, userRepo, profileRepo, pendingRepo)
+                .verifyOtp("+263771234567", "000000");
+
+        assertTrue(ok);
+        ArgumentCaptor<User> userCaptor = ArgumentCaptor.forClass(User.class);
+        verify(userRepo).save(userCaptor.capture());
+        assertEquals("+263771234567", userCaptor.getValue().getPhoneNumber());
+        assertEquals("hashed-pw", userCaptor.getValue().getPassword());
+        assertEquals(User.Role.CUSTOMER, userCaptor.getValue().getRole());
+
+        ArgumentCaptor<CustomerProfile> profileCaptor = ArgumentCaptor.forClass(CustomerProfile.class);
+        verify(profileRepo).save(profileCaptor.capture());
+        assertTrue(profileCaptor.getValue().isPhoneVerified());
+        assertEquals(1, profileCaptor.getValue().getRegistrationTier());
+
+        verify(pendingRepo).delete(pending);
+    }
+
+    @Test
+    void verifyOtp_onCorrectCode_withoutPending_butExistingUser_flipsPhoneVerified() {
+        OtpRepository otpRepo = mock(OtpRepository.class);
+        OtpRetryAttemptRepository retryRepo = mock(OtpRetryAttemptRepository.class);
+        UserRepository userRepo = mock(UserRepository.class);
+        CustomerProfileRepository profileRepo = mock(CustomerProfileRepository.class);
+        PendingRegistrationRepository pendingRepo = mock(PendingRegistrationRepository.class);
+
+        when(otpRepo.consume(eq("+263771234567"), eq("000000"), any())).thenReturn(1);
+        when(pendingRepo.findByPhoneNumber("+263771234567")).thenReturn(Optional.empty());
         User user = User.builder().id(7L).phoneNumber("+263771234567").role(User.Role.CUSTOMER).build();
         CustomerProfile profile = CustomerProfile.builder().user(user).registrationTier(1).phoneVerified(false).build();
         when(userRepo.findByPhoneNumber("+263771234567")).thenReturn(Optional.of(user));
         when(profileRepo.findByUserId(7L)).thenReturn(Optional.of(profile));
 
-        boolean ok = newService(otpRepo, retryRepo, userRepo, profileRepo)
+        boolean ok = newService(otpRepo, retryRepo, userRepo, profileRepo, pendingRepo)
                 .verifyOtp("+263771234567", "000000");
 
         assertTrue(ok);
         assertTrue(profile.isPhoneVerified());
         verify(profileRepo).save(profile);
+        verify(userRepo, never()).save(any()); // no account creation in this branch
     }
 
     @Test
@@ -133,7 +172,7 @@ class OtpServiceTest {
         Otp otp = Otp.builder().phoneNumber("+263771234567").code("000000").failedAttempts(0).build();
         when(otpRepo.findByPhoneNumber("+263771234567")).thenReturn(Optional.of(otp));
 
-        boolean ok = newService(otpRepo, mock(OtpRetryAttemptRepository.class), mock(UserRepository.class), mock(CustomerProfileRepository.class))
+        boolean ok = newService(otpRepo, mock(OtpRetryAttemptRepository.class), mock(UserRepository.class), mock(CustomerProfileRepository.class), mock(PendingRegistrationRepository.class))
                 .verifyOtp("+263771234567", "999999");
 
         assertFalse(ok);
@@ -148,7 +187,7 @@ class OtpServiceTest {
         Otp otp = Otp.builder().phoneNumber("+263771234567").code("000000").failedAttempts(2).build();
         when(otpRepo.findByPhoneNumber("+263771234567")).thenReturn(Optional.of(otp));
 
-        newService(otpRepo, mock(OtpRetryAttemptRepository.class), mock(UserRepository.class), mock(CustomerProfileRepository.class))
+        newService(otpRepo, mock(OtpRetryAttemptRepository.class), mock(UserRepository.class), mock(CustomerProfileRepository.class), mock(PendingRegistrationRepository.class))
                 .verifyOtp("+263771234567", "999999");
 
         verify(otpRepo).delete(otp);
