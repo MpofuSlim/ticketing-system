@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 class AuthServiceTest {
@@ -155,7 +156,7 @@ class AuthServiceTest {
         when(jwt.generateToken("u@example.com", "SHOP_USER", 4, true)).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
-        req.setEmail("u@example.com"); req.setPassword("pw");
+        req.setIdentifier("u@example.com"); req.setPassword("pw");
 
         AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),
                 mock(DeviceRepository.class), encoder, jwt).login(req);
@@ -185,7 +186,7 @@ class AuthServiceTest {
         when(jwt.generateToken("0777000099", "CUSTOMER", 2, false)).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
-        req.setPhoneNumber("0777000099"); req.setPassword("pw");
+        req.setIdentifier("0777000099"); req.setPassword("pw");
 
         AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),
                 customerRepo, mock(DeviceRepository.class), encoder, jwt).login(req);
@@ -206,7 +207,7 @@ class AuthServiceTest {
         when(encoder.matches(any(), any())).thenReturn(false);
 
         LoginRequestDTO req = new LoginRequestDTO();
-        req.setEmail("u@example.com"); req.setPassword("wrong");
+        req.setIdentifier("u@example.com"); req.setPassword("wrong");
 
         AuthService service = newService(userRepo, mock(TenantProfileRepository.class),
                 mock(DeviceRepository.class), encoder, mock(JwtUtil.class));
@@ -220,7 +221,7 @@ class AuthServiceTest {
         when(userRepo.findByEmail(any())).thenReturn(Optional.empty());
 
         LoginRequestDTO req = new LoginRequestDTO();
-        req.setEmail("missing@example.com"); req.setPassword("pw");
+        req.setIdentifier("missing@example.com"); req.setPassword("pw");
 
         AuthService service = newService(userRepo, mock(TenantProfileRepository.class),
                 mock(DeviceRepository.class), mock(PasswordEncoder.class), mock(JwtUtil.class));
@@ -228,23 +229,28 @@ class AuthServiceTest {
     }
 
     @Test
-    void login_withMfaEnabledAndNoOtp_returnsMfaRequired() {
+    void login_withMfaEnabled_stillIssuesTokenDirectly() {
+        // MFA-at-login is no longer enforced; the mfaEnabled flag doesn't block token issuance.
         UserRepository userRepo = mock(UserRepository.class);
+        CustomerProfileRepository customerRepo = mock(CustomerProfileRepository.class);
         PasswordEncoder encoder = mock(PasswordEncoder.class);
         JwtUtil jwt = mock(JwtUtil.class);
-        User user = User.builder().email("u@example.com").password("hashed")
+        User user = User.builder().id(1L).email("u@example.com").password("hashed")
                 .role(User.Role.CUSTOMER).mfaEnabled(true).build();
+        CustomerProfile profile = CustomerProfile.builder()
+                .user(user).registrationTier(1).verified(false).build();
         when(userRepo.findByEmail(any())).thenReturn(Optional.of(user));
+        when(customerRepo.findByUserId(1L)).thenReturn(Optional.of(profile));
         when(encoder.matches(any(), any())).thenReturn(true);
+        when(jwt.generateToken(eq("u@example.com"), eq("CUSTOMER"), eq(1), eq(false))).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
-        req.setEmail("u@example.com"); req.setPassword("pw"); // no OTP
+        req.setIdentifier("u@example.com"); req.setPassword("pw");
 
         AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),
-                mock(DeviceRepository.class), encoder, jwt).login(req);
+                customerRepo, mock(DeviceRepository.class), encoder, jwt).login(req);
 
-        assertTrue(resp.isMfaRequired());
-        assertNull(resp.getToken());
-        verify(jwt, never()).generateToken(any(), any(), anyInt(), anyBoolean());
+        assertEquals("tok", resp.getToken());
+        assertFalse(resp.isMfaRequired());
     }
 }
