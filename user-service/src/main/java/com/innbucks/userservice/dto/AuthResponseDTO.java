@@ -27,8 +27,8 @@ public class AuthResponseDTO {
             allowableValues = {"CUSTOMER", "TENANT", "ADMIN", "SYSTEM_MANAGER", "MERCHANT_ADMIN", "SHOP_ADMIN", "SHOP_USER"})
     private String role;
 
-    @Schema(description = "Email address if registered. Null for tier-1 customers who registered with phone only.",
-            example = "jane@example.com",
+    @Schema(description = "Email address if the account has one. Omitted from the JSON for customers who " +
+            "registered with a phone number only (tier 1 / tier 2 / tier 3 / tier 4 phone-only accounts).",
             nullable = true)
     private String email;
 
