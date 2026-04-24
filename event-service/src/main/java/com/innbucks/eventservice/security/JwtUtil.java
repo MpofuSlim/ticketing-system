@@ -25,6 +25,14 @@ public class JwtUtil {
         return getClaims(token).get("role", String.class);
     }
 
+    public Integer extractTier(String token) {
+        return getClaims(token).get("tier", Integer.class);
+    }
+
+    public Boolean extractVerified(String token) {
+        return getClaims(token).get("verified", Boolean.class);
+    }
+
     public boolean isTokenValid(String token) {
         try {
             getClaims(token);

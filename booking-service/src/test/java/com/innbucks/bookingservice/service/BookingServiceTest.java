@@ -53,10 +53,39 @@ class BookingServiceTest {
                 .thenReturn(List.of(existing));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> service.createBooking("user@example.com", req));
+                () -> service.createBooking("user@example.com", 4, req));
         assertTrue(ex.getMessage().toLowerCase().contains("already booked"));
         verify(bookingRepo, never()).save(any());
         verify(itemRepo, never()).saveAll(any());
+    }
+
+    @Test
+    void createBooking_rejectsTier1CustomersOutright() {
+        BookingService service = new BookingService(mock(BookingRepository.class), mock(BookingItemRepository.class));
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> service.createBooking("u@example.com", 1, request(BigDecimal.TEN)));
+        assertTrue(ex.getMessage().toLowerCase().contains("tier"));
+    }
+
+    @Test
+    void createBooking_rejectsWhenTier2ExceedsTwoSeats() {
+        BookingService service = new BookingService(mock(BookingRepository.class), mock(BookingItemRepository.class));
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> service.createBooking("u@example.com", 2,
+                        request(BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE)));
+        assertTrue(ex.getMessage().contains("2 seats"));
+    }
+
+    @Test
+    void createBooking_allowsTier3UpToSixSeats() {
+        BookingService service = new BookingService(mock(BookingRepository.class), mock(BookingItemRepository.class));
+
+        BookingResponseDTO resp = service.createBooking("u@example.com", 3,
+                request(BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE));
+
+        assertEquals(6, resp.getItems().size());
     }
 
     @Test
@@ -65,7 +94,7 @@ class BookingServiceTest {
         BookingItemRepository itemRepo = mock(BookingItemRepository.class);
         BookingService service = new BookingService(bookingRepo, itemRepo);
 
-        BookingResponseDTO resp = service.createBooking("user@example.com",
+        BookingResponseDTO resp = service.createBooking("user@example.com", 4,
                 request(new BigDecimal("20.00"), new BigDecimal("15.50"), new BigDecimal("4.50")));
 
         ArgumentCaptor<Booking> savedBooking = ArgumentCaptor.forClass(Booking.class);
@@ -86,7 +115,7 @@ class BookingServiceTest {
     void createBooking_generatesUniqueTicketNumbersForEachSeat() {
         BookingService service = new BookingService(mock(BookingRepository.class), mock(BookingItemRepository.class));
 
-        BookingResponseDTO resp = service.createBooking("u@example.com",
+        BookingResponseDTO resp = service.createBooking("u@example.com", 4,
                 request(BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE));
 
         long unique = resp.getItems().stream().map(i -> i.getTicketNumber()).distinct().count();
@@ -101,7 +130,7 @@ class BookingServiceTest {
     void createBooking_producesConfirmationNumberWithExpectedFormat() {
         BookingService service = new BookingService(mock(BookingRepository.class), mock(BookingItemRepository.class));
 
-        BookingResponseDTO resp = service.createBooking("u@example.com", request(BigDecimal.TEN));
+        BookingResponseDTO resp = service.createBooking("u@example.com", 4, request(BigDecimal.TEN));
 
         // Format: INN-YYYYMMDD-XXXXXX (6 hex chars upper)
         assertTrue(Pattern.matches("INN-\\d{8}-[A-F0-9]{6}", resp.getConfirmationNumber()),

@@ -3,6 +3,7 @@ package com.innbucks.seatservice.controller;
 import com.innbucks.seatservice.dto.ApiResult;
 import com.innbucks.seatservice.dto.SeatLockResponseDTO;
 import com.innbucks.seatservice.dto.SeatResponseDTO;
+import com.innbucks.seatservice.security.MinTier;
 import com.innbucks.seatservice.service.SeatService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -67,7 +68,8 @@ public class SeatController {
     }
 
     @PostMapping("/{id}/lock")
-    @Operation(summary = "Lock seat", description = "Locks an available seat for the authenticated user for a short TTL window.")
+    @MinTier(2)
+    @Operation(summary = "Lock seat", description = "Locks an available seat for the authenticated user for a short TTL window. Requires tier 2.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Seat locked"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
@@ -84,7 +86,8 @@ public class SeatController {
     }
 
     @PostMapping("/{id}/confirm")
-    @Operation(summary = "Confirm seat", description = "Confirms a locked seat after successful payment.")
+    @MinTier(2)
+    @Operation(summary = "Confirm seat", description = "Confirms a locked seat after successful payment. Requires tier 2.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Seat confirmed"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
@@ -101,7 +104,8 @@ public class SeatController {
     }
 
     @PostMapping("/{id}/release")
-    @Operation(summary = "Release seat lock", description = "Releases a seat lock owned by the authenticated user.")
+    @MinTier(2)
+    @Operation(summary = "Release seat lock", description = "Releases a seat lock owned by the authenticated user. Requires tier 2.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Seat released"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
