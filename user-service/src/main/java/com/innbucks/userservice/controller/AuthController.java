@@ -3,10 +3,13 @@ package com.innbucks.userservice.controller;
 import com.innbucks.userservice.dto.*;
 import com.innbucks.userservice.service.AuthService;
 import com.innbucks.userservice.service.CustomerService;
+import com.innbucks.userservice.service.TokenRevocationService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -23,6 +26,7 @@ public class AuthController {
 
     private final AuthService authService;
     private final CustomerService customerService;
+    private final TokenRevocationService tokenRevocationService;
 
     @PostMapping("/register")
     @SecurityRequirements()
@@ -76,6 +80,37 @@ public class AuthController {
         }
         log.info("Login successful role={}", response.getRole());
         return ResponseEntity.ok(ApiResult.ok("Login successful", response));
+    }
+
+    @PostMapping("/logout")
+    @SecurityRequirement(name = "bearerAuth")
+    @Operation(summary = "Logout",
+            description = """
+                    Revokes the JWT supplied in the `Authorization: Bearer <token>` header.
+
+                    The token's SHA-256 hash is added to a server-side denylist. Any subsequent request
+                    to user-service that presents the same token will be treated as unauthenticated.
+
+                    **Scope note:** today the denylist is checked only in user-service. Other services
+                    (booking, seat, event) continue to accept the token until it expires naturally. For
+                    a full logout, the client should also delete its stored token.
+
+                    Safe to call multiple times — revoking an already-revoked token is a no-op.
+                    """)
+            @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Token revoked"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Missing or malformed Authorization header, or token already expired")
+    })
+    public ResponseEntity<ApiResult<Void>> logout(HttpServletRequest request) {
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            return ResponseEntity.badRequest()
+                    .body(ApiResult.error(HttpStatus.BAD_REQUEST, "Missing Bearer token"));
+        }
+        String token = authHeader.substring(7);
+        tokenRevocationService.revoke(token);
+        log.info("Logout successful");
+        return ResponseEntity.ok(ApiResult.ok("Logout successful", null));
     }
 
     @PostMapping("/customer/register")
