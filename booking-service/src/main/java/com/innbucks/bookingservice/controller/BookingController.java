@@ -61,7 +61,7 @@ public class BookingController {
         int tier = 0;
         for (var authority : authentication.getAuthorities()) {
             String name = authority.getAuthority();
-            if (name.startsWith("TIER_")) {
+            if (name != null && name.startsWith("TIER_")) {
                 try {
                     tier = Math.max(tier, Integer.parseInt(name.substring(5)));
                 } catch (NumberFormatException ignored) { }
