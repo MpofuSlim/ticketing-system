@@ -19,11 +19,11 @@ class JwtUtilTest {
 
     @Test
     void generateToken_embedsSubjectAndRoleClaim() {
-        String token = jwtUtil.generateToken("user@example.com", "AGENT");
+        String token = jwtUtil.generateToken("user@example.com", "TENANT");
 
         assertNotNull(token);
         assertEquals("user@example.com", jwtUtil.extractEmail(token));
-        assertEquals("AGENT", jwtUtil.extractRole(token));
+        assertEquals("TENANT", jwtUtil.extractRole(token));
     }
 
     @Test
@@ -42,7 +42,7 @@ class JwtUtilTest {
         JwtUtil other = new JwtUtil();
         ReflectionTestUtils.setField(other, "secret", "different-secret-different-secret-xxx");
         ReflectionTestUtils.setField(other, "expiration", 3_600_000L);
-        String foreignToken = other.generateToken("user@example.com", "AGENT");
+        String foreignToken = other.generateToken("user@example.com", "TENANT");
 
         assertFalse(jwtUtil.isTokenValid(foreignToken));
     }
@@ -50,7 +50,7 @@ class JwtUtilTest {
     @Test
     void isTokenValid_returnsFalseForExpiredToken() {
         ReflectionTestUtils.setField(jwtUtil, "expiration", -1_000L);
-        String expired = jwtUtil.generateToken("user@example.com", "AGENT");
+        String expired = jwtUtil.generateToken("user@example.com", "TENANT");
 
         assertFalse(jwtUtil.isTokenValid(expired));
     }

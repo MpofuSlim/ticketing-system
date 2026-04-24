@@ -21,8 +21,8 @@ public class EventResponseDTO {
     @Schema(example = "1", description = "1-based position of this event within the current /events/by-province response page. Not stored; null on other endpoints.")
     private Integer eventNo;
 
-    @Schema(description = "Owning agent identifier (typically the JWT subject/username).")
-    private String agentId;
+    @Schema(description = "Owning tenant identifier (typically the JWT subject/username).")
+    private String tenantId;
 
     @Schema(example = "Summer Concert")
     private String title;

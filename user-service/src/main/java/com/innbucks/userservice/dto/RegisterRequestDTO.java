@@ -1,5 +1,6 @@
 package com.innbucks.userservice.dto;
 
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 
@@ -8,6 +9,8 @@ public class RegisterRequestDTO {
 
     @NotBlank(message = "First name is required")
     private String firstName;
+
+    private String middleName;
 
     @NotBlank(message = "Last name is required")
     private String lastName;
@@ -23,15 +26,14 @@ public class RegisterRequestDTO {
     @Size(min = 8, message = "Password must be at least 8 characters")
     private String password;
 
-    private String role = "AGENT";
+    @NotBlank(message = "Role is required")
+    private String role;
 
-    // Agent-specific fields
-    private String businessName;
-    private String businessAddress;
-    private String businessEmail;
-    private String businessPhoneNumber;
-    private String registrationNumber;
+    @Valid
+    @NotNull(message = "Device registration is required")
+    private DeviceRegistrationDTO device;
 
-    // Will hold the file path after upload is processed
-    private String metaData;
+    @Valid
+    @NotNull(message = "MFA registration is required")
+    private MfaRegistrationDTO mfa;
 }

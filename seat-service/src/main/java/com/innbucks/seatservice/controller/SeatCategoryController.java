@@ -55,12 +55,12 @@ public class SeatCategoryController {
     }
 
     @PostMapping
-    @PreAuthorize("hasRole('AGENT')")
-    @Operation(summary = "Create category", description = "Creates a seat category for an event. Requires AGENT role.")
+    @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
+    @Operation(summary = "Create category", description = "Creates a seat category for an event. Requires TENANT or ADMIN role.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "201", description = "Category created"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not AGENT"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Validation or domain error")
     })
     public ResponseEntity<ApiResult<CreateCategoryResponseDTO>> createCategory(
@@ -73,12 +73,12 @@ public class SeatCategoryController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasRole('AGENT')")
-    @Operation(summary = "Delete category", description = "Soft-deletes a seat category. Requires AGENT role.")
+    @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
+    @Operation(summary = "Delete category", description = "Soft-deletes a seat category. Requires TENANT or ADMIN role.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Category deleted"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not AGENT"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Category not found")
     })
     public ResponseEntity<ApiResult<Void>> deleteCategory(@PathVariable UUID id) {

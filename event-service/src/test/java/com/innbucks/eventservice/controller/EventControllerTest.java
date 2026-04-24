@@ -43,7 +43,7 @@ class EventControllerTest {
     @Test
     void getAllEvents_isPublic_andReturnsLocalDateInDto() throws Exception {
         Event saved = eventRepository.save(Event.builder()
-                .agentId("agent-1")
+                .tenantId("tenant-1")
                 .title("Test Event")
                 .description("desc")
                 .venue("Harare")
@@ -80,8 +80,8 @@ class EventControllerTest {
     }
 
     @Test
-    @WithMockUser(username = "agent-99", roles = "AGENT")
-    void createEvent_withAgentRole_createsEvent() throws Exception {
+    @WithMockUser(username = "tenant-99", roles = "TENANT")
+    void createEvent_withTenantRole_createsEvent() throws Exception {
         CreateEventRequestDTO req = new CreateEventRequestDTO();
         req.setTitle("Concert");
         req.setDescription("desc");
@@ -95,7 +95,7 @@ class EventControllerTest {
                         .content(objectMapper.writeValueAsString(req)))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.code", is("201 CREATED")))
-                .andExpect(jsonPath("$.data.agentId", is("agent-99")))
+                .andExpect(jsonPath("$.data.tenantId", is("tenant-99")))
                 .andExpect(jsonPath("$.data.title", is("Concert")))
                 .andExpect(jsonPath("$.data.availableTickets", is(50)));
     }
@@ -109,7 +109,6 @@ class EventControllerTest {
 
     @Test
     void getEventsByProvince_onlyReturnsActiveUpcomingEvents_numberedFromOne() throws Exception {
-        // 3 upcoming events in HRE — earliest first, expected as eventNo 1..3
         eventRepository.save(eventBuilder()
                 .title("Third")
                 .province(Province.HRE)
@@ -126,14 +125,12 @@ class EventControllerTest {
                 .dateTime(LocalDateTime.now().plusDays(20))
                 .build());
 
-        // Past event — must be filtered out
         eventRepository.save(eventBuilder()
                 .title("Past")
                 .province(Province.HRE)
                 .dateTime(LocalDateTime.now().minusDays(1))
                 .build());
 
-        // Inactive upcoming event — must be filtered out
         eventRepository.save(eventBuilder()
                 .title("Inactive")
                 .province(Province.HRE)
@@ -141,7 +138,6 @@ class EventControllerTest {
                 .active(false)
                 .build());
 
-        // Different province — must be filtered out
         eventRepository.save(eventBuilder()
                 .title("Other province")
                 .province(Province.BYO)
@@ -164,7 +160,7 @@ class EventControllerTest {
 
     private static Event.EventBuilder eventBuilder() {
         return Event.builder()
-                .agentId("agent-1")
+                .tenantId("tenant-1")
                 .description("desc")
                 .venue("Venue")
                 .totalCapacity(100)

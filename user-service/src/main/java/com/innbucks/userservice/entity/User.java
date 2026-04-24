@@ -19,13 +19,15 @@ public class User {
     @Column(nullable = false)
     private String firstName;
 
+    private String middleName;
+
     @Column(nullable = false)
     private String lastName;
 
-    @Column(nullable = false)
+    @Column(unique = true, nullable = false)
     private String phoneNumber;
 
-    @Column(unique = true, nullable = false)
+    @Column(unique = true)
     private String email;
 
     @Column(nullable = false)
@@ -41,6 +43,12 @@ public class User {
     private LocalDateTime createdAt = LocalDateTime.now();
 
     public enum Role {
-        AGENT, CUSTOMER, ADMIN
+        SYSTEM_MANAGER,
+        TENANT,
+        MERCHANT_ADMIN,
+        SHOP_ADMIN,
+        SHOP_USER,
+        CUSTOMER,
+        ADMIN
     }
 }

@@ -70,7 +70,7 @@ public class SecurityConfig {
                             response.setContentType("application/json");
                             response.setStatus(403);
                             response.getWriter().write(
-                                    "{\"code\":\"403 FORBIDDEN\",\"message\":\"Forbidden - you do not have the required role (AGENT or ADMIN)\",\"data\":null}");
+                                    "{\"code\":\"403 FORBIDDEN\",\"message\":\"Forbidden - you do not have the required role (TENANT or ADMIN)\",\"data\":null}");
                         })
                 )
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);

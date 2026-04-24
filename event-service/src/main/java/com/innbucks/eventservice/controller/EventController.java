@@ -30,7 +30,7 @@ import java.util.UUID;
 @RequestMapping("/events")
 @RequiredArgsConstructor
 @Slf4j
-@Tag(name = "Events", description = "Browse events publicly; agents can create/update/delete events.")
+@Tag(name = "Events", description = "Browse events publicly; tenants can create/update/delete events.")
 public class EventController {
 
     private final EventService eventService;
@@ -142,13 +142,13 @@ public class EventController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyRole('AGENT','ADMIN')")
+    @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
     @Operation(
             summary = "Create event",
             description = """
-                    Creates a new event for the authenticated **AGENT** or **ADMIN**.
+                    Creates a new event for the authenticated **TENANT** or **ADMIN**.
 
-                    The authenticated principal (`Authentication#getName()`) becomes the owning `agentId`.
+                    The authenticated principal (`Authentication#getName()`) becomes the owning `tenantId`.
 
                     Validation:
                     - `dateTime` must be **in the future** (validated on the request DTO).
@@ -157,7 +157,7 @@ public class EventController {
     @ApiResponses({
             @ApiResponse(responseCode = "201", description = "Created"),
             @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @ApiResponse(responseCode = "403", description = "Authenticated but not AGENT/ADMIN"),
+            @ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN"),
             @ApiResponse(responseCode = "422", description = "Validation errors",
                     content = @Content(schema = @Schema(example = "{\"title\":\"Title is required\"}")))
     })
@@ -165,23 +165,23 @@ public class EventController {
             @Valid @RequestBody CreateEventRequestDTO request,
             Authentication authentication
     ) {
-        String agentId = authentication.getName();
-        log.info("Creating event agentId={} title={} venue={}", agentId, request.getTitle(), request.getVenue());
-        EventResponseDTO created = eventService.createEvent(agentId, request);
+        String tenantId = authentication.getName();
+        log.info("Creating event tenantId={} title={} venue={}", tenantId, request.getTitle(), request.getVenue());
+        EventResponseDTO created = eventService.createEvent(tenantId, request);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Event created successfully", created));
     }
 
     @PutMapping("/{id}")
-    @PreAuthorize("hasAnyRole('AGENT','ADMIN')")
+    @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
     @Operation(
             summary = "Update event",
             description = """
                     Updates an existing event.
 
                     Authorization:
-                    - Requires **AGENT** or **ADMIN**.
-                    - AGENT can update only their own event. ADMIN can update any event.
+                    - Requires **TENANT** or **ADMIN**.
+                    - TENANT can update only their own event. ADMIN can update any event.
 
                     Behavior:
                     - Fields omitted from the body remain unchanged (partial update).
@@ -193,30 +193,30 @@ public class EventController {
             @ApiResponse(responseCode = "400", description = "Not found or not authorized",
                     content = @Content(schema = @Schema(example = "{\"error\":\"You are not authorized to update this event\"}"))),
             @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @ApiResponse(responseCode = "403", description = "Authenticated but not AGENT/ADMIN")
+            @ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN")
     })
     public ResponseEntity<ApiResult<EventResponseDTO>> updateEvent(
             @Parameter(description = "Event UUID") @PathVariable UUID id,
             @Valid @RequestBody UpdateEventRequestDTO request,
             Authentication authentication
     ) {
-        String agentId = authentication.getName();
+        String tenantId = authentication.getName();
         String role = getCurrentRole(authentication);
-        log.info("Updating event eventId={} agentId={}", id, agentId);
-        EventResponseDTO updated = eventService.updateEvent(agentId, role, id, request);
+        log.info("Updating event eventId={} tenantId={}", id, tenantId);
+        EventResponseDTO updated = eventService.updateEvent(tenantId, role, id, request);
         return ResponseEntity.ok(ApiResult.ok("Event updated successfully", updated));
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAnyRole('AGENT','ADMIN')")
+    @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
     @Operation(
             summary = "Delete event (soft delete)",
             description = """
                     Soft-deletes an event (`deleted=true`).
 
                     Authorization:
-                    - Requires **AGENT** or **ADMIN**.
-                    - AGENT can delete only their own event. ADMIN can delete any event.
+                    - Requires **TENANT** or **ADMIN**.
+                    - TENANT can delete only their own event. ADMIN can delete any event.
                     """
     )
     @ApiResponses({
@@ -224,16 +224,16 @@ public class EventController {
             @ApiResponse(responseCode = "400", description = "Not found or not authorized",
                     content = @Content(schema = @Schema(example = "{\"error\":\"You are not authorized to delete this event\"}"))),
             @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @ApiResponse(responseCode = "403", description = "Authenticated but not AGENT/ADMIN")
+            @ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN")
     })
     public ResponseEntity<ApiResult<Void>> deleteEvent(
             @Parameter(description = "Event UUID") @PathVariable UUID id,
             Authentication authentication
     ) {
-        String agentId = authentication.getName();
+        String tenantId = authentication.getName();
         String role = getCurrentRole(authentication);
-        log.info("Deleting event eventId={} agentId={}", id, agentId);
-        eventService.deleteEvent(agentId, role, id);
+        log.info("Deleting event eventId={} tenantId={}", id, tenantId);
+        eventService.deleteEvent(tenantId, role, id);
         return ResponseEntity.ok(ApiResult.ok("Event deleted successfully", null));
     }
 

@@ -50,7 +50,7 @@ public class Seat {
 
     public enum SeatStatus {
         AVAILABLE,   // free to book
-        LOCKED,      // temporarily held — Redis TTL controls this
+        LOCKED,      // temporarily held — in-memory TTL controls this
         BOOKED       // permanently reserved after payment
     }
 }
