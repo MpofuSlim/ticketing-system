@@ -6,6 +6,8 @@ import com.innbucks.userservice.service.CustomerService;
 import com.innbucks.userservice.service.OtpService;
 import com.innbucks.userservice.service.TokenRevocationService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
@@ -70,7 +72,36 @@ public class AuthController {
                     a fresh token — the old token keeps its original tier claim until it expires.
                     """)
             @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Login successful, or MFA required (inspect `mfaRequired`)"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "Login successful, or MFA required (inspect `mfaRequired`)",
+                    content = @Content(
+                            mediaType = "application/json",
+                            examples = {
+                                    @ExampleObject(name = "Customer login (phone-only)", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Login successful",
+                                              "data": {
+                                                "role": "CUSTOMER",
+                                                "mfaRequired": false,
+                                                "tier": 2,
+                                                "verified": false
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "System user login", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Login successful",
+                                              "data": {
+                                                "role": "TENANT",
+                                                "mfaRequired": false,
+                                                "tier": 4,
+                                                "verified": true
+                                              }
+                                            }
+                                            """)
+                            })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid credentials or missing identifier")
     })
     public ResponseEntity<ApiResult<AuthResponseDTO>> login(@Valid @RequestBody LoginRequestDTO request) {
@@ -118,7 +149,24 @@ public class AuthController {
     @PostMapping("/customer/register")
     @SecurityRequirements()
     @Operation(summary = "Customer registration - Tier 1",
-            description = "Tier 1: Creates a customer account with phone number and password only.")
+            description = "Tier 1: Creates a customer account with phone number and password only. " +
+                    "Does NOT return a JWT token — customers authenticate separately via POST /auth/login.")
+    @ApiResponses(@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "201",
+            description = "Customer created; OTP dispatched to the phone for verification.",
+            content = @Content(mediaType = "application/json",
+                    examples = @ExampleObject(value = """
+                            {
+                              "code": "201 CREATED",
+                              "message": "Customer tier 1 registration successful",
+                              "data": {
+                                "userId": 42,
+                                "phoneNumber": "+263771234567",
+                                "tier": 1,
+                                "verified": false,
+                                "nextStep": "Verify phone at /auth/otp/verify, then submit personal details at /auth/customer/register/tier2"
+                              }
+                            }
+                            """))))
     public ResponseEntity<ApiResult<CustomerRegistrationResponseDTO>> customerTier1(
             @Valid @RequestBody CustomerTier1RegisterDTO request) {
         CustomerRegistrationResponseDTO response = customerService.registerTier1(request);
@@ -130,6 +178,22 @@ public class AuthController {
     @SecurityRequirements()
     @Operation(summary = "Customer registration - Tier 2",
             description = "Tier 2: Captures fullName, idNumber, passport number, address, gender, and selfie picture.")
+    @ApiResponses(@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+            description = "Tier 2 complete.",
+            content = @Content(mediaType = "application/json",
+                    examples = @ExampleObject(value = """
+                            {
+                              "code": "200 OK",
+                              "message": "Customer tier 2 registration successful",
+                              "data": {
+                                "userId": 42,
+                                "phoneNumber": "+263771234567",
+                                "tier": 2,
+                                "verified": false,
+                                "nextStep": "Submit biometrics and device registration at /auth/customer/register/tier3"
+                              }
+                            }
+                            """))))
     public ResponseEntity<ApiResult<CustomerRegistrationResponseDTO>> customerTier2(
             @RequestParam("phoneNumber") String phoneNumber,
             @Valid @RequestBody CustomerTier2RegisterDTO request) {
@@ -141,6 +205,22 @@ public class AuthController {
     @SecurityRequirements()
     @Operation(summary = "Customer registration - Tier 3",
             description = "Tier 3: Captures biometrics reference and registers a device for the customer.")
+    @ApiResponses(@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+            description = "Tier 3 complete.",
+            content = @Content(mediaType = "application/json",
+                    examples = @ExampleObject(value = """
+                            {
+                              "code": "200 OK",
+                              "message": "Customer tier 3 registration successful",
+                              "data": {
+                                "userId": 42,
+                                "phoneNumber": "+263771234567",
+                                "tier": 3,
+                                "verified": false,
+                                "nextStep": "Upload verification documents at /auth/customer/register/tier4"
+                              }
+                            }
+                            """))))
     public ResponseEntity<ApiResult<CustomerRegistrationResponseDTO>> customerTier3(
             @RequestParam("phoneNumber") String phoneNumber,
             @Valid @RequestBody CustomerTier3RegisterDTO request) {
@@ -152,6 +232,21 @@ public class AuthController {
     @SecurityRequirements()
     @Operation(summary = "Customer registration - Tier 4 (verification)",
             description = "Tier 4: Captures uploaded ID document, proof of residence, and passport document paths and marks the customer as verified.")
+    @ApiResponses(@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+            description = "Tier 4 verification complete.",
+            content = @Content(mediaType = "application/json",
+                    examples = @ExampleObject(value = """
+                            {
+                              "code": "200 OK",
+                              "message": "Customer verification complete",
+                              "data": {
+                                "userId": 42,
+                                "phoneNumber": "+263771234567",
+                                "tier": 4,
+                                "verified": true
+                              }
+                            }
+                            """))))
     public ResponseEntity<ApiResult<CustomerRegistrationResponseDTO>> customerTier4(
             @RequestParam("phoneNumber") String phoneNumber,
             @Valid @RequestBody CustomerTier4RegisterDTO request) {

@@ -18,7 +18,6 @@ import io.swagger.v3.oas.annotations.media.Schema;
 public class AuthResponseDTO {
 
     @Schema(description = "JWT access token. Null when `mfaRequired=true` or on registration responses.",
-            example = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
             nullable = true)
     private String token;
 
@@ -27,8 +26,8 @@ public class AuthResponseDTO {
             allowableValues = {"CUSTOMER", "TENANT", "ADMIN", "SYSTEM_MANAGER", "MERCHANT_ADMIN", "SHOP_ADMIN", "SHOP_USER"})
     private String role;
 
-    @Schema(description = "Email address if registered. Null for tier-1 customers who registered with phone only.",
-            example = "jane@example.com",
+    @Schema(description = "Email address if the account has one. Null / omitted for customers who registered " +
+            "with a phone number only.",
             nullable = true)
     private String email;
 
