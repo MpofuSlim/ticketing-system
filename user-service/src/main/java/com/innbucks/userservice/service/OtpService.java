@@ -3,10 +3,12 @@ package com.innbucks.userservice.service;
 import com.innbucks.userservice.entity.CustomerProfile;
 import com.innbucks.userservice.entity.Otp;
 import com.innbucks.userservice.entity.OtpRetryAttempt;
+import com.innbucks.userservice.entity.PendingRegistration;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.repository.CustomerProfileRepository;
 import com.innbucks.userservice.repository.OtpRepository;
 import com.innbucks.userservice.repository.OtpRetryAttemptRepository;
+import com.innbucks.userservice.repository.PendingRegistrationRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -35,6 +37,7 @@ public class OtpService {
     private final OtpRetryAttemptRepository retryRepository;
     private final UserRepository userRepository;
     private final CustomerProfileRepository customerProfileRepository;
+    private final PendingRegistrationRepository pendingRegistrationRepository;
 
     /**
      * Send an OTP with rate-limit enforcement. Used by the public /auth/otp/request endpoint
@@ -60,7 +63,7 @@ public class OtpService {
         int consumed = otpRepository.consume(phoneNumber, code, now);
         if (consumed > 0) {
             retryRepository.findByPhoneNumber(phoneNumber).ifPresent(retryRepository::delete);
-            markPhoneVerified(phoneNumber);
+            finalizeVerification(phoneNumber);
             log.info("OTP verified phone={}", phoneNumber);
             return true;
         }
@@ -81,9 +84,11 @@ public class OtpService {
     @Scheduled(fixedDelayString = "PT5M")
     @Transactional
     public void purgeExpired() {
-        int removed = otpRepository.deleteExpired(Instant.now());
-        if (removed > 0) {
-            log.info("Purged {} expired OTP entries", removed);
+        Instant now = Instant.now();
+        int otpsRemoved = otpRepository.deleteExpired(now);
+        int pendingRemoved = pendingRegistrationRepository.deleteExpired(now);
+        if (otpsRemoved > 0 || pendingRemoved > 0) {
+            log.info("Purged expired entries otps={} pendingRegistrations={}", otpsRemoved, pendingRemoved);
         }
     }
 
@@ -136,7 +141,39 @@ public class OtpService {
         log.info("[OTP] phone={} code={} (dev fixed OTP; replace with SMS provider)", phoneNumber, code);
     }
 
-    private void markPhoneVerified(String phoneNumber) {
+    /**
+     * Runs after a successful OTP consume.
+     *
+     * <p>If a pending_registrations row exists for the phone (the common path, set up by tier 1
+     * customer registration), materialise the {@link User} + {@link CustomerProfile} from it and
+     * drop the pending row. If the phone already belongs to a customer, just flip
+     * {@code phoneVerified = true}.
+     */
+    private void finalizeVerification(String phoneNumber) {
+        var pendingOpt = pendingRegistrationRepository.findByPhoneNumber(phoneNumber);
+        if (pendingOpt.isPresent()) {
+            PendingRegistration pending = pendingOpt.get();
+            User user = User.builder()
+                    .firstName("Customer")
+                    .lastName("Pending")
+                    .phoneNumber(pending.getPhoneNumber())
+                    .password(pending.getPasswordHash())
+                    .role(User.Role.CUSTOMER)
+                    .mfaEnabled(false)
+                    .build();
+            userRepository.save(user);
+            CustomerProfile profile = CustomerProfile.builder()
+                    .user(user)
+                    .registrationTier(1)
+                    .verified(false)
+                    .phoneVerified(true)
+                    .build();
+            customerProfileRepository.save(profile);
+            pendingRegistrationRepository.delete(pending);
+            log.info("Customer account materialised from pending registration phone={} userId={}",
+                    phoneNumber, user.getId());
+            return;
+        }
         userRepository.findByPhoneNumber(phoneNumber)
                 .filter(u -> u.getRole() == User.Role.CUSTOMER)
                 .flatMap(u -> customerProfileRepository.findByUserId(u.getId()))
