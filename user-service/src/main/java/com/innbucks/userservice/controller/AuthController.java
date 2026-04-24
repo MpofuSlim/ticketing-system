@@ -43,11 +43,29 @@ public class AuthController {
 
     @PostMapping("/login")
     @SecurityRequirements()
-    @Operation(summary = "Login user",
-            description = "Authenticates a user by email OR phone number plus password, and returns a JWT token.")
-    @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Login successful"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid credentials")
+    @Operation(summary = "Login (customer or system user)",
+            description = """
+                    Authenticates a user and returns a JWT bearer token.
+
+                    **Identifier:** supply **either** `email` **or** `phoneNumber` (not both required) together with `password`.
+                    - Customers registered at tier 1 typically log in with `phoneNumber` only (no email).
+                    - System users (TENANT, ADMIN, MERCHANT_ADMIN, SHOP_ADMIN, SHOP_USER, SYSTEM_MANAGER) log in with `email`.
+
+                    **MFA:** if the account has MFA enabled (all system users) and `otpCode` is omitted, the response returns
+                    `mfaRequired=true` with a null `token`. The client must re-submit the login including `otpCode`.
+                    Customers do not have MFA enabled by default, so they can log in with identifier + password only.
+
+                    **Tier / verified claims:** on success the response includes the customer's `tier` (1..4) and `verified` flag.
+                    These are also embedded in the JWT as claims, so every downstream service can enforce tier-based access
+                    without re-querying user-service. System users are reported as tier 4, verified=true.
+
+                    **Using the token:** send it on every authenticated request as `Authorization: Bearer <token>`.
+                    To pick up a new tier after the customer upgrades (e.g. tier 2 → tier 3), log in again to receive
+                    a fresh token — the old token keeps its original tier claim until it expires.
+                    """)
+            @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Login successful, or MFA required (inspect `mfaRequired`)"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid credentials or missing identifier")
     })
     public ResponseEntity<ApiResult<AuthResponseDTO>> login(@Valid @RequestBody LoginRequestDTO request) {
         log.info("Received login request email={} phone={}", request.getEmail(), request.getPhoneNumber());
