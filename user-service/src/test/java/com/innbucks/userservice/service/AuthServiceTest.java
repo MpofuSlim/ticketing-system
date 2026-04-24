@@ -156,7 +156,7 @@ class AuthServiceTest {
         when(jwt.generateToken("u@example.com", "SHOP_USER", 4, true)).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
-        req.setEmail("u@example.com"); req.setPassword("pw");
+        req.setIdentifier("u@example.com"); req.setPassword("pw");
 
         AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),
                 mock(DeviceRepository.class), encoder, jwt).login(req);
@@ -186,7 +186,7 @@ class AuthServiceTest {
         when(jwt.generateToken("0777000099", "CUSTOMER", 2, false)).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
-        req.setPhoneNumber("0777000099"); req.setPassword("pw");
+        req.setIdentifier("0777000099"); req.setPassword("pw");
 
         AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),
                 customerRepo, mock(DeviceRepository.class), encoder, jwt).login(req);
@@ -207,7 +207,7 @@ class AuthServiceTest {
         when(encoder.matches(any(), any())).thenReturn(false);
 
         LoginRequestDTO req = new LoginRequestDTO();
-        req.setEmail("u@example.com"); req.setPassword("wrong");
+        req.setIdentifier("u@example.com"); req.setPassword("wrong");
 
         AuthService service = newService(userRepo, mock(TenantProfileRepository.class),
                 mock(DeviceRepository.class), encoder, mock(JwtUtil.class));
@@ -221,7 +221,7 @@ class AuthServiceTest {
         when(userRepo.findByEmail(any())).thenReturn(Optional.empty());
 
         LoginRequestDTO req = new LoginRequestDTO();
-        req.setEmail("missing@example.com"); req.setPassword("pw");
+        req.setIdentifier("missing@example.com"); req.setPassword("pw");
 
         AuthService service = newService(userRepo, mock(TenantProfileRepository.class),
                 mock(DeviceRepository.class), mock(PasswordEncoder.class), mock(JwtUtil.class));
@@ -245,7 +245,7 @@ class AuthServiceTest {
         when(jwt.generateToken(eq("u@example.com"), eq("CUSTOMER"), eq(1), eq(false))).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
-        req.setEmail("u@example.com"); req.setPassword("pw");
+        req.setIdentifier("u@example.com"); req.setPassword("pw");
 
         AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),
                 customerRepo, mock(DeviceRepository.class), encoder, jwt).login(req);

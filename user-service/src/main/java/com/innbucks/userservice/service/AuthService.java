@@ -132,13 +132,14 @@ public class AuthService {
     }
 
     private java.util.Optional<User> resolveUser(LoginRequestDTO request) {
-        if (request.getEmail() != null && !request.getEmail().isBlank()) {
-            return userRepository.findByEmail(request.getEmail());
+        String identifier = request.getIdentifier();
+        if (identifier == null || identifier.isBlank()) {
+            return java.util.Optional.empty();
         }
-        if (request.getPhoneNumber() != null && !request.getPhoneNumber().isBlank()) {
-            return userRepository.findByPhoneNumber(request.getPhoneNumber());
-        }
-        return java.util.Optional.empty();
+        String trimmed = identifier.trim();
+        return trimmed.contains("@")
+                ? userRepository.findByEmail(trimmed)
+                : userRepository.findByPhoneNumber(trimmed);
     }
 
     private User.Role parseRole(String raw) {

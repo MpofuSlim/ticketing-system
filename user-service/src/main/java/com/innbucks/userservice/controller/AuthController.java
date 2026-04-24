@@ -55,9 +55,11 @@ public class AuthController {
             description = """
                     Authenticates a user and returns a JWT bearer token.
 
-                    **Identifier:** supply **either** `email` **or** `phoneNumber` (not both required) together with `password`.
-                    - Customers registered at tier 1 typically log in with `phoneNumber` only (no email).
-                    - System users (TENANT, ADMIN, MERCHANT_ADMIN, SHOP_ADMIN, SHOP_USER, SYSTEM_MANAGER) log in with `email`.
+                    **Identifier:** supply a single `identifier` field containing either an email address or a phone
+                    number, together with `password`. The server picks the matching lookup based on whether the value
+                    contains an `@`.
+                    - Customers registered at tier 1 typically log in with their phone number.
+                    - System users (TENANT, ADMIN, MERCHANT_ADMIN, SHOP_ADMIN, SHOP_USER, SYSTEM_MANAGER) log in with email.
 
                     **Tier / verified claims:** on success the response includes the customer's `tier` (1..4) and `verified` flag.
                     These are also embedded in the JWT as claims, so every downstream service can enforce tier-based access
@@ -99,7 +101,7 @@ public class AuthController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid credentials or missing identifier")
     })
     public ResponseEntity<ApiResult<AuthResponseDTO>> login(@Valid @RequestBody LoginRequestDTO request) {
-        log.info("Received login request email={} phone={}", request.getEmail(), request.getPhoneNumber());
+        log.info("Received login request identifier={}", request.getIdentifier());
         AuthResponseDTO response = authService.login(request);
         log.info("Login successful role={}", response.getRole());
         return ResponseEntity.ok(ApiResult.ok("Login successful", response));
