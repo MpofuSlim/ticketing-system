@@ -3,6 +3,7 @@ package com.innbucks.userservice.controller;
 import com.innbucks.userservice.dto.*;
 import com.innbucks.userservice.service.AuthService;
 import com.innbucks.userservice.service.CustomerService;
+import com.innbucks.userservice.service.OtpService;
 import com.innbucks.userservice.service.TokenRevocationService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
@@ -27,6 +28,7 @@ public class AuthController {
     private final AuthService authService;
     private final CustomerService customerService;
     private final TokenRevocationService tokenRevocationService;
+    private final OtpService otpService;
 
     @PostMapping("/register")
     @SecurityRequirements()
@@ -155,5 +157,58 @@ public class AuthController {
             @Valid @RequestBody CustomerTier4RegisterDTO request) {
         CustomerRegistrationResponseDTO response = customerService.registerTier4(phoneNumber, request);
         return ResponseEntity.ok(ApiResult.ok("Customer verification complete", response));
+    }
+
+    @PostMapping("/otp/request")
+    @SecurityRequirements()
+    @Operation(summary = "Request (or re-send) an OTP",
+            description = """
+                    Generates a fresh 6-digit OTP for the supplied phone number and (nominally) sends it by SMS.
+                    Any previously-issued OTP for that phone is invalidated.
+
+                    **Development note:** delivery is stubbed — the OTP is always `000000` and is written to the
+                    user-service logs instead of being sent by SMS. This will be swapped for a real provider later.
+
+                    **Rate limit:** a phone number may request at most **3 OTPs within any 10-minute window**.
+                    The 4th request triggers a **30-minute lockout** (HTTP 429). A successful OTP verification
+                    resets the counter.
+                    """)
+            @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "OTP sent"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Missing or invalid phone number"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429", description = "Retry quota exceeded — try again after the lockout expires")
+    })
+    public ResponseEntity<ApiResult<Void>> requestOtp(@Valid @RequestBody OtpRequestDTO request) {
+        log.info("OTP request phone={}", request.getPhoneNumber());
+        try {
+            otpService.sendOtp(request.getPhoneNumber());
+        } catch (OtpService.OtpRateLimitException e) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .body(ApiResult.error(HttpStatus.TOO_MANY_REQUESTS, e.getMessage()));
+        }
+        return ResponseEntity.ok(ApiResult.ok("OTP sent", null));
+    }
+
+    @PostMapping("/otp/verify")
+    @SecurityRequirements()
+    @Operation(summary = "Verify an OTP",
+            description = """
+                    Verifies the 6-digit OTP for the supplied phone number. On success the OTP is consumed
+                    (deleted from the database) and — if the phone belongs to a customer — their
+                    `phoneVerified` flag is flipped to `true`. Three wrong submissions invalidate the OTP,
+                    forcing the user to request a fresh one.
+                    """)
+            @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "OTP verified and consumed"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "OTP invalid or expired")
+    })
+    public ResponseEntity<ApiResult<Void>> verifyOtp(@Valid @RequestBody OtpVerifyDTO request) {
+        log.info("OTP verify phone={}", request.getPhoneNumber());
+        boolean ok = otpService.verifyOtp(request.getPhoneNumber(), request.getCode());
+        if (!ok) {
+            return ResponseEntity.badRequest()
+                    .body(ApiResult.error(HttpStatus.BAD_REQUEST, "Invalid or expired OTP"));
+        }
+        return ResponseEntity.ok(ApiResult.ok("OTP verified", null));
     }
 }

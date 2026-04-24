@@ -45,6 +45,10 @@ public class CustomerProfile {
     @Builder.Default
     private boolean verified = false;
 
+    @Column(nullable = false)
+    @Builder.Default
+    private boolean phoneVerified = false;
+
     private LocalDateTime updatedAt;
 
     @PreUpdate
