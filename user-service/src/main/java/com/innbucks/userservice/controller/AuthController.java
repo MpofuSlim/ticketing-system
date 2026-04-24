@@ -59,10 +59,6 @@ public class AuthController {
                     - Customers registered at tier 1 typically log in with `phoneNumber` only (no email).
                     - System users (TENANT, ADMIN, MERCHANT_ADMIN, SHOP_ADMIN, SHOP_USER, SYSTEM_MANAGER) log in with `email`.
 
-                    **MFA:** if the account has MFA enabled (all system users) and `otpCode` is omitted, the response returns
-                    `mfaRequired=true` with a null `token`. The client must re-submit the login including `otpCode`.
-                    Customers do not have MFA enabled by default, so they can log in with identifier + password only.
-
                     **Tier / verified claims:** on success the response includes the customer's `tier` (1..4) and `verified` flag.
                     These are also embedded in the JWT as claims, so every downstream service can enforce tier-based access
                     without re-querying user-service. System users are reported as tier 4, verified=true.
@@ -73,7 +69,7 @@ public class AuthController {
                     """)
             @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
-                    description = "Login successful, or MFA required (inspect `mfaRequired`)",
+                    description = "Login successful",
                     content = @Content(
                             mediaType = "application/json",
                             examples = {
@@ -83,7 +79,6 @@ public class AuthController {
                                               "message": "Login successful",
                                               "data": {
                                                 "role": "CUSTOMER",
-                                                "mfaRequired": false,
                                                 "tier": 2,
                                                 "verified": false
                                               }
@@ -95,7 +90,6 @@ public class AuthController {
                                               "message": "Login successful",
                                               "data": {
                                                 "role": "TENANT",
-                                                "mfaRequired": false,
                                                 "tier": 4,
                                                 "verified": true
                                               }
@@ -107,10 +101,6 @@ public class AuthController {
     public ResponseEntity<ApiResult<AuthResponseDTO>> login(@Valid @RequestBody LoginRequestDTO request) {
         log.info("Received login request email={} phone={}", request.getEmail(), request.getPhoneNumber());
         AuthResponseDTO response = authService.login(request);
-        if (response.isMfaRequired()) {
-            log.info("Login halted for MFA");
-            return ResponseEntity.ok(ApiResult.ok("MFA verification required", response));
-        }
         log.info("Login successful role={}", response.getRole());
         return ResponseEntity.ok(ApiResult.ok("Login successful", response));
     }

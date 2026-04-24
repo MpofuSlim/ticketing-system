@@ -105,15 +105,6 @@ public class AuthService {
             throw new RuntimeException("Invalid credentials");
         }
 
-        if (user.isMfaEnabled()) {
-            if (request.getOtpCode() == null || request.getOtpCode().isBlank()) {
-                return AuthResponseDTO.builder()
-                        .mfaRequired(true)
-                        .build();
-            }
-            // TODO: validate OTP code against mfaSecret
-        }
-
         String subject = user.getEmail() != null ? user.getEmail() : user.getPhoneNumber();
 
         int tier;
