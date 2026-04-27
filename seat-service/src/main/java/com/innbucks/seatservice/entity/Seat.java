@@ -38,6 +38,9 @@ public class Seat {
     @Column(nullable = false)
     private SeatStatus status;
 
+    @Version
+    private Long version;
+
     private LocalDateTime createdAt;
 
     @PrePersist

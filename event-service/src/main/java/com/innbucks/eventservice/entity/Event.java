@@ -49,6 +49,9 @@ public class Event {
     @Column(nullable = false)
     private Integer availableTickets;
 
+    @Version
+    private Long version;
+
     @Column(nullable = false)
     private boolean deleted = false;
 
