@@ -7,6 +7,7 @@ import com.innbucks.bookingservice.dto.CreateBookingRequestDTO;
 import com.innbucks.bookingservice.dto.SeatLookupResponseDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
+import com.innbucks.bookingservice.exception.TierRequirementException;
 import com.innbucks.bookingservice.repository.BookingItemRepository;
 import com.innbucks.bookingservice.repository.BookingRepository;
 import org.junit.jupiter.api.Test;
@@ -108,7 +109,7 @@ class BookingServiceTest {
         BookingService service = newService(mock(BookingRepository.class),
                 mock(BookingItemRepository.class), stubClient(fx.lookups));
 
-        RuntimeException ex = assertThrows(RuntimeException.class,
+        TierRequirementException ex = assertThrows(TierRequirementException.class,
                 () -> service.createBooking("u@example.com", 1, fx.request));
         assertTrue(ex.getMessage().toLowerCase().contains("tier"));
     }
@@ -119,7 +120,7 @@ class BookingServiceTest {
         BookingService service = newService(mock(BookingRepository.class),
                 mock(BookingItemRepository.class), stubClient(fx.lookups));
 
-        RuntimeException ex = assertThrows(RuntimeException.class,
+        TierRequirementException ex = assertThrows(TierRequirementException.class,
                 () -> service.createBooking("u@example.com", 2, fx.request));
         assertTrue(ex.getMessage().contains("2 seats"));
     }

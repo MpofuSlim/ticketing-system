@@ -13,6 +13,8 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @Slf4j
 public class GlobalExceptionHandler {
 
+    public static final String TIER_REQUIREMENT_CODE = "Do not meet min tier requirement";
+
     @ExceptionHandler(AuthenticationException.class)
     public void handleAuthentication(AuthenticationException ex) throws AuthenticationException {
         throw ex;
@@ -21,6 +23,17 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AccessDeniedException.class)
     public void handleAccessDenied(AccessDeniedException ex) throws AccessDeniedException {
         throw ex;
+    }
+
+    @ExceptionHandler(TierRequirementException.class)
+    public ResponseEntity<ApiResult<String>> handleTierRequirement(TierRequirementException ex) {
+        log.warn("Tier requirement not met: {}", ex.getMessage());
+        ApiResult<String> body = ApiResult.<String>builder()
+                .code(TIER_REQUIREMENT_CODE)
+                .message(null)
+                .data(ex.getMessage())
+                .build();
+        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(body);
     }
 
     @ExceptionHandler(RuntimeException.class)

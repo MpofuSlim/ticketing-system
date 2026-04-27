@@ -3,6 +3,7 @@ package com.innbucks.bookingservice.service;
 import com.innbucks.bookingservice.client.SeatServiceClient;
 import com.innbucks.bookingservice.dto.*;
 import com.innbucks.bookingservice.entity.*;
+import com.innbucks.bookingservice.exception.TierRequirementException;
 import com.innbucks.bookingservice.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -41,7 +42,7 @@ public class BookingService {
         if (request.getSeats().size() > maxSeats) {
             log.warn("Booking rejected, exceeds tier seat limit userEmail={} tier={} requested={} max={}",
                     userEmail, tier, request.getSeats().size(), maxSeats);
-            throw new RuntimeException(
+            throw new TierRequirementException(
                     "Tier " + tier + " customers may book at most " + maxSeats + " seats per booking");
         }
 
