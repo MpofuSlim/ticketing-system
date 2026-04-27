@@ -226,6 +226,30 @@ services:
       retries: 10
       start_period: 45s
 
+  # Load tests are opt-in. Bring up the stack first, then run:
+  #   AUTH_TOKEN=... SEAT_IDS=uuid1,uuid2,... \
+  #     docker compose --profile loadtest run --rm k6
+  # See load-tests/seat-lock-contention.js for the full setup recipe.
+  k6:
+    profiles: ["loadtest"]
+    image: grafana/k6:latest
+    container_name: innbucks-k6
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    volumes:
+      - ./load-tests:/scripts:ro
+    environment:
+      BASE_URL: http://api-gateway:8080
+      # Required at run-time; the k6 script throws a clear error if empty.
+      # Not marked :? because variable substitution runs before profile
+      # filtering and would otherwise break `docker compose up` for
+      # everyone not running the load test.
+      AUTH_TOKEN: ${AUTH_TOKEN:-}
+      SEAT_IDS: ${SEAT_IDS:-}
+      K6_VUS_PEAK: ${K6_VUS_PEAK:-200}
+    entrypoint: ["k6", "run", "/scripts/seat-lock-contention.js"]
+
 volumes:
   postgres_data:
   redis_data:
