@@ -29,6 +29,21 @@ services:
       timeout: 3s
       retries: 20
 
+  redis:
+    image: redis:7-alpine
+    container_name: innbucks-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
   user-service:
     build:
       context: .
@@ -96,6 +111,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/seat_service
       DB_USERNAME: innbucks
@@ -104,8 +121,9 @@ services:
       HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       EUREKA_ENABLED: "false"
-    # Seat locks are held in-memory; running more than one replica will cause
-    # double-booking. Keep this service pinned to a single instance in staging.
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      LOCK_STORE: redis
     ports:
       - "8083:8083"
     healthcheck:
@@ -207,3 +225,4 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:
