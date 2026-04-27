@@ -1,6 +1,7 @@
 package com.innbucks.bookingservice.exception;
 
 import com.innbucks.bookingservice.dto.ApiResult;
+import com.innbucks.bookingservice.dto.TierViolationData;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -10,30 +11,20 @@ import static org.junit.jupiter.api.Assertions.*;
 class GlobalExceptionHandlerTest {
 
     @Test
-    void handleTierRequirement_returns422WithCustomCodeAndMessageInData() {
+    void handleTierRequirement_returns422WithStructuredEnvelope() {
         GlobalExceptionHandler handler = new GlobalExceptionHandler();
-        String reason = "Tier 2 customers may book at most 2 seats per booking";
+        String reason = "You require tier 2 registration to access that feature (current tier: 1)";
 
-        ResponseEntity<ApiResult<String>> response =
-                handler.handleTierRequirement(new TierRequirementException(reason));
+        ResponseEntity<ApiResult<TierViolationData>> response =
+                handler.handleTierRequirement(new TierRequirementException(2, 1, reason));
 
         assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, response.getStatusCode());
-        ApiResult<String> body = response.getBody();
+        ApiResult<TierViolationData> body = response.getBody();
         assertNotNull(body);
-        assertEquals("Do not meet min tier requirement", body.getCode());
-        assertNull(body.getMessage());
-        assertEquals(reason, body.getData());
-    }
-
-    @Test
-    void handleRuntime_doesNotInterceptTierRequirementException() {
-        // Sanity check: TierRequirementException is handled by its dedicated
-        // handler, not by the generic RuntimeException one (which would map
-        // to 400 BAD_REQUEST and lose the custom code).
-        GlobalExceptionHandler handler = new GlobalExceptionHandler();
-        ResponseEntity<ApiResult<String>> tierResp =
-                handler.handleTierRequirement(new TierRequirementException("anything"));
-        assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, tierResp.getStatusCode());
-        assertEquals("Do not meet min tier requirement", tierResp.getBody().getCode());
+        assertEquals("422", body.getCode());
+        assertEquals(reason, body.getMessage());
+        assertNotNull(body.getData());
+        assertEquals(2, body.getData().getRequiredTier());
+        assertEquals(1, body.getData().getCurrentTier());
     }
 }

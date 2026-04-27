@@ -112,6 +112,8 @@ class BookingServiceTest {
         TierRequirementException ex = assertThrows(TierRequirementException.class,
                 () -> service.createBooking("u@example.com", 1, fx.request));
         assertTrue(ex.getMessage().toLowerCase().contains("tier"));
+        assertEquals(1, ex.getCurrentTier());
+        assertEquals(2, ex.getRequiredTier()); // 1 seat fits tier 2's cap of 2
     }
 
     @Test
@@ -123,6 +125,8 @@ class BookingServiceTest {
         TierRequirementException ex = assertThrows(TierRequirementException.class,
                 () -> service.createBooking("u@example.com", 2, fx.request));
         assertTrue(ex.getMessage().contains("2 seats"));
+        assertEquals(2, ex.getCurrentTier());
+        assertEquals(3, ex.getRequiredTier()); // 3 seats need tier 3 (cap 6)
     }
 
     @Test

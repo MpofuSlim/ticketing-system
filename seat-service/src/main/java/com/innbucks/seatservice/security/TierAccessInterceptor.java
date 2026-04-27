@@ -2,6 +2,7 @@ package com.innbucks.seatservice.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.innbucks.seatservice.dto.ApiResult;
+import com.innbucks.seatservice.dto.TierViolationData;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -15,8 +16,6 @@ import org.springframework.web.servlet.HandlerInterceptor;
 @Component
 @RequiredArgsConstructor
 public class TierAccessInterceptor implements HandlerInterceptor {
-
-    public static final String TIER_REQUIREMENT_CODE = "Do not meet min tier requirement";
 
     private final ObjectMapper objectMapper;
 
@@ -39,12 +38,15 @@ public class TierAccessInterceptor implements HandlerInterceptor {
             return true;
         }
 
-        String dataMsg = "You require tier " + minTier.value()
+        String message = "You require tier " + minTier.value()
                 + " registration to access that feature (current tier: " + currentTier + ")";
-        ApiResult<String> body = ApiResult.<String>builder()
-                .code(TIER_REQUIREMENT_CODE)
-                .message(null)
-                .data(dataMsg)
+        ApiResult<TierViolationData> body = ApiResult.<TierViolationData>builder()
+                .code(String.valueOf(HttpStatus.UNPROCESSABLE_ENTITY.value()))
+                .message(message)
+                .data(TierViolationData.builder()
+                        .requiredTier(minTier.value())
+                        .currentTier(currentTier)
+                        .build())
                 .build();
 
         response.setContentType("application/json");

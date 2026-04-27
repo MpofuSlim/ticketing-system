@@ -43,6 +43,8 @@ public class BookingService {
             log.warn("Booking rejected, exceeds tier seat limit userEmail={} tier={} requested={} max={}",
                     userEmail, tier, request.getSeats().size(), maxSeats);
             throw new TierRequirementException(
+                    minTierForSeatCount(request.getSeats().size()),
+                    tier,
                     "Tier " + tier + " customers may book at most " + maxSeats + " seats per booking");
         }
 
@@ -237,6 +239,13 @@ public class BookingService {
             case 4 -> TIER_4_MAX_SEATS;
             default -> 0;
         };
+    }
+
+    // Smallest tier whose per-booking cap can accommodate the requested seat count.
+    private int minTierForSeatCount(int seatCount) {
+        if (seatCount <= TIER_2_MAX_SEATS) return 2;
+        if (seatCount <= TIER_3_MAX_SEATS) return 3;
+        return 4;
     }
 
     private String generateConfirmationNumber() {

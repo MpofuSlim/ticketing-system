@@ -2,7 +2,7 @@ package com.innbucks.bookingservice.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.innbucks.bookingservice.dto.ApiResult;
-import com.innbucks.bookingservice.exception.GlobalExceptionHandler;
+import com.innbucks.bookingservice.dto.TierViolationData;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
@@ -38,12 +38,15 @@ public class TierAccessInterceptor implements HandlerInterceptor {
             return true;
         }
 
-        String dataMsg = "You require tier " + minTier.value()
+        String message = "You require tier " + minTier.value()
                 + " registration to access that feature (current tier: " + currentTier + ")";
-        ApiResult<String> body = ApiResult.<String>builder()
-                .code(GlobalExceptionHandler.TIER_REQUIREMENT_CODE)
-                .message(null)
-                .data(dataMsg)
+        ApiResult<TierViolationData> body = ApiResult.<TierViolationData>builder()
+                .code(String.valueOf(HttpStatus.UNPROCESSABLE_ENTITY.value()))
+                .message(message)
+                .data(TierViolationData.builder()
+                        .requiredTier(minTier.value())
+                        .currentTier(currentTier)
+                        .build())
                 .build();
 
         response.setContentType("application/json");

@@ -1,6 +1,7 @@
 package com.innbucks.bookingservice.exception;
 
 import com.innbucks.bookingservice.dto.ApiResult;
+import com.innbucks.bookingservice.dto.TierViolationData;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -13,8 +14,6 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 @Slf4j
 public class GlobalExceptionHandler {
 
-    public static final String TIER_REQUIREMENT_CODE = "Do not meet min tier requirement";
-
     @ExceptionHandler(AuthenticationException.class)
     public void handleAuthentication(AuthenticationException ex) throws AuthenticationException {
         throw ex;
@@ -26,12 +25,16 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(TierRequirementException.class)
-    public ResponseEntity<ApiResult<String>> handleTierRequirement(TierRequirementException ex) {
-        log.warn("Tier requirement not met: {}", ex.getMessage());
-        ApiResult<String> body = ApiResult.<String>builder()
-                .code(TIER_REQUIREMENT_CODE)
-                .message(null)
-                .data(ex.getMessage())
+    public ResponseEntity<ApiResult<TierViolationData>> handleTierRequirement(TierRequirementException ex) {
+        log.warn("Tier requirement not met requiredTier={} currentTier={} reason={}",
+                ex.getRequiredTier(), ex.getCurrentTier(), ex.getMessage());
+        ApiResult<TierViolationData> body = ApiResult.<TierViolationData>builder()
+                .code(String.valueOf(HttpStatus.UNPROCESSABLE_ENTITY.value()))
+                .message(ex.getMessage())
+                .data(TierViolationData.builder()
+                        .requiredTier(ex.getRequiredTier())
+                        .currentTier(ex.getCurrentTier())
+                        .build())
                 .build();
         return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(body);
     }
