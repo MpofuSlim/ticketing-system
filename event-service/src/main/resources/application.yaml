@@ -22,6 +22,16 @@ spring:
     properties:
       hibernate:
         dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.H2Dialect}
+
+  # Flyway is off by default so tests stay on H2 + Hibernate ddl-auto.
+  # docker-compose flips FLYWAY_ENABLED=true (with JPA_DDL_AUTO=validate)
+  # so PostgreSQL migrations run on startup and Hibernate only validates.
+  flyway:
+    enabled: ${FLYWAY_ENABLED:false}
+    baseline-on-migrate: true
+    baseline-version: 0
+    locations: classpath:db/migration
+
   lifecycle:
     timeout-per-shutdown-phase: 30s
 
