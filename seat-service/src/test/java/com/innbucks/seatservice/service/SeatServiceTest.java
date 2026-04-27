@@ -6,6 +6,7 @@ import com.innbucks.seatservice.entity.SeatCategory;
 import com.innbucks.seatservice.repository.SeatCategoryRepository;
 import com.innbucks.seatservice.repository.SeatRepository;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 
 import java.util.Optional;
 import java.util.UUID;
@@ -46,7 +47,7 @@ class SeatServiceTest {
         UUID seatId = UUID.randomUUID();
         SeatCategory cat = category(10);
         Seat seat = availableSeat(seatId, cat);
-        when(seatRepo.findById(seatId)).thenReturn(Optional.of(seat));
+        when(seatRepo.findByIdForUpdate(seatId)).thenReturn(Optional.of(seat));
         when(catRepo.decrementAvailableSeats(cat.getId())).thenReturn(1);
 
         SeatLockResponseDTO resp = service.lockSeat(seatId, "user@example.com");
@@ -60,7 +61,30 @@ class SeatServiceTest {
     }
 
     @Test
-    void lockSeat_throwsWhenCategoryExhausted() {
+    void lockSeat_acquiresPessimisticLock_andPutsRedisAfterDbWrites() {
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatLockStore store = mock(SeatLockStore.class);
+        SeatService service = new SeatService(seatRepo, catRepo, store);
+
+        UUID seatId = UUID.randomUUID();
+        SeatCategory cat = category(10);
+        Seat seat = availableSeat(seatId, cat);
+        when(seatRepo.findByIdForUpdate(seatId)).thenReturn(Optional.of(seat));
+        when(catRepo.decrementAvailableSeats(cat.getId())).thenReturn(1);
+
+        service.lockSeat(seatId, "user@example.com");
+
+        verify(seatRepo, never()).findById(any());
+        InOrder order = inOrder(seatRepo, catRepo, store);
+        order.verify(seatRepo).findByIdForUpdate(seatId);
+        order.verify(catRepo).decrementAvailableSeats(cat.getId());
+        order.verify(seatRepo).save(seat);
+        order.verify(store).put(eq("seat:lock:" + seatId), eq("user@example.com"), eq(300L));
+    }
+
+    @Test
+    void lockSeat_doesNotPutRedisOrSaveSeat_whenCategoryExhausted() {
         SeatRepository seatRepo = mock(SeatRepository.class);
         SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
         SeatLockStore store = mock(SeatLockStore.class);
@@ -69,39 +93,45 @@ class SeatServiceTest {
         UUID seatId = UUID.randomUUID();
         SeatCategory cat = category(0);
         Seat seat = availableSeat(seatId, cat);
-        when(seatRepo.findById(seatId)).thenReturn(Optional.of(seat));
+        when(seatRepo.findByIdForUpdate(seatId)).thenReturn(Optional.of(seat));
         when(catRepo.decrementAvailableSeats(cat.getId())).thenReturn(0);
 
         RuntimeException ex = assertThrows(RuntimeException.class,
                 () -> service.lockSeat(seatId, "u@example.com"));
         assertTrue(ex.getMessage().contains("No seats available"));
+        verify(seatRepo, never()).save(any());
+        verify(store, never()).put(any(), any(), anyLong());
     }
 
     @Test
     void lockSeat_rejectsWhenSeatAlreadyLocked() {
         SeatRepository seatRepo = mock(SeatRepository.class);
-        SeatService service = new SeatService(seatRepo, mock(SeatCategoryRepository.class), mock(SeatLockStore.class));
+        SeatLockStore store = mock(SeatLockStore.class);
+        SeatService service = new SeatService(seatRepo, mock(SeatCategoryRepository.class), store);
 
         UUID seatId = UUID.randomUUID();
         Seat seat = availableSeat(seatId, category(10));
         seat.setStatus(Seat.SeatStatus.LOCKED);
-        when(seatRepo.findById(seatId)).thenReturn(Optional.of(seat));
+        when(seatRepo.findByIdForUpdate(seatId)).thenReturn(Optional.of(seat));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
                 () -> service.lockSeat(seatId, "u@example.com"));
         assertTrue(ex.getMessage().contains("is not available"));
         verify(seatRepo, never()).save(any());
+        verify(store, never()).put(any(), any(), anyLong());
     }
 
     @Test
     void lockSeat_throwsWhenSeatMissing() {
         SeatRepository seatRepo = mock(SeatRepository.class);
-        when(seatRepo.findById(any())).thenReturn(Optional.empty());
-        SeatService service = new SeatService(seatRepo, mock(SeatCategoryRepository.class), mock(SeatLockStore.class));
+        when(seatRepo.findByIdForUpdate(any())).thenReturn(Optional.empty());
+        SeatLockStore store = mock(SeatLockStore.class);
+        SeatService service = new SeatService(seatRepo, mock(SeatCategoryRepository.class), store);
 
         RuntimeException ex = assertThrows(RuntimeException.class,
                 () -> service.lockSeat(UUID.randomUUID(), "u@example.com"));
         assertEquals("Seat not found", ex.getMessage());
+        verify(store, never()).put(any(), any(), anyLong());
     }
 
     @Test

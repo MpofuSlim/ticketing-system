@@ -71,7 +71,9 @@ public class SeatService {
     @Transactional
     public SeatLockResponseDTO lockSeat(UUID seatId, String userEmail) {
         log.info("Locking seat seatId={} userEmail={}", seatId, userEmail);
-        Seat seat = seatRepository.findById(seatId)
+        // Pessimistic row lock: concurrent lock attempts on the same seat are
+        // serialised here so the status check and update can't race.
+        Seat seat = seatRepository.findByIdForUpdate(seatId)
                 .orElseThrow(() -> {
                     log.warn("Lock failed, seat not found seatId={}", seatId);
                     return new RuntimeException("Seat not found");
@@ -84,12 +86,6 @@ public class SeatService {
                     + seat.getSeatNumber() + " is not available");
         }
 
-        String lockKey = LOCK_KEY_PREFIX + seatId;
-        seatLockStore.put(lockKey, userEmail, LOCK_TTL_SECONDS);
-
-        seat.setStatus(Seat.SeatStatus.LOCKED);
-        seatRepository.save(seat);
-
         SeatCategory category = seat.getCategory();
         int updated = categoryRepository.decrementAvailableSeats(category.getId());
         if (updated == 0) {
@@ -97,6 +93,15 @@ public class SeatService {
                     seatId, category.getId());
             throw new RuntimeException("No seats available in category " + category.getName());
         }
+
+        seat.setStatus(Seat.SeatStatus.LOCKED);
+        seatRepository.save(seat);
+
+        // Redis put goes last: if it throws, the surrounding transaction rolls
+        // back and the seat returns to AVAILABLE. Doing it before the DB writes
+        // would leak a Redis owner whenever the transaction failed afterwards.
+        String lockKey = LOCK_KEY_PREFIX + seatId;
+        seatLockStore.put(lockKey, userEmail, LOCK_TTL_SECONDS);
 
         log.info("Seat locked seatId={} section={} number={} userEmail={} ttlSeconds={}",
                 seatId, seat.getSectionLabel(), seat.getSeatNumber(), userEmail, LOCK_TTL_SECONDS);
