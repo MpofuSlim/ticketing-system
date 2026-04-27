@@ -47,15 +47,34 @@ class SeatServiceTest {
         SeatCategory cat = category(10);
         Seat seat = availableSeat(seatId, cat);
         when(seatRepo.findById(seatId)).thenReturn(Optional.of(seat));
+        when(catRepo.decrementAvailableSeats(cat.getId())).thenReturn(1);
 
         SeatLockResponseDTO resp = service.lockSeat(seatId, "user@example.com");
 
         assertEquals(Seat.SeatStatus.LOCKED, seat.getStatus());
         assertEquals("LOCKED", resp.getStatus());
-        assertEquals(9, cat.getAvailableSeats());
         verify(store).put(eq("seat:lock:" + seatId), eq("user@example.com"), eq(300L));
         verify(seatRepo).save(seat);
-        verify(catRepo).save(cat);
+        verify(catRepo).decrementAvailableSeats(cat.getId());
+        verify(catRepo, never()).save(any());
+    }
+
+    @Test
+    void lockSeat_throwsWhenCategoryExhausted() {
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatLockStore store = mock(SeatLockStore.class);
+        SeatService service = new SeatService(seatRepo, catRepo, store);
+
+        UUID seatId = UUID.randomUUID();
+        SeatCategory cat = category(0);
+        Seat seat = availableSeat(seatId, cat);
+        when(seatRepo.findById(seatId)).thenReturn(Optional.of(seat));
+        when(catRepo.decrementAvailableSeats(cat.getId())).thenReturn(0);
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> service.lockSeat(seatId, "u@example.com"));
+        assertTrue(ex.getMessage().contains("No seats available"));
     }
 
     @Test
@@ -149,11 +168,13 @@ class SeatServiceTest {
         seat.setStatus(Seat.SeatStatus.LOCKED);
         when(seatRepo.findById(seatId)).thenReturn(Optional.of(seat));
         when(store.get(any())).thenReturn("me@example.com");
+        when(catRepo.incrementAvailableSeats(cat.getId())).thenReturn(1);
 
         service.releaseSeat(seatId, "me@example.com");
 
         assertEquals(Seat.SeatStatus.AVAILABLE, seat.getStatus());
-        assertEquals(10, cat.getAvailableSeats());
+        verify(catRepo).incrementAvailableSeats(cat.getId());
+        verify(catRepo, never()).save(any());
         verify(store).delete("seat:lock:" + seatId);
     }
 
@@ -187,10 +208,11 @@ class SeatServiceTest {
         seat.setStatus(Seat.SeatStatus.LOCKED);
         when(seatRepo.findById(seatId)).thenReturn(Optional.of(seat));
         when(store.get(any())).thenReturn(null);
+        when(catRepo.incrementAvailableSeats(cat.getId())).thenReturn(1);
 
         service.releaseSeat(seatId, "anyone@example.com");
 
         assertEquals(Seat.SeatStatus.AVAILABLE, seat.getStatus());
-        assertEquals(10, cat.getAvailableSeats());
+        verify(catRepo).incrementAvailableSeats(cat.getId());
     }
 }

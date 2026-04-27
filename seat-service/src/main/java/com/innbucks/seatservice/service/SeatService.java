@@ -91,12 +91,15 @@ public class SeatService {
         seatRepository.save(seat);
 
         SeatCategory category = seat.getCategory();
-        category.setAvailableSeats(category.getAvailableSeats() - 1);
-        categoryRepository.save(category);
+        int updated = categoryRepository.decrementAvailableSeats(category.getId());
+        if (updated == 0) {
+            log.warn("Lock rejected, category exhausted seatId={} categoryId={}",
+                    seatId, category.getId());
+            throw new RuntimeException("No seats available in category " + category.getName());
+        }
 
-        log.info("Seat locked seatId={} section={} number={} userEmail={} ttlSeconds={} categoryAvailable={}",
-                seatId, seat.getSectionLabel(), seat.getSeatNumber(), userEmail,
-                LOCK_TTL_SECONDS, category.getAvailableSeats());
+        log.info("Seat locked seatId={} section={} number={} userEmail={} ttlSeconds={}",
+                seatId, seat.getSectionLabel(), seat.getSeatNumber(), userEmail, LOCK_TTL_SECONDS);
 
         return SeatLockResponseDTO.builder()
                 .seatId(seat.getId())
@@ -157,13 +160,15 @@ public class SeatService {
         seat.setStatus(Seat.SeatStatus.AVAILABLE);
         seatRepository.save(seat);
 
-        SeatCategory category = seat.getCategory();
-        category.setAvailableSeats(category.getAvailableSeats() + 1);
-        categoryRepository.save(category);
+        UUID categoryId = seat.getCategory().getId();
+        int updated = categoryRepository.incrementAvailableSeats(categoryId);
+        if (updated == 0) {
+            log.warn("Release: category counter not incremented (already at total) categoryId={}", categoryId);
+        }
 
         seatLockStore.delete(lockKey);
-        log.info("Seat released seatId={} section={} number={} userEmail={} categoryAvailable={}",
-                seatId, seat.getSectionLabel(), seat.getSeatNumber(), userEmail, category.getAvailableSeats());
+        log.info("Seat released seatId={} section={} number={} userEmail={}",
+                seatId, seat.getSectionLabel(), seat.getSeatNumber(), userEmail);
     }
 
     private SeatResponseDTO toDTO(Seat seat) {
