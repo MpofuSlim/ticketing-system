@@ -143,6 +143,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/booking_service
       DB_USERNAME: innbucks
@@ -151,8 +153,9 @@ services:
       HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       EUREKA_ENABLED: "false"
-    # Idempotency cache is held in-memory; keep this pinned to a single
-    # replica in staging to avoid duplicate bookings on retry.
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      IDEMPOTENCY_STORE: redis
     ports:
       - "8084:8084"
     healthcheck:
