@@ -59,10 +59,12 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- H2 database -->
+        <!-- H2: in-memory database for unit tests only. Production runs on
+             PostgreSQL via Flyway-managed migrations. -->
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
+            <scope>test</scope>
         </dependency>
 
         <!-- PostgreSQL for future production use -->

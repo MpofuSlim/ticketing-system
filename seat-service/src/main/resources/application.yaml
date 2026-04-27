@@ -2,11 +2,15 @@ spring:
   application:
     name: seat-service
 
+  # Local dev: run `docker compose up -d postgres redis` first; the seed
+  # in docker/postgres/init-databases.sql creates seat_service with the
+  # default credentials below. Tests override these to in-memory H2 via
+  # src/test/resources/application-test.yaml + @ActiveProfiles("test").
   datasource:
-    url: ${DB_URL:jdbc:h2:file:./data/seat_service_db;AUTO_SERVER=TRUE}
-    driver-class-name: ${DB_DRIVER:org.h2.Driver}
-    username: ${DB_USERNAME:sa}
-    password: ${DB_PASSWORD:}
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/seat_service}
+    driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
+    username: ${DB_USERNAME:innbucks}
+    password: ${DB_PASSWORD:innbucks}
     hikari:
       pool-name: seat-service-pool
       maximum-pool-size: ${DB_POOL_MAX:20}
@@ -17,17 +21,15 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: ${JPA_DDL_AUTO:update}
+      # Flyway owns the schema; Hibernate validates entities against it.
+      ddl-auto: ${JPA_DDL_AUTO:validate}
     show-sql: ${JPA_SHOW_SQL:false}
     properties:
       hibernate:
-        dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.H2Dialect}
+        dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
 
-  # Flyway is off by default so tests stay on H2 + Hibernate ddl-auto.
-  # docker-compose flips FLYWAY_ENABLED=true (with JPA_DDL_AUTO=validate)
-  # so PostgreSQL migrations run on startup and Hibernate only validates.
   flyway:
-    enabled: ${FLYWAY_ENABLED:false}
+    enabled: ${FLYWAY_ENABLED:true}
     baseline-on-migrate: true
     baseline-version: 0
     locations: classpath:db/migration
