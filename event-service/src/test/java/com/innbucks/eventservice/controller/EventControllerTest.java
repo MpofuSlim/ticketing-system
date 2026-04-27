@@ -103,13 +103,6 @@ class EventControllerTest {
     }
 
     @Test
-    void h2ConsoleRoot_redirectsToTrailingSlash() throws Exception {
-        mockMvc.perform(get("/h2-console"))
-                .andExpect(status().is3xxRedirection())
-                .andExpect(header().string("Location", "/h2-console/"));
-    }
-
-    @Test
     void getEventsByProvince_onlyReturnsActiveUpcomingEvents_numberedFromOne() throws Exception {
         eventRepository.save(eventBuilder()
                 .title("Third")
