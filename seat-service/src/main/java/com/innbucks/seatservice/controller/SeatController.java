@@ -2,6 +2,7 @@ package com.innbucks.seatservice.controller;
 
 import com.innbucks.seatservice.dto.ApiResult;
 import com.innbucks.seatservice.dto.SeatLockResponseDTO;
+import com.innbucks.seatservice.dto.SeatLookupResponseDTO;
 import com.innbucks.seatservice.dto.SeatResponseDTO;
 import com.innbucks.seatservice.security.MinTier;
 import com.innbucks.seatservice.service.SeatService;
@@ -65,6 +66,18 @@ public class SeatController {
                     .body(ApiResult.error(HttpStatus.NOT_FOUND, "Not found"));
         }
         return ResponseEntity.ok(ApiResult.ok("Available seats retrieved successfully", result));
+    }
+
+    @GetMapping("/{id}/lookup")
+    @Operation(summary = "Lookup seat details", description = "Returns full seat details including event, category, price, and status. Used by booking-service to resolve a seatId without trusting client-supplied data.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Seat details returned"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Seat not found")
+    })
+    public ResponseEntity<ApiResult<SeatLookupResponseDTO>> lookupSeat(@PathVariable UUID id) {
+        log.debug("GET /seats/{}/lookup", id);
+        return ResponseEntity.ok(ApiResult.ok("Seat details retrieved successfully",
+                seatService.lookupSeat(id)));
     }
 
     @PostMapping("/{id}/lock")
