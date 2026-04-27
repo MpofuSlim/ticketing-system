@@ -15,8 +15,20 @@ spring:
     properties:
       hibernate:
         dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.H2Dialect}
+
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
   lifecycle:
     timeout-per-shutdown-phase: 30s
+
+app:
+  lock:
+    # Set to "redis" for shared, cross-replica locks. Defaults to in-memory so
+    # local dev and tests work without a running Redis.
+    store: ${LOCK_STORE:memory}
 
 jwt:
   secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}

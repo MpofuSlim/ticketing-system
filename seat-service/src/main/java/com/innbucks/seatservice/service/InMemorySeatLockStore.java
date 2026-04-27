@@ -1,13 +1,11 @@
 package com.innbucks.seatservice.service;
 
-import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Component
-@Primary
 public class InMemorySeatLockStore implements SeatLockStore {
 
     private final ConcurrentHashMap<String, LockEntry> locks = new ConcurrentHashMap<>();
