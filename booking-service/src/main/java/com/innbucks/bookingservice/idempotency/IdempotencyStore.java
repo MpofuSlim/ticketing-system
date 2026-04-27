@@ -4,8 +4,9 @@ import java.util.Optional;
 
 /**
  * Keyed response cache for Idempotency-Key replay. An implementation
- * is expected to purge entries whose TTL has elapsed. Backed by the
- * in-memory store; deployments are pinned to a single replica.
+ * is expected to purge entries whose TTL has elapsed. Two implementations
+ * exist: an in-memory map for local dev/tests, and a Redis-backed store
+ * (selected via app.idempotency.store=redis) so replicas share state.
  */
 public interface IdempotencyStore {
 
