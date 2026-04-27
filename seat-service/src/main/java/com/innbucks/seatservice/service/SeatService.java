@@ -1,6 +1,7 @@
 package com.innbucks.seatservice.service;
 
 import com.innbucks.seatservice.dto.SeatLockResponseDTO;
+import com.innbucks.seatservice.dto.SeatLookupResponseDTO;
 import com.innbucks.seatservice.dto.SeatResponseDTO;
 import com.innbucks.seatservice.entity.Seat;
 import com.innbucks.seatservice.entity.SeatCategory;
@@ -42,6 +43,29 @@ public class SeatService {
                 .stream()
                 .map(this::toDTO)
                 .collect(Collectors.toList());
+    }
+
+    // Authoritative lookup used by other services (e.g. booking-service) to
+    // resolve a seat to its category, price, event, and status without
+    // trusting client-supplied values.
+    public SeatLookupResponseDTO lookupSeat(UUID seatId) {
+        log.debug("Looking up seat seatId={}", seatId);
+        Seat seat = seatRepository.findById(seatId)
+                .orElseThrow(() -> {
+                    log.warn("Lookup failed, seat not found seatId={}", seatId);
+                    return new RuntimeException("Seat not found");
+                });
+        SeatCategory category = seat.getCategory();
+        return SeatLookupResponseDTO.builder()
+                .seatId(seat.getId())
+                .eventId(category.getEventId())
+                .categoryId(category.getId())
+                .categoryName(category.getName())
+                .sectionLabel(seat.getSectionLabel())
+                .seatNumber(seat.getSeatNumber())
+                .price(category.getPrice())
+                .status(seat.getStatus())
+                .build();
     }
 
     @Transactional

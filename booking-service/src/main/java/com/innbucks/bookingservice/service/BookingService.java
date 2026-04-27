@@ -1,7 +1,9 @@
 package com.innbucks.bookingservice.service;
 
+import com.innbucks.bookingservice.client.SeatServiceClient;
 import com.innbucks.bookingservice.dto.*;
 import com.innbucks.bookingservice.entity.*;
+import com.innbucks.bookingservice.exception.TierRequirementException;
 import com.innbucks.bookingservice.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -21,6 +23,7 @@ public class BookingService {
 
     private final BookingRepository bookingRepository;
     private final BookingItemRepository bookingItemRepository;
+    private final SeatServiceClient seatServiceClient;
 
     private static final int TIER_2_MAX_SEATS = 2;
     private static final int TIER_3_MAX_SEATS = 6;
@@ -39,7 +42,9 @@ public class BookingService {
         if (request.getSeats().size() > maxSeats) {
             log.warn("Booking rejected, exceeds tier seat limit userEmail={} tier={} requested={} max={}",
                     userEmail, tier, request.getSeats().size(), maxSeats);
-            throw new RuntimeException(
+            throw new TierRequirementException(
+                    minTierForSeatCount(request.getSeats().size()),
+                    tier,
                     "Tier " + tier + " customers may book at most " + maxSeats + " seats per booking");
         }
 
@@ -58,8 +63,30 @@ public class BookingService {
             throw new RuntimeException("One or more seats are already booked: " + clashingSeats);
         }
 
-        BigDecimal total = request.getSeats().stream()
-                .map(CreateBookingRequestDTO.SeatItemRequest::getPriceAtBooking)
+        // Resolve every seat against seat-service so price, category, and event
+        // are derived from the source of truth rather than client input.
+        // The eventId and categoryId on the request are kept as defensive
+        // cross-checks — they must match what the seat actually belongs to.
+        List<SeatLookupResponseDTO> resolved = new ArrayList<>(requestedSeatIds.size());
+        for (CreateBookingRequestDTO.SeatItemRequest item : request.getSeats()) {
+            SeatLookupResponseDTO seat = lookupSeat(item.getSeatId());
+            if (!request.getEventId().equals(seat.getEventId())) {
+                log.warn("Booking rejected, seat does not belong to event userEmail={} seatId={} requestEventId={} actualEventId={}",
+                        userEmail, item.getSeatId(), request.getEventId(), seat.getEventId());
+                throw new RuntimeException(
+                        "Seat " + item.getSeatId() + " does not belong to event " + request.getEventId());
+            }
+            if (!item.getCategoryId().equals(seat.getCategoryId())) {
+                log.warn("Booking rejected, seat does not belong to category userEmail={} seatId={} requestCategoryId={} actualCategoryId={}",
+                        userEmail, item.getSeatId(), item.getCategoryId(), seat.getCategoryId());
+                throw new RuntimeException(
+                        "Seat " + item.getSeatId() + " does not belong to category " + item.getCategoryId());
+            }
+            resolved.add(seat);
+        }
+
+        BigDecimal total = resolved.stream()
+                .map(SeatLookupResponseDTO::getPrice)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         String confirmationNumber = generateConfirmationNumber();
@@ -75,15 +102,15 @@ public class BookingService {
         bookingRepository.save(booking);
 
         // Each seat gets its own unique ticket number
-        List<BookingItem> items = request.getSeats().stream()
+        List<BookingItem> items = resolved.stream()
                 .map(s -> BookingItem.builder()
                         .booking(booking)
                         .seatId(s.getSeatId())
                         .categoryId(s.getCategoryId())
-                        .rowLabel(s.getRowLabel())
+                        .rowLabel(s.getSectionLabel())
                         .seatNumber(s.getSeatNumber())
                         .categoryName(s.getCategoryName())
-                        .priceAtBooking(s.getPriceAtBooking())
+                        .priceAtBooking(s.getPrice())
                         .ticketNumber(generateTicketNumber()) // unique per seat
                         .build())
                 .collect(Collectors.toList());
@@ -192,6 +219,15 @@ public class BookingService {
 
     // ==================== HELPERS ====================
 
+    private SeatLookupResponseDTO lookupSeat(UUID seatId) {
+        ApiResult<SeatLookupResponseDTO> envelope = seatServiceClient.lookupSeat(seatId);
+        if (envelope == null || envelope.getData() == null) {
+            log.warn("Seat lookup returned no data seatId={}", seatId);
+            throw new RuntimeException("Seat " + seatId + " not found");
+        }
+        return envelope.getData();
+    }
+
     /**
      * Generates a booking confirmation number
      * Format: INN-20260419-A3F9B2
@@ -203,6 +239,13 @@ public class BookingService {
             case 4 -> TIER_4_MAX_SEATS;
             default -> 0;
         };
+    }
+
+    // Smallest tier whose per-booking cap can accommodate the requested seat count.
+    private int minTierForSeatCount(int seatCount) {
+        if (seatCount <= TIER_2_MAX_SEATS) return 2;
+        if (seatCount <= TIER_3_MAX_SEATS) return 3;
+        return 4;
     }
 
     private String generateConfirmationNumber() {
@@ -233,7 +276,7 @@ public class BookingService {
         for (int i = 0; i < 5; i++) {
             digits.append(random.nextInt(10));
         }
-        
+
         char letter = (char) ('A' + random.nextInt(26));
 
         return date + "-" + digits + letter;

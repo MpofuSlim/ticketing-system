@@ -1,7 +1,12 @@
 package com.innbucks.seatservice.security;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.innbucks.seatservice.dto.ApiResult;
+import com.innbucks.seatservice.dto.TierViolationData;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
@@ -9,7 +14,10 @@ import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.HandlerInterceptor;
 
 @Component
+@RequiredArgsConstructor
 public class TierAccessInterceptor implements HandlerInterceptor {
+
+    private final ObjectMapper objectMapper;
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
@@ -30,12 +38,20 @@ public class TierAccessInterceptor implements HandlerInterceptor {
             return true;
         }
 
-        response.setContentType("application/json");
-        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
         String message = "You require tier " + minTier.value()
                 + " registration to access that feature (current tier: " + currentTier + ")";
-        response.getWriter().write(
-                "{\"code\":\"403 FORBIDDEN\",\"message\":\"" + message + "\",\"data\":null}");
+        ApiResult<TierViolationData> body = ApiResult.<TierViolationData>builder()
+                .code(String.valueOf(HttpStatus.UNPROCESSABLE_ENTITY.value()))
+                .message(message)
+                .data(TierViolationData.builder()
+                        .requiredTier(minTier.value())
+                        .currentTier(currentTier)
+                        .build())
+                .build();
+
+        response.setContentType("application/json");
+        response.setStatus(HttpStatus.UNPROCESSABLE_ENTITY.value());
+        objectMapper.writeValue(response.getWriter(), body);
         return false;
     }
 
