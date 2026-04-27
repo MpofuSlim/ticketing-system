@@ -20,5 +20,8 @@ public class CreateBookingRequestDTO {
     public static class SeatItemRequest {
         @NotNull(message = "Seat ID is required")
         private UUID seatId;
+
+        @NotNull(message = "Category ID is required")
+        private UUID categoryId;
     }
 }

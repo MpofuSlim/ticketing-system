@@ -62,14 +62,22 @@ public class BookingService {
 
         // Resolve every seat against seat-service so price, category, and event
         // are derived from the source of truth rather than client input.
+        // The eventId and categoryId on the request are kept as defensive
+        // cross-checks — they must match what the seat actually belongs to.
         List<SeatLookupResponseDTO> resolved = new ArrayList<>(requestedSeatIds.size());
-        for (UUID seatId : requestedSeatIds) {
-            SeatLookupResponseDTO seat = lookupSeat(seatId);
+        for (CreateBookingRequestDTO.SeatItemRequest item : request.getSeats()) {
+            SeatLookupResponseDTO seat = lookupSeat(item.getSeatId());
             if (!request.getEventId().equals(seat.getEventId())) {
                 log.warn("Booking rejected, seat does not belong to event userEmail={} seatId={} requestEventId={} actualEventId={}",
-                        userEmail, seatId, request.getEventId(), seat.getEventId());
+                        userEmail, item.getSeatId(), request.getEventId(), seat.getEventId());
                 throw new RuntimeException(
-                        "Seat " + seatId + " does not belong to event " + request.getEventId());
+                        "Seat " + item.getSeatId() + " does not belong to event " + request.getEventId());
+            }
+            if (!item.getCategoryId().equals(seat.getCategoryId())) {
+                log.warn("Booking rejected, seat does not belong to category userEmail={} seatId={} requestCategoryId={} actualCategoryId={}",
+                        userEmail, item.getSeatId(), item.getCategoryId(), seat.getCategoryId());
+                throw new RuntimeException(
+                        "Seat " + item.getSeatId() + " does not belong to category " + item.getCategoryId());
             }
             resolved.add(seat);
         }

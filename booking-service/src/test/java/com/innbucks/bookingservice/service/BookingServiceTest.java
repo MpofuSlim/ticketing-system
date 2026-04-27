@@ -50,6 +50,7 @@ class BookingServiceTest {
             UUID seatId = UUID.randomUUID();
             CreateBookingRequestDTO.SeatItemRequest s = new CreateBookingRequestDTO.SeatItemRequest();
             s.setSeatId(seatId);
+            s.setCategoryId(DEFAULT_CATEGORY_ID);
             seats.add(s);
 
             lookups.add(SeatLookupResponseDTO.builder()
@@ -171,6 +172,22 @@ class BookingServiceTest {
         RuntimeException ex = assertThrows(RuntimeException.class,
                 () -> service.createBooking("user@example.com", 4, fx.request));
         assertTrue(ex.getMessage().contains("does not belong to event"));
+        verify(bookingRepo, never()).save(any());
+        verify(itemRepo, never()).saveAll(any());
+    }
+
+    @Test
+    void createBooking_rejectsWhenSeatBelongsToDifferentCategory() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        RequestFixture fx = request(new BigDecimal("20.00"));
+        // Seat-service says the seat is in a different category than the client claims
+        fx.lookups.get(0).setCategoryId(UUID.randomUUID());
+        BookingService service = newService(bookingRepo, itemRepo, stubClient(fx.lookups));
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> service.createBooking("user@example.com", 4, fx.request));
+        assertTrue(ex.getMessage().contains("does not belong to category"));
         verify(bookingRepo, never()).save(any());
         verify(itemRepo, never()).saveAll(any());
     }
