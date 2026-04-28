@@ -144,6 +144,28 @@ public class CustomerService {
                 .build();
     }
 
+    private static final int MAX_TIER = 4;
+
+    @Transactional(readOnly = true)
+    public CustomerTierResponseDTO getCustomerTierByPhoneNumber(String phoneNumber) {
+        User user = userRepository.findByPhoneNumber(phoneNumber)
+                .orElseThrow(() -> new RuntimeException("Customer not found for phone " + phoneNumber));
+        if (user.getRole() != User.Role.CUSTOMER) {
+            throw new RuntimeException("User is not a customer");
+        }
+        CustomerProfile profile = customerProfileRepository.findByUserId(user.getId())
+                .orElseThrow(() -> new RuntimeException("Customer profile not found"));
+
+        int currentTier = profile.getRegistrationTier();
+        Integer nextTier = currentTier < MAX_TIER ? currentTier + 1 : null;
+
+        return CustomerTierResponseDTO.builder()
+                .phoneNumber(user.getPhoneNumber())
+                .currentTier(currentTier)
+                .nextTier(nextTier)
+                .build();
+    }
+
     private CustomerProfile loadProfile(String phoneNumber, int requiredCurrentTier) {
         User user = userRepository.findByPhoneNumber(phoneNumber)
                 .orElseThrow(() -> new RuntimeException("Customer not found for phone " + phoneNumber));

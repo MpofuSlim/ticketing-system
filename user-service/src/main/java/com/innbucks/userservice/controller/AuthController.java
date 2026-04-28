@@ -247,6 +247,35 @@ public class AuthController {
         return ResponseEntity.ok(ApiResult.ok("Customer verification complete", response));
     }
 
+    @GetMapping("/customer/tier")
+    @SecurityRequirements()
+    @Operation(summary = "Get customer registration tier by phone number",
+            description = "Returns the customer's current registration tier (1..4) along with the next tier they can progress to. " +
+                    "`nextTier` is omitted when the customer is already at the maximum tier (4).")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "Customer tier retrieved",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Customer tier retrieved",
+                                      "data": {
+                                        "phoneNumber": "+263771234567",
+                                        "currentTier": 2,
+                                        "nextTier": 3
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Customer not found for the supplied phone number")
+    })
+    public ResponseEntity<ApiResult<CustomerTierResponseDTO>> getCustomerTier(
+            @RequestParam("phoneNumber") String phoneNumber) {
+        log.info("Get customer tier phone={}", phoneNumber);
+        CustomerTierResponseDTO response = customerService.getCustomerTierByPhoneNumber(phoneNumber);
+        return ResponseEntity.ok(ApiResult.ok("Customer tier retrieved", response));
+    }
+
     @PostMapping("/otp/request")
     @SecurityRequirements()
     @Operation(summary = "Request (or re-send) an OTP",
