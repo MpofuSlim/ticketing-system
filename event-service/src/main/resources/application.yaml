@@ -9,8 +9,8 @@ spring:
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/event_service}
     driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
-    username: ${DB_USERNAME:innbucks}
-    password: ${DB_PASSWORD:innbucks}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:}
     hikari:
       pool-name: event-service-pool
       maximum-pool-size: ${DB_POOL_MAX:20}
