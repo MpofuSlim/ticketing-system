@@ -67,6 +67,12 @@ management:
       probes:
         enabled: true
       show-details: never
+  health:
+    # The Redis auto-configuration registers a reactive health indicator that
+    # pings Redis on every probe. Keep it off when the lock store is in-memory;
+    # flip on alongside LOCK_STORE=redis.
+    redis:
+      enabled: ${REDIS_HEALTH_ENABLED:false}
 
 logging:
   pattern:
