@@ -46,8 +46,8 @@ public class SeatCategoryGateway {
         return circuitBreaker.run(
                 () -> doFetch(eventId),
                 throwable -> {
-                    log.warn("seatCategories breaker fallback eventId={} cause={}",
-                            eventId, throwable.toString());
+                    log.warn("seatCategories breaker fallback eventId={}",
+                            eventId, throwable);
                     return Collections.emptyList();
                 }
         );
