@@ -48,12 +48,6 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- Service discovery -->
-        <dependency>
-            <groupId>org.springframework.cloud</groupId>
-            <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
-        </dependency>
-
         <!-- Swagger UI aggregation for reactive gateway -->
         <dependency>
             <groupId>org.springdoc</groupId>

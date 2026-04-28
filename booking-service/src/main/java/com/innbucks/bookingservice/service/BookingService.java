@@ -3,10 +3,12 @@ package com.innbucks.bookingservice.service;
 import com.innbucks.bookingservice.client.SeatServiceClient;
 import com.innbucks.bookingservice.dto.*;
 import com.innbucks.bookingservice.entity.*;
+import com.innbucks.bookingservice.event.BookingDomainEvent;
 import com.innbucks.bookingservice.exception.TierRequirementException;
 import com.innbucks.bookingservice.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,6 +26,7 @@ public class BookingService {
     private final BookingRepository bookingRepository;
     private final BookingItemRepository bookingItemRepository;
     private final SeatServiceClient seatServiceClient;
+    private final ApplicationEventPublisher eventPublisher;
 
     private static final int TIER_2_MAX_SEATS = 2;
     private static final int TIER_3_MAX_SEATS = 6;
@@ -119,6 +122,8 @@ public class BookingService {
         booking.setItems(items);
         bookingRepository.save(booking);
 
+        eventPublisher.publishEvent(BookingDomainEvent.BookingCreated.of(booking, requestedSeatIds));
+
         log.info("Booking created bookingId={} confirmation={} userEmail={} eventId={} total={} items={}",
                 booking.getId(), confirmationNumber, userEmail, request.getEventId(),
                 total, items.size());
@@ -191,6 +196,8 @@ public class BookingService {
         booking.setStatus(Booking.BookingStatus.CANCELLED);
         bookingRepository.save(booking);
 
+        eventPublisher.publishEvent(BookingDomainEvent.BookingCancelled.of(booking));
+
         log.info("Booking cancelled bookingId={} userEmail={}", bookingId, userEmail);
         return toDTO(booking);
     }
@@ -212,6 +219,8 @@ public class BookingService {
 
         booking.setStatus(Booking.BookingStatus.CONFIRMED);
         bookingRepository.save(booking);
+
+        eventPublisher.publishEvent(BookingDomainEvent.BookingConfirmed.of(booking));
 
         log.info("Booking confirmed bookingId={} userEmail={}", bookingId, booking.getUserEmail());
         return toDTO(booking);

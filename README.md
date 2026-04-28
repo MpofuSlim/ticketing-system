@@ -110,6 +110,35 @@ present, otherwise the client IP. Defaults: 50 req/s sustained,
 `RATE_LIMIT_BURST_CAPACITY`. Over-budget requests get HTTP 429 with
 `X-RateLimit-Remaining` and `Retry-After` headers.
 
+## Domain events (Kafka)
+
+`booking-service` publishes domain events as a side-effect of its existing
+flows; consumers can subscribe incrementally. Topics:
+
+| Topic                | When                              | Key         |
+|----------------------|-----------------------------------|-------------|
+| `booking.created`    | `POST /bookings` succeeds         | `bookingId` |
+| `booking.confirmed`  | `confirmBooking` succeeds         | `bookingId` |
+| `booking.cancelled`  | `cancelBooking` succeeds          | `bookingId` |
+
+Topic names are env-overridable (`BOOKING_CREATED_TOPIC`,
+`BOOKING_CONFIRMED_TOPIC`, `BOOKING_CANCELLED_TOPIC`). Events are emitted
+via `ApplicationEventPublisher` inside the transaction and forwarded to
+Kafka by a `@TransactionalEventListener(AFTER_COMMIT)`, so a rolled-back
+booking never produces a ghost event. Producer config: `acks=all` plus
+idempotence; payload is JSON.
+
+The local Kafka broker runs in single-node KRaft mode (no Zookeeper).
+Inside the Docker network it's reachable as `kafka:9092`; from your host
+it's `localhost:29092` for tools like `kafkacat`.
+
+## Service discovery
+
+There is none. Inter-service URLs are explicit and resolved by Docker
+Compose / Kubernetes DNS (`http://seat-service:8083`, etc.). Eureka was
+previously wired but disabled; it has been removed entirely in favour of
+the simpler DNS approach.
+
 ## CI/CD
 
 GitHub Actions workflows in `.github/workflows/`:

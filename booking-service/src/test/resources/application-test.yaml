@@ -18,9 +18,12 @@ spring:
     discovery:
       enabled: false
 
-eureka:
-  client:
-    enabled: false
+seat-service:
+  url: http://localhost:0
+
+# Tests don't talk to Kafka. localhost:0 satisfies KafkaProducerConfig's
+# bootstrap-servers @Value at context load; nothing actually sends.
+spring.kafka.bootstrap-servers: localhost:0
 
 jwt:
   secret: test-test-test-test-test-test-test-test
@@ -29,3 +32,11 @@ jwt:
 app:
   idempotency:
     store: memory
+  events:
+    booking-created-topic: booking.created
+    booking-confirmed-topic: booking.confirmed
+    booking-cancelled-topic: booking.cancelled
+
+# Tests use a stubbed BookingEventPublisher; no Kafka broker required.
+# Spring's auto-configured KafkaTemplate is replaced by a Mockito mock in
+# the application context (see BookingServiceTest configuration).

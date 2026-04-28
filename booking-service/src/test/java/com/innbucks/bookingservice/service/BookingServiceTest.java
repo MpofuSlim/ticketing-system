@@ -7,11 +7,13 @@ import com.innbucks.bookingservice.dto.CreateBookingRequestDTO;
 import com.innbucks.bookingservice.dto.SeatLookupResponseDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
+import com.innbucks.bookingservice.event.BookingDomainEvent;
 import com.innbucks.bookingservice.exception.TierRequirementException;
 import com.innbucks.bookingservice.repository.BookingItemRepository;
 import com.innbucks.bookingservice.repository.BookingRepository;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.context.ApplicationEventPublisher;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -81,7 +83,14 @@ class BookingServiceTest {
     private BookingService newService(BookingRepository bookingRepo,
                                        BookingItemRepository itemRepo,
                                        SeatServiceClient seatClient) {
-        return new BookingService(bookingRepo, itemRepo, seatClient);
+        return newService(bookingRepo, itemRepo, seatClient, mock(ApplicationEventPublisher.class));
+    }
+
+    private BookingService newService(BookingRepository bookingRepo,
+                                       BookingItemRepository itemRepo,
+                                       SeatServiceClient seatClient,
+                                       ApplicationEventPublisher eventPublisher) {
+        return new BookingService(bookingRepo, itemRepo, seatClient, eventPublisher);
     }
 
     @Test
@@ -370,5 +379,63 @@ class BookingServiceTest {
         RuntimeException ex = assertThrows(RuntimeException.class, () -> service.confirmBooking(id));
         assertTrue(ex.getMessage().contains("pending"));
         verify(bookingRepo, never()).save(any());
+    }
+
+    @Test
+    void createBooking_publishesBookingCreatedEvent() {
+        ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+        RequestFixture fx = request(BigDecimal.TEN);
+        BookingService service = newService(mock(BookingRepository.class),
+                mock(BookingItemRepository.class), stubClient(fx.lookups), publisher);
+
+        service.createBooking("u@example.com", 4, fx.request);
+
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+        verify(publisher).publishEvent(captor.capture());
+        assertInstanceOf(BookingDomainEvent.BookingCreated.class, captor.getValue());
+        BookingDomainEvent.BookingCreated created = (BookingDomainEvent.BookingCreated) captor.getValue();
+        assertEquals("u@example.com", created.userEmail());
+        assertEquals(0, BigDecimal.TEN.compareTo(created.totalAmount()));
+        assertEquals(1, created.seatIds().size());
+    }
+
+    @Test
+    void confirmBooking_publishesBookingConfirmedEvent() {
+        ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class), publisher);
+
+        UUID id = UUID.randomUUID();
+        Booking booking = Booking.builder().id(id).userEmail("u@example.com")
+                .confirmationNumber("INN-X").status(Booking.BookingStatus.PENDING)
+                .totalAmount(BigDecimal.TEN).build();
+        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+
+        service.confirmBooking(id);
+
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+        verify(publisher).publishEvent(captor.capture());
+        assertInstanceOf(BookingDomainEvent.BookingConfirmed.class, captor.getValue());
+    }
+
+    @Test
+    void cancelBooking_publishesBookingCancelledEvent() {
+        ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class), publisher);
+
+        UUID id = UUID.randomUUID();
+        Booking booking = Booking.builder().id(id).userEmail("u@example.com")
+                .confirmationNumber("INN-X").status(Booking.BookingStatus.PENDING)
+                .totalAmount(BigDecimal.TEN).build();
+        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+
+        service.cancelBooking(id, "u@example.com");
+
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+        verify(publisher).publishEvent(captor.capture());
+        assertInstanceOf(BookingDomainEvent.BookingCancelled.class, captor.getValue());
     }
 }

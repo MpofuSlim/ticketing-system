@@ -15,8 +15,7 @@ import java.time.LocalDateTime;
 import static org.junit.jupiter.api.Assertions.*;
 
 @SpringBootTest(properties = {
-        "spring.jpa.hibernate.ddl-auto=create-drop",
-        "eureka.client.enabled=false"
+        "spring.jpa.hibernate.ddl-auto=create-drop"
 })
 @ActiveProfiles("test")
 @Transactional

@@ -39,10 +39,19 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
 
+  # KafkaProducerConfig builds the producer factory + template from this
+  # property. Boot 4 no longer auto-configures Kafka, so spring.kafka.*
+  # subkeys are not consumed automatically.
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
   lifecycle:
     timeout-per-shutdown-phase: 30s
 
   cloud:
+    discovery:
+      # No Eureka or other discovery client wired; Feign uses explicit URLs.
+      enabled: false
     openfeign:
       # Wraps every Feign call in a Spring Cloud Circuit Breaker (Resilience4j
       # impl, configured below). Required for @FeignClient(fallback = ...) to
@@ -82,21 +91,26 @@ resilience4j:
           - java.io.IOException
           - org.springframework.web.client.ResourceAccessException
 
+seat-service:
+  # Explicit URL (no service discovery). docker-compose sets this to
+  # http://seat-service:8083 via SEAT_SERVICE_URL.
+  url: ${SEAT_SERVICE_URL:http://localhost:8083}
+
 app:
   idempotency:
     # Set to "redis" for shared idempotency across replicas. Defaults to
     # in-memory so local dev and unit tests work without Redis.
     store: ${IDEMPOTENCY_STORE:memory}
+  events:
+    # Domain event topics. Override these to wire onto an existing event
+    # bus / shared topic naming scheme.
+    booking-created-topic: ${BOOKING_CREATED_TOPIC:booking.created}
+    booking-confirmed-topic: ${BOOKING_CONFIRMED_TOPIC:booking.confirmed}
+    booking-cancelled-topic: ${BOOKING_CANCELLED_TOPIC:booking.cancelled}
 
 jwt:
   secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
   expiration: ${JWT_EXPIRATION_MS:86400000}
-
-eureka:
-  client:
-    enabled: ${EUREKA_ENABLED:false}
-    service-url:
-      defaultZone: ${EUREKA_DEFAULT_ZONE:http://localhost:8761/eureka/}
 
 server:
   port: 8084
