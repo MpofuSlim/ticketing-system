@@ -169,7 +169,8 @@ public class AuthController {
     @PostMapping("/customer/register/tier2")
     @SecurityRequirements()
     @Operation(summary = "Customer registration - Tier 2",
-            description = "Tier 2: Captures fullName, idNumber, passport number, address, gender, and selfie picture.")
+            description = "Tier 2: Captures fullName, idNumber, passport number, address, gender, and a base64-encoded selfie picture " +
+                    "(raw base64 or a data URL such as `data:image/png;base64,...`).")
     @ApiResponses(@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
             description = "Tier 2 complete.",
             content = @Content(mediaType = "application/json",

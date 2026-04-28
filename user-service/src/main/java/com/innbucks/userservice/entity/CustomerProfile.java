@@ -33,7 +33,9 @@ public class CustomerProfile {
     @Enumerated(EnumType.STRING)
     private Gender gender;
 
-    private String selfiePicturePath;
+    @Lob
+    @Column(columnDefinition = "TEXT")
+    private String selfiePicture;
 
     private String biometricsReference;
 
