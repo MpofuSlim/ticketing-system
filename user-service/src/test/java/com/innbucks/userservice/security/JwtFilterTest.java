@@ -116,7 +116,7 @@ class JwtFilterTest {
 
     @Test
     void shouldNotFilter_returnsTrueForExcludedPaths() {
-        for (String path : new String[]{"/auth/login", "/auth/register", "/h2-console/",
+        for (String path : new String[]{"/auth/login", "/auth/register",
                 "/swagger-ui/index.html", "/v3/api-docs", "/error"}) {
             MockHttpServletRequest req = new MockHttpServletRequest("GET", path);
             assertTrue(filter.shouldNotFilter(req), "expected skip for " + path);

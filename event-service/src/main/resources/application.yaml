@@ -2,11 +2,15 @@ spring:
   application:
     name: event-service
 
+  # Local dev: run `docker compose up -d postgres` first; the seed in
+  # docker/postgres/init-databases.sql creates event_service with the
+  # default credentials below. Tests override these to in-memory H2 via
+  # src/test/resources/application-test.yaml + @ActiveProfiles("test").
   datasource:
-    url: ${DB_URL:jdbc:h2:file:./data/event_service_db;AUTO_SERVER=TRUE}
-    driver-class-name: ${DB_DRIVER:org.h2.Driver}
-    username: ${DB_USERNAME:sa}
-    password: ${DB_PASSWORD:}
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/event_service}
+    driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
+    username: ${DB_USERNAME:innbucks}
+    password: ${DB_PASSWORD:innbucks}
     hikari:
       pool-name: event-service-pool
       maximum-pool-size: ${DB_POOL_MAX:20}
@@ -17,11 +21,19 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: ${JPA_DDL_AUTO:update}
+      # Flyway owns the schema; Hibernate validates entities against it.
+      ddl-auto: ${JPA_DDL_AUTO:validate}
     show-sql: ${JPA_SHOW_SQL:false}
     properties:
       hibernate:
-        dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.H2Dialect}
+        dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
+
+  flyway:
+    enabled: ${FLYWAY_ENABLED:true}
+    baseline-on-migrate: true
+    baseline-version: 0
+    locations: classpath:db/migration
+
   lifecycle:
     timeout-per-shutdown-phase: 30s
 

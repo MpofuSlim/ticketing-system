@@ -11,6 +11,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.security.test.context.support.WithMockUser;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.web.context.WebApplicationContext;
 
@@ -27,6 +28,7 @@ import static org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppC
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "eureka.client.enabled=false"
 })
+@ActiveProfiles("test")
 class EventControllerTest {
 
     MockMvc mockMvc;
@@ -98,13 +100,6 @@ class EventControllerTest {
                 .andExpect(jsonPath("$.data.tenantId", is("tenant-99")))
                 .andExpect(jsonPath("$.data.title", is("Concert")))
                 .andExpect(jsonPath("$.data.availableTickets", is(50)));
-    }
-
-    @Test
-    void h2ConsoleRoot_redirectsToTrailingSlash() throws Exception {
-        mockMvc.perform(get("/h2-console"))
-                .andExpect(status().is3xxRedirection())
-                .andExpect(header().string("Location", "/h2-console/"));
     }
 
     @Test

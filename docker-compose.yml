@@ -60,7 +60,9 @@ services:
       DB_PASSWORD: innbucks
       DB_DRIVER: org.postgresql.Driver
       HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
-      JPA_DDL_AUTO: update
+      # Flyway owns the schema; Hibernate only validates entities against it.
+      JPA_DDL_AUTO: validate
+      FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       JWT_EXPIRATION_MS: 86400000
       EUREKA_ENABLED: "false"
@@ -89,6 +91,9 @@ services:
       DB_PASSWORD: innbucks
       DB_DRIVER: org.postgresql.Driver
       HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+      # Flyway owns the schema; Hibernate only validates entities against it.
+      JPA_DDL_AUTO: validate
+      FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       SEAT_SERVICE_BASE_URL: http://seat-service:8083
       EUREKA_ENABLED: "false"
@@ -119,6 +124,9 @@ services:
       DB_PASSWORD: innbucks
       DB_DRIVER: org.postgresql.Driver
       HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+      # Flyway owns the schema; Hibernate only validates entities against it.
+      JPA_DDL_AUTO: validate
+      FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       EUREKA_ENABLED: "false"
       REDIS_HOST: redis
@@ -151,6 +159,9 @@ services:
       DB_PASSWORD: innbucks
       DB_DRIVER: org.postgresql.Driver
       HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+      # Flyway owns the schema; Hibernate only validates entities against it.
+      JPA_DDL_AUTO: validate
+      FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       EUREKA_ENABLED: "false"
       REDIS_HOST: redis
