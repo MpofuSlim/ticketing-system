@@ -15,8 +15,8 @@ services:
     container_name: innbucks-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-innbucks}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-innbucks}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
       POSTGRES_DB: postgres
     ports:
       - "5432:5432"
@@ -24,7 +24,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-innbucks}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -85,8 +85,8 @@ services:
         condition: service_healthy
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/user_service
-      DB_USERNAME: ${POSTGRES_USER:-innbucks}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-innbucks}
+      DB_USERNAME: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
       DB_DRIVER: org.postgresql.Driver
       HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
       # Flyway owns the schema; Hibernate only validates entities against it.
@@ -115,8 +115,8 @@ services:
         condition: service_healthy
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/event_service
-      DB_USERNAME: ${POSTGRES_USER:-innbucks}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-innbucks}
+      DB_USERNAME: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
       DB_DRIVER: org.postgresql.Driver
       HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
       # Flyway owns the schema; Hibernate only validates entities against it.
@@ -148,8 +148,8 @@ services:
         condition: service_healthy
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/seat_service
-      DB_USERNAME: ${POSTGRES_USER:-innbucks}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-innbucks}
+      DB_USERNAME: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
       DB_DRIVER: org.postgresql.Driver
       HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
       # Flyway owns the schema; Hibernate only validates entities against it.
@@ -184,8 +184,8 @@ services:
         condition: service_healthy
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/booking_service
-      DB_USERNAME: ${POSTGRES_USER:-innbucks}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:-innbucks}
+      DB_USERNAME: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
       DB_DRIVER: org.postgresql.Driver
       HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
       # Flyway owns the schema; Hibernate only validates entities against it.
@@ -221,8 +221,8 @@ services:
         condition: service_healthy
     environment:
       SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/payment_service
-      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-innbucks}
-      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-innbucks}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-postgres}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
       SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
       SPRING_JPA_HIBERNATE_DDL_AUTO: update
     ports:
