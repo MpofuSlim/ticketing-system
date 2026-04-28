@@ -1,5 +1,6 @@
 package com.innbucks.eventservice.service;
 
+import com.innbucks.eventservice.client.SeatCategoryGateway;
 import com.innbucks.eventservice.dto.CreateEventRequestDTO;
 import com.innbucks.eventservice.dto.EventResponseDTO;
 import com.innbucks.eventservice.dto.UpdateEventRequestDTO;
@@ -9,11 +10,9 @@ import com.innbucks.eventservice.mapper.EventMapper;
 import com.innbucks.eventservice.repository.EventRepository;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import org.springframework.test.util.ReflectionTestUtils;
-import org.springframework.web.client.RestClientException;
-import org.springframework.web.client.RestTemplate;
 
 import java.time.LocalDateTime;
+import java.util.Collections;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -27,8 +26,8 @@ class EventServiceTest {
     void updateEvent_rejectsWhenTenantDoesNotMatch() {
         EventRepository repo = mock(EventRepository.class);
         EventMapper mapper = mock(EventMapper.class);
-        RestTemplate restTemplate = mock(RestTemplate.class);
-        EventService service = new EventService(repo, mapper, restTemplate);
+        SeatCategoryGateway gateway = mock(SeatCategoryGateway.class);
+        EventService service = new EventService(repo, mapper, gateway);
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder()
@@ -56,8 +55,8 @@ class EventServiceTest {
     void updateEvent_adjustsAvailableTicketsByCapacityDiff() {
         EventRepository repo = mock(EventRepository.class);
         EventMapper mapper = mock(EventMapper.class);
-        RestTemplate restTemplate = mock(RestTemplate.class);
-        EventService service = new EventService(repo, mapper, restTemplate);
+        SeatCategoryGateway gateway = mock(SeatCategoryGateway.class);
+        EventService service = new EventService(repo, mapper, gateway);
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder()
@@ -93,7 +92,7 @@ class EventServiceTest {
     void createEvent_initializesAvailableTicketsToTotalCapacity() {
         EventRepository repo = mock(EventRepository.class);
         EventMapper mapper = mock(EventMapper.class);
-        EventService service = new EventService(repo, mapper, mock(RestTemplate.class));
+        EventService service = new EventService(repo, mapper, mock(SeatCategoryGateway.class));
 
         CreateEventRequestDTO req = new CreateEventRequestDTO();
         req.setTitle("Concert"); req.setDescription("desc"); req.setVenue("Venue");
@@ -116,7 +115,7 @@ class EventServiceTest {
     @Test
     void createEvent_rejectsDuplicateForSameTenantTitleVenueDate() {
         EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, mock(EventMapper.class), mock(RestTemplate.class));
+        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class));
 
         LocalDateTime when = LocalDateTime.now().plusDays(10);
         CreateEventRequestDTO req = new CreateEventRequestDTO();
@@ -136,7 +135,7 @@ class EventServiceTest {
     void updateEvent_asAdmin_canEditEventOwnedByAnotherTenant() {
         EventRepository repo = mock(EventRepository.class);
         EventMapper mapper = mock(EventMapper.class);
-        EventService service = new EventService(repo, mapper, mock(RestTemplate.class));
+        EventService service = new EventService(repo, mapper, mock(SeatCategoryGateway.class));
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder()
@@ -157,7 +156,7 @@ class EventServiceTest {
     @Test
     void deleteEvent_rejectsNonOwnerTenant() {
         EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, mock(EventMapper.class), mock(RestTemplate.class));
+        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class));
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder().eventId(eventId).tenantId("owner-tenant")
@@ -175,7 +174,7 @@ class EventServiceTest {
     @Test
     void deleteEvent_asAdmin_softDeletesEventOwnedByAnotherTenant() {
         EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, mock(EventMapper.class), mock(RestTemplate.class));
+        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class));
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder().eventId(eventId).tenantId("owner-tenant")
@@ -192,7 +191,7 @@ class EventServiceTest {
     @Test
     void getEventById_throwsWhenMissing() {
         EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, mock(EventMapper.class), mock(RestTemplate.class));
+        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class));
         when(repo.findByEventIdAndDeletedFalse(any())).thenReturn(Optional.empty());
 
         RuntimeException ex = assertThrows(RuntimeException.class,
@@ -204,9 +203,8 @@ class EventServiceTest {
     void getEventById_fallsBackToEmptySeatCategories_whenSeatServiceFails() {
         EventRepository repo = mock(EventRepository.class);
         EventMapper mapper = mock(EventMapper.class);
-        RestTemplate restTemplate = mock(RestTemplate.class);
-        EventService service = new EventService(repo, mapper, restTemplate);
-        ReflectionTestUtils.setField(service, "seatServiceBaseUrl", "http://localhost:9999");
+        SeatCategoryGateway gateway = mock(SeatCategoryGateway.class);
+        EventService service = new EventService(repo, mapper, gateway);
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder().eventId(eventId).tenantId("a").title("T")
@@ -216,8 +214,9 @@ class EventServiceTest {
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
         EventResponseDTO dto = new EventResponseDTO();
         when(mapper.toDTO(existing)).thenReturn(dto);
-        when(restTemplate.getForObject(any(String.class), any()))
-                .thenThrow(new RestClientException("seat-service down"));
+        // Gateway swallows the seat-service failure and returns an empty list,
+        // so the event is still served — just without enriched categories.
+        when(gateway.fetchForEvent(eventId)).thenReturn(Collections.emptyList());
 
         EventResponseDTO result = service.getEventById(eventId);
 

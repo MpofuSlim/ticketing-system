@@ -24,6 +24,13 @@ public class GlobalExceptionHandler {
         throw ex;
     }
 
+    @ExceptionHandler(SeatServiceUnavailableException.class)
+    public ResponseEntity<ApiResult<Void>> handleSeatServiceUnavailable(SeatServiceUnavailableException ex) {
+        log.warn("seat-service unavailable: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(ApiResult.error(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage()));
+    }
+
     @ExceptionHandler(TierRequirementException.class)
     public ResponseEntity<ApiResult<TierViolationData>> handleTierRequirement(TierRequirementException ex) {
         log.warn("Tier requirement not met requiredTier={} currentTier={} reason={}",

@@ -44,6 +44,35 @@ services:
       timeout: 3s
       retries: 20
 
+  # Kafka in single-node KRaft mode (no Zookeeper). Used by booking-service
+  # to publish domain events. Listeners: container traffic on port 9092,
+  # host machine on 29092 (for poking with kafkacat / IDE consumers).
+  kafka:
+    image: bitnami/kafka:3.7
+    container_name: innbucks-kafka
+    restart: unless-stopped
+    ports:
+      - "29092:29092"
+    environment:
+      KAFKA_CFG_NODE_ID: "1"
+      KAFKA_CFG_PROCESS_ROLES: "controller,broker"
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:29092"
+      KAFKA_CFG_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092"
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT"
+      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    volumes:
+      - kafka_data:/bitnami/kafka
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/bitnami/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
   user-service:
     build:
       context: .
@@ -65,7 +94,6 @@ services:
       FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       JWT_EXPIRATION_MS: 86400000
-      EUREKA_ENABLED: "false"
     ports:
       - "8081:8081"
     healthcheck:
@@ -96,7 +124,6 @@ services:
       FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       SEAT_SERVICE_BASE_URL: http://seat-service:8083
-      EUREKA_ENABLED: "false"
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
     ports:
       - "8082:8082"
@@ -129,7 +156,6 @@ services:
       JPA_DDL_AUTO: validate
       FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
-      EUREKA_ENABLED: "false"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       LOCK_STORE: redis
@@ -154,6 +180,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      kafka:
+        condition: service_healthy
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/booking_service
       DB_USERNAME: ${POSTGRES_USER:-innbucks}
@@ -164,10 +192,11 @@ services:
       JPA_DDL_AUTO: validate
       FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
-      EUREKA_ENABLED: "false"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       IDEMPOTENCY_STORE: redis
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      SEAT_SERVICE_URL: http://seat-service:8083
     ports:
       - "8084:8084"
     healthcheck:
@@ -196,7 +225,6 @@ services:
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-innbucks}
       SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
       SPRING_JPA_HIBERNATE_DDL_AUTO: update
-      EUREKA_CLIENT_ENABLED: "false"
     ports:
       - "8085:8085"
     healthcheck:
@@ -222,14 +250,20 @@ services:
         condition: service_healthy
       booking-service:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       USER_SERVICE_URI: http://user-service:8081
       EVENT_SERVICE_URI: http://event-service:8082
       SEAT_SERVICE_URI: http://seat-service:8083
       BOOKING_SERVICE_URI: http://booking-service:8084
       PAYMENT_SERVICE_URI: http://payment-service:8085
-      EUREKA_ENABLED: "false"
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      # Redis backs the gateway's RequestRateLimiter token bucket store.
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      RATE_LIMIT_REPLENISH_PER_SECOND: ${RATE_LIMIT_REPLENISH_PER_SECOND:-50}
+      RATE_LIMIT_BURST_CAPACITY: ${RATE_LIMIT_BURST_CAPACITY:-100}
     ports:
       - "8080:8080"
     healthcheck:
@@ -242,3 +276,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  kafka_data:

@@ -41,12 +41,6 @@ jwt:
   secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
   expiration: ${JWT_EXPIRATION_MS:86400000}
 
-eureka:
-  client:
-    enabled: ${EUREKA_ENABLED:false}
-    service-url:
-      defaultZone: ${EUREKA_DEFAULT_ZONE:http://localhost:8761/eureka/}
-
 server:
   port: 8082
   shutdown: graceful
@@ -59,6 +53,31 @@ springdoc:
 
 seat-service:
   base-url: ${SEAT_SERVICE_BASE_URL:http://localhost:8083}
+
+# Circuit breaker + retry around the outbound call to seat-service
+# (SeatCategoryGateway). Fallback returns an empty category list, so events
+# remain visible even while seat-service is degraded.
+resilience4j:
+  circuitbreaker:
+    instances:
+      seatCategories:
+        register-health-indicator: true
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+  retry:
+    instances:
+      seatCategories:
+        max-attempts: 3
+        wait-duration: 500ms
+        exponential-backoff-multiplier: 2.0
+        retry-exceptions:
+          - org.springframework.web.client.ResourceAccessException
+          - java.io.IOException
 
 management:
   endpoints:

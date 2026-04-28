@@ -8,7 +8,10 @@ import org.springframework.web.bind.annotation.PathVariable;
 
 import java.util.UUID;
 
-@FeignClient(name = "seat-service")
+@FeignClient(
+        name = "seat-service",
+        url = "${seat-service.url}",
+        fallback = SeatServiceClientFallback.class)
 public interface SeatServiceClient {
 
     @GetMapping("/seats/{id}/lookup")

@@ -3,6 +3,14 @@ spring:
     name: api-gateway
   lifecycle:
     timeout-per-shutdown-phase: 30s
+
+  # Redis-backed token bucket store for the gateway's RequestRateLimiter.
+  # Defaults assume the local docker-compose Redis on the same network.
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+
   cloud:
     gateway:
       server:
@@ -74,6 +82,16 @@ spring:
 
           default-filters:
             - DedupeResponseHeader=Access-Control-Allow-Credentials Access-Control-Allow-Origin Access-Control-Allow-Headers Access-Control-Allow-Methods, RETAIN_FIRST
+            # Gateway-wide rate limit. Token bucket per resolved key (bearer
+            # token if present, else client IP — see RateLimiterConfig).
+            # Defaults to 50 req/s sustained with a 100-burst, overridable
+            # via env. Returns 429 with Retry-After when over budget.
+            - name: RequestRateLimiter
+              args:
+                redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                redis-rate-limiter.requestedTokens: 1
+                key-resolver: "#{@gatewayKeyResolver}"
 
           globalcors:
             add-to-simple-url-handler-mapping: true
@@ -95,12 +113,6 @@ spring:
                 allowedHeaders: "*"
                 allowCredentials: true
                 maxAge: 3600
-
-eureka:
-  client:
-    enabled: ${EUREKA_ENABLED:false}
-    service-url:
-      defaultZone: ${EUREKA_DEFAULT_ZONE:http://localhost:8761/eureka/}
 
 server:
   port: ${SERVER_PORT:8080}

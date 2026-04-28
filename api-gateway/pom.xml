@@ -21,6 +21,14 @@
             <artifactId>spring-cloud-starter-gateway-server-webflux</artifactId>
         </dependency>
 
+        <!-- Redis-backed token bucket store for the gateway's
+             RequestRateLimiter filter. Reactive flavour because the
+             gateway runs on Netty/WebFlux. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis-reactive</artifactId>
+        </dependency>
+
         <!-- JWT validation at gateway level -->
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
@@ -38,12 +46,6 @@
             <artifactId>jjwt-jackson</artifactId>
             <version>0.11.5</version>
             <scope>runtime</scope>
-        </dependency>
-
-        <!-- Service discovery -->
-        <dependency>
-            <groupId>org.springframework.cloud</groupId>
-            <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
         </dependency>
 
         <!-- Swagger UI aggregation for reactive gateway -->
