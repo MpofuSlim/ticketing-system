@@ -90,6 +90,26 @@ Each service exposes Spring Boot Actuator endpoints:
 All metrics carry an `application` tag set to `spring.application.name` so
 dashboards can slice by service.
 
+## Resilience
+
+Inter-service calls are wrapped in Resilience4j circuit breakers with
+exponential-backoff retries:
+
+- `booking-service` → `seat-service` (Feign): breaker `SeatServiceClient`,
+  fallback raises `SeatServiceUnavailableException` (mapped to 503).
+- `event-service` → `seat-service` (RestTemplate): breaker `seatCategories`,
+  fallback returns an empty category list so events stay viewable.
+
+Defaults: 50% failure-rate threshold over 20 calls (min 10), 30s open
+window, 3 retries with 500ms initial wait and 2× backoff.
+
+The api-gateway applies a Redis-backed token bucket rate limit
+(`RequestRateLimiter`) to every route. Bucket key is the bearer token if
+present, otherwise the client IP. Defaults: 50 req/s sustained,
+100 burst — overridable via `RATE_LIMIT_REPLENISH_PER_SECOND` and
+`RATE_LIMIT_BURST_CAPACITY`. Over-budget requests get HTTP 429 with
+`X-RateLimit-Remaining` and `Retry-After` headers.
+
 ## CI/CD
 
 GitHub Actions workflows in `.github/workflows/`:
@@ -124,7 +144,6 @@ This codebase is suitable for staging but **not** yet hardened for
 production. Notable gaps:
 
 - No TLS termination configured (delegate to ingress / reverse proxy)
-- No circuit breakers on inter-service calls (Feign / RestTemplate)
 - No Kubernetes manifests or Helm chart
 - No distributed tracing (OpenTelemetry not wired up)
 - No Postgres backup / WAL archive strategy

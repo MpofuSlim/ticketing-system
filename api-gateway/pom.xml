@@ -21,6 +21,14 @@
             <artifactId>spring-cloud-starter-gateway-server-webflux</artifactId>
         </dependency>
 
+        <!-- Redis-backed token bucket store for the gateway's
+             RequestRateLimiter filter. Reactive flavour because the
+             gateway runs on Netty/WebFlux. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis-reactive</artifactId>
+        </dependency>
+
         <!-- JWT validation at gateway level -->
         <dependency>
             <groupId>io.jsonwebtoken</groupId>

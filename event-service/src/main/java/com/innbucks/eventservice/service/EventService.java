@@ -1,5 +1,6 @@
 package com.innbucks.eventservice.service;
 
+import com.innbucks.eventservice.client.SeatCategoryGateway;
 import com.innbucks.eventservice.dto.*;
 import com.innbucks.eventservice.entity.Event;
 import com.innbucks.eventservice.entity.Province;
@@ -7,20 +8,13 @@ import com.innbucks.eventservice.mapper.EventMapper;
 import com.innbucks.eventservice.repository.EventRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.*;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestClientException;
-import org.springframework.web.client.RestTemplate;
-import org.springframework.web.util.UriComponentsBuilder;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -29,10 +23,7 @@ public class EventService {
 
     private final EventRepository eventRepository;
     private final EventMapper eventMapper;
-    private final RestTemplate restTemplate;
-
-    @Value("${seat-service.base-url:http://localhost:8083}")
-    private String seatServiceBaseUrl;
+    private final SeatCategoryGateway seatCategoryGateway;
 
     public Page<EventResponseDTO> getAllActiveEvents(
             LocalDateTime from,
@@ -58,7 +49,7 @@ public class EventService {
                     return new RuntimeException("Event not found");
                 });
         EventResponseDTO response = eventMapper.toDTO(event);
-        response.setSeatCategories(fetchSeatCategoriesForEvent(eventId));
+        response.setSeatCategories(seatCategoryGateway.fetchForEvent(eventId));
         return response;
     }
 
@@ -178,52 +169,4 @@ public class EventService {
         deleteEvent(tenantId, "ROLE_TENANT", eventId);
     }
 
-    private List<EventSeatCategoryResponseDTO> fetchSeatCategoriesForEvent(UUID eventId) {
-        String url = UriComponentsBuilder
-                .fromUriString(seatServiceBaseUrl)
-                .path("/seat-categories")
-                .queryParam("eventId", eventId)
-                .toUriString();
-
-        try {
-            SeatCategoryServiceResponseDTO[] categories = restTemplate.getForObject(
-                    url,
-                    SeatCategoryServiceResponseDTO[].class
-            );
-
-            if (categories == null || categories.length == 0) {
-                return Collections.emptyList();
-            }
-
-            return Arrays.stream(categories)
-                    .map(category -> EventSeatCategoryResponseDTO.builder()
-                            .name(category.getName())
-                            .description(category.getDescription())
-                            .categoryPrice(category.getPrice())
-                            .sections(mapSectionsWithPrice(category.getSections(), category.getPrice()))
-                            .build())
-                    .collect(Collectors.toList());
-        } catch (RestClientException ex) {
-            log.warn("Failed to fetch seat categories for eventId={} from seat-service. Returning event without categories. error={}",
-                    eventId, ex.getMessage());
-            return Collections.emptyList();
-        }
-    }
-
-    private List<EventSectionResponseDTO> mapSectionsWithPrice(
-            List<SeatCategorySectionDTO> sections,
-            java.math.BigDecimal price
-    ) {
-        if (sections == null || sections.isEmpty()) {
-            return Collections.emptyList();
-        }
-
-        return sections.stream()
-                .map(section -> EventSectionResponseDTO.builder()
-                        .section(section.getSection())
-                        .seatCount(section.getSeatCount())
-                        .price(price)
-                        .build())
-                .collect(Collectors.toList());
-    }
 }

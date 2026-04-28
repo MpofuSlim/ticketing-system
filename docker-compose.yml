@@ -222,6 +222,8 @@ services:
         condition: service_healthy
       booking-service:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       USER_SERVICE_URI: http://user-service:8081
       EVENT_SERVICE_URI: http://event-service:8082
@@ -230,6 +232,11 @@ services:
       PAYMENT_SERVICE_URI: http://payment-service:8085
       EUREKA_ENABLED: "false"
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      # Redis backs the gateway's RequestRateLimiter token bucket store.
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      RATE_LIMIT_REPLENISH_PER_SECOND: ${RATE_LIMIT_REPLENISH_PER_SECOND:-50}
+      RATE_LIMIT_BURST_CAPACITY: ${RATE_LIMIT_BURST_CAPACITY:-100}
     ports:
       - "8080:8080"
     healthcheck:

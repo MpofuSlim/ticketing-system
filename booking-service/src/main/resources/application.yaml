@@ -44,12 +44,43 @@ spring:
 
   cloud:
     openfeign:
+      # Wraps every Feign call in a Spring Cloud Circuit Breaker (Resilience4j
+      # impl, configured below). Required for @FeignClient(fallback = ...) to
+      # actually run.
+      circuitbreaker:
+        enabled: true
       client:
         config:
           default:
             connect-timeout: ${FEIGN_CONNECT_TIMEOUT_MS:2000}
             read-timeout: ${FEIGN_READ_TIMEOUT_MS:5000}
             logger-level: basic
+
+# Resilience4j configuration. The instance name MUST match the Feign client
+# class name (SeatServiceClient) — that's the convention Spring Cloud uses
+# when it wraps a Feign call in a CircuitBreaker.
+resilience4j:
+  circuitbreaker:
+    instances:
+      SeatServiceClient:
+        register-health-indicator: true
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        failure-rate-threshold: 50            # open if ≥50% of last 10 calls fail
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+  retry:
+    instances:
+      SeatServiceClient:
+        max-attempts: 3
+        wait-duration: 500ms
+        exponential-backoff-multiplier: 2.0
+        retry-exceptions:
+          - feign.RetryableException
+          - java.io.IOException
+          - org.springframework.web.client.ResourceAccessException
 
 app:
   idempotency:
