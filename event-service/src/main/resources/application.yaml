@@ -64,12 +64,21 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info
+        include: health,info,prometheus
   endpoint:
     health:
       probes:
         enabled: true
-      show-details: never
+      # 'when-authorized' hides component breakdown from anonymous callers
+      # (probes still get UP/DOWN) while letting authenticated tooling debug.
+      show-details: when-authorized
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+cors:
+  # Comma-separated list of allowed origins. Override via CORS_ALLOWED_ORIGINS in prod.
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
 
 logging:
   pattern:

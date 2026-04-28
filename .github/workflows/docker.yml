@@ -72,8 +72,30 @@ jobs:
         with:
           context: .
           file: ${{ matrix.service }}/Dockerfile
+          load: true
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,scope=${{ matrix.service }},mode=max
+
+      # Install Trivy via the official install script and scan the locally
+      # loaded image. Inline install avoids depending on third-party actions
+      # which may not be allowlisted on every runner.
+      - name: Install Trivy
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sudo sh -s -- -b /usr/local/bin
+
+      - name: Scan image with Trivy
+        run: |
+          # Pick the first tag the metadata action computed (any tag points
+          # to the same loaded image).
+          IMAGE=$(echo "${{ steps.meta.outputs.tags }}" | head -n 1)
+          trivy image \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --vuln-type os,library \
+            --exit-code 1 \
+            --no-progress \
+            "$IMAGE"
