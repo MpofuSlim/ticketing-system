@@ -76,7 +76,7 @@ public class CustomerService {
         profile.setPassportNumber(request.getPassportNumber());
         profile.setAddress(request.getAddress());
         profile.setGender(request.getGender());
-        profile.setSelfiePicturePath(request.getSelfiePicturePath());
+        profile.setSelfiePicture(request.getSelfiePicture());
         profile.setRegistrationTier(2);
         customerProfileRepository.save(profile);
 
