@@ -1,15 +1,15 @@
 spring:
   application:
     name: user-service
-  # Local dev: run `docker compose up -d postgres` first; the seed in
-  # docker/postgres/init-databases.sql creates user_service with the
-  # default credentials below. Tests override these to in-memory H2 via
-  # src/test/resources/application-test.yaml + @ActiveProfiles("test").
+  # Dev branch (claude/dev-h2-local): defaults switched to in-memory H2 so
+  # the service runs with zero external dependencies. Postgres can still be
+  # used by setting DB_URL / DB_DRIVER / HIBERNATE_DIALECT and flipping
+  # FLYWAY_ENABLED + JPA_DDL_AUTO. master's defaults point at Postgres.
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/user_service}
-    username: ${DB_USERNAME:postgres}
+    url: ${DB_URL:jdbc:h2:mem:user_service;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE}
+    username: ${DB_USERNAME:sa}
     password: ${DB_PASSWORD:}
-    driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
+    driver-class-name: ${DB_DRIVER:org.h2.Driver}
     hikari:
       pool-name: user-service-pool
       maximum-pool-size: ${DB_POOL_MAX:20}
@@ -19,15 +19,16 @@ spring:
       max-lifetime: ${DB_MAX_LIFETIME_MS:1800000}
   jpa:
     hibernate:
-      # Flyway owns the schema; Hibernate validates entities against it.
-      ddl-auto: ${JPA_DDL_AUTO:validate}
+      # H2 is in-memory; let Hibernate generate the schema on startup.
+      ddl-auto: ${JPA_DDL_AUTO:create-drop}
     show-sql: ${JPA_SHOW_SQL:false}
     properties:
       hibernate:
-        dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
+        dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.H2Dialect}
 
   flyway:
-    enabled: ${FLYWAY_ENABLED:true}
+    # Migrations are PostgreSQL-flavoured; off for the H2 dev path.
+    enabled: ${FLYWAY_ENABLED:false}
     baseline-on-migrate: true
     baseline-version: 0
     locations: classpath:db/migration

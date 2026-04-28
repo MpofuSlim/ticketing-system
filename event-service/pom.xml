@@ -54,12 +54,13 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- H2: in-memory database for unit tests only. Production runs on
-             PostgreSQL via Flyway-managed migrations. -->
+        <!-- H2: in-memory database. On this dev branch the main
+             application.yaml defaults to H2 too, so runtime scope is
+             needed; tests still use it via application-test.yaml. -->
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
-            <scope>test</scope>
+            <scope>runtime</scope>
         </dependency>
 
         <!-- PostgreSQL for production -->
