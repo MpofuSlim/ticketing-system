@@ -10,7 +10,12 @@ spring:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/seat_service}
     driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
     username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD:}
+    # No empty default: an unset DB_PASSWORD must fail at startup with an
+    # unresolved-placeholder error rather than silently sending no password
+    # and producing the cryptic "SCRAM-based authentication, but no password
+    # was provided" deep inside Hibernate bootstrap. Source scripts/dev-env.sh
+    # before `mvn spring-boot:run`, or rely on docker-compose to inject it.
+    password: ${DB_PASSWORD}
     hikari:
       pool-name: seat-service-pool
       maximum-pool-size: ${DB_POOL_MAX:20}
