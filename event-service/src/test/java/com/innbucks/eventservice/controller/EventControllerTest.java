@@ -112,6 +112,7 @@ class EventControllerTest {
         String body = mockMvc.perform(multipart("/events").file(eventPart).file(bannerPart))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.data.bannerUrl", containsString("/banner")))
+                .andExpect(jsonPath("$.data.eventBanner", startsWith("data:image/png;base64,")))
                 .andReturn().getResponse().getContentAsString();
 
         String eventId = objectMapper.readTree(body).path("data").path("eventId").asText();
@@ -120,6 +121,11 @@ class EventControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.IMAGE_PNG))
                 .andExpect(content().bytes(pngBytes));
+
+        mockMvc.perform(get("/events/" + eventId))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.bannerUrl", containsString("/banner")))
+                .andExpect(jsonPath("$.data.eventBanner", startsWith("data:image/png;base64,")));
     }
 
     private static CreateEventRequestDTO sampleRequest(String title, Province province) {

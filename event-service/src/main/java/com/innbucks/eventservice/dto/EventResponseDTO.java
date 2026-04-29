@@ -46,6 +46,15 @@ public class EventResponseDTO {
     private String bannerUrl;
 
     @Schema(
+            example = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg...",
+            description = """
+                    Banner image inlined as a base64 data URI (null if no banner uploaded).
+                    Drop directly into an `<img src>`; raw bytes are also available at `bannerUrl`.
+                    """
+    )
+    private String eventBanner;
+
+    @Schema(
             description = """
                     Event date exposed as a calendar date (`yyyy-MM-dd`).
 

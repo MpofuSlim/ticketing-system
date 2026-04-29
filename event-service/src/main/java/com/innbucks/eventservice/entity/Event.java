@@ -55,10 +55,9 @@ public class Event {
     // Banner image bytes. Declared as BYTEA so it works in H2 (running in
     // MODE=PostgreSQL) and real Postgres alike — neither has a length cap that
     // would truncate real-world images, unlike the default Hibernate
-    // varbinary mapping. Lazy-loaded so list endpoints don't pull bytes into
-    // memory. Served via GET /events/{id}/banner; the response DTO carries
-    // only the URL.
-    @Basic(fetch = FetchType.LAZY)
+    // varbinary mapping. Eagerly loaded because the GET responses now embed
+    // the banner inline (base64 data URI) for the front-end to render
+    // directly. Also exposed at GET /events/{id}/banner.
     @Column(name = "banner_image", columnDefinition = "BYTEA")
     private byte[] bannerImage;
 
