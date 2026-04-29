@@ -2,8 +2,6 @@ package com.innbucks.eventservice.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
-import org.hibernate.annotations.JdbcTypeCode;
-import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -54,14 +52,14 @@ public class Event {
     @Column(nullable = false)
     private Integer availableTickets;
 
-    // Banner image for the event. Mapped to LONGVARBINARY so it portably becomes
-    // varbinary on H2 / bytea on Postgres (H2 in MODE=PostgreSQL rejects BLOB,
-    // which is the default for @Lob byte[]). Lazy-loaded so list endpoints don't
-    // pull the bytes into memory. Served via GET /events/{id}/banner; the
-    // response DTO carries only the URL.
-    @JdbcTypeCode(SqlTypes.LONGVARBINARY)
+    // Banner image bytes. Declared as BYTEA so it works in H2 (running in
+    // MODE=PostgreSQL) and real Postgres alike — neither has a length cap that
+    // would truncate real-world images, unlike the default Hibernate
+    // varbinary mapping. Lazy-loaded so list endpoints don't pull bytes into
+    // memory. Served via GET /events/{id}/banner; the response DTO carries
+    // only the URL.
     @Basic(fetch = FetchType.LAZY)
-    @Column(name = "banner_image")
+    @Column(name = "banner_image", columnDefinition = "BYTEA")
     private byte[] bannerImage;
 
     @Column(name = "banner_content_type")

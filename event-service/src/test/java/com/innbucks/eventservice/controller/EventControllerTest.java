@@ -26,7 +26,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.setup.MockMvcBuilders.webAppContextSetup;
 
 @SpringBootTest(properties = {
-        "spring.datasource.url=jdbc:h2:mem:eventdb-test;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE",
+        "spring.datasource.url=jdbc:h2:mem:eventdb-test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE",
         "spring.jpa.hibernate.ddl-auto=create-drop"
 })
 @ActiveProfiles("test")
@@ -101,7 +101,11 @@ class EventControllerTest {
                 "event", "event.json", MediaType.APPLICATION_JSON_VALUE,
                 objectMapper.writeValueAsBytes(sampleRequest("Concert With Banner", Province.HRE)));
 
-        byte[] pngBytes = new byte[]{(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
+        // ~200 KB payload — guards against the column-type regression where
+        // Hibernate generated a 32 KB varbinary on H2 and truncated real images.
+        byte[] pngBytes = new byte[200 * 1024];
+        pngBytes[0] = (byte) 0x89; pngBytes[1] = 0x50; pngBytes[2] = 0x4E; pngBytes[3] = 0x47;
+        pngBytes[4] = 0x0D; pngBytes[5] = 0x0A; pngBytes[6] = 0x1A; pngBytes[7] = 0x0A;
         MockMultipartFile bannerPart = new MockMultipartFile(
                 "eventBanner", "banner.png", MediaType.IMAGE_PNG_VALUE, pngBytes);
 
