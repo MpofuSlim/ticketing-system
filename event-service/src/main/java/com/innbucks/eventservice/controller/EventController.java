@@ -6,7 +6,9 @@ import com.innbucks.eventservice.service.EventService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.Encoding;
 import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.parameters.RequestBody;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
@@ -20,6 +22,7 @@ import org.springframework.http.*;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -141,7 +144,7 @@ public class EventController {
         return ResponseEntity.ok(ApiResult.ok("Events retrieved successfully", result));
     }
 
-    @PostMapping
+    @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
     @Operation(
             summary = "Create event",
@@ -150,9 +153,24 @@ public class EventController {
 
                     The authenticated principal (`Authentication#getName()`) becomes the owning `tenantId`.
 
+                    The request is `multipart/form-data` with two parts:
+                    - `event` — JSON body matching `CreateEventRequest` (title, description, venue, province, location, dateTime, totalCapacity).
+                    - `eventBanner` — optional image file (JPEG/PNG/GIF/WEBP, max 5 MB).
+
                     Validation:
-                    - `dateTime` must be **in the future** (validated on the request DTO).
-                    """
+                    - `dateTime` must be **in the future**.
+                    - `location.latitude` ∈ [-90, 90]; `location.longitude` ∈ [-180, 180].
+                    """,
+            requestBody = @RequestBody(
+                    content = @Content(
+                            mediaType = MediaType.MULTIPART_FORM_DATA_VALUE,
+                            schema = @Schema(implementation = CreateEventMultipartRequest.class),
+                            encoding = {
+                                    @Encoding(name = "event", contentType = MediaType.APPLICATION_JSON_VALUE),
+                                    @Encoding(name = "eventBanner", contentType = "image/png, image/jpeg, image/gif, image/webp")
+                            }
+                    )
+            )
     )
     @ApiResponses({
             @ApiResponse(responseCode = "201", description = "Created"),
@@ -162,14 +180,49 @@ public class EventController {
                     content = @Content(schema = @Schema(example = "{\"title\":\"Title is required\"}")))
     })
     public ResponseEntity<ApiResult<EventResponseDTO>> createEvent(
-            @Valid @RequestBody CreateEventRequestDTO request,
+            @Valid @RequestPart("event") CreateEventRequestDTO request,
+            @RequestPart(value = "eventBanner", required = false) MultipartFile eventBanner,
             Authentication authentication
     ) {
         String tenantId = authentication.getName();
-        log.info("Creating event tenantId={} title={} venue={}", tenantId, request.getTitle(), request.getVenue());
-        EventResponseDTO created = eventService.createEvent(tenantId, request);
+        log.info("Creating event tenantId={} title={} venue={} hasBanner={}",
+                tenantId, request.getTitle(), request.getVenue(),
+                eventBanner != null && !eventBanner.isEmpty());
+        EventResponseDTO created = eventService.createEvent(tenantId, request, eventBanner);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Event created successfully", created));
+    }
+
+    @GetMapping("/{id}/banner")
+    @SecurityRequirements()
+    @Operation(
+            summary = "Get event banner image",
+            description = "Returns the raw bytes of the event banner with its original Content-Type."
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Banner image bytes"),
+            @ApiResponse(responseCode = "400", description = "Event not found or no banner uploaded")
+    })
+    public ResponseEntity<byte[]> getEventBanner(
+            @Parameter(description = "Event UUID") @PathVariable UUID id
+    ) {
+        EventService.BannerImage banner = eventService.getEventBanner(id);
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType(banner.contentType()))
+                .cacheControl(CacheControl.maxAge(java.time.Duration.ofHours(1)).cachePublic())
+                .body(banner.bytes());
+    }
+
+    // Schema-only helper so springdoc renders a usable multipart form in
+    // Swagger UI (separate JSON text field + file picker). Not used at runtime.
+    @Schema(name = "CreateEventMultipartRequest")
+    @SuppressWarnings("unused")
+    private static class CreateEventMultipartRequest {
+        @Schema(description = "Event JSON payload", implementation = CreateEventRequestDTO.class)
+        public CreateEventRequestDTO event;
+
+        @Schema(type = "string", format = "binary", description = "Optional banner image (JPEG/PNG/GIF/WEBP, max 5 MB).")
+        public MultipartFile eventBanner;
     }
 
     @PutMapping("/{id}")

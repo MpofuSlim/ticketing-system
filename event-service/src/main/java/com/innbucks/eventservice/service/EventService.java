@@ -3,6 +3,7 @@ package com.innbucks.eventservice.service;
 import com.innbucks.eventservice.client.SeatCategoryGateway;
 import com.innbucks.eventservice.dto.*;
 import com.innbucks.eventservice.entity.Event;
+import com.innbucks.eventservice.entity.Location;
 import com.innbucks.eventservice.entity.Province;
 import com.innbucks.eventservice.mapper.EventMapper;
 import com.innbucks.eventservice.repository.EventRepository;
@@ -10,16 +11,25 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.*;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class EventService {
+
+    private static final long MAX_BANNER_BYTES = 5L * 1024 * 1024; // 5 MB
+    private static final Set<String> ALLOWED_BANNER_CONTENT_TYPES = Set.of(
+            "image/jpeg", "image/png", "image/gif", "image/webp"
+    );
 
     private final EventRepository eventRepository;
     private final EventMapper eventMapper;
@@ -78,8 +88,13 @@ public class EventService {
     }
 
     public EventResponseDTO createEvent(String tenantId, CreateEventRequestDTO request) {
-        log.info("Creating event tenantId={} title={} venue={} dateTime={} capacity={}",
-                tenantId, request.getTitle(), request.getVenue(), request.getDateTime(), request.getTotalCapacity());
+        return createEvent(tenantId, request, null);
+    }
+
+    public EventResponseDTO createEvent(String tenantId, CreateEventRequestDTO request, MultipartFile eventBanner) {
+        log.info("Creating event tenantId={} title={} venue={} dateTime={} capacity={} hasBanner={}",
+                tenantId, request.getTitle(), request.getVenue(), request.getDateTime(), request.getTotalCapacity(),
+                eventBanner != null && !eventBanner.isEmpty());
 
         if (eventRepository.existsByTenantIdAndTitleAndVenueAndDateTimeAndDeletedFalse(
                 tenantId, request.getTitle(), request.getVenue(), request.getDateTime())) {
@@ -94,15 +109,55 @@ public class EventService {
                 .description(request.getDescription())
                 .venue(request.getVenue())
                 .province(request.getProvince())
+                .location(toLocation(request.getLocation()))
                 .dateTime(request.getDateTime())
                 .totalCapacity(request.getTotalCapacity())
                 .availableTickets(request.getTotalCapacity())
                 .deleted(false)
                 .build();
 
+        applyBanner(event, eventBanner);
+
         Event saved = eventRepository.save(event);
         log.info("Event created eventId={} tenantId={}", saved.getEventId(), tenantId);
         return eventMapper.toDTO(saved);
+    }
+
+    @Transactional(readOnly = true)
+    public BannerImage getEventBanner(UUID eventId) {
+        Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
+                .orElseThrow(() -> new RuntimeException("Event not found"));
+        if (event.getBannerImage() == null || event.getBannerImage().length == 0) {
+            throw new RuntimeException("Banner not found");
+        }
+        return new BannerImage(event.getBannerImage(), event.getBannerContentType());
+    }
+
+    public record BannerImage(byte[] bytes, String contentType) {}
+
+    private static Location toLocation(LocationDTO dto) {
+        if (dto == null) return null;
+        return Location.builder()
+                .latitude(dto.getLatitude())
+                .longitude(dto.getLongitude())
+                .build();
+    }
+
+    private static void applyBanner(Event event, MultipartFile file) {
+        if (file == null || file.isEmpty()) return;
+        if (file.getSize() > MAX_BANNER_BYTES) {
+            throw new RuntimeException("Banner image is too large (max 5MB)");
+        }
+        String contentType = file.getContentType();
+        if (contentType == null || !ALLOWED_BANNER_CONTENT_TYPES.contains(contentType.toLowerCase())) {
+            throw new RuntimeException("Banner image must be JPEG, PNG, GIF or WEBP");
+        }
+        try {
+            event.setBannerImage(file.getBytes());
+            event.setBannerContentType(contentType.toLowerCase());
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to read banner image", e);
+        }
     }
 
     public EventResponseDTO updateEvent(String tenantId, String role, UUID eventId, UpdateEventRequestDTO request) {
@@ -126,6 +181,7 @@ public class EventService {
         if (request.getDescription() != null)  event.setDescription(request.getDescription());
         if (request.getVenue() != null)        event.setVenue(request.getVenue());
         if (request.getProvince() != null)     event.setProvince(request.getProvince());
+        if (request.getLocation() != null)     event.setLocation(toLocation(request.getLocation()));
         if (request.getDateTime() != null)     event.setDateTime(request.getDateTime());
         if (request.getTotalCapacity() != null) {
             int diff = request.getTotalCapacity() - event.getTotalCapacity();
