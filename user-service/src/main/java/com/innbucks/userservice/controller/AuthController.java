@@ -20,7 +20,6 @@ import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-@CrossOrigin
 @RequestMapping("/auth")
 @RequiredArgsConstructor
 @Slf4j
