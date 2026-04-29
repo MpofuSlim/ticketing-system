@@ -45,6 +45,14 @@ spring:
   lifecycle:
     timeout-per-shutdown-phase: 30s
 
+  # POST /events accepts a multipart payload (JSON `event` part + optional
+  # `eventBanner` image part). Bumped above Spring's 1MB/10MB defaults so the
+  # 5MB banner cap enforced in EventService can actually be reached.
+  servlet:
+    multipart:
+      max-file-size: 5MB
+      max-request-size: 10MB
+
 jwt:
   secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
   expiration: ${JWT_EXPIRATION_MS:86400000}

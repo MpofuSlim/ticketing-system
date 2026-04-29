@@ -2,6 +2,7 @@ package com.innbucks.eventservice.dto;
 
 import com.innbucks.eventservice.entity.Province;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 import java.time.LocalDateTime;
@@ -28,6 +29,11 @@ public class CreateEventRequestDTO {
     )
     @NotNull(message = "Province is required")
     private Province province;
+
+    @Schema(description = "Geographic coordinates of the venue (latitude/longitude in decimal degrees).")
+    @NotNull(message = "Location is required")
+    @Valid
+    private LocationDTO location;
 
     @Schema(
             description = """

@@ -2,6 +2,7 @@ package com.innbucks.eventservice.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.innbucks.eventservice.dto.CreateEventRequestDTO;
+import com.innbucks.eventservice.dto.LocationDTO;
 import com.innbucks.eventservice.entity.Event;
 import com.innbucks.eventservice.entity.Province;
 import com.innbucks.eventservice.repository.EventRepository;
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
@@ -66,39 +68,66 @@ class EventControllerTest {
 
     @Test
     void createEvent_requiresAuthentication() throws Exception {
-        CreateEventRequestDTO req = new CreateEventRequestDTO();
-        req.setTitle("Concert");
-        req.setDescription("desc");
-        req.setVenue("Bulawayo");
-        req.setProvince(Province.BYO);
-        req.setDateTime(LocalDateTime.now().plusDays(10));
-        req.setTotalCapacity(50);
+        MockMultipartFile eventPart = new MockMultipartFile(
+                "event", "event.json", MediaType.APPLICATION_JSON_VALUE,
+                objectMapper.writeValueAsBytes(sampleRequest("Concert", Province.BYO)));
 
-        mockMvc.perform(post("/events")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(req)))
+        mockMvc.perform(multipart("/events").file(eventPart))
                 .andExpect(status().isUnauthorized());
     }
 
     @Test
     @WithMockUser(username = "tenant-99", roles = "TENANT")
     void createEvent_withTenantRole_createsEvent() throws Exception {
-        CreateEventRequestDTO req = new CreateEventRequestDTO();
-        req.setTitle("Concert");
-        req.setDescription("desc");
-        req.setVenue("Bulawayo");
-        req.setProvince(Province.BYO);
-        req.setDateTime(LocalDateTime.now().plusDays(10));
-        req.setTotalCapacity(50);
+        MockMultipartFile eventPart = new MockMultipartFile(
+                "event", "event.json", MediaType.APPLICATION_JSON_VALUE,
+                objectMapper.writeValueAsBytes(sampleRequest("Concert", Province.BYO)));
 
-        mockMvc.perform(post("/events")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(req)))
+        mockMvc.perform(multipart("/events").file(eventPart))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.code", is("201 CREATED")))
                 .andExpect(jsonPath("$.data.tenantId", is("tenant-99")))
                 .andExpect(jsonPath("$.data.title", is("Concert")))
-                .andExpect(jsonPath("$.data.availableTickets", is(50)));
+                .andExpect(jsonPath("$.data.availableTickets", is(50)))
+                .andExpect(jsonPath("$.data.location.latitude", is(-17.8252)))
+                .andExpect(jsonPath("$.data.location.longitude", is(31.0335)))
+                .andExpect(jsonPath("$.data.bannerUrl", nullValue()));
+    }
+
+    @Test
+    @WithMockUser(username = "tenant-99", roles = "TENANT")
+    void createEvent_withBanner_storesBytesAndReturnsBannerUrl() throws Exception {
+        MockMultipartFile eventPart = new MockMultipartFile(
+                "event", "event.json", MediaType.APPLICATION_JSON_VALUE,
+                objectMapper.writeValueAsBytes(sampleRequest("Concert With Banner", Province.HRE)));
+
+        byte[] pngBytes = new byte[]{(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
+        MockMultipartFile bannerPart = new MockMultipartFile(
+                "eventBanner", "banner.png", MediaType.IMAGE_PNG_VALUE, pngBytes);
+
+        String body = mockMvc.perform(multipart("/events").file(eventPart).file(bannerPart))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.bannerUrl", containsString("/banner")))
+                .andReturn().getResponse().getContentAsString();
+
+        String eventId = objectMapper.readTree(body).path("data").path("eventId").asText();
+
+        mockMvc.perform(get("/events/" + eventId + "/banner"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentType(MediaType.IMAGE_PNG))
+                .andExpect(content().bytes(pngBytes));
+    }
+
+    private static CreateEventRequestDTO sampleRequest(String title, Province province) {
+        CreateEventRequestDTO req = new CreateEventRequestDTO();
+        req.setTitle(title);
+        req.setDescription("desc");
+        req.setVenue("Bulawayo");
+        req.setProvince(province);
+        req.setLocation(LocationDTO.builder().latitude(-17.8252).longitude(31.0335).build());
+        req.setDateTime(LocalDateTime.now().plusDays(10));
+        req.setTotalCapacity(50);
+        return req;
     }
 
     @Test

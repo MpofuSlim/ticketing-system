@@ -2,6 +2,8 @@ package com.innbucks.eventservice.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -40,6 +42,9 @@ public class Event {
     @Column(nullable = false, length = 3)
     private Province province;
 
+    @Embedded
+    private Location location;
+
     @Column(nullable = false)
     private LocalDateTime dateTime;
 
@@ -48,6 +53,19 @@ public class Event {
 
     @Column(nullable = false)
     private Integer availableTickets;
+
+    // Banner image for the event. Mapped to LONGVARBINARY so it portably becomes
+    // varbinary on H2 / bytea on Postgres (H2 in MODE=PostgreSQL rejects BLOB,
+    // which is the default for @Lob byte[]). Lazy-loaded so list endpoints don't
+    // pull the bytes into memory. Served via GET /events/{id}/banner; the
+    // response DTO carries only the URL.
+    @JdbcTypeCode(SqlTypes.LONGVARBINARY)
+    @Basic(fetch = FetchType.LAZY)
+    @Column(name = "banner_image")
+    private byte[] bannerImage;
+
+    @Column(name = "banner_content_type")
+    private String bannerContentType;
 
     @Version
     private Long version;

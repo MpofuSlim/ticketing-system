@@ -36,6 +36,15 @@ public class EventResponseDTO {
     @Schema(example = "HRE", description = "Province code where the event is hosted.")
     private Province province;
 
+    @Schema(description = "Geographic coordinates of the venue (latitude/longitude in decimal degrees).")
+    private LocationDTO location;
+
+    @Schema(
+            example = "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+            description = "Relative URL to fetch the banner image (null if no banner uploaded)."
+    )
+    private String bannerUrl;
+
     @Schema(
             description = """
                     Event date exposed as a calendar date (`yyyy-MM-dd`).
