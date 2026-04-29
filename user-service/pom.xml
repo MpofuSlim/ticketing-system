@@ -57,24 +57,22 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
-        <!-- H2: in-memory database for unit tests only. Production runs on
-             PostgreSQL via Flyway-managed migrations. -->
+        <!-- H2: now the only database (runtime + tests). -->
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
-            <scope>test</scope>
         </dependency>
 
-        <!-- PostgreSQL for production -->
+        <!-- PostgreSQL (disabled — see application.yaml; revert by removing
+             the comment block and dropping H2 to test scope above).
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
         </dependency>
+        -->
 
-        <!-- Flyway: schema migrations against PostgreSQL in prod. Disabled in
-             tests via FLYWAY_ENABLED so H2 + Hibernate ddl-auto stays the
-             test-time path. -->
+        <!-- Flyway (disabled — migrations are PostgreSQL-flavoured).
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-core</artifactId>
@@ -84,6 +82,7 @@
             <artifactId>flyway-database-postgresql</artifactId>
             <scope>runtime</scope>
         </dependency>
+        -->
 
         <!-- Swagger UI -->
         <dependency>

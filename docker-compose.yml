@@ -10,24 +10,29 @@
 name: innbucks
 
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: innbucks-postgres
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
-      POSTGRES_DB: postgres
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./docker/postgres/init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql:ro
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
+  # ----------------------------------------------------------------------
+  # Postgres (disabled — services now run on H2 in-memory).
+  # Re-enable by uncommenting this block, the DB_* env entries in each
+  # service, and the postgres_data volume at the bottom of this file.
+  # ----------------------------------------------------------------------
+  # postgres:
+  #   image: postgres:16-alpine
+  #   container_name: innbucks-postgres
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_USER: ${POSTGRES_USER:-postgres}
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
+  #     POSTGRES_DB: postgres
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #     - ./docker/postgres/init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql:ro
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 20
 
   redis:
     image: redis:7-alpine
@@ -80,18 +85,18 @@ services:
     image: ticketing-user-service:dev
     container_name: innbucks-user-service
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
+    # depends_on:
+    #   postgres:
+    #     condition: service_healthy
     environment:
-      DB_URL: jdbc:postgresql://postgres:5432/user_service
-      DB_USERNAME: ${POSTGRES_USER:-postgres}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
-      DB_DRIVER: org.postgresql.Driver
-      HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
-      # Flyway owns the schema; Hibernate only validates entities against it.
-      JPA_DDL_AUTO: validate
-      FLYWAY_ENABLED: "true"
+      # --- PostgreSQL (disabled — service runs on H2 in-memory). ---
+      # DB_URL: jdbc:postgresql://postgres:5432/user_service
+      # DB_USERNAME: ${POSTGRES_USER:-postgres}
+      # DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
+      # DB_DRIVER: org.postgresql.Driver
+      # HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+      # JPA_DDL_AUTO: validate
+      # FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       JWT_EXPIRATION_MS: 86400000
     ports:
@@ -110,18 +115,18 @@ services:
     image: ticketing-event-service:dev
     container_name: innbucks-event-service
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
+    # depends_on:
+    #   postgres:
+    #     condition: service_healthy
     environment:
-      DB_URL: jdbc:postgresql://postgres:5432/event_service
-      DB_USERNAME: ${POSTGRES_USER:-postgres}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
-      DB_DRIVER: org.postgresql.Driver
-      HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
-      # Flyway owns the schema; Hibernate only validates entities against it.
-      JPA_DDL_AUTO: validate
-      FLYWAY_ENABLED: "true"
+      # --- PostgreSQL (disabled — service runs on H2 in-memory). ---
+      # DB_URL: jdbc:postgresql://postgres:5432/event_service
+      # DB_USERNAME: ${POSTGRES_USER:-postgres}
+      # DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
+      # DB_DRIVER: org.postgresql.Driver
+      # HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+      # JPA_DDL_AUTO: validate
+      # FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       SEAT_SERVICE_BASE_URL: http://seat-service:8083
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
@@ -142,19 +147,19 @@ services:
     container_name: innbucks-seat-service
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
+      # postgres:
+      #   condition: service_healthy
       redis:
         condition: service_healthy
     environment:
-      DB_URL: jdbc:postgresql://postgres:5432/seat_service
-      DB_USERNAME: ${POSTGRES_USER:-postgres}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
-      DB_DRIVER: org.postgresql.Driver
-      HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
-      # Flyway owns the schema; Hibernate only validates entities against it.
-      JPA_DDL_AUTO: validate
-      FLYWAY_ENABLED: "true"
+      # --- PostgreSQL (disabled — service runs on H2 in-memory). ---
+      # DB_URL: jdbc:postgresql://postgres:5432/seat_service
+      # DB_USERNAME: ${POSTGRES_USER:-postgres}
+      # DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
+      # DB_DRIVER: org.postgresql.Driver
+      # HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+      # JPA_DDL_AUTO: validate
+      # FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
@@ -176,21 +181,21 @@ services:
     container_name: innbucks-booking-service
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
+      # postgres:
+      #   condition: service_healthy
       redis:
         condition: service_healthy
       kafka:
         condition: service_healthy
     environment:
-      DB_URL: jdbc:postgresql://postgres:5432/booking_service
-      DB_USERNAME: ${POSTGRES_USER:-postgres}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
-      DB_DRIVER: org.postgresql.Driver
-      HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
-      # Flyway owns the schema; Hibernate only validates entities against it.
-      JPA_DDL_AUTO: validate
-      FLYWAY_ENABLED: "true"
+      # --- PostgreSQL (disabled — service runs on H2 in-memory). ---
+      # DB_URL: jdbc:postgresql://postgres:5432/booking_service
+      # DB_USERNAME: ${POSTGRES_USER:-postgres}
+      # DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
+      # DB_DRIVER: org.postgresql.Driver
+      # HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+      # JPA_DDL_AUTO: validate
+      # FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
@@ -216,14 +221,15 @@ services:
     image: ticketing-payment-service:dev
     container_name: innbucks-payment-service
     restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
+    # depends_on:
+    #   postgres:
+    #     condition: service_healthy
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/payment_service
-      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-postgres}
-      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
-      SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
+      # --- PostgreSQL (disabled — service runs on H2 in-memory). ---
+      # SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/payment_service
+      # SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-postgres}
+      # SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
+      # SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
       SPRING_JPA_HIBERNATE_DDL_AUTO: update
     ports:
       - "8085:8085"
@@ -274,6 +280,6 @@ services:
       start_period: 45s
 
 volumes:
-  postgres_data:
+  # postgres_data:   # disabled — see Postgres service block above
   redis_data:
   kafka_data:

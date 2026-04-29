@@ -51,10 +51,10 @@ while IFS= read -r _line || [ -n "$_line" ]; do
   export "$_key=$_val"
 done < "$_env_file"
 
-# Map docker-compose's POSTGRES_USER/POSTGRES_PASSWORD onto the DB_USERNAME/
-# DB_PASSWORD names that each service's application.yaml reads.
-export DB_USERNAME="${DB_USERNAME:-${POSTGRES_USER:-postgres}}"
-export DB_PASSWORD="${DB_PASSWORD:-${POSTGRES_PASSWORD:-}}"
+# Postgres mapping disabled — services now run on H2 in-memory and the
+# application.yaml files no longer read DB_USERNAME / DB_PASSWORD.
+# export DB_USERNAME="${DB_USERNAME:-${POSTGRES_USER:-postgres}}"
+# export DB_PASSWORD="${DB_PASSWORD:-${POSTGRES_PASSWORD:-}}"
 
-echo "loaded $_env_file (DB_USERNAME=$DB_USERNAME, DB_PASSWORD=***)"
+echo "loaded $_env_file"
 unset _env_file _line _key _val
