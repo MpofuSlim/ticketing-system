@@ -99,7 +99,10 @@ services:
       # FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       JWT_EXPIRATION_MS: 86400000
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      # Default permits any localhost port so the gateway-hosted Swagger UI
+      # on :8080 can POST against the user-service. Override with explicit
+      # origins (e.g. https://app.example.com) in production.
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:*}
     ports:
       - "8081:8081"
     healthcheck:
@@ -130,7 +133,7 @@ services:
       # FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       SEAT_SERVICE_BASE_URL: http://seat-service:8083
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:*}
     ports:
       - "8082:8082"
     healthcheck:
@@ -265,7 +268,7 @@ services:
       SEAT_SERVICE_URI: http://seat-service:8083
       BOOKING_SERVICE_URI: http://booking-service:8084
       PAYMENT_SERVICE_URI: http://payment-service:8085
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:*}
       # Redis backs the gateway's RequestRateLimiter token bucket store.
       REDIS_HOST: redis
       REDIS_PORT: "6379"
