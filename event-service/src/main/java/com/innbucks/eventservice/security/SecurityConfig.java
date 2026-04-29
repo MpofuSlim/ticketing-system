@@ -24,11 +24,12 @@ public class SecurityConfig {
     private final JwtFilter jwtFilter;
 
     // Comma-separated; Spring binds a String -> List<String> automatically.
-    // Default permits any localhost port for dev plus ngrok tunnels for
-    // testing externally exposed endpoints from a browser. Set
-    // CORS_ALLOWED_ORIGINS in prod to your real client origins
+    // Default is permissive ('*') so dev/Swagger/ngrok/any FE origin works
+    // out of the box. Safe with allowCredentials=true because we use
+    // setAllowedOriginPatterns (not setAllowedOrigins). MUST be overridden
+    // in prod via CORS_ALLOWED_ORIGINS to your real client origins
     // (e.g. https://app.example.com).
-    @Value("${cors.allowed-origins:http://localhost:*,https://*.ngrok-free.app,https://*.ngrok.io,https://*.ngrok.app}")
+    @Value("${cors.allowed-origins:*}")
     private List<String> allowedOrigins;
 
     @Bean

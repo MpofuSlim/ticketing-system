@@ -127,15 +127,15 @@ spring:
             add-to-simple-url-handler-mapping: true
             cors-configurations:
               '[/**]':
-                # Comma-separated list of allowed origins. Defaults to any
-                # localhost port for dev (FE on :3000/:5173, Swagger UI on
-                # :8080, etc.) plus ngrok tunnels so externally exposed
-                # endpoints can be exercised from a browser. In production
-                # set CORS_ALLOWED_ORIGINS to your real client origins
+                # Comma-separated list of allowed origin patterns. Default
+                # is permissive ('*') so dev/Swagger/ngrok/any FE origin
+                # works out of the box. Spring Cloud Gateway treats this
+                # as an allowed-origin PATTERN, which is compatible with
+                # allowCredentials=true (unlike a plain allowed-origins
+                # wildcard). MUST be overridden in prod via
+                # CORS_ALLOWED_ORIGINS to your real client origins
                 # (e.g. https://app.example.com,https://admin.example.com).
-                # Wildcard '*' is intentionally NOT supported here because
-                # allowCredentials=true requires explicit origins.
-                allowedOriginPatterns: "${CORS_ALLOWED_ORIGINS:http://localhost:*,https://*.ngrok-free.app,https://*.ngrok.io,https://*.ngrok.app}"
+                allowedOriginPatterns: "${CORS_ALLOWED_ORIGINS:*}"
                 allowedMethods:
                   - GET
                   - POST
