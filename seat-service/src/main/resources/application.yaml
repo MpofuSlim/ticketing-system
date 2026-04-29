@@ -2,10 +2,11 @@ spring:
   application:
     name: seat-service
 
-  # H2-only mode: in-memory database, no external Postgres needed. The
+  # H2-only mode: file-based database under ./data so writes survive restart;
+  # AUTO_SERVER=TRUE lets a SQL client connect while the app is running. The
   # PostgreSQL config is preserved below (commented) for easy reversal.
   datasource:
-    url: jdbc:h2:mem:seat_service;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    url: jdbc:h2:file:./data/seat-service;MODE=PostgreSQL;AUTO_SERVER=TRUE
     driver-class-name: org.h2.Driver
     username: sa
     password:
@@ -25,7 +26,7 @@ spring:
   jpa:
     hibernate:
       # H2 in-memory: Hibernate generates the schema on each boot.
-      ddl-auto: ${JPA_DDL_AUTO:create-drop}
+      ddl-auto: ${JPA_DDL_AUTO:update}
     show-sql: ${JPA_SHOW_SQL:false}
     properties:
       hibernate:
