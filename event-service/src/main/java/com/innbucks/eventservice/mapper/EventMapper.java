@@ -18,6 +18,8 @@ public class EventMapper {
                 .dateTime(event.getDateTime() == null ? null : event.getDateTime().toLocalDate())
                 .totalCapacity(event.getTotalCapacity())
                 .availableTickets(event.getAvailableTickets())
+                .location(event.getLocation())
+                .hasEventBanner(event.getEventBanner() != null && event.getEventBanner().length > 0)
                 .createdAt(event.getCreatedAt())
                 .updatedAt(event.getUpdatedAt())
                 .build();

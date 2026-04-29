@@ -3,6 +3,7 @@ package com.innbucks.eventservice.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.innbucks.eventservice.dto.CreateEventRequestDTO;
 import com.innbucks.eventservice.entity.Event;
+import com.innbucks.eventservice.entity.Location;
 import com.innbucks.eventservice.entity.Province;
 import com.innbucks.eventservice.repository.EventRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -10,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
@@ -66,23 +68,40 @@ class EventControllerTest {
 
     @Test
     void createEvent_requiresAuthentication() throws Exception {
-        CreateEventRequestDTO req = new CreateEventRequestDTO();
-        req.setTitle("Concert");
-        req.setDescription("desc");
-        req.setVenue("Bulawayo");
-        req.setProvince(Province.BYO);
-        req.setDateTime(LocalDateTime.now().plusDays(10));
-        req.setTotalCapacity(50);
+        MockMultipartFile eventPart = new MockMultipartFile(
+                "event", "event", MediaType.APPLICATION_JSON_VALUE,
+                objectMapper.writeValueAsBytes(sampleCreateRequest()));
 
-        mockMvc.perform(post("/events")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(req)))
+        mockMvc.perform(multipart("/events").file(eventPart))
                 .andExpect(status().isUnauthorized());
     }
 
     @Test
     @WithMockUser(username = "tenant-99", roles = "TENANT")
     void createEvent_withTenantRole_createsEvent() throws Exception {
+        CreateEventRequestDTO req = sampleCreateRequest();
+
+        MockMultipartFile eventPart = new MockMultipartFile(
+                "event", "event", MediaType.APPLICATION_JSON_VALUE,
+                objectMapper.writeValueAsBytes(req));
+        MockMultipartFile bannerPart = new MockMultipartFile(
+                "eventBanner", "banner.png", MediaType.IMAGE_PNG_VALUE,
+                new byte[]{1, 2, 3, 4});
+
+        mockMvc.perform(multipart("/events")
+                        .file(eventPart)
+                        .file(bannerPart))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.code", is("201 CREATED")))
+                .andExpect(jsonPath("$.data.tenantId", is("tenant-99")))
+                .andExpect(jsonPath("$.data.title", is("Concert")))
+                .andExpect(jsonPath("$.data.availableTickets", is(50)))
+                .andExpect(jsonPath("$.data.location.latitude", is(-20.1486)))
+                .andExpect(jsonPath("$.data.location.longitude", is(28.5870)))
+                .andExpect(jsonPath("$.data.hasEventBanner", is(true)));
+    }
+
+    private static CreateEventRequestDTO sampleCreateRequest() {
         CreateEventRequestDTO req = new CreateEventRequestDTO();
         req.setTitle("Concert");
         req.setDescription("desc");
@@ -90,15 +109,8 @@ class EventControllerTest {
         req.setProvince(Province.BYO);
         req.setDateTime(LocalDateTime.now().plusDays(10));
         req.setTotalCapacity(50);
-
-        mockMvc.perform(post("/events")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(req)))
-                .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.code", is("201 CREATED")))
-                .andExpect(jsonPath("$.data.tenantId", is("tenant-99")))
-                .andExpect(jsonPath("$.data.title", is("Concert")))
-                .andExpect(jsonPath("$.data.availableTickets", is(50)));
+        req.setLocation(new Location(-20.1486, 28.5870));
+        return req;
     }
 
     @Test

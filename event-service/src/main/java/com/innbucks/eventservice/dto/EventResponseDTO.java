@@ -1,5 +1,6 @@
 package com.innbucks.eventservice.dto;
 
+import com.innbucks.eventservice.entity.Location;
 import com.innbucks.eventservice.entity.Province;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.*;
@@ -50,6 +51,12 @@ public class EventResponseDTO {
 
     @Schema(description = "Tickets still available for sale.")
     private Integer availableTickets;
+
+    @Schema(description = "Geographic coordinates of the event venue.")
+    private Location location;
+
+    @Schema(description = "True when an event banner image has been uploaded for this event.")
+    private boolean hasEventBanner;
 
     @Schema(description = "Creation timestamp (server time).")
     private LocalDateTime createdAt;

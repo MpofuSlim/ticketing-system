@@ -1,7 +1,9 @@
 package com.innbucks.eventservice.dto;
 
+import com.innbucks.eventservice.entity.Location;
 import com.innbucks.eventservice.entity.Province;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 import java.time.LocalDateTime;
@@ -44,4 +46,9 @@ public class CreateEventRequestDTO {
     @NotNull(message = "Total capacity is required")
     @Min(value = 1, message = "Capacity must be at least 1")
     private Integer totalCapacity;
+
+    @Schema(description = "Geographic coordinates of the event venue.")
+    @NotNull(message = "Location is required")
+    @Valid
+    private Location location;
 }

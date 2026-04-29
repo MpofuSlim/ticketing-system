@@ -20,6 +20,7 @@ import org.springframework.http.*;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -141,7 +142,7 @@ public class EventController {
         return ResponseEntity.ok(ApiResult.ok("Events retrieved successfully", result));
     }
 
-    @PostMapping
+    @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
     @Operation(
             summary = "Create event",
@@ -150,8 +151,13 @@ public class EventController {
 
                     The authenticated principal (`Authentication#getName()`) becomes the owning `tenantId`.
 
+                    The request body is `multipart/form-data` with two parts:
+                    - **event** — JSON payload matching `CreateEventRequest` (includes `location` with `latitude`/`longitude`).
+                    - **eventBanner** — optional image file uploaded for the event banner.
+
                     Validation:
                     - `dateTime` must be **in the future** (validated on the request DTO).
+                    - `location.latitude` must be between -90 and 90; `location.longitude` between -180 and 180.
                     """
     )
     @ApiResponses({
@@ -162,12 +168,16 @@ public class EventController {
                     content = @Content(schema = @Schema(example = "{\"title\":\"Title is required\"}")))
     })
     public ResponseEntity<ApiResult<EventResponseDTO>> createEvent(
-            @Valid @RequestBody CreateEventRequestDTO request,
+            @Valid @RequestPart("event") CreateEventRequestDTO request,
+            @Parameter(description = "Banner image uploaded for the event (optional).")
+            @RequestPart(value = "eventBanner", required = false) MultipartFile eventBanner,
             Authentication authentication
     ) {
         String tenantId = authentication.getName();
-        log.info("Creating event tenantId={} title={} venue={}", tenantId, request.getTitle(), request.getVenue());
-        EventResponseDTO created = eventService.createEvent(tenantId, request);
+        log.info("Creating event tenantId={} title={} venue={} bannerProvided={}",
+                tenantId, request.getTitle(), request.getVenue(),
+                eventBanner != null && !eventBanner.isEmpty());
+        EventResponseDTO created = eventService.createEvent(tenantId, request, eventBanner);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Event created successfully", created));
     }

@@ -5,11 +5,13 @@ import com.innbucks.eventservice.dto.CreateEventRequestDTO;
 import com.innbucks.eventservice.dto.EventResponseDTO;
 import com.innbucks.eventservice.dto.UpdateEventRequestDTO;
 import com.innbucks.eventservice.entity.Event;
+import com.innbucks.eventservice.entity.Location;
 import com.innbucks.eventservice.entity.Province;
 import com.innbucks.eventservice.mapper.EventMapper;
 import com.innbucks.eventservice.repository.EventRepository;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.mock.web.MockMultipartFile;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
@@ -98,11 +100,15 @@ class EventServiceTest {
         req.setTitle("Concert"); req.setDescription("desc"); req.setVenue("Venue");
         req.setProvince(Province.HRE); req.setDateTime(LocalDateTime.now().plusDays(10));
         req.setTotalCapacity(200);
+        req.setLocation(new Location(-17.8252, 31.0335));
         when(repo.existsByTenantIdAndTitleAndVenueAndDateTimeAndDeletedFalse(
                 any(), any(), any(), any())).thenReturn(false);
         when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        service.createEvent("tenant-9", req);
+        MockMultipartFile banner = new MockMultipartFile(
+                "eventBanner", "banner.png", "image/png", new byte[]{9, 8, 7});
+
+        service.createEvent("tenant-9", req, banner);
 
         ArgumentCaptor<Event> saved = ArgumentCaptor.forClass(Event.class);
         verify(repo).save(saved.capture());
@@ -110,6 +116,10 @@ class EventServiceTest {
         assertEquals(200, saved.getValue().getTotalCapacity());
         assertEquals(200, saved.getValue().getAvailableTickets());
         assertFalse(saved.getValue().isDeleted());
+        assertEquals(-17.8252, saved.getValue().getLocation().getLatitude());
+        assertEquals(31.0335, saved.getValue().getLocation().getLongitude());
+        assertArrayEquals(new byte[]{9, 8, 7}, saved.getValue().getEventBanner());
+        assertEquals("image/png", saved.getValue().getEventBannerContentType());
     }
 
     @Test
@@ -121,12 +131,13 @@ class EventServiceTest {
         CreateEventRequestDTO req = new CreateEventRequestDTO();
         req.setTitle("Concert"); req.setVenue("Harare Gardens");
         req.setProvince(Province.HRE); req.setDateTime(when); req.setTotalCapacity(100);
+        req.setLocation(new Location(-17.8252, 31.0335));
 
         when(repo.existsByTenantIdAndTitleAndVenueAndDateTimeAndDeletedFalse(
                 "tenant-1", "Concert", "Harare Gardens", when)).thenReturn(true);
 
         RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> service.createEvent("tenant-1", req));
+                () -> service.createEvent("tenant-1", req, null));
         assertTrue(ex.getMessage().toLowerCase().contains("already exists"));
         verify(repo, never()).save(any());
     }

@@ -49,6 +49,15 @@ public class Event {
     @Column(nullable = false)
     private Integer availableTickets;
 
+    @Embedded
+    private Location location;
+
+    @Column(name = "event_banner", columnDefinition = "bytea")
+    private byte[] eventBanner;
+
+    @Column(name = "event_banner_content_type")
+    private String eventBannerContentType;
+
     @Version
     private Long version;
 

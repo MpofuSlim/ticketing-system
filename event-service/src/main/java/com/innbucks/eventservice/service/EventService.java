@@ -10,7 +10,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.*;
 import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -77,7 +79,7 @@ public class EventService {
         return new PageImpl<>(dtos, pageable, entities.getTotalElements());
     }
 
-    public EventResponseDTO createEvent(String tenantId, CreateEventRequestDTO request) {
+    public EventResponseDTO createEvent(String tenantId, CreateEventRequestDTO request, MultipartFile eventBanner) {
         log.info("Creating event tenantId={} title={} venue={} dateTime={} capacity={}",
                 tenantId, request.getTitle(), request.getVenue(), request.getDateTime(), request.getTotalCapacity());
 
@@ -86,6 +88,18 @@ public class EventService {
             log.warn("Event create rejected, duplicate tenantId={} title={} venue={} dateTime={}",
                     tenantId, request.getTitle(), request.getVenue(), request.getDateTime());
             throw new RuntimeException("An event with the same title, venue and date already exists");
+        }
+
+        byte[] bannerBytes = null;
+        String bannerContentType = null;
+        if (eventBanner != null && !eventBanner.isEmpty()) {
+            try {
+                bannerBytes = eventBanner.getBytes();
+            } catch (IOException e) {
+                log.error("Failed to read event banner upload tenantId={} title={}", tenantId, request.getTitle(), e);
+                throw new RuntimeException("Failed to read event banner upload", e);
+            }
+            bannerContentType = eventBanner.getContentType();
         }
 
         Event event = Event.builder()
@@ -97,6 +111,9 @@ public class EventService {
                 .dateTime(request.getDateTime())
                 .totalCapacity(request.getTotalCapacity())
                 .availableTickets(request.getTotalCapacity())
+                .location(request.getLocation())
+                .eventBanner(bannerBytes)
+                .eventBannerContentType(bannerContentType)
                 .deleted(false)
                 .build();
 
