@@ -26,8 +26,10 @@ public class SecurityConfig {
     private final JwtFilter jwtFilter;
 
     // Comma-separated; Spring binds a String -> List<String> automatically.
-    // Set CORS_ALLOWED_ORIGINS in prod (e.g. https://app.example.com).
-    @Value("${cors.allowed-origins:http://localhost:3000}")
+    // Default permits any localhost port for dev (FE on :3000/:5173, Swagger
+    // aggregated at the gateway on :8080, etc.). Set CORS_ALLOWED_ORIGINS in
+    // prod to your real client origins (e.g. https://app.example.com).
+    @Value("${cors.allowed-origins:http://localhost:*}")
     private List<String> allowedOrigins;
 
     @Bean
