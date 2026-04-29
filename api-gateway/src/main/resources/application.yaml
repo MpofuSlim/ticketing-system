@@ -15,6 +15,11 @@ spring:
     gateway:
       server:
         webflux:
+          # Rate limiter applied to authenticated routes only. /auth is
+          # intentionally excluded so logins still work when Redis is
+          # unreachable (Redis-backed RequestRateLimiter fails closed
+          # with 403 on connection errors). Brute-force protection for
+          # /auth lives in user-service (OTP throttling, etc.).
           routes:
             - id: user-auth-route
               uri: ${USER_SERVICE_URI:http://localhost:8081}
@@ -25,25 +30,60 @@ spring:
               uri: ${EVENT_SERVICE_URI:http://localhost:8082}
               predicates:
                 - Path=/events/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
 
             - id: seat-service-seat-route
               uri: ${SEAT_SERVICE_URI:http://localhost:8083}
               predicates:
                 - Path=/seats/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
             - id: seat-service-category-route
               uri: ${SEAT_SERVICE_URI:http://localhost:8083}
               predicates:
                 - Path=/seat-categories/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
 
             - id: booking-service-route
               uri: ${BOOKING_SERVICE_URI:http://localhost:8084}
               predicates:
                 - Path=/bookings/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
 
             - id: payment-service-route
               uri: ${PAYMENT_SERVICE_URI:http://localhost:8085}
               predicates:
                 - Path=/payments/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
 
             - id: user-service-proxy-route
               uri: ${USER_SERVICE_URI:http://localhost:8081}
@@ -82,16 +122,6 @@ spring:
 
           default-filters:
             - DedupeResponseHeader=Access-Control-Allow-Credentials Access-Control-Allow-Origin Access-Control-Allow-Headers Access-Control-Allow-Methods, RETAIN_FIRST
-            # Gateway-wide rate limit. Token bucket per resolved key (bearer
-            # token if present, else client IP — see RateLimiterConfig).
-            # Defaults to 50 req/s sustained with a 100-burst, overridable
-            # via env. Returns 429 with Retry-After when over budget.
-            - name: RequestRateLimiter
-              args:
-                redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
-                redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
-                redis-rate-limiter.requestedTokens: 1
-                key-resolver: "#{@gatewayKeyResolver}"
 
           globalcors:
             add-to-simple-url-handler-mapping: true
