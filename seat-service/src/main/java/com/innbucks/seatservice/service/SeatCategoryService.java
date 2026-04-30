@@ -167,6 +167,7 @@ public class SeatCategoryService {
                 .collect(Collectors.toList());
 
         return CreateCategoryResponseDTO.builder()
+                .id(category.getId())
                 .eventId(category.getEventId())
                 .name(category.getName())
                 .description(category.getDescription())

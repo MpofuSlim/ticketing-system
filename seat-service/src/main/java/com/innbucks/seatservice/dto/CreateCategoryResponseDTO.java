@@ -15,6 +15,7 @@ import java.util.UUID;
 @AllArgsConstructor
 public class CreateCategoryResponseDTO {
 
+    private UUID id;
     private UUID eventId;
     private String name;
     private String description;
