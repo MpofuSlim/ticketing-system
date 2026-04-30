@@ -150,6 +150,26 @@ public class CustomerService {
     public CustomerTierResponseDTO getCustomerTierByPhoneNumber(String phoneNumber) {
         User user = userRepository.findByPhoneNumber(phoneNumber)
                 .orElseThrow(() -> new RuntimeException("Customer not found for phone " + phoneNumber));
+        return tierFor(user);
+    }
+
+    /**
+     * Resolves the current tier for a customer using whichever identifier is on the JWT
+     * subject — login uses email when present and falls back to phone, so callers that
+     * just have {@code Authentication#getName()} can use this without knowing which it is.
+     */
+    @Transactional(readOnly = true)
+    public CustomerTierResponseDTO getCustomerTierBySubject(String subject) {
+        if (subject == null || subject.isBlank()) {
+            throw new RuntimeException("Subject is required");
+        }
+        User user = userRepository.findByEmail(subject)
+                .or(() -> userRepository.findByPhoneNumber(subject))
+                .orElseThrow(() -> new RuntimeException("Customer not found for subject " + subject));
+        return tierFor(user);
+    }
+
+    private CustomerTierResponseDTO tierFor(User user) {
         if (user.getRole() != User.Role.CUSTOMER) {
             throw new RuntimeException("User is not a customer");
         }

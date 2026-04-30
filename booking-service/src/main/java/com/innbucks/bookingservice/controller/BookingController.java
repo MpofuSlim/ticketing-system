@@ -1,8 +1,11 @@
 package com.innbucks.bookingservice.controller;
 
+import com.innbucks.bookingservice.client.UserServiceClient;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.BookingResponseDTO;
 import com.innbucks.bookingservice.dto.CreateBookingRequestDTO;
+import com.innbucks.bookingservice.dto.CustomerTierResponseDTO;
+import com.innbucks.bookingservice.exception.UserServiceUnavailableException;
 import com.innbucks.bookingservice.security.MinTier;
 import com.innbucks.bookingservice.service.BookingService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -34,6 +37,7 @@ import java.util.UUID;
 public class BookingController {
 
     private final BookingService bookingService;
+    private final UserServiceClient userServiceClient;
 
     @PostMapping
     @MinTier(2)
@@ -49,7 +53,11 @@ public class BookingController {
             Authentication authentication
     ) {
         String userEmail = authentication.getName();
-        int tier = extractTier(authentication);
+        // Tier is read live from user-service (DB) rather than from the JWT claim,
+        // so a customer who's just upgraded but is still using an older token
+        // is treated as their current tier. The interceptor has already gated
+        // access via @MinTier(2); this lookup informs the per-tier seat cap.
+        int tier = lookupCurrentTier(userEmail);
         log.info("POST /bookings userEmail={} tier={} eventId={} seats={}",
                 userEmail, tier, request.getEventId(), request.getSeats().size());
         BookingResponseDTO created = bookingService.createBooking(userEmail, tier, request);
@@ -57,17 +65,13 @@ public class BookingController {
                 .body(ApiResult.created("Booking created successfully", created));
     }
 
-    private int extractTier(Authentication authentication) {
-        int tier = 0;
-        for (var authority : authentication.getAuthorities()) {
-            String name = authority.getAuthority();
-            if (name != null && name.startsWith("TIER_")) {
-                try {
-                    tier = Math.max(tier, Integer.parseInt(name.substring(5)));
-                } catch (NumberFormatException ignored) { }
-            }
+    private int lookupCurrentTier(String subject) {
+        ApiResult<CustomerTierResponseDTO> envelope = userServiceClient.lookupCustomerTier(subject);
+        if (envelope == null || envelope.getData() == null) {
+            throw new UserServiceUnavailableException(
+                    "Unable to verify customer tier — user-service is currently unavailable.");
         }
-        return tier;
+        return envelope.getData().getCurrentTier();
     }
 
     @GetMapping("/my")

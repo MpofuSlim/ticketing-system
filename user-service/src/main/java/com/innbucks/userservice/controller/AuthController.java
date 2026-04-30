@@ -276,6 +276,23 @@ public class AuthController {
         return ResponseEntity.ok(ApiResult.ok("Customer tier retrieved", response));
     }
 
+    @GetMapping("/customer/tier/lookup")
+    @SecurityRequirements()
+    @Operation(summary = "Get customer registration tier by JWT subject",
+            description = "Returns the customer's current tier resolved by the value used as the JWT subject — " +
+                    "i.e. email when set, otherwise phone number. Used by downstream services that need a fresh, " +
+                    "DB-backed tier instead of relying on a possibly stale `tier` claim in the access token.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Customer tier retrieved"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Customer not found for the supplied subject")
+    })
+    public ResponseEntity<ApiResult<CustomerTierResponseDTO>> lookupCustomerTier(
+            @RequestParam("subject") String subject) {
+        log.info("Get customer tier subject={}", subject);
+        CustomerTierResponseDTO response = customerService.getCustomerTierBySubject(subject);
+        return ResponseEntity.ok(ApiResult.ok("Customer tier retrieved", response));
+    }
+
     @PostMapping("/otp/request")
     @SecurityRequirements()
     @Operation(summary = "Request (or re-send) an OTP",

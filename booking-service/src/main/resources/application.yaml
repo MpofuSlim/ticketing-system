@@ -85,9 +85,26 @@ resilience4j:
         wait-duration-in-open-state: 30s
         permitted-number-of-calls-in-half-open-state: 3
         automatic-transition-from-open-to-half-open-enabled: true
+      UserServiceClient:
+        register-health-indicator: true
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
   retry:
     instances:
       SeatServiceClient:
+        max-attempts: 3
+        wait-duration: 500ms
+        exponential-backoff-multiplier: 2.0
+        retry-exceptions:
+          - feign.RetryableException
+          - java.io.IOException
+          - org.springframework.web.client.ResourceAccessException
+      UserServiceClient:
         max-attempts: 3
         wait-duration: 500ms
         exponential-backoff-multiplier: 2.0
@@ -100,6 +117,13 @@ seat-service:
   # Explicit URL (no service discovery). docker-compose sets this to
   # http://seat-service:8083 via SEAT_SERVICE_URL.
   url: ${SEAT_SERVICE_URL:http://localhost:8083}
+
+user-service:
+  # docker-compose sets this to http://user-service:8081 via USER_SERVICE_URL.
+  # Used to read the customer's current registration tier from the source of
+  # truth on each booking request, so an upgraded customer who's still on an
+  # older JWT isn't rejected for a stale `tier` claim.
+  url: ${USER_SERVICE_URL:http://localhost:8081}
 
 app:
   idempotency:

@@ -182,6 +182,8 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
+      user-service:
+        condition: service_started
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/booking_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
@@ -197,6 +199,7 @@ services:
       IDEMPOTENCY_STORE: redis
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       SEAT_SERVICE_URL: http://seat-service:8083
+      USER_SERVICE_URL: http://user-service:8081
     ports:
       - "8084:8084"
     healthcheck:

@@ -21,6 +21,9 @@ spring:
 seat-service:
   url: http://localhost:0
 
+user-service:
+  url: http://localhost:0
+
 # Tests don't talk to Kafka. localhost:0 satisfies KafkaProducerConfig's
 # bootstrap-servers @Value at context load; nothing actually sends.
 spring.kafka.bootstrap-servers: localhost:0

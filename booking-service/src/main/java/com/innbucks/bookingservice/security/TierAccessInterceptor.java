@@ -1,11 +1,14 @@
 package com.innbucks.bookingservice.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.innbucks.bookingservice.client.UserServiceClient;
 import com.innbucks.bookingservice.dto.ApiResult;
+import com.innbucks.bookingservice.dto.CustomerTierResponseDTO;
 import com.innbucks.bookingservice.dto.TierViolationData;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -14,10 +17,20 @@ import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.HandlerInterceptor;
 
 @Component
-@RequiredArgsConstructor
+@Slf4j
 public class TierAccessInterceptor implements HandlerInterceptor {
 
     private final ObjectMapper objectMapper;
+    private final UserServiceClient userServiceClient;
+
+    // Feign client context creation publishes ApplicationEvents that re-enter
+    // the WebMvc bean graph; injecting it lazily breaks that cycle so the
+    // interceptor can be wired into WebMvcConfig at startup.
+    public TierAccessInterceptor(ObjectMapper objectMapper,
+                                 @Lazy UserServiceClient userServiceClient) {
+        this.objectMapper = objectMapper;
+        this.userServiceClient = userServiceClient;
+    }
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
@@ -33,39 +46,56 @@ public class TierAccessInterceptor implements HandlerInterceptor {
         }
 
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        int currentTier = currentTier(auth);
+        String subject = auth != null ? auth.getName() : null;
+        // Always read the live tier from user-service so a customer who's just
+        // upgraded (but is still presenting an older token) isn't blocked here.
+        Integer currentTier = lookupCurrentTier(subject);
+        if (currentTier == null) {
+            writeError(response, HttpStatus.SERVICE_UNAVAILABLE,
+                    "Unable to verify customer tier — user-service is currently unavailable.",
+                    null);
+            return false;
+        }
+
         if (currentTier >= minTier.value()) {
             return true;
         }
 
         String message = "You require tier " + minTier.value()
                 + " registration to access that feature (current tier: " + currentTier + ")";
-        ApiResult<TierViolationData> body = ApiResult.<TierViolationData>builder()
-                .code(String.valueOf(HttpStatus.UNPROCESSABLE_ENTITY.value()))
-                .message(message)
-                .data(TierViolationData.builder()
+        writeError(response, HttpStatus.UNPROCESSABLE_ENTITY, message,
+                TierViolationData.builder()
                         .requiredTier(minTier.value())
                         .currentTier(currentTier)
-                        .build())
-                .build();
-
-        response.setContentType("application/json");
-        response.setStatus(HttpStatus.UNPROCESSABLE_ENTITY.value());
-        objectMapper.writeValue(response.getWriter(), body);
+                        .build());
         return false;
     }
 
-    private int currentTier(Authentication auth) {
-        if (auth == null) return 0;
-        int tier = 0;
-        for (var authority : auth.getAuthorities()) {
-            String name = authority.getAuthority();
-            if (name != null && name.startsWith("TIER_")) {
-                try {
-                    tier = Math.max(tier, Integer.parseInt(name.substring(5)));
-                } catch (NumberFormatException ignored) { }
-            }
+    private Integer lookupCurrentTier(String subject) {
+        if (subject == null || subject.isBlank()) {
+            return 0;
         }
-        return tier;
+        try {
+            ApiResult<CustomerTierResponseDTO> envelope = userServiceClient.lookupCustomerTier(subject);
+            if (envelope == null || envelope.getData() == null) {
+                return null;
+            }
+            return envelope.getData().getCurrentTier();
+        } catch (Exception e) {
+            log.warn("Tier lookup failed subject={} message={}", subject, e.getMessage());
+            return null;
+        }
+    }
+
+    private void writeError(HttpServletResponse response, HttpStatus status, String message, TierViolationData data)
+            throws java.io.IOException {
+        ApiResult<TierViolationData> body = ApiResult.<TierViolationData>builder()
+                .code(String.valueOf(status.value()))
+                .message(message)
+                .data(data)
+                .build();
+        response.setContentType("application/json");
+        response.setStatus(status.value());
+        objectMapper.writeValue(response.getWriter(), body);
     }
 }

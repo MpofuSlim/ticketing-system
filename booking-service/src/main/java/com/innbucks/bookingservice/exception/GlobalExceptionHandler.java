@@ -31,6 +31,13 @@ public class GlobalExceptionHandler {
                 .body(ApiResult.error(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage()));
     }
 
+    @ExceptionHandler(UserServiceUnavailableException.class)
+    public ResponseEntity<ApiResult<Void>> handleUserServiceUnavailable(UserServiceUnavailableException ex) {
+        log.warn("user-service unavailable: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(ApiResult.error(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage()));
+    }
+
     @ExceptionHandler(TierRequirementException.class)
     public ResponseEntity<ApiResult<TierViolationData>> handleTierRequirement(TierRequirementException ex) {
         log.warn("Tier requirement not met requiredTier={} currentTier={} reason={}",
