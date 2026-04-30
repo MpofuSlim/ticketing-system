@@ -31,7 +31,8 @@ class AuthServiceTest {
                                    PasswordEncoder encoder,
                                    JwtUtil jwt) {
         return new AuthService(userRepo, tenantRepo,
-                mock(CustomerProfileRepository.class), deviceRepo, encoder, jwt);
+                mock(CustomerProfileRepository.class), deviceRepo, encoder, jwt,
+                mock(TokenRevocationService.class));
     }
 
     private AuthService newService(UserRepository userRepo,
@@ -40,7 +41,8 @@ class AuthServiceTest {
                                    DeviceRepository deviceRepo,
                                    PasswordEncoder encoder,
                                    JwtUtil jwt) {
-        return new AuthService(userRepo, tenantRepo, customerRepo, deviceRepo, encoder, jwt);
+        return new AuthService(userRepo, tenantRepo, customerRepo, deviceRepo, encoder, jwt,
+                mock(TokenRevocationService.class));
     }
 
     private RegisterRequestDTO baseRequest(String email, String phone, String role) {

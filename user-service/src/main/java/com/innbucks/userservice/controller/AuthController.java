@@ -106,6 +106,49 @@ public class AuthController {
         return ResponseEntity.ok(ApiResult.ok("Login successful", response));
     }
 
+    @PostMapping("/refresh")
+    @SecurityRequirement(name = "bearerAuth")
+    @Operation(summary = "Refresh JWT (pick up updated tier/verified)",
+            description = """
+                    Mints a new JWT for the currently authenticated user, reading the latest
+                    `tier` and `verified` values from the database. Useful right after a tier
+                    upgrade (e.g. tier 1 → tier 2) so the client can pick up the new claims
+                    without a full re-login.
+
+                    The old token is **not** revoked here — it keeps working until it expires
+                    or `/auth/logout` is called. Other services already accept tokens until
+                    expiry, so a brief overlap is harmless.
+                    """)
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "Fresh token issued",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Token refreshed",
+                                      "data": {
+                                        "token": "<new-jwt>",
+                                        "role": "CUSTOMER",
+                                        "tier": 2,
+                                        "verified": false
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
+                    description = "Missing or invalid bearer token")
+    })
+    public ResponseEntity<ApiResult<AuthResponseDTO>> refresh(HttpServletRequest request) {
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing Bearer token"));
+        }
+        String token = authHeader.substring(7);
+        AuthResponseDTO response = authService.refresh(token);
+        return ResponseEntity.ok(ApiResult.ok("Token refreshed", response));
+    }
+
     @PostMapping("/logout")
     @SecurityRequirement(name = "bearerAuth")
     @Operation(summary = "Logout",

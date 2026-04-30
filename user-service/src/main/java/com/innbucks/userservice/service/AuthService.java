@@ -33,6 +33,7 @@ public class AuthService {
     private final DeviceRepository deviceRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
+    private final TokenRevocationService tokenRevocationService;
 
     @Transactional
     public AuthResponseDTO register(RegisterRequestDTO request) {
@@ -123,6 +124,47 @@ public class AuthService {
         String token = jwtUtil.generateToken(subject, user.getRole().name(), tier, verified);
         return AuthResponseDTO.builder()
                 .token(token)
+                .email(user.getEmail())
+                .role(user.getRole().name())
+                .mfaRequired(false)
+                .tier(tier)
+                .verified(verified)
+                .build();
+    }
+
+    public AuthResponseDTO refresh(String token) {
+        if (token == null || token.isBlank() || !jwtUtil.isTokenValid(token)) {
+            throw new RuntimeException("Invalid or expired token");
+        }
+        if (tokenRevocationService.isRevoked(token)) {
+            throw new RuntimeException("Token revoked");
+        }
+        String subject = jwtUtil.extractEmail(token);
+        if (subject == null || subject.isBlank()) {
+            throw new RuntimeException("Token has no subject");
+        }
+        User user = (subject.contains("@")
+                ? userRepository.findByEmail(subject)
+                : userRepository.findByPhoneNumber(subject))
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        int tier;
+        boolean verified;
+        if (user.getRole() == User.Role.CUSTOMER) {
+            CustomerProfile profile = customerProfileRepository.findByUserId(user.getId())
+                    .orElseThrow(() -> new RuntimeException("Customer profile missing"));
+            tier = profile.getRegistrationTier();
+            verified = profile.isVerified();
+        } else {
+            tier = 4;
+            verified = true;
+        }
+
+        String newToken = jwtUtil.generateToken(subject, user.getRole().name(), tier, verified);
+        log.info("Token refreshed subject={} role={} tier={} verified={}",
+                subject, user.getRole(), tier, verified);
+        return AuthResponseDTO.builder()
+                .token(newToken)
                 .email(user.getEmail())
                 .role(user.getRole().name())
                 .mfaRequired(false)
