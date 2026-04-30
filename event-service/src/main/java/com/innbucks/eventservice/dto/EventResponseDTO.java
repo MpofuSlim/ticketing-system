@@ -60,6 +60,9 @@ public class EventResponseDTO {
     @Schema(description = "Tickets still available for sale.")
     private Integer availableTickets;
 
+    @Schema(description = "Whether the event is currently active (visible in /events/active and bookable).")
+    private boolean active;
+
     @Schema(description = "Creation timestamp (server time).")
     private LocalDateTime createdAt;
 

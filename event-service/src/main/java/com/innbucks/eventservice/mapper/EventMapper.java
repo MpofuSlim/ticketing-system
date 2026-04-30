@@ -24,6 +24,7 @@ public class EventMapper {
                 .dateTime(event.getDateTime() == null ? null : event.getDateTime().toLocalDate())
                 .totalCapacity(event.getTotalCapacity())
                 .availableTickets(event.getAvailableTickets())
+                .active(event.isActive())
                 .createdAt(event.getCreatedAt())
                 .updatedAt(event.getUpdatedAt())
                 .build();
