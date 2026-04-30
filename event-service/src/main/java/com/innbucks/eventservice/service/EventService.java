@@ -130,6 +130,9 @@ public class EventService {
                 .totalCapacity(request.getTotalCapacity())
                 .availableTickets(request.getTotalCapacity())
                 .deleted(false)
+                // Newly created events start inactive; the tenant flips active=true
+                // via PUT /events/{id}/activate once they're ready to publish.
+                .active(false)
                 .build();
 
         applyBanner(event, eventBanner);
@@ -213,6 +216,27 @@ public class EventService {
 
     public EventResponseDTO updateEvent(String tenantId, UUID eventId, UpdateEventRequestDTO request) {
         return updateEvent(tenantId, "ROLE_TENANT", eventId, request);
+    }
+
+    public EventResponseDTO activateEvent(String tenantId, String role, UUID eventId) {
+        log.info("Activating event eventId={} tenantId={} role={}", eventId, tenantId, role);
+        Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
+                .orElseThrow(() -> {
+                    log.warn("Activate failed, event not found eventId={} tenantId={}", eventId, tenantId);
+                    return new RuntimeException("Event not found");
+                });
+
+        boolean isAdmin = "ROLE_ADMIN".equals(role);
+        if (!isAdmin && !event.getTenantId().equals(tenantId)) {
+            log.warn("Unauthorized activate attempt eventId={} tenantId={} ownerTenantId={}",
+                    eventId, tenantId, event.getTenantId());
+            throw new RuntimeException("You are not authorized to activate this event");
+        }
+
+        event.setActive(true);
+        Event saved = eventRepository.save(event);
+        log.info("Event activated eventId={} tenantId={}", eventId, tenantId);
+        return eventMapper.toDTO(saved);
     }
 
     public void deleteEvent(String tenantId, String role, UUID eventId) {

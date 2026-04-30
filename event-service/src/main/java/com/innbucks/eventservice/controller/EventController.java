@@ -41,9 +41,11 @@ public class EventController {
     @GetMapping
     @SecurityRequirements()
     @Operation(
-            summary = "List active events",
+            summary = "List all (active and inactive) events",
             description = """
-                    Returns a paginated list of **non-deleted** events.
+                    Returns a paginated list of **non-deleted** events, including
+                    both `active=true` and `active=false`. Use `GET /events/active`
+                    to fetch only the active ones.
 
                     Filtering:
                     - **from/to** are interpreted as calendar dates (`yyyy-MM-dd`).
@@ -309,6 +311,37 @@ public class EventController {
         log.info("Updating event eventId={} tenantId={}", id, tenantId);
         EventResponseDTO updated = eventService.updateEvent(tenantId, role, id, request);
         return ResponseEntity.ok(ApiResult.ok("Event updated successfully", updated));
+    }
+
+    @PutMapping("/{id}/activate")
+    @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
+    @Operation(
+            summary = "Activate event",
+            description = """
+                    Flips the event's `active` flag to `true`.
+
+                    Newly created events start with `active=false`; the owning
+                    **TENANT** (or an **ADMIN**) calls this endpoint once the event
+                    is ready to be surfaced via `GET /events/active` and
+                    `GET /events/by-province`.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Activated"),
+            @ApiResponse(responseCode = "400", description = "Not found or not authorized",
+                    content = @Content(schema = @Schema(example = "{\"error\":\"You are not authorized to activate this event\"}"))),
+            @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN")
+    })
+    public ResponseEntity<ApiResult<EventResponseDTO>> activateEvent(
+            @Parameter(description = "Event UUID") @PathVariable UUID id,
+            Authentication authentication
+    ) {
+        String tenantId = authentication.getName();
+        String role = getCurrentRole(authentication);
+        log.info("Activating event eventId={} tenantId={}", id, tenantId);
+        EventResponseDTO activated = eventService.activateEvent(tenantId, role, id);
+        return ResponseEntity.ok(ApiResult.ok("Event activated successfully", activated));
     }
 
     @DeleteMapping("/{id}")
