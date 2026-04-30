@@ -21,6 +21,7 @@ public class SecurityConfig {
     public SecurityFilterChain apiChain(HttpSecurity http) throws Exception {
         http
                 .csrf(csrf -> csrf.disable())
+                .headers(headers -> headers.frameOptions(frame -> frame.sameOrigin()))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/swagger-ui/**").permitAll()
                         .requestMatchers("/swagger-ui.html").permitAll()
@@ -29,6 +30,9 @@ public class SecurityConfig {
                         // Public — anyone can view seats and categories
                         .requestMatchers(HttpMethod.GET, "/seats/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/seat-categories/**").permitAll()
+                        // H2 console (dev only). frameOptions=sameOrigin above
+                        // lets it render its iframes.
+                        .requestMatchers("/h2-console/**").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                         // Everything else requires authentication
                         .anyRequest().authenticated()

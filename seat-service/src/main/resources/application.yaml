@@ -49,6 +49,11 @@ spring:
   lifecycle:
     timeout-per-shutdown-phase: 30s
 
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+
 app:
   lock:
     # Set to "redis" for shared, cross-replica locks. Defaults to in-memory so
