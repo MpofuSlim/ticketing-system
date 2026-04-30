@@ -90,6 +90,57 @@ public class EventController {
     }
 
 
+    @GetMapping("/active")
+    @SecurityRequirements()
+    @Operation(
+            summary = "List events that are flagged active",
+            description = """
+                    Returns a paginated list of **non-deleted** events whose `active`
+                    flag is `true`. Tenants flip `active` to `false` when an event ends
+                    (or it is flipped by a future scheduler), so this endpoint excludes
+                    those while `GET /events` still includes them.
+
+                    Filtering and sorting follow the same rules as `GET /events`.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Paged list of active events")
+    })
+    public ResponseEntity<ApiResult<Page<EventResponseDTO>>> getActiveEvents(
+            @Parameter(description = "Inclusive lower bound date for events (maps to start of day)")
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+
+            @Parameter(description = "Inclusive upper bound date for events (maps to end of day)")
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+
+            @Parameter(description = "Venue substring filter (case-insensitive)")
+            @RequestParam(required = false) String venue,
+
+            @Parameter(description = "Zero-based page index")
+            @RequestParam(defaultValue = "0")   int page,
+
+            @Parameter(description = "Page size")
+            @RequestParam(defaultValue = "10")  int size,
+
+            @Parameter(description = "Sort field name (must match an entity property), ascending")
+            @RequestParam(defaultValue = "dateTime") String sortBy
+    ) {
+        LocalDateTime fromDateTime = from == null ? null : from.atStartOfDay();
+        LocalDateTime toDateTime = to == null ? null : to.atTime(LocalTime.MAX);
+        log.debug("GET /events/active from={} to={} venue={} page={} size={} sortBy={}",
+                from, to, venue, page, size, sortBy);
+        Page<EventResponseDTO> result = eventService.getActiveOnlyEvents(
+                fromDateTime, toDateTime, venue, page, size, sortBy);
+        if (result.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResult.error(HttpStatus.NOT_FOUND, "Not found"));
+        }
+        return ResponseEntity.ok(ApiResult.ok("Active events retrieved successfully", result));
+    }
+
+
     @GetMapping("/{id}")
     @SecurityRequirements()
     @Operation(

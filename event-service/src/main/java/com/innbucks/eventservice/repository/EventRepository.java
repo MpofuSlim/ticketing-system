@@ -29,6 +29,22 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
             Pageable pageable
     );
 
+    // Get only events flagged active=true (and non-deleted) with optional filters — paginated
+    @Query("""
+        SELECT e FROM Event e
+        WHERE e.deleted = false
+        AND e.active = true
+        AND (:from IS NULL OR e.dateTime >= :from)
+        AND (:to IS NULL OR e.dateTime <= :to)
+        AND (:venue IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', :venue, '%')))
+    """)
+    Page<Event> findAllActiveOnly(
+            @Param("from") LocalDateTime from,
+            @Param("to") LocalDateTime to,
+            @Param("venue") String venue,
+            Pageable pageable
+    );
+
     // Only return event if it is not soft deleted
     Optional<Event> findByEventIdAndDeletedFalse(UUID eventId);
 

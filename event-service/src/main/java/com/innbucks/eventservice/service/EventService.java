@@ -51,6 +51,22 @@ public class EventService {
                 .map(eventMapper::toDTO);
     }
 
+    public Page<EventResponseDTO> getActiveOnlyEvents(
+            LocalDateTime from,
+            LocalDateTime to,
+            String venue,
+            int page,
+            int size,
+            String sortBy
+    ) {
+        Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
+        log.debug("Fetching active=true events from={} to={} venue={} page={} size={} sortBy={}",
+                from, to, venue, page, size, sortBy);
+        return eventRepository
+                .findAllActiveOnly(from, to, venue, pageable)
+                .map(eventMapper::toDTO);
+    }
+
     public EventResponseDTO getEventById(UUID eventId) {
         log.debug("Fetching event eventId={}", eventId);
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
