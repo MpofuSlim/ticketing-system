@@ -1,10 +1,8 @@
 package innbucks.paymentservice.dto;
 
 import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Positive;
 import lombok.Data;
 
-import java.math.BigDecimal;
 import java.util.UUID;
 
 @Data
@@ -13,14 +11,11 @@ public class PaymentRequest {
     @NotNull(message = "bookingId is required")
     private UUID bookingId;
 
-    // Optional in the dummy flow — accepted for shape but not used to gate
-    // anything. A real payment service would validate the amount against the
-    // booking's totalAmount before charging.
-    @Positive(message = "amount must be positive when provided")
-    private BigDecimal amount;
-
+    // Optional. Defaults to USD on the response when omitted. The amount is
+    // NOT taken from the client; it's read from booking-service's totalAmount
+    // so a malicious caller can't underpay.
     private String currency;
 
-    // e.g. "4242" — purely cosmetic, echoed back on the receipt.
+    // Optional, cosmetic-only — echoed back on the receipt.
     private String cardLast4;
 }

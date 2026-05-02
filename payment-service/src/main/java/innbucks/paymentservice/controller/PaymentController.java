@@ -49,7 +49,9 @@ public class PaymentController {
             description = "Confirms the booking referenced by `bookingId` by calling booking-service's " +
                     "PATCH /bookings/{id}/confirm. The Authorization header on this request is forwarded " +
                     "to booking-service, so the same JWT must be valid there. " +
-                    "No real charge is made — `amount`, `currency`, `cardLast4` are echoed back on the receipt."
+                    "No real charge is made; the receipt's `amountPaid` is read from booking-service's " +
+                    "`totalAmount` (the source of truth) — clients do not quote the amount. " +
+                    "`currency` (defaults to USD) and `cardLast4` are optional and echoed back on the receipt."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -84,8 +86,7 @@ public class PaymentController {
             @Valid @RequestBody PaymentRequest request,
             HttpServletRequest httpRequest
     ) {
-        log.info("POST /payments bookingId={} amount={} currency={}",
-                request.getBookingId(), request.getAmount(), request.getCurrency());
+        log.info("POST /payments bookingId={}", request.getBookingId());
 
         String authHeader = httpRequest.getHeader(HttpHeaders.AUTHORIZATION);
         Map<String, Object> confirmedBooking;
@@ -105,21 +106,22 @@ public class PaymentController {
                             .build());
         }
 
+        // Amount paid is ALWAYS the booking's totalAmount (the source of truth
+        // computed from real seat prices). The client doesn't quote amounts.
         PaymentResponse response = PaymentResponse.builder()
                 .transactionId(UUID.randomUUID())
                 .bookingId(request.getBookingId())
                 .status(PaymentResponse.Status.SUCCESS)
-                // Default to the booking's totalAmount when the caller didn't pass an amount.
-                .amountPaid(request.getAmount() != null ? request.getAmount()
-                        : asBigDecimal(confirmedBooking.get("totalAmount")))
+                .amountPaid(asBigDecimal(confirmedBooking.get("totalAmount")))
                 .currency(request.getCurrency() != null ? request.getCurrency() : "USD")
                 .cardLast4(request.getCardLast4())
                 .confirmationNumber(asString(confirmedBooking.get("confirmationNumber")))
                 .processedAt(LocalDateTime.now())
                 .build();
 
-        log.info("Payment processed transactionId={} bookingId={} confirmation={}",
-                response.getTransactionId(), response.getBookingId(), response.getConfirmationNumber());
+        log.info("Payment processed transactionId={} bookingId={} confirmation={} amountPaid={}",
+                response.getTransactionId(), response.getBookingId(),
+                response.getConfirmationNumber(), response.getAmountPaid());
         return ResponseEntity.ok(ApiResult.ok("Payment processed successfully", response));
     }
 

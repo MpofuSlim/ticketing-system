@@ -25,7 +25,6 @@ class PaymentControllerTest {
     private PaymentRequest paymentFor(UUID bookingId) {
         PaymentRequest r = new PaymentRequest();
         r.setBookingId(bookingId);
-        r.setAmount(new BigDecimal("100.00"));
         r.setCurrency("USD");
         r.setCardLast4("4242");
         return r;
@@ -38,7 +37,7 @@ class PaymentControllerTest {
     }
 
     @Test
-    void processPayment_forwardsAuthHeaderToBookingServiceAndReturnsSuccessReceipt() {
+    void processPayment_forwardsAuthHeaderAndUsesBookingTotalAmountForReceipt() {
         BookingServiceClient client = mock(BookingServiceClient.class);
         UUID bookingId = UUID.randomUUID();
         when(client.confirmBooking(eq(bookingId), eq("Bearer abc.def.ghi"))).thenReturn(Map.of(
@@ -55,6 +54,7 @@ class PaymentControllerTest {
         PaymentResponse data = resp.getBody().getData();
         assertEquals(PaymentResponse.Status.SUCCESS, data.getStatus());
         assertEquals(bookingId, data.getBookingId());
+        // Amount comes from booking-service's totalAmount, not the request.
         assertEquals(0, new BigDecimal("100.00").compareTo(data.getAmountPaid()));
         assertEquals("USD", data.getCurrency());
         assertEquals("4242", data.getCardLast4());
@@ -65,7 +65,25 @@ class PaymentControllerTest {
     }
 
     @Test
-    void processPayment_fallsBackToBookingTotalAmountWhenRequestOmitsAmount() {
+    void processPayment_defaultsCurrencyToUsdWhenRequestOmitsIt() {
+        BookingServiceClient client = mock(BookingServiceClient.class);
+        UUID bookingId = UUID.randomUUID();
+        when(client.confirmBooking(eq(bookingId), any())).thenReturn(Map.of(
+                "totalAmount", 50.00,
+                "confirmationNumber", "INN-Y"
+        ));
+
+        PaymentRequest req = new PaymentRequest();
+        req.setBookingId(bookingId); // currency intentionally null
+
+        ResponseEntity<ApiResult<PaymentResponse>> resp = new PaymentController(client)
+                .processPayment(req, reqWithAuth(null));
+
+        assertEquals("USD", resp.getBody().getData().getCurrency());
+    }
+
+    @Test
+    void processPayment_handlesBookingsWithFractionalTotalAmount() {
         BookingServiceClient client = mock(BookingServiceClient.class);
         UUID bookingId = UUID.randomUUID();
         when(client.confirmBooking(eq(bookingId), any())).thenReturn(Map.of(
@@ -73,12 +91,8 @@ class PaymentControllerTest {
                 "confirmationNumber", "INN-X"
         ));
 
-        PaymentRequest req = new PaymentRequest();
-        req.setBookingId(bookingId);
-        // amount intentionally null
-
         ResponseEntity<ApiResult<PaymentResponse>> resp = new PaymentController(client)
-                .processPayment(req, reqWithAuth(null));
+                .processPayment(paymentFor(bookingId), reqWithAuth(null));
 
         assertEquals(0, new BigDecimal("75.5").compareTo(resp.getBody().getData().getAmountPaid()));
     }
