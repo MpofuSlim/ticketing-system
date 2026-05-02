@@ -48,9 +48,13 @@ spring:
 
   # KafkaProducerConfig builds the producer factory + template from this
   # property. Boot 4 no longer auto-configures Kafka, so spring.kafka.*
-  # subkeys are not consumed automatically.
+  # subkeys are not consumed automatically. The default targets the EXTERNAL
+  # listener exposed by docker-compose (localhost:29092 → kafka:9092 inside
+  # the network) so booking-service running on the host can talk to a
+  # docker-compose Kafka without further config. Inside Docker the compose
+  # file overrides this to kafka:9092.
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:29092}
 
   lifecycle:
     timeout-per-shutdown-phase: 30s
