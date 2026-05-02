@@ -23,7 +23,11 @@ RUN ./mvnw -B -pl booking-service -am -DskipTests package \
     && cp booking-service/target/booking-service-*.jar /workspace/app.jar
 
 FROM eclipse-temurin:21-jre-alpine AS runtime
-RUN addgroup -S app && adduser -S -G app app
+# Pull in any apk security patches published since the base image was tagged.
+# Trivy fails the build on HIGH/CRITICAL CVEs (see .github/workflows/docker.yml),
+# and the floating eclipse-temurin:21-*-alpine tag isn't always rebuilt promptly.
+RUN apk --no-cache upgrade \
+ && addgroup -S app && adduser -S -G app app
 WORKDIR /app
 USER app
 
