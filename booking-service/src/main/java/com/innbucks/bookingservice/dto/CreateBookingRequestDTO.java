@@ -16,11 +16,10 @@ public class CreateBookingRequestDTO {
     @NotEmpty(message = "At least one seat is required")
     private List<@Valid SeatItemRequest> seats;
 
+    // Each entry requests one seat in the given category. The actual seat is
+    // picked at random by booking-service from seat-service's available pool.
     @Data
     public static class SeatItemRequest {
-        @NotNull(message = "Seat ID is required")
-        private UUID seatId;
-
         @NotNull(message = "Category ID is required")
         private UUID categoryId;
     }

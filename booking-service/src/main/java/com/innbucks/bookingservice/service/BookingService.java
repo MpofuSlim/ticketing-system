@@ -16,6 +16,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 
 @Service
@@ -51,39 +52,54 @@ public class BookingService {
                     "Tier " + tier + " customers may book at most " + maxSeats + " seats per booking");
         }
 
-        List<UUID> requestedSeatIds = request.getSeats().stream()
-                .map(CreateBookingRequestDTO.SeatItemRequest::getSeatId)
-                .toList();
+        // For each requested category, pick a random AVAILABLE seat from
+        // seat-service. Cache the available pool per category so multiple
+        // seats in the same category share one upstream call, and track
+        // already-picked seats so the same seat isn't assigned twice in
+        // one request.
+        Map<UUID, List<UUID>> availablePoolByCategory = new HashMap<>();
+        Set<UUID> pickedInThisRequest = new HashSet<>();
+        List<UUID> assignedSeatIds = new ArrayList<>(request.getSeats().size());
+        for (CreateBookingRequestDTO.SeatItemRequest item : request.getSeats()) {
+            UUID categoryId = item.getCategoryId();
+            List<UUID> pool = availablePoolByCategory.computeIfAbsent(
+                    categoryId, this::fetchAvailableSeatIds);
+
+            UUID picked = pickRandomAvailable(pool, pickedInThisRequest);
+            if (picked == null) {
+                log.warn("Booking rejected, no available seats userEmail={} categoryId={}", userEmail, categoryId);
+                throw new RuntimeException("No available seats in category " + categoryId);
+            }
+            pickedInThisRequest.add(picked);
+            assignedSeatIds.add(picked);
+        }
+
+        // Cross-check against our own DB. Catches the race where a seat that
+        // looked AVAILABLE in seat-service is already part of an active
+        // booking on our side (e.g. concurrent request just before
+        // seat-service was updated).
         List<BookingItem> existingActive = bookingItemRepository.findActiveBySeatIds(
-                requestedSeatIds, Booking.BookingStatus.CANCELLED);
+                assignedSeatIds, Booking.BookingStatus.CANCELLED);
         if (!existingActive.isEmpty()) {
             List<UUID> clashingSeats = existingActive.stream()
                     .map(BookingItem::getSeatId)
                     .distinct()
                     .toList();
-            log.warn("Booking create rejected, seats already booked userEmail={} seatIds={}",
+            log.warn("Booking create rejected, picked seats already booked userEmail={} seatIds={}",
                     userEmail, clashingSeats);
             throw new RuntimeException("One or more seats are already booked: " + clashingSeats);
         }
 
-        // Resolve every seat against seat-service so price, category, and event
-        // are derived from the source of truth rather than client input.
-        // The eventId and categoryId on the request are kept as defensive
-        // cross-checks — they must match what the seat actually belongs to.
-        List<SeatLookupResponseDTO> resolved = new ArrayList<>(requestedSeatIds.size());
-        for (CreateBookingRequestDTO.SeatItemRequest item : request.getSeats()) {
-            SeatLookupResponseDTO seat = lookupSeat(item.getSeatId());
+        // Resolve full details (price, eventId, sectionLabel) from seat-service.
+        // The available-seats endpoint omits these fields by design.
+        List<SeatLookupResponseDTO> resolved = new ArrayList<>(assignedSeatIds.size());
+        for (UUID seatId : assignedSeatIds) {
+            SeatLookupResponseDTO seat = lookupSeat(seatId);
             if (!request.getEventId().equals(seat.getEventId())) {
-                log.warn("Booking rejected, seat does not belong to event userEmail={} seatId={} requestEventId={} actualEventId={}",
-                        userEmail, item.getSeatId(), request.getEventId(), seat.getEventId());
+                log.warn("Booking rejected, category does not belong to event userEmail={} seatId={} requestEventId={} actualEventId={}",
+                        userEmail, seatId, request.getEventId(), seat.getEventId());
                 throw new RuntimeException(
-                        "Seat " + item.getSeatId() + " does not belong to event " + request.getEventId());
-            }
-            if (!item.getCategoryId().equals(seat.getCategoryId())) {
-                log.warn("Booking rejected, seat does not belong to category userEmail={} seatId={} requestCategoryId={} actualCategoryId={}",
-                        userEmail, item.getSeatId(), item.getCategoryId(), seat.getCategoryId());
-                throw new RuntimeException(
-                        "Seat " + item.getSeatId() + " does not belong to category " + item.getCategoryId());
+                        "Category " + seat.getCategoryId() + " does not belong to event " + request.getEventId());
             }
             resolved.add(seat);
         }
@@ -122,7 +138,7 @@ public class BookingService {
         booking.setItems(items);
         bookingRepository.save(booking);
 
-        eventPublisher.publishEvent(BookingDomainEvent.BookingCreated.of(booking, requestedSeatIds));
+        eventPublisher.publishEvent(BookingDomainEvent.BookingCreated.of(booking, assignedSeatIds));
 
         log.info("Booking created bookingId={} confirmation={} userEmail={} eventId={} total={} items={}",
                 booking.getId(), confirmationNumber, userEmail, request.getEventId(),
@@ -235,6 +251,30 @@ public class BookingService {
             throw new RuntimeException("Seat " + seatId + " not found");
         }
         return envelope.getData();
+    }
+
+    private List<UUID> fetchAvailableSeatIds(UUID categoryId) {
+        ApiResult<List<AvailableSeatDTO>> envelope = seatServiceClient.getAvailableSeats(categoryId);
+        if (envelope == null || envelope.getData() == null || envelope.getData().isEmpty()) {
+            log.warn("No available seats returned by seat-service categoryId={}", categoryId);
+            throw new RuntimeException("No available seats in category " + categoryId);
+        }
+        return envelope.getData().stream()
+                .map(AvailableSeatDTO::getId)
+                .collect(Collectors.toCollection(ArrayList::new));
+    }
+
+    // Returns a uniformly random seatId from the pool, skipping any already
+    // claimed by an earlier item in the same booking request. Returns null if
+    // the pool has no candidates left.
+    private UUID pickRandomAvailable(List<UUID> pool, Set<UUID> alreadyPicked) {
+        List<UUID> candidates = pool.stream()
+                .filter(id -> !alreadyPicked.contains(id))
+                .toList();
+        if (candidates.isEmpty()) {
+            return null;
+        }
+        return candidates.get(ThreadLocalRandom.current().nextInt(candidates.size()));
     }
 
     /**

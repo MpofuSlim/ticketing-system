@@ -2,6 +2,7 @@ package com.innbucks.bookingservice.service;
 
 import com.innbucks.bookingservice.client.SeatServiceClient;
 import com.innbucks.bookingservice.dto.ApiResult;
+import com.innbucks.bookingservice.dto.AvailableSeatDTO;
 import com.innbucks.bookingservice.dto.BookingResponseDTO;
 import com.innbucks.bookingservice.dto.CreateBookingRequestDTO;
 import com.innbucks.bookingservice.dto.SeatLookupResponseDTO;
@@ -52,7 +53,6 @@ class BookingServiceTest {
         for (BigDecimal price : prices) {
             UUID seatId = UUID.randomUUID();
             CreateBookingRequestDTO.SeatItemRequest s = new CreateBookingRequestDTO.SeatItemRequest();
-            s.setSeatId(seatId);
             s.setCategoryId(DEFAULT_CATEGORY_ID);
             seats.add(s);
 
@@ -71,12 +71,29 @@ class BookingServiceTest {
         return new RequestFixture(req, lookups);
     }
 
+    // Wires up a mocked SeatServiceClient that:
+    //  - returns the given lookups by seatId for /seats/{id}/lookup, and
+    //  - returns the same seat IDs as the available pool for the
+    //    DEFAULT_CATEGORY_ID, so the random pick exhausts exactly the
+    //    fixture's seats (and pickRandomAvailable can't loop).
     private SeatServiceClient stubClient(List<SeatLookupResponseDTO> lookups) {
         SeatServiceClient client = mock(SeatServiceClient.class);
         for (SeatLookupResponseDTO lookup : lookups) {
             when(client.lookupSeat(lookup.getSeatId()))
                     .thenReturn(ApiResult.ok("Seat details retrieved successfully", lookup));
         }
+        List<AvailableSeatDTO> available = lookups.stream()
+                .map(l -> AvailableSeatDTO.builder()
+                        .id(l.getSeatId())
+                        .categoryId(l.getCategoryId())
+                        .categoryName(l.getCategoryName())
+                        .sectionLabel(l.getSectionLabel())
+                        .seatNumber(l.getSeatNumber())
+                        .status("AVAILABLE")
+                        .build())
+                .toList();
+        when(client.getAvailableSeats(DEFAULT_CATEGORY_ID))
+                .thenReturn(ApiResult.ok("Available seats retrieved successfully", available));
         return client;
     }
 
@@ -94,13 +111,14 @@ class BookingServiceTest {
     }
 
     @Test
-    void createBooking_rejectsWhenAnyRequestedSeatIsAlreadyInActiveBooking() {
+    void createBooking_rejectsWhenPickedSeatIsAlreadyInActiveBooking() {
         BookingRepository bookingRepo = mock(BookingRepository.class);
         BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        // Single-seat pool ⇒ the random pick is deterministic.
         RequestFixture fx = request(new BigDecimal("20.00"));
         BookingService service = newService(bookingRepo, itemRepo, stubClient(fx.lookups));
 
-        UUID clashingSeatId = fx.request.getSeats().get(0).getSeatId();
+        UUID clashingSeatId = fx.lookups.get(0).getSeatId();
         BookingItem existing = BookingItem.builder().seatId(clashingSeatId).build();
         when(itemRepo.findActiveBySeatIds(any(), eq(Booking.BookingStatus.CANCELLED)))
                 .thenReturn(List.of(existing));
@@ -174,11 +192,12 @@ class BookingServiceTest {
     }
 
     @Test
-    void createBooking_rejectsWhenSeatBelongsToDifferentEvent() {
+    void createBooking_rejectsWhenCategoryBelongsToDifferentEvent() {
         BookingRepository bookingRepo = mock(BookingRepository.class);
         BookingItemRepository itemRepo = mock(BookingItemRepository.class);
         RequestFixture fx = request(new BigDecimal("20.00"));
-        // Override the lookup to point at a different event
+        // Seat-service says the picked seat's category belongs to a different event
+        // than the one in the booking request.
         SeatLookupResponseDTO mismatched = fx.lookups.get(0);
         mismatched.setEventId(UUID.randomUUID());
         BookingService service = newService(bookingRepo, itemRepo, stubClient(fx.lookups));
@@ -191,17 +210,19 @@ class BookingServiceTest {
     }
 
     @Test
-    void createBooking_rejectsWhenSeatBelongsToDifferentCategory() {
+    void createBooking_rejectsWhenCategoryHasNoAvailableSeats() {
         BookingRepository bookingRepo = mock(BookingRepository.class);
         BookingItemRepository itemRepo = mock(BookingItemRepository.class);
         RequestFixture fx = request(new BigDecimal("20.00"));
-        // Seat-service says the seat is in a different category than the client claims
-        fx.lookups.get(0).setCategoryId(UUID.randomUUID());
-        BookingService service = newService(bookingRepo, itemRepo, stubClient(fx.lookups));
+        // Override the available-seats stub: empty pool simulates a sold-out category.
+        SeatServiceClient client = mock(SeatServiceClient.class);
+        when(client.getAvailableSeats(DEFAULT_CATEGORY_ID))
+                .thenReturn(ApiResult.ok("ok", List.of()));
+        BookingService service = newService(bookingRepo, itemRepo, client);
 
         RuntimeException ex = assertThrows(RuntimeException.class,
                 () -> service.createBooking("user@example.com", 4, fx.request));
-        assertTrue(ex.getMessage().contains("does not belong to category"));
+        assertTrue(ex.getMessage().toLowerCase().contains("no available seats"));
         verify(bookingRepo, never()).save(any());
         verify(itemRepo, never()).saveAll(any());
     }
