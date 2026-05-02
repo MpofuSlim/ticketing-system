@@ -69,7 +69,8 @@ public class BookingController {
                                             "rowLabel": "A",
                                             "seatNumber": 12,
                                             "priceAtBooking": 100.00,
-                                            "ticketNumber": "20260502-12345A"
+                                            "ticketNumber": "20260502-12345A",
+                                            "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)"
                                           }
                                         ],
                                         "createdAt": "2026-05-02T15:45:00",
@@ -139,7 +140,8 @@ public class BookingController {
                                               "rowLabel": "A",
                                               "seatNumber": 12,
                                               "priceAtBooking": 100.00,
-                                              "ticketNumber": "20260502-12345A"
+                                              "ticketNumber": "20260502-12345A",
+                                              "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)"
                                             },
                                             {
                                               "seatId": "22222222-3333-4444-5555-666666666666",
@@ -148,7 +150,8 @@ public class BookingController {
                                               "rowLabel": "A",
                                               "seatNumber": 13,
                                               "priceAtBooking": 100.00,
-                                              "ticketNumber": "20260502-12346B"
+                                              "ticketNumber": "20260502-12346B",
+                                              "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)"
                                             }
                                           ],
                                           "createdAt": "2026-05-02T15:45:00",
@@ -200,7 +203,8 @@ public class BookingController {
                                             "rowLabel": "A",
                                             "seatNumber": 12,
                                             "priceAtBooking": 100.00,
-                                            "ticketNumber": "20260502-12345A"
+                                            "ticketNumber": "20260502-12345A",
+                                            "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)"
                                           }
                                         ],
                                         "createdAt": "2026-05-02T15:45:00",
@@ -390,7 +394,8 @@ public class BookingController {
                                             "rowLabel": "A",
                                             "seatNumber": 12,
                                             "priceAtBooking": 100.00,
-                                            "ticketNumber": "20260502-12345A"
+                                            "ticketNumber": "20260502-12345A",
+                                            "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)"
                                           }
                                         ],
                                         "createdAt": "2026-05-02T15:45:00",
@@ -437,7 +442,8 @@ public class BookingController {
                                             "rowLabel": "A",
                                             "seatNumber": 12,
                                             "priceAtBooking": 100.00,
-                                            "ticketNumber": "20260502-12345A"
+                                            "ticketNumber": "20260502-12345A",
+                                            "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)"
                                           }
                                         ],
                                         "createdAt": "2026-05-02T15:45:00",
@@ -488,7 +494,8 @@ public class BookingController {
                                             "rowLabel": "A",
                                             "seatNumber": 12,
                                             "priceAtBooking": 100.00,
-                                            "ticketNumber": "20260502-12345A"
+                                            "ticketNumber": "20260502-12345A",
+                                            "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)"
                                           }
                                         ],
                                         "createdAt": "2026-05-02T15:45:00",

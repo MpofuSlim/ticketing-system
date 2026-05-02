@@ -65,6 +65,19 @@
             <artifactId>h2</artifactId>
         </dependency>
 
+        <!-- ZXing for per-ticket QR code generation. core has the encoder;
+             javase brings MatrixToImageWriter so we can render to PNG bytes. -->
+        <dependency>
+            <groupId>com.google.zxing</groupId>
+            <artifactId>core</artifactId>
+            <version>3.5.3</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.zxing</groupId>
+            <artifactId>javase</artifactId>
+            <version>3.5.3</version>
+        </dependency>
+
         <!-- PostgreSQL (disabled — see application.yaml; revert by removing
              the comment block and dropping H2 to test scope above).
         <dependency>

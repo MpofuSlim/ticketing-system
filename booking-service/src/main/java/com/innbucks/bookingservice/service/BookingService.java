@@ -28,6 +28,7 @@ public class BookingService {
     private final BookingItemRepository bookingItemRepository;
     private final SeatServiceClient seatServiceClient;
     private final ApplicationEventPublisher eventPublisher;
+    private final QrCodeGenerator qrCodeGenerator;
 
     private static final int TIER_2_MAX_SEATS = 2;
     private static final int TIER_3_MAX_SEATS = 6;
@@ -412,6 +413,7 @@ public class BookingService {
                             .seatNumber(i.getSeatNumber())
                             .priceAtBooking(i.getPriceAtBooking())
                             .ticketNumber(i.getTicketNumber())
+                            .qrCode(qrCodeGenerator.toDataUri(i.getTicketNumber()))
                             .build())
                   .collect(Collectors.toList());
 

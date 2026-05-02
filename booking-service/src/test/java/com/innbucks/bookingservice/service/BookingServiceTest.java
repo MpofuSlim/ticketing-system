@@ -108,7 +108,11 @@ class BookingServiceTest {
                                        BookingItemRepository itemRepo,
                                        SeatServiceClient seatClient,
                                        ApplicationEventPublisher eventPublisher) {
-        return new BookingService(bookingRepo, itemRepo, seatClient, eventPublisher);
+        // Real QrCodeGenerator — fast (in-memory ZXing) and lets us assert
+        // qrCode round-trips without mocking. Tests that don't care about
+        // QRs simply ignore the field.
+        return new BookingService(bookingRepo, itemRepo, seatClient, eventPublisher,
+                new QrCodeGenerator());
     }
 
     @Test
@@ -521,6 +525,26 @@ class BookingServiceTest {
 
         assertEquals(Booking.BookingStatus.CANCELLED, booking.getStatus());
         assertNull(booking.getExpiresAt());
+    }
+
+    @Test
+    void createBooking_attachesPerSeatQrCodeToEachItem() {
+        RequestFixture fx = request(BigDecimal.TEN, BigDecimal.TEN);
+        BookingService service = newService(mock(BookingRepository.class),
+                mock(BookingItemRepository.class), stubClient(fx.lookups));
+
+        BookingResponseDTO resp = service.createBooking("u@example.com", 4, fx.request);
+
+        assertEquals(2, resp.getItems().size());
+        for (var item : resp.getItems()) {
+            assertNotNull(item.getQrCode(), "every item should have a QR code");
+            assertTrue(item.getQrCode().startsWith("data:image/png;base64,"),
+                    "QR should be a base64 PNG data URI; got: "
+                            + item.getQrCode().substring(0, Math.min(40, item.getQrCode().length())));
+        }
+        // QR codes should be unique per ticket — they encode unique ticket numbers.
+        long uniqueQrs = resp.getItems().stream().map(i -> i.getQrCode()).distinct().count();
+        assertEquals(resp.getItems().size(), uniqueQrs, "each ticket gets its own QR");
     }
 
     @Test
