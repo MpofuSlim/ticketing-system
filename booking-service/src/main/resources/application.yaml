@@ -119,6 +119,16 @@ seat-service:
   url: ${SEAT_SERVICE_URL:http://localhost:8083}
 
 app:
+  booking:
+    # How long a PENDING booking holds its seats before the expiration
+    # scheduler auto-cancels it. Set to 5 minutes by default — matches
+    # seat-service's 5-min lock TTL.
+    hold-ttl-minutes: ${BOOKING_HOLD_TTL_MINUTES:5}
+    # How often the expiration scheduler scans for PENDING bookings whose
+    # hold has lapsed. 30s lag on a 5-min TTL is invisible to users; lower
+    # if you want tighter timing, raise to ease DB load. Tune with ShedLock
+    # when running multiple replicas (avoids duplicate work per tick).
+    expiration-poll-interval-ms: ${BOOKING_EXPIRATION_POLL_MS:30000}
   idempotency:
     # Set to "redis" for shared idempotency across replicas. Defaults to
     # in-memory so local dev and unit tests work without Redis.

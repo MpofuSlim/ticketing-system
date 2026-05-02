@@ -30,4 +30,7 @@ public class CategoryBookingDTO {
     private BigDecimal priceAtBooking;
     private LocalDateTime bookedAt;
     private LocalDateTime updatedAt;
+    // For PENDING bookings: the instant the seat hold lapses. Null for
+    // CONFIRMED (paid) and CANCELLED bookings.
+    private LocalDateTime expiresAt;
 }

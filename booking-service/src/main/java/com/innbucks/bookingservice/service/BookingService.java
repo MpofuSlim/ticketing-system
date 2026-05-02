@@ -33,6 +33,13 @@ public class BookingService {
     private static final int TIER_3_MAX_SEATS = 6;
     private static final int TIER_4_MAX_SEATS = 10;
 
+    // How long a PENDING booking holds its seats before the expiration
+    // scheduler auto-cancels it. Java-side default of 5 means unit tests that
+    // construct BookingService with `new` (no Spring) get a sensible value;
+    // Spring overrides via @Value at runtime.
+    @org.springframework.beans.factory.annotation.Value("${app.booking.hold-ttl-minutes:5}")
+    private long holdTtlMinutes = 5;
+
     @Transactional
     public BookingResponseDTO createBooking(
             String userEmail,
@@ -110,12 +117,18 @@ public class BookingService {
 
         String confirmationNumber = generateConfirmationNumber();
 
+        // Seats are held for holdTtlMinutes; if no /confirm (= payment) lands
+        // by then, the expiration scheduler flips the booking to CANCELLED
+        // so the seats are usable by other customers again.
+        LocalDateTime expiresAt = LocalDateTime.now().plusMinutes(holdTtlMinutes);
+
         Booking booking = Booking.builder()
                 .userEmail(userEmail)
                 .eventId(request.getEventId())
                 .confirmationNumber(confirmationNumber)
                 .status(Booking.BookingStatus.PENDING)
                 .totalAmount(total)
+                .expiresAt(expiresAt)
                 .build();
 
         bookingRepository.save(booking);
@@ -185,6 +198,7 @@ public class BookingService {
                 .priceAtBooking(item.getPriceAtBooking())
                 .bookedAt(b.getCreatedAt())
                 .updatedAt(b.getUpdatedAt())
+                .expiresAt(b.getExpiresAt())
                 .build();
     }
 
@@ -252,6 +266,7 @@ public class BookingService {
         }
 
         booking.setStatus(Booking.BookingStatus.CANCELLED);
+        booking.setExpiresAt(null); // hold no longer applicable
         bookingRepository.save(booking);
 
         eventPublisher.publishEvent(BookingDomainEvent.BookingCancelled.of(booking));
@@ -275,7 +290,19 @@ public class BookingService {
             throw new RuntimeException("Only pending bookings can be confirmed");
         }
 
+        // Reject confirms that arrive after the seat hold has lapsed — the
+        // expiration scheduler may not have run yet, but the lock is gone.
+        if (booking.getExpiresAt() != null
+                && booking.getExpiresAt().isBefore(LocalDateTime.now())) {
+            log.warn("Confirm rejected, hold expired bookingId={} expiredAt={}",
+                    bookingId, booking.getExpiresAt());
+            throw new RuntimeException(
+                    "Seat hold expired — please create a new booking and pay within "
+                            + holdTtlMinutes + " minutes");
+        }
+
         booking.setStatus(Booking.BookingStatus.CONFIRMED);
+        booking.setExpiresAt(null); // paid — hold no longer applicable
         bookingRepository.save(booking);
 
         eventPublisher.publishEvent(BookingDomainEvent.BookingConfirmed.of(booking));
@@ -398,6 +425,7 @@ public class BookingService {
                 .items(itemDTOs)
                 .createdAt(booking.getCreatedAt())
                 .updatedAt(booking.getUpdatedAt())
+                .expiresAt(booking.getExpiresAt())
                 .build();
     }
 }

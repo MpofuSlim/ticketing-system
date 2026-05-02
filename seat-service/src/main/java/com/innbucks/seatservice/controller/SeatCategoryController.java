@@ -174,9 +174,13 @@ public class SeatCategoryController {
                                           "bookedSeats": 55,
                                           "totalBookings": 53,
                                           "activeBookings": 50,
+                                          "pendingBookings": 3,
+                                          "paidBookings": 47,
                                           "cancelledBookings": 3,
                                           "grossRevenue": 5300.00,
                                           "netRevenue": 5000.00,
+                                          "pendingRevenue": 300.00,
+                                          "paidRevenue": 4700.00,
                                           "potentialRevenue": 8000.00,
                                           "mostRecentBookingAt": "2026-05-02T15:45:00"
                                         },
@@ -197,9 +201,13 @@ public class SeatCategoryController {
                                             "bookings": {
                                               "totalRecords": 38,
                                               "activeRecords": 35,
+                                              "pendingRecords": 2,
+                                              "paidRecords": 33,
                                               "cancelledRecords": 3,
                                               "grossRevenue": 3800.00,
                                               "netRevenue": 3500.00,
+                                              "pendingRevenue": 200.00,
+                                              "paidRevenue": 3300.00,
                                               "potentialRevenue": 5000.00,
                                               "mostRecentBookingAt": "2026-05-02T15:45:00",
                                               "pageNumber": 0,
@@ -220,7 +228,25 @@ public class SeatCategoryController {
                                                   "ticketNumber": "20260502-12345A",
                                                   "priceAtBooking": 100.00,
                                                   "bookedAt": "2026-05-02T15:45:00",
-                                                  "updatedAt": "2026-05-02T15:45:00"
+                                                  "updatedAt": "2026-05-02T15:45:00",
+                                                  "expiresAt": null
+                                                },
+                                                {
+                                                  "bookingId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                                  "userEmail": "bob@example.com",
+                                                  "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                                  "status": "PENDING",
+                                                  "confirmationNumber": "INN-20260502-EF34GH",
+                                                  "seatId": "22222222-3333-4444-5555-666666666666",
+                                                  "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                                  "categoryName": "VIP",
+                                                  "rowLabel": "A",
+                                                  "seatNumber": 13,
+                                                  "ticketNumber": "20260502-67890B",
+                                                  "priceAtBooking": 100.00,
+                                                  "bookedAt": "2026-05-02T15:43:30",
+                                                  "updatedAt": "2026-05-02T15:43:30",
+                                                  "expiresAt": "2026-05-02T15:48:30"
                                                 }
                                               ]
                                             }
@@ -241,9 +267,13 @@ public class SeatCategoryController {
                                             "bookings": {
                                               "totalRecords": 15,
                                               "activeRecords": 15,
+                                              "pendingRecords": 1,
+                                              "paidRecords": 14,
                                               "cancelledRecords": 0,
                                               "grossRevenue": 1500.00,
                                               "netRevenue": 1500.00,
+                                              "pendingRevenue": 100.00,
+                                              "paidRevenue": 1400.00,
                                               "potentialRevenue": 3000.00,
                                               "mostRecentBookingAt": "2026-05-02T14:00:00",
                                               "pageNumber": 0,

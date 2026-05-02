@@ -163,6 +163,47 @@ class SeatCategoryAnalyticsServiceTest {
     }
 
     @Test
+    void getEventAnalytics_splitsRevenueIntoPendingAndPaidBuckets() {
+        SeatCategoryRepository categoryRepo = mock(SeatCategoryRepository.class);
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        BookingServiceClient bookingClient = mock(BookingServiceClient.class);
+
+        when(categoryRepo.findByEventIdAndDeletedFalse(EVENT_ID)).thenReturn(List.of(
+                category(CATEGORY_VIP, "VIP", 5, 0, new BigDecimal("100.00"))
+        ));
+        when(seatRepo.findByCategoryId(any())).thenReturn(List.of());
+        when(bookingClient.fetchBookingsByEvent(eq(EVENT_ID), any())).thenReturn(Optional.of(List.of(
+                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.PENDING,   new BigDecimal("100.00"), LocalDateTime.now().minusMinutes(1)),
+                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.PENDING,   new BigDecimal("100.00"), LocalDateTime.now().minusMinutes(2)),
+                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.CONFIRMED, new BigDecimal("100.00"), LocalDateTime.now().minusDays(1)),
+                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.CANCELLED, new BigDecimal("100.00"), LocalDateTime.now().minusDays(3))
+        )));
+
+        EventAnalyticsDTO result = newService(categoryRepo, seatRepo, bookingClient)
+                .getEventAnalytics(EVENT_ID, 0, 20, null);
+
+        EventAnalyticsDTO.BookingStats stats = result.getCategories().get(0).getBookings();
+        // Counts: 4 total, 3 active (2 pending + 1 paid), 1 cancelled.
+        assertEquals(4, stats.getTotalRecords());
+        assertEquals(3, stats.getActiveRecords());
+        assertEquals(2, stats.getPendingRecords());
+        assertEquals(1, stats.getPaidRecords());
+        assertEquals(1, stats.getCancelledRecords());
+        // Revenue: gross=400 (everything), net=300 (non-cancelled),
+        //          pendingRevenue=200 (held only), paidRevenue=100 (real money in).
+        assertEquals(0, new BigDecimal("400.00").compareTo(stats.getGrossRevenue()));
+        assertEquals(0, new BigDecimal("300.00").compareTo(stats.getNetRevenue()));
+        assertEquals(0, new BigDecimal("200.00").compareTo(stats.getPendingRevenue()));
+        assertEquals(0, new BigDecimal("100.00").compareTo(stats.getPaidRevenue()));
+
+        // Event rollup carries the same buckets through.
+        assertEquals(2, result.getTotals().getPendingBookings());
+        assertEquals(1, result.getTotals().getPaidBookings());
+        assertEquals(0, new BigDecimal("200.00").compareTo(result.getTotals().getPendingRevenue()));
+        assertEquals(0, new BigDecimal("100.00").compareTo(result.getTotals().getPaidRevenue()));
+    }
+
+    @Test
     void getEventAnalytics_paginatesBookingsListPerCategoryAndKeepsAggregatesAcrossFullSet() {
         SeatCategoryRepository categoryRepo = mock(SeatCategoryRepository.class);
         SeatRepository seatRepo = mock(SeatRepository.class);

@@ -22,4 +22,8 @@ public class BookingResponseDTO {
     private List<BookingItemDTO> items; // each item has its own ticketNumber
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+    // Set on PENDING bookings; the seat hold lapses at this instant and the
+    // expiration scheduler will flip the booking to CANCELLED. Null after
+    // the booking is paid (CONFIRMED) or once it's been cancelled.
+    private LocalDateTime expiresAt;
 }

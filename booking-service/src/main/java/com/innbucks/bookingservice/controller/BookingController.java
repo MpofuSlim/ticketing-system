@@ -73,7 +73,8 @@ public class BookingController {
                                           }
                                         ],
                                         "createdAt": "2026-05-02T15:45:00",
-                                        "updatedAt": "2026-05-02T15:45:00"
+                                        "updatedAt": "2026-05-02T15:45:00",
+                                        "expiresAt": "2026-05-02T15:50:00"
                                       }
                                     }
                                     """)
@@ -257,7 +258,8 @@ public class BookingController {
                                           "ticketNumber": "20260502-12345A",
                                           "priceAtBooking": 100.00,
                                           "bookedAt": "2026-05-02T15:45:00",
-                                          "updatedAt": "2026-05-02T15:45:00"
+                                          "updatedAt": "2026-05-02T15:45:00",
+                                          "expiresAt": null
                                         },
                                         {
                                           "bookingId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
@@ -273,7 +275,8 @@ public class BookingController {
                                           "ticketNumber": "20260501-67890B",
                                           "priceAtBooking": 100.00,
                                           "bookedAt": "2026-05-01T10:30:00",
-                                          "updatedAt": "2026-05-01T11:00:00"
+                                          "updatedAt": "2026-05-01T11:00:00",
+                                          "expiresAt": null
                                         }
                                       ]
                                     }
@@ -324,7 +327,8 @@ public class BookingController {
                                           "ticketNumber": "20260502-12345A",
                                           "priceAtBooking": 100.00,
                                           "bookedAt": "2026-05-02T15:45:00",
-                                          "updatedAt": "2026-05-02T15:45:00"
+                                          "updatedAt": "2026-05-02T15:45:00",
+                                          "expiresAt": null
                                         },
                                         {
                                           "bookingId": "c5d1e3f4-3456-7890-abcd-ef0123456789",
@@ -340,7 +344,8 @@ public class BookingController {
                                           "ticketNumber": "20260502-99999C",
                                           "priceAtBooking": 60.00,
                                           "bookedAt": "2026-05-02T14:00:00",
-                                          "updatedAt": "2026-05-02T14:00:00"
+                                          "updatedAt": "2026-05-02T14:00:00",
+                                          "expiresAt": "2026-05-02T14:05:00"
                                         }
                                       ]
                                     }

@@ -442,6 +442,88 @@ class BookingServiceTest {
     }
 
     @Test
+    void createBooking_setsExpiresAtToHoldWindowFromNow() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        RequestFixture fx = request(new BigDecimal("10.00"));
+        BookingService service = newService(bookingRepo, itemRepo, stubClient(fx.lookups));
+
+        java.time.LocalDateTime before = java.time.LocalDateTime.now();
+        BookingResponseDTO resp = service.createBooking("u@example.com", 4, fx.request);
+        java.time.LocalDateTime after = java.time.LocalDateTime.now();
+
+        // Default holdTtlMinutes is 5 → expiresAt is roughly 5 min from now.
+        assertNotNull(resp.getExpiresAt());
+        assertTrue(resp.getExpiresAt().isAfter(before.plusMinutes(4).plusSeconds(50)));
+        assertTrue(resp.getExpiresAt().isBefore(after.plusMinutes(5).plusSeconds(10)));
+        assertEquals(Booking.BookingStatus.PENDING, resp.getStatus());
+
+        // The Booking entity persisted to the repo also carries it.
+        ArgumentCaptor<Booking> captor = ArgumentCaptor.forClass(Booking.class);
+        verify(bookingRepo, atLeastOnce()).save(captor.capture());
+        assertNotNull(captor.getValue().getExpiresAt());
+    }
+
+    @Test
+    void confirmBooking_clearsExpiresAtOnceBookingIsPaid() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+
+        UUID id = UUID.randomUUID();
+        Booking booking = Booking.builder().id(id).userEmail("u@example.com")
+                .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN)
+                .expiresAt(java.time.LocalDateTime.now().plusMinutes(3))
+                .build();
+        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+
+        BookingResponseDTO resp = service.confirmBooking(id);
+
+        assertEquals(Booking.BookingStatus.CONFIRMED, resp.getStatus());
+        assertNull(resp.getExpiresAt(), "expiresAt should be null on a paid booking");
+        assertNull(booking.getExpiresAt());
+    }
+
+    @Test
+    void confirmBooking_rejectsWhenHoldHasAlreadyExpired() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+
+        UUID id = UUID.randomUUID();
+        Booking booking = Booking.builder().id(id).userEmail("u@example.com")
+                .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN)
+                .expiresAt(java.time.LocalDateTime.now().minusSeconds(1)) // already past
+                .build();
+        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+
+        RuntimeException ex = assertThrows(RuntimeException.class, () -> service.confirmBooking(id));
+        assertTrue(ex.getMessage().toLowerCase().contains("expired"));
+        // Booking stays PENDING — the expiration scheduler will pick it up.
+        assertEquals(Booking.BookingStatus.PENDING, booking.getStatus());
+        verify(bookingRepo, never()).save(any());
+    }
+
+    @Test
+    void cancelBooking_clearsExpiresAtSoExpirationSchedulerSkipsIt() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+
+        UUID id = UUID.randomUUID();
+        Booking booking = Booking.builder().id(id).userEmail("u@example.com")
+                .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN)
+                .expiresAt(java.time.LocalDateTime.now().plusMinutes(3))
+                .build();
+        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+
+        service.cancelBooking(id, "u@example.com");
+
+        assertEquals(Booking.BookingStatus.CANCELLED, booking.getStatus());
+        assertNull(booking.getExpiresAt());
+    }
+
+    @Test
     void getBookingsByCategory_returnsOneRowPerBookingItemFlattened() {
         BookingRepository bookingRepo = mock(BookingRepository.class);
         BookingItemRepository itemRepo = mock(BookingItemRepository.class);

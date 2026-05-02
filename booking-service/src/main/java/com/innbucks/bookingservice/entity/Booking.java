@@ -41,6 +41,12 @@ public class Booking {
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
 
+    // When a PENDING booking's seat-hold runs out. The expiration scheduler
+    // flips such bookings to CANCELLED and releases the seats. Null for
+    // CONFIRMED (paid — no hold) and for legacy bookings created before the
+    // hold model existed.
+    private LocalDateTime expiresAt;
+
     @PrePersist
     public void onCreate() {
         this.createdAt = LocalDateTime.now();
