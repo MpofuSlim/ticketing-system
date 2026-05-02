@@ -45,6 +45,12 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+      # Redis is used for distributed seat-locks only; we don't have any
+      # @RedisHash-annotated entities. Without this flag Spring Data Redis
+      # tries to classify every Repository<> bean (SeatRepository, etc.) as
+      # a potential Redis repository and logs a noisy INFO warning on each.
+      repositories:
+        enabled: false
 
   lifecycle:
     timeout-per-shutdown-phase: 30s

@@ -45,6 +45,12 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+      # Redis is used for idempotency keys and caching only; we don't have any
+      # @RedisHash-annotated entities. Without this flag Spring Data Redis
+      # tries to classify every Repository<> bean (BookingRepository, etc.) as
+      # a potential Redis repository and logs a noisy INFO warning on each.
+      repositories:
+        enabled: false
 
   # KafkaProducerConfig builds the producer factory + template from this
   # property. Boot 4 no longer auto-configures Kafka, so spring.kafka.*
