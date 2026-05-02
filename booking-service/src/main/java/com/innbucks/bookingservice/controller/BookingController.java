@@ -2,6 +2,7 @@ package com.innbucks.bookingservice.controller;
 
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.BookingResponseDTO;
+import com.innbucks.bookingservice.dto.CategoryBookingDTO;
 import com.innbucks.bookingservice.dto.CreateBookingRequestDTO;
 import com.innbucks.bookingservice.security.MinTier;
 import com.innbucks.bookingservice.service.BookingService;
@@ -14,6 +15,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -103,6 +105,25 @@ public class BookingController {
         log.debug("GET /bookings/{} userEmail={}", id, userEmail);
         return ResponseEntity.ok(ApiResult.ok("Booking retrieved successfully",
                 bookingService.getBookingById(id, userEmail)));
+    }
+
+    @GetMapping("/by-category/{categoryId}")
+    @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
+    @Operation(
+            summary = "List bookings by seat category",
+            description = "Analytics endpoint. Returns one row per booked seat in the given category, " +
+                    "including who bought it and when. Includes CANCELLED bookings — filter client-side if you need " +
+                    "to exclude them. Restricted to TENANT/ADMIN because it exposes customer emails."
+    )
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Bookings returned"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN")
+    })
+    public ResponseEntity<ApiResult<List<CategoryBookingDTO>>> getBookingsByCategory(@PathVariable UUID categoryId) {
+        log.debug("GET /bookings/by-category/{}", categoryId);
+        return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully",
+                bookingService.getBookingsByCategory(categoryId)));
     }
 
     @GetMapping("/confirmation/{number}")

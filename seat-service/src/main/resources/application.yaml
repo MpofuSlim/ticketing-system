@@ -66,6 +66,16 @@ app:
     # local dev and tests work without a running Redis.
     store: ${LOCK_STORE:memory}
 
+# booking-service is queried by the analytics endpoint
+# (GET /seat-categories/{id}/analytics) to enrich the response with who-bought-
+# what data. Configured as an explicit URL because we don't run service
+# discovery. Failures are tolerated — analytics still returns category + seat
+# stats, with bookingServiceReachable=false in the payload.
+booking-service:
+  base-url: ${BOOKING_SERVICE_URL:http://localhost:8084}
+  connect-timeout-ms: ${BOOKING_SERVICE_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${BOOKING_SERVICE_READ_TIMEOUT_MS:5000}
+
 jwt:
   secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
   expiration: ${JWT_EXPIRATION_MS:86400000}

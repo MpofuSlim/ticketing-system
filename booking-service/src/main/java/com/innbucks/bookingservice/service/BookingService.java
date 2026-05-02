@@ -146,6 +146,37 @@ public class BookingService {
         return toDTO(booking);
     }
 
+    // Returns one DTO per booked seat in the category, regardless of booking
+    // status. Consumers (e.g. seat-service analytics) decide whether to
+    // exclude CANCELLED themselves.
+    public List<CategoryBookingDTO> getBookingsByCategory(UUID categoryId) {
+        log.debug("Fetching bookings by category categoryId={}", categoryId);
+        return bookingItemRepository.findByCategoryIdWithBooking(categoryId)
+                .stream()
+                .map(this::toCategoryBookingDTO)
+                .collect(Collectors.toList());
+    }
+
+    private CategoryBookingDTO toCategoryBookingDTO(BookingItem item) {
+        Booking b = item.getBooking();
+        return CategoryBookingDTO.builder()
+                .bookingId(b.getId())
+                .userEmail(b.getUserEmail())
+                .eventId(b.getEventId())
+                .status(b.getStatus())
+                .confirmationNumber(b.getConfirmationNumber())
+                .seatId(item.getSeatId())
+                .categoryId(item.getCategoryId())
+                .categoryName(item.getCategoryName())
+                .rowLabel(item.getRowLabel())
+                .seatNumber(item.getSeatNumber())
+                .ticketNumber(item.getTicketNumber())
+                .priceAtBooking(item.getPriceAtBooking())
+                .bookedAt(b.getCreatedAt())
+                .updatedAt(b.getUpdatedAt())
+                .build();
+    }
+
     public List<BookingResponseDTO> getMyBookings(String userEmail) {
         log.debug("Fetching bookings userEmail={}", userEmail);
         return bookingRepository.findByUserEmail(userEmail)

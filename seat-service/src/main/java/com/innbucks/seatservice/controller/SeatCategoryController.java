@@ -3,7 +3,11 @@ package com.innbucks.seatservice.controller;
 import com.innbucks.seatservice.dto.ApiResult;
 import com.innbucks.seatservice.dto.CreateCategoryRequestDTO;
 import com.innbucks.seatservice.dto.CreateCategoryResponseDTO;
+import com.innbucks.seatservice.dto.SeatCategoryAnalyticsDTO;
+import com.innbucks.seatservice.service.SeatCategoryAnalyticsService;
 import com.innbucks.seatservice.service.SeatCategoryService;
+import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.http.HttpHeaders;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
@@ -35,6 +39,7 @@ import java.util.UUID;
 public class SeatCategoryController {
 
     private final SeatCategoryService categoryService;
+    private final SeatCategoryAnalyticsService analyticsService;
 
     @GetMapping
     @SecurityRequirements()
@@ -70,6 +75,35 @@ public class SeatCategoryController {
         CreateCategoryResponseDTO created = categoryService.createCategory(request);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Seat category created successfully", created));
+    }
+
+    @GetMapping("/{id}/analytics")
+    @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
+    @Operation(
+            summary = "Get category analytics",
+            description = "Returns aggregated analytics for a seat category: " +
+                    "category metadata, per-status seat counts, plus bookings + revenue " +
+                    "fetched from booking-service (who bought tickets, when, status). " +
+                    "Restricted to TENANT/ADMIN because the response includes customer emails. " +
+                    "Tolerates booking-service downtime — `bookingServiceReachable=false` " +
+                    "indicates the booking section reflects no-data, not zero-bookings."
+    )
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Analytics returned"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Category not found or deleted")
+    })
+    public ResponseEntity<ApiResult<SeatCategoryAnalyticsDTO>> getCategoryAnalytics(
+            @PathVariable UUID id,
+            HttpServletRequest httpRequest
+    ) {
+        log.info("GET /seat-categories/{}/analytics", id);
+        // Forward the inbound Authorization header so booking-service's
+        // matching role check sees the same caller.
+        String authHeader = httpRequest.getHeader(HttpHeaders.AUTHORIZATION);
+        SeatCategoryAnalyticsDTO analytics = analyticsService.getAnalytics(id, authHeader);
+        return ResponseEntity.ok(ApiResult.ok("Category analytics retrieved successfully", analytics));
     }
 
     @DeleteMapping("/{id}")

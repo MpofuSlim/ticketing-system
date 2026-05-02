@@ -23,4 +23,15 @@ public interface BookingItemRepository extends JpaRepository<BookingItem, UUID> 
             @Param("seatIds") Collection<UUID> seatIds,
             @Param("cancelledStatus") Booking.BookingStatus cancelledStatus
     );
+
+    // Returns every booking item whose seat belongs to the given category.
+    // Joins the parent booking eagerly so callers can read userEmail/status/
+    // createdAt without triggering N+1 lazy-loads. Used by seat-service's
+    // category analytics endpoint.
+    @Query("""
+        SELECT i FROM BookingItem i
+        JOIN FETCH i.booking
+        WHERE i.categoryId = :categoryId
+    """)
+    List<BookingItem> findByCategoryIdWithBooking(@Param("categoryId") UUID categoryId);
 }

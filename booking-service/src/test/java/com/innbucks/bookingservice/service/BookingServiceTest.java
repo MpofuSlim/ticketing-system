@@ -4,6 +4,7 @@ import com.innbucks.bookingservice.client.SeatServiceClient;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.AvailableSeatDTO;
 import com.innbucks.bookingservice.dto.BookingResponseDTO;
+import com.innbucks.bookingservice.dto.CategoryBookingDTO;
 import com.innbucks.bookingservice.dto.CreateBookingRequestDTO;
 import com.innbucks.bookingservice.dto.SeatLookupResponseDTO;
 import com.innbucks.bookingservice.entity.Booking;
@@ -438,6 +439,61 @@ class BookingServiceTest {
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
         verify(publisher).publishEvent(captor.capture());
         assertInstanceOf(BookingDomainEvent.BookingConfirmed.class, captor.getValue());
+    }
+
+    @Test
+    void getBookingsByCategory_returnsOneRowPerBookingItemFlattened() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        BookingService service = newService(bookingRepo, itemRepo, mock(SeatServiceClient.class));
+
+        UUID categoryId = UUID.randomUUID();
+        UUID eventId = UUID.randomUUID();
+        UUID bookingId1 = UUID.randomUUID();
+        UUID bookingId2 = UUID.randomUUID();
+        Booking b1 = Booking.builder()
+                .id(bookingId1).userEmail("alice@example.com").eventId(eventId)
+                .confirmationNumber("INN-1").status(Booking.BookingStatus.CONFIRMED)
+                .totalAmount(new BigDecimal("100.00")).build();
+        Booking b2 = Booking.builder()
+                .id(bookingId2).userEmail("bob@example.com").eventId(eventId)
+                .confirmationNumber("INN-2").status(Booking.BookingStatus.CANCELLED)
+                .totalAmount(new BigDecimal("50.00")).build();
+        BookingItem item1 = BookingItem.builder()
+                .booking(b1).seatId(UUID.randomUUID()).categoryId(categoryId)
+                .categoryName("VIP").rowLabel("A").seatNumber(1).ticketNumber("T1")
+                .priceAtBooking(new BigDecimal("100.00")).build();
+        BookingItem item2 = BookingItem.builder()
+                .booking(b2).seatId(UUID.randomUUID()).categoryId(categoryId)
+                .categoryName("VIP").rowLabel("A").seatNumber(2).ticketNumber("T2")
+                .priceAtBooking(new BigDecimal("50.00")).build();
+        when(itemRepo.findByCategoryIdWithBooking(categoryId)).thenReturn(List.of(item1, item2));
+
+        List<CategoryBookingDTO> result = service.getBookingsByCategory(categoryId);
+
+        assertEquals(2, result.size());
+        // Booking-level fields surface on every row.
+        assertEquals("alice@example.com", result.get(0).getUserEmail());
+        assertEquals(Booking.BookingStatus.CONFIRMED, result.get(0).getStatus());
+        assertEquals("INN-1", result.get(0).getConfirmationNumber());
+        // Seat-level fields surface too.
+        assertEquals("T1", result.get(0).getTicketNumber());
+        assertEquals(0, new BigDecimal("100.00").compareTo(result.get(0).getPriceAtBooking()));
+        // Cancelled bookings are NOT filtered out — caller decides.
+        assertEquals(Booking.BookingStatus.CANCELLED, result.get(1).getStatus());
+    }
+
+    @Test
+    void getBookingsByCategory_returnsEmptyListWhenNoneFound() {
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        BookingService service = newService(mock(BookingRepository.class), itemRepo, mock(SeatServiceClient.class));
+        UUID categoryId = UUID.randomUUID();
+        when(itemRepo.findByCategoryIdWithBooking(categoryId)).thenReturn(List.of());
+
+        List<CategoryBookingDTO> result = service.getBookingsByCategory(categoryId);
+
+        assertNotNull(result);
+        assertTrue(result.isEmpty());
     }
 
     @Test
