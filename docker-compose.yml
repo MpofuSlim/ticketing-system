@@ -220,8 +220,10 @@ services:
       retries: 10
       start_period: 45s
 
-  # Payment service is intentionally unimplemented for staging.
-  # Start it with: docker compose --profile payments up
+  # Dummy payment-service: POST /payments confirms the matching booking via
+  # booking-service so the booking journey can complete end-to-end. No real
+  # processor — every call "succeeds" if booking-service accepts the confirm.
+  # Start with: docker compose --profile payments up
   payment-service:
     profiles: ["payments"]
     build:
@@ -230,9 +232,9 @@ services:
     image: ticketing-payment-service:dev
     container_name: innbucks-payment-service
     restart: unless-stopped
-    # depends_on:
-    #   postgres:
-    #     condition: service_healthy
+    depends_on:
+      booking-service:
+        condition: service_healthy
     environment:
       # --- PostgreSQL (disabled — service runs on H2 in-memory). ---
       # SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/payment_service
@@ -240,6 +242,7 @@ services:
       # SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
       # SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
       SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      BOOKING_SERVICE_URL: http://booking-service:8084
     ports:
       - "8085:8085"
     healthcheck:

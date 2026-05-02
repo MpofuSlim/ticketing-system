@@ -4,6 +4,20 @@ spring:
   lifecycle:
     timeout-per-shutdown-phase: 30s
 
+# booking-service is called by POST /payments to flip the matching booking
+# from PENDING to CONFIRMED. Default targets host:8084 for local dev; docker-
+# compose overrides to http://booking-service:8084 inside the network.
+booking-service:
+  base-url: ${BOOKING_SERVICE_URL:http://localhost:8084}
+  connect-timeout-ms: ${BOOKING_SERVICE_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${BOOKING_SERVICE_READ_TIMEOUT_MS:5000}
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui/index.html
+  api-docs:
+    path: /v3/api-docs
+
 server:
   port: 8085
   shutdown: graceful
