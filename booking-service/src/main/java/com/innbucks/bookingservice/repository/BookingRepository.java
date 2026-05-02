@@ -18,6 +18,11 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
 
     List<Booking> findByEventId(UUID eventId);
 
+    // Phone-number lookup (most-recent first). One phone may have many
+    // bookings across events / over time, so this returns a list rather than
+    // an Optional. See GET /bookings/phone/{phoneNumber}.
+    List<Booking> findByPhoneNumberOrderByCreatedAtDesc(String phoneNumber);
+
     // PENDING bookings whose seat hold has lapsed. Used by the expiration
     // scheduler to auto-cancel them and publish BookingCancelled events.
     @Query("""

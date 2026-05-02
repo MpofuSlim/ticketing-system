@@ -33,6 +33,13 @@ public class JwtUtil {
         return getClaims(token).get("verified", Boolean.class);
     }
 
+    // user-service stamps the customer's phoneNumber into the JWT (login /
+    // refresh both set it). May be null for older tokens or system users
+    // without a phone on file.
+    public String extractPhoneNumber(String token) {
+        return getClaims(token).get("phoneNumber", String.class);
+    }
+
     public boolean isTokenValid(String token) {
         try {
             getClaims(token);

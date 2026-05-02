@@ -45,6 +45,7 @@ public class BookingService {
     public BookingResponseDTO createBooking(
             String userEmail,
             int tier,
+            String phoneNumber,
             CreateBookingRequestDTO request
     ) {
         log.info("Creating booking userEmail={} tier={} eventId={} seats={}",
@@ -125,6 +126,7 @@ public class BookingService {
 
         Booking booking = Booking.builder()
                 .userEmail(userEmail)
+                .phoneNumber(phoneNumber)
                 .eventId(request.getEventId())
                 .confirmationNumber(confirmationNumber)
                 .status(Booking.BookingStatus.PENDING)
@@ -206,6 +208,16 @@ public class BookingService {
     public List<BookingResponseDTO> getMyBookings(String userEmail) {
         log.debug("Fetching bookings userEmail={}", userEmail);
         return bookingRepository.findByUserEmail(userEmail)
+                .stream()
+                .map(this::toDTO)
+                .collect(Collectors.toList());
+    }
+
+    // Phone-number lookup (most-recent first). One phone may have many
+    // bookings; the caller decides how to render the list.
+    public List<BookingResponseDTO> getByPhoneNumber(String phoneNumber) {
+        log.debug("Fetching bookings phoneNumber={}", phoneNumber);
+        return bookingRepository.findByPhoneNumberOrderByCreatedAtDesc(phoneNumber)
                 .stream()
                 .map(this::toDTO)
                 .collect(Collectors.toList());
@@ -420,6 +432,7 @@ public class BookingService {
         return BookingResponseDTO.builder()
                 .id(booking.getId())
                 .userEmail(booking.getUserEmail())
+                .phoneNumber(booking.getPhoneNumber())
                 .eventId(booking.getEventId())
                 .confirmationNumber(booking.getConfirmationNumber())
                 .status(booking.getStatus())

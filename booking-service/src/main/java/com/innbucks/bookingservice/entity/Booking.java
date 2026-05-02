@@ -22,6 +22,13 @@ public class Booking {
     @Column(nullable = false)
     private String userEmail;
 
+    // Captured from the JWT's phoneNumber claim at booking time. Optional —
+    // some JWTs (system users, older tokens) don't carry the claim, so the
+    // booking is still valid without one. Indexed so `findByPhoneNumber*`
+    // lookups don't full-scan.
+    @Column
+    private String phoneNumber;
+
     @Column(nullable = false)
     private UUID eventId;
 

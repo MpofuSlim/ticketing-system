@@ -15,6 +15,9 @@ public class BookingResponseDTO {
 
     private UUID id;
     private String userEmail;
+    // Set from the JWT phoneNumber claim at booking time. May be null for
+    // system users or older tokens that don't carry the claim.
+    private String phoneNumber;
     private UUID eventId;
     private String confirmationNumber;
     private Booking.BookingStatus status;

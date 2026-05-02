@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -155,7 +156,8 @@ class AuthServiceTest {
                 .mfaEnabled(false).build();
         when(userRepo.findByEmail("u@example.com")).thenReturn(Optional.of(user));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
-        when(jwt.generateToken("u@example.com", "SHOP_USER", 4, true)).thenReturn("tok");
+        // User has email only, no phone — 5th arg (phoneNumber) is null.
+        when(jwt.generateToken("u@example.com", "SHOP_USER", 4, true, null)).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("u@example.com"); req.setPassword("pw");
@@ -185,7 +187,8 @@ class AuthServiceTest {
         when(userRepo.findByPhoneNumber("0777000099")).thenReturn(Optional.of(user));
         when(customerRepo.findByUserId(7L)).thenReturn(Optional.of(profile));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
-        when(jwt.generateToken("0777000099", "CUSTOMER", 2, false)).thenReturn("tok");
+        // User has phone only — same value flows through subject AND phoneNumber claim.
+        when(jwt.generateToken("0777000099", "CUSTOMER", 2, false, "0777000099")).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("0777000099"); req.setPassword("pw");
@@ -244,7 +247,8 @@ class AuthServiceTest {
         when(userRepo.findByEmail(any())).thenReturn(Optional.of(user));
         when(customerRepo.findByUserId(1L)).thenReturn(Optional.of(profile));
         when(encoder.matches(any(), any())).thenReturn(true);
-        when(jwt.generateToken(eq("u@example.com"), eq("CUSTOMER"), eq(1), eq(false))).thenReturn("tok");
+        // No phone on the user → phoneNumber arg is null.
+        when(jwt.generateToken(eq("u@example.com"), eq("CUSTOMER"), eq(1), eq(false), isNull())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("u@example.com"); req.setPassword("pw");

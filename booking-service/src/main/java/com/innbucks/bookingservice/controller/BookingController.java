@@ -4,6 +4,7 @@ import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.BookingResponseDTO;
 import com.innbucks.bookingservice.dto.CategoryBookingDTO;
 import com.innbucks.bookingservice.dto.CreateBookingRequestDTO;
+import com.innbucks.bookingservice.security.JwtAuthDetails;
 import com.innbucks.bookingservice.security.MinTier;
 import com.innbucks.bookingservice.service.BookingService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -91,11 +92,17 @@ public class BookingController {
     ) {
         String userEmail = authentication.getName();
         int tier = extractTier(authentication);
-        log.info("POST /bookings userEmail={} tier={} eventId={} seats={}",
-                userEmail, tier, request.getEventId(), request.getSeats().size());
-        BookingResponseDTO created = bookingService.createBooking(userEmail, tier, request);
+        String phoneNumber = extractPhoneNumber(authentication);
+        log.info("POST /bookings userEmail={} tier={} phoneNumber={} eventId={} seats={}",
+                userEmail, tier, phoneNumber, request.getEventId(), request.getSeats().size());
+        BookingResponseDTO created = bookingService.createBooking(userEmail, tier, phoneNumber, request);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Booking created successfully", created));
+    }
+
+    private String extractPhoneNumber(Authentication authentication) {
+        Object details = authentication.getDetails();
+        return details instanceof JwtAuthDetails d ? d.phoneNumber() : null;
     }
 
     private int extractTier(Authentication authentication) {
@@ -411,6 +418,65 @@ public class BookingController {
         log.debug("GET /bookings/confirmation/{}", number);
         return ResponseEntity.ok(ApiResult.ok("Booking retrieved successfully",
                 bookingService.getByConfirmationNumber(number)));
+    }
+
+    @GetMapping("/phone/{phoneNumber}")
+    @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
+    @Operation(
+            summary = "Lookup bookings by phone number",
+            description = "Returns every booking attached to the given phone number, most recent first. " +
+                    "Phone is set from the JWT's `phoneNumber` claim at booking time. " +
+                    "Restricted to TENANT/ADMIN — phone numbers aren't secret like confirmation numbers, " +
+                    "so this is not a public lookup. Empty list if no bookings exist for the phone."
+    )
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Bookings returned (may be empty)",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = BookingResponseDTO.class),
+                            examples = @ExampleObject(name = "Bookings by phone", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Bookings retrieved successfully",
+                                      "data": [
+                                        {
+                                          "id": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                          "userEmail": "alice@example.com",
+                                          "phoneNumber": "+254700000000",
+                                          "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                          "confirmationNumber": "INN-20260502-AB12CD",
+                                          "status": "CONFIRMED",
+                                          "totalAmount": 100.00,
+                                          "items": [
+                                            {
+                                              "seatId": "11111111-2222-3333-4444-555555555555",
+                                              "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                              "categoryName": "VIP",
+                                              "rowLabel": "A",
+                                              "seatNumber": 12,
+                                              "priceAtBooking": 100.00,
+                                              "ticketNumber": "20260502-12345A",
+                                              "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)"
+                                            }
+                                          ],
+                                          "createdAt": "2026-05-02T15:45:00",
+                                          "updatedAt": "2026-05-02T15:50:00",
+                                          "expiresAt": null
+                                        }
+                                      ]
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN")
+    })
+    public ResponseEntity<ApiResult<List<BookingResponseDTO>>> getBookingsByPhoneNumber(@PathVariable String phoneNumber) {
+        log.debug("GET /bookings/phone/{}", phoneNumber);
+        return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully",
+                bookingService.getByPhoneNumber(phoneNumber)));
     }
 
     @PatchMapping("/{id}/cancel")

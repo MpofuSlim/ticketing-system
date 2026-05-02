@@ -121,7 +121,8 @@ public class AuthService {
             verified = true;
         }
 
-        String token = jwtUtil.generateToken(subject, user.getRole().name(), tier, verified);
+        String token = jwtUtil.generateToken(subject, user.getRole().name(), tier, verified,
+                user.getPhoneNumber());
         return AuthResponseDTO.builder()
                 .token(token)
                 .email(user.getEmail())
@@ -160,7 +161,8 @@ public class AuthService {
             verified = true;
         }
 
-        String newToken = jwtUtil.generateToken(subject, user.getRole().name(), tier, verified);
+        String newToken = jwtUtil.generateToken(subject, user.getRole().name(), tier, verified,
+                user.getPhoneNumber());
         log.info("Token refreshed subject={} role={} tier={} verified={}",
                 subject, user.getRole(), tier, verified);
         return AuthResponseDTO.builder()

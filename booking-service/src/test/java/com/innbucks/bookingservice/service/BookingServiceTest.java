@@ -129,7 +129,7 @@ class BookingServiceTest {
                 .thenReturn(List.of(existing));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> service.createBooking("user@example.com", 4, fx.request));
+                () -> service.createBooking("user@example.com", 4, null, fx.request));
         assertTrue(ex.getMessage().toLowerCase().contains("already booked"));
         verify(bookingRepo, never()).save(any());
         verify(itemRepo, never()).saveAll(any());
@@ -142,7 +142,7 @@ class BookingServiceTest {
                 mock(BookingItemRepository.class), stubClient(fx.lookups));
 
         TierRequirementException ex = assertThrows(TierRequirementException.class,
-                () -> service.createBooking("u@example.com", 1, fx.request));
+                () -> service.createBooking("u@example.com", 1, null, fx.request));
         assertTrue(ex.getMessage().toLowerCase().contains("tier"));
         assertEquals(1, ex.getCurrentTier());
         assertEquals(2, ex.getRequiredTier()); // 1 seat fits tier 2's cap of 2
@@ -155,7 +155,7 @@ class BookingServiceTest {
                 mock(BookingItemRepository.class), stubClient(fx.lookups));
 
         TierRequirementException ex = assertThrows(TierRequirementException.class,
-                () -> service.createBooking("u@example.com", 2, fx.request));
+                () -> service.createBooking("u@example.com", 2, null, fx.request));
         assertTrue(ex.getMessage().contains("2 seats"));
         assertEquals(2, ex.getCurrentTier());
         assertEquals(3, ex.getRequiredTier()); // 3 seats need tier 3 (cap 6)
@@ -168,7 +168,7 @@ class BookingServiceTest {
         BookingService service = newService(mock(BookingRepository.class),
                 mock(BookingItemRepository.class), stubClient(fx.lookups));
 
-        BookingResponseDTO resp = service.createBooking("u@example.com", 3, fx.request);
+        BookingResponseDTO resp = service.createBooking("u@example.com", 3, null, fx.request);
 
         assertEquals(6, resp.getItems().size());
     }
@@ -180,7 +180,7 @@ class BookingServiceTest {
         RequestFixture fx = request(new BigDecimal("20.00"), new BigDecimal("15.50"), new BigDecimal("4.50"));
         BookingService service = newService(bookingRepo, itemRepo, stubClient(fx.lookups));
 
-        BookingResponseDTO resp = service.createBooking("user@example.com", 4, fx.request);
+        BookingResponseDTO resp = service.createBooking("user@example.com", 4, null, fx.request);
 
         ArgumentCaptor<Booking> savedBooking = ArgumentCaptor.forClass(Booking.class);
         verify(bookingRepo, atLeastOnce()).save(savedBooking.capture());
@@ -208,7 +208,7 @@ class BookingServiceTest {
         BookingService service = newService(bookingRepo, itemRepo, stubClient(fx.lookups));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> service.createBooking("user@example.com", 4, fx.request));
+                () -> service.createBooking("user@example.com", 4, null, fx.request));
         assertTrue(ex.getMessage().contains("does not belong to event"));
         verify(bookingRepo, never()).save(any());
         verify(itemRepo, never()).saveAll(any());
@@ -226,7 +226,7 @@ class BookingServiceTest {
         BookingService service = newService(bookingRepo, itemRepo, client);
 
         RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> service.createBooking("user@example.com", 4, fx.request));
+                () -> service.createBooking("user@example.com", 4, null, fx.request));
         assertTrue(ex.getMessage().toLowerCase().contains("no available seats"));
         verify(bookingRepo, never()).save(any());
         verify(itemRepo, never()).saveAll(any());
@@ -242,7 +242,7 @@ class BookingServiceTest {
         fx.lookups.get(0).setSeatNumber(42);
         BookingService service = newService(bookingRepo, itemRepo, stubClient(fx.lookups));
 
-        BookingResponseDTO resp = service.createBooking("user@example.com", 4, fx.request);
+        BookingResponseDTO resp = service.createBooking("user@example.com", 4, null, fx.request);
 
         assertEquals(0, new BigDecimal("99.99").compareTo(resp.getTotalAmount()));
         assertEquals("Diamond", resp.getItems().get(0).getCategoryName());
@@ -257,7 +257,7 @@ class BookingServiceTest {
         BookingService service = newService(mock(BookingRepository.class),
                 mock(BookingItemRepository.class), stubClient(fx.lookups));
 
-        BookingResponseDTO resp = service.createBooking("u@example.com", 4, fx.request);
+        BookingResponseDTO resp = service.createBooking("u@example.com", 4, null, fx.request);
 
         long unique = resp.getItems().stream().map(i -> i.getTicketNumber()).distinct().count();
         assertEquals(resp.getItems().size(), unique, "ticket numbers should be unique");
@@ -273,7 +273,7 @@ class BookingServiceTest {
         BookingService service = newService(mock(BookingRepository.class),
                 mock(BookingItemRepository.class), stubClient(fx.lookups));
 
-        BookingResponseDTO resp = service.createBooking("u@example.com", 4, fx.request);
+        BookingResponseDTO resp = service.createBooking("u@example.com", 4, null, fx.request);
 
         // Format: INN-YYYYMMDD-XXXXXX (6 hex chars upper)
         assertTrue(Pattern.matches("INN-\\d{8}-[A-F0-9]{6}", resp.getConfirmationNumber()),
@@ -414,7 +414,7 @@ class BookingServiceTest {
         BookingService service = newService(mock(BookingRepository.class),
                 mock(BookingItemRepository.class), stubClient(fx.lookups), publisher);
 
-        service.createBooking("u@example.com", 4, fx.request);
+        service.createBooking("u@example.com", 4, null, fx.request);
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
         verify(publisher).publishEvent(captor.capture());
@@ -453,7 +453,7 @@ class BookingServiceTest {
         BookingService service = newService(bookingRepo, itemRepo, stubClient(fx.lookups));
 
         java.time.LocalDateTime before = java.time.LocalDateTime.now();
-        BookingResponseDTO resp = service.createBooking("u@example.com", 4, fx.request);
+        BookingResponseDTO resp = service.createBooking("u@example.com", 4, null, fx.request);
         java.time.LocalDateTime after = java.time.LocalDateTime.now();
 
         // Default holdTtlMinutes is 5 → expiresAt is roughly 5 min from now.
@@ -528,12 +528,82 @@ class BookingServiceTest {
     }
 
     @Test
+    void createBooking_stampsPhoneNumberFromJwtOntoBookingAndResponse() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        RequestFixture fx = request(BigDecimal.TEN);
+        BookingService service = newService(bookingRepo, itemRepo, stubClient(fx.lookups));
+
+        BookingResponseDTO resp = service.createBooking(
+                "u@example.com", 4, "+254700000000", fx.request);
+
+        assertEquals("+254700000000", resp.getPhoneNumber(),
+                "phoneNumber from JWT should land on the response");
+        ArgumentCaptor<Booking> captor = ArgumentCaptor.forClass(Booking.class);
+        verify(bookingRepo, atLeastOnce()).save(captor.capture());
+        assertEquals("+254700000000", captor.getValue().getPhoneNumber(),
+                "phoneNumber should be stored on the Booking entity");
+    }
+
+    @Test
+    void createBooking_handlesMissingPhoneNumberClaimGracefully() {
+        // System users / older JWTs don't carry the claim — booking still works.
+        RequestFixture fx = request(BigDecimal.TEN);
+        BookingService service = newService(mock(BookingRepository.class),
+                mock(BookingItemRepository.class), stubClient(fx.lookups));
+
+        BookingResponseDTO resp = service.createBooking("u@example.com", 4, null, fx.request);
+
+        assertNull(resp.getPhoneNumber());
+        assertEquals(Booking.BookingStatus.PENDING, resp.getStatus());
+    }
+
+    @Test
+    void getByPhoneNumber_returnsAllMatchingBookingsMostRecentFirst() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+
+        Booking older = Booking.builder().id(UUID.randomUUID()).userEmail("u@example.com")
+                .phoneNumber("+254700000000").confirmationNumber("INN-1")
+                .status(Booking.BookingStatus.CONFIRMED).totalAmount(BigDecimal.TEN).build();
+        Booking newer = Booking.builder().id(UUID.randomUUID()).userEmail("u@example.com")
+                .phoneNumber("+254700000000").confirmationNumber("INN-2")
+                .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN).build();
+        // Repository orders most-recent-first by contract; assert that order
+        // surfaces unchanged.
+        when(bookingRepo.findByPhoneNumberOrderByCreatedAtDesc("+254700000000"))
+                .thenReturn(List.of(newer, older));
+
+        List<BookingResponseDTO> result = service.getByPhoneNumber("+254700000000");
+
+        assertEquals(2, result.size());
+        assertEquals("INN-2", result.get(0).getConfirmationNumber());
+        assertEquals("INN-1", result.get(1).getConfirmationNumber());
+        assertEquals("+254700000000", result.get(0).getPhoneNumber());
+    }
+
+    @Test
+    void getByPhoneNumber_returnsEmptyListWhenNoMatch() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+        when(bookingRepo.findByPhoneNumberOrderByCreatedAtDesc("+999"))
+                .thenReturn(List.of());
+
+        List<BookingResponseDTO> result = service.getByPhoneNumber("+999");
+
+        assertNotNull(result);
+        assertTrue(result.isEmpty());
+    }
+
+    @Test
     void createBooking_attachesPerSeatQrCodeToEachItem() {
         RequestFixture fx = request(BigDecimal.TEN, BigDecimal.TEN);
         BookingService service = newService(mock(BookingRepository.class),
                 mock(BookingItemRepository.class), stubClient(fx.lookups));
 
-        BookingResponseDTO resp = service.createBooking("u@example.com", 4, fx.request);
+        BookingResponseDTO resp = service.createBooking("u@example.com", 4, null, fx.request);
 
         assertEquals(2, resp.getItems().size());
         for (var item : resp.getItems()) {
