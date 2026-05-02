@@ -6,11 +6,13 @@ import innbucks.paymentservice.dto.ApiResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
+import java.net.http.HttpClient;
+import java.time.Duration;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -33,9 +35,16 @@ public class BookingServiceClient {
             @Value("${booking-service.connect-timeout-ms:2000}") int connectMs,
             @Value("${booking-service.read-timeout-ms:5000}") int readMs,
             ObjectMapper objectMapper) {
-        SimpleClientHttpRequestFactory rf = new SimpleClientHttpRequestFactory();
-        rf.setConnectTimeout(connectMs);
-        rf.setReadTimeout(readMs);
+        // JDK HttpClient supports PATCH; SimpleClientHttpRequestFactory's
+        // underlying HttpURLConnection rejects it ("Invalid HTTP method:
+        // PATCH"). RestClient applies the request factory's read timeout
+        // per-request, so we wire connect timeout on the HttpClient and
+        // read timeout on the factory.
+        HttpClient httpClient = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofMillis(connectMs))
+                .build();
+        JdkClientHttpRequestFactory rf = new JdkClientHttpRequestFactory(httpClient);
+        rf.setReadTimeout(Duration.ofMillis(readMs));
         this.restClient = RestClient.builder().baseUrl(baseUrl).requestFactory(rf).build();
         this.objectMapper = objectMapper;
     }
