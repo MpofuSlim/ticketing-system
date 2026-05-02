@@ -2,7 +2,7 @@ package com.innbucks.seatservice.service;
 
 import com.innbucks.seatservice.client.BookingServiceClient;
 import com.innbucks.seatservice.dto.CategoryBookingDTO;
-import com.innbucks.seatservice.dto.SeatCategoryAnalyticsDTO;
+import com.innbucks.seatservice.dto.EventAnalyticsDTO;
 import com.innbucks.seatservice.entity.Seat;
 import com.innbucks.seatservice.entity.SeatCategory;
 import com.innbucks.seatservice.repository.SeatCategoryRepository;
@@ -22,15 +22,16 @@ import static org.mockito.Mockito.*;
 
 class SeatCategoryAnalyticsServiceTest {
 
-    private static final UUID CATEGORY_ID = UUID.randomUUID();
     private static final UUID EVENT_ID = UUID.randomUUID();
+    private static final UUID CATEGORY_VIP = UUID.randomUUID();
+    private static final UUID CATEGORY_GA  = UUID.randomUUID();
 
-    private SeatCategory category(int total, int cachedAvailable, BigDecimal price) {
+    private SeatCategory category(UUID id, String name, int total, int cachedAvailable, BigDecimal price) {
         return SeatCategory.builder()
-                .id(CATEGORY_ID)
+                .id(id)
                 .eventId(EVENT_ID)
-                .name("VIP")
-                .description("Front rows")
+                .name(name)
+                .description(name + " seats")
                 .price(price)
                 .totalSeats(total)
                 .availableSeats(cachedAvailable)
@@ -44,174 +45,238 @@ class SeatCategoryAnalyticsServiceTest {
         return Seat.builder().id(UUID.randomUUID()).status(status).build();
     }
 
-    private CategoryBookingDTO booking(CategoryBookingDTO.BookingStatus status, BigDecimal price, LocalDateTime bookedAt) {
+    private CategoryBookingDTO booking(UUID categoryId,
+                                       CategoryBookingDTO.BookingStatus status,
+                                       BigDecimal price,
+                                       LocalDateTime bookedAt) {
         return CategoryBookingDTO.builder()
                 .bookingId(UUID.randomUUID())
                 .userEmail("u@example.com")
                 .eventId(EVENT_ID)
                 .status(status)
                 .seatId(UUID.randomUUID())
-                .categoryId(CATEGORY_ID)
+                .categoryId(categoryId)
                 .priceAtBooking(price)
                 .bookedAt(bookedAt)
                 .build();
     }
 
+    private SeatCategoryAnalyticsService newService(SeatCategoryRepository categoryRepo,
+                                                     SeatRepository seatRepo,
+                                                     BookingServiceClient bookingClient) {
+        return new SeatCategoryAnalyticsService(categoryRepo, seatRepo, bookingClient);
+    }
+
     @Test
-    void getAnalytics_throwsWhenCategoryMissing() {
+    void getEventAnalytics_returnsEmptyShellWhenEventHasNoCategories() {
         SeatCategoryRepository categoryRepo = mock(SeatCategoryRepository.class);
         SeatRepository seatRepo = mock(SeatRepository.class);
         BookingServiceClient bookingClient = mock(BookingServiceClient.class);
-        when(categoryRepo.findById(CATEGORY_ID)).thenReturn(Optional.empty());
+        when(categoryRepo.findByEventIdAndDeletedFalse(EVENT_ID)).thenReturn(List.of());
+        when(bookingClient.fetchBookingsByEvent(eq(EVENT_ID), any())).thenReturn(Optional.of(List.of()));
 
-        SeatCategoryAnalyticsService service = new SeatCategoryAnalyticsService(categoryRepo, seatRepo, bookingClient);
+        EventAnalyticsDTO result = newService(categoryRepo, seatRepo, bookingClient)
+                .getEventAnalytics(EVENT_ID, 0, 20, "Bearer x");
 
-        assertThrows(RuntimeException.class, () -> service.getAnalytics(CATEGORY_ID, "Bearer x"));
-        verify(bookingClient, never()).fetchBookingsByCategory(any(), any());
+        assertEquals(0, result.getCategoryCount());
+        assertTrue(result.getCategories().isEmpty());
+        assertEquals(0L, result.getTotals().getTotalSeats());
+        assertEquals(0, result.getTotals().getTotalBookings());
     }
 
     @Test
-    void getAnalytics_treatsSoftDeletedCategoryAsMissing() {
-        SeatCategoryRepository categoryRepo = mock(SeatCategoryRepository.class);
-        SeatCategory deleted = category(10, 10, BigDecimal.TEN);
-        deleted.setDeleted(true);
-        when(categoryRepo.findById(CATEGORY_ID)).thenReturn(Optional.of(deleted));
-
-        SeatCategoryAnalyticsService service = new SeatCategoryAnalyticsService(
-                categoryRepo, mock(SeatRepository.class), mock(BookingServiceClient.class));
-
-        assertThrows(RuntimeException.class, () -> service.getAnalytics(CATEGORY_ID, null));
-    }
-
-    @Test
-    void getAnalytics_aggregatesSeatStatusCountsFromSeatsTable() {
+    void getEventAnalytics_aggregatesSeatStatusCountsAcrossAllCategories() {
         SeatCategoryRepository categoryRepo = mock(SeatCategoryRepository.class);
         SeatRepository seatRepo = mock(SeatRepository.class);
         BookingServiceClient bookingClient = mock(BookingServiceClient.class);
 
-        when(categoryRepo.findById(CATEGORY_ID)).thenReturn(Optional.of(category(10, 4, BigDecimal.TEN)));
-        when(seatRepo.findByCategoryId(CATEGORY_ID)).thenReturn(List.of(
-                seat(Seat.SeatStatus.AVAILABLE),
-                seat(Seat.SeatStatus.AVAILABLE),
-                seat(Seat.SeatStatus.AVAILABLE),
-                seat(Seat.SeatStatus.AVAILABLE),
-                seat(Seat.SeatStatus.LOCKED),
-                seat(Seat.SeatStatus.LOCKED),
-                seat(Seat.SeatStatus.BOOKED),
-                seat(Seat.SeatStatus.BOOKED),
-                seat(Seat.SeatStatus.BOOKED),
-                seat(Seat.SeatStatus.BOOKED)
+        when(categoryRepo.findByEventIdAndDeletedFalse(EVENT_ID)).thenReturn(List.of(
+                category(CATEGORY_VIP, "VIP", 4, 2, new BigDecimal("100.00")),
+                category(CATEGORY_GA,  "GA",  6, 3, new BigDecimal("50.00"))
         ));
-        when(bookingClient.fetchBookingsByCategory(eq(CATEGORY_ID), any())).thenReturn(Optional.of(List.of()));
+        when(seatRepo.findByCategoryId(CATEGORY_VIP)).thenReturn(List.of(
+                seat(Seat.SeatStatus.AVAILABLE), seat(Seat.SeatStatus.AVAILABLE),
+                seat(Seat.SeatStatus.LOCKED), seat(Seat.SeatStatus.BOOKED)
+        ));
+        when(seatRepo.findByCategoryId(CATEGORY_GA)).thenReturn(List.of(
+                seat(Seat.SeatStatus.AVAILABLE), seat(Seat.SeatStatus.AVAILABLE),
+                seat(Seat.SeatStatus.AVAILABLE), seat(Seat.SeatStatus.BOOKED),
+                seat(Seat.SeatStatus.BOOKED), seat(Seat.SeatStatus.BOOKED)
+        ));
+        when(bookingClient.fetchBookingsByEvent(eq(EVENT_ID), any())).thenReturn(Optional.of(List.of()));
 
-        SeatCategoryAnalyticsService service = new SeatCategoryAnalyticsService(categoryRepo, seatRepo, bookingClient);
-        SeatCategoryAnalyticsDTO result = service.getAnalytics(CATEGORY_ID, "Bearer x");
+        EventAnalyticsDTO result = newService(categoryRepo, seatRepo, bookingClient)
+                .getEventAnalytics(EVENT_ID, 0, 20, null);
 
-        assertEquals(10, result.getSeatStatusCounts().getTotal());
-        assertEquals(4, result.getSeatStatusCounts().getAvailable());
-        assertEquals(2, result.getSeatStatusCounts().getLocked());
-        assertEquals(4, result.getSeatStatusCounts().getBooked());
+        assertEquals(2, result.getCategoryCount());
+        // Rollup: total seats 10, available 5, locked 1, booked 4
+        assertEquals(10L, result.getTotals().getTotalSeats());
+        assertEquals(5L, result.getTotals().getAvailableSeats());
+        assertEquals(1L, result.getTotals().getLockedSeats());
+        assertEquals(4L, result.getTotals().getBookedSeats());
         assertTrue(result.isBookingServiceReachable());
     }
 
     @Test
-    void getAnalytics_computesGrossNetAndPotentialRevenue() {
+    void getEventAnalytics_groupsBookingsByCategoryAndComputesPerBlockRevenue() {
         SeatCategoryRepository categoryRepo = mock(SeatCategoryRepository.class);
         SeatRepository seatRepo = mock(SeatRepository.class);
         BookingServiceClient bookingClient = mock(BookingServiceClient.class);
 
-        // 10 total seats, price 50.00 → potential revenue 500.00
-        when(categoryRepo.findById(CATEGORY_ID)).thenReturn(Optional.of(category(10, 6, new BigDecimal("50.00"))));
-        when(seatRepo.findByCategoryId(CATEGORY_ID)).thenReturn(List.of());
-        when(bookingClient.fetchBookingsByCategory(eq(CATEGORY_ID), any())).thenReturn(Optional.of(List.of(
-                booking(CategoryBookingDTO.BookingStatus.CONFIRMED, new BigDecimal("50.00"), LocalDateTime.now().minusDays(2)),
-                booking(CategoryBookingDTO.BookingStatus.PENDING,   new BigDecimal("50.00"), LocalDateTime.now().minusDays(1)),
-                booking(CategoryBookingDTO.BookingStatus.CANCELLED, new BigDecimal("50.00"), LocalDateTime.now().minusDays(3))
+        when(categoryRepo.findByEventIdAndDeletedFalse(EVENT_ID)).thenReturn(List.of(
+                category(CATEGORY_VIP, "VIP", 5, 5, new BigDecimal("100.00")),
+                category(CATEGORY_GA,  "GA",  10, 10, new BigDecimal("50.00"))
+        ));
+        when(seatRepo.findByCategoryId(any())).thenReturn(List.of());
+        when(bookingClient.fetchBookingsByEvent(eq(EVENT_ID), any())).thenReturn(Optional.of(List.of(
+                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.CONFIRMED, new BigDecimal("100.00"), LocalDateTime.now().minusDays(2)),
+                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.CANCELLED, new BigDecimal("100.00"), LocalDateTime.now().minusDays(3)),
+                booking(CATEGORY_GA,  CategoryBookingDTO.BookingStatus.CONFIRMED, new BigDecimal("50.00"),  LocalDateTime.now().minusDays(1)),
+                booking(CATEGORY_GA,  CategoryBookingDTO.BookingStatus.PENDING,   new BigDecimal("50.00"),  LocalDateTime.now())
         )));
 
-        SeatCategoryAnalyticsService service = new SeatCategoryAnalyticsService(categoryRepo, seatRepo, bookingClient);
-        SeatCategoryAnalyticsDTO result = service.getAnalytics(CATEGORY_ID, null);
+        EventAnalyticsDTO result = newService(categoryRepo, seatRepo, bookingClient)
+                .getEventAnalytics(EVENT_ID, 0, 20, null);
 
-        assertEquals(3, result.getBookings().getTotalRecords());
-        assertEquals(2, result.getBookings().getActiveRecords());
-        assertEquals(1, result.getBookings().getCancelledRecords());
-        assertEquals(0, new BigDecimal("150.00").compareTo(result.getBookings().getGrossRevenue()));
-        assertEquals(0, new BigDecimal("100.00").compareTo(result.getBookings().getNetRevenue()));
-        assertEquals(0, new BigDecimal("500.00").compareTo(result.getBookings().getPotentialRevenue()));
+        EventAnalyticsDTO.CategoryAnalytics vip = result.getCategories().stream()
+                .filter(c -> c.getCategory().getId().equals(CATEGORY_VIP))
+                .findFirst().orElseThrow();
+        EventAnalyticsDTO.CategoryAnalytics ga = result.getCategories().stream()
+                .filter(c -> c.getCategory().getId().equals(CATEGORY_GA))
+                .findFirst().orElseThrow();
+
+        // Per-category revenue
+        assertEquals(0, new BigDecimal("200.00").compareTo(vip.getBookings().getGrossRevenue()));
+        assertEquals(0, new BigDecimal("100.00").compareTo(vip.getBookings().getNetRevenue()));
+        assertEquals(0, new BigDecimal("500.00").compareTo(vip.getBookings().getPotentialRevenue())); // 5 × 100
+        assertEquals(0, new BigDecimal("100.00").compareTo(ga.getBookings().getGrossRevenue()));
+        assertEquals(0, new BigDecimal("100.00").compareTo(ga.getBookings().getNetRevenue()));
+        assertEquals(0, new BigDecimal("500.00").compareTo(ga.getBookings().getPotentialRevenue())); // 10 × 50
+
+        // Event rollup adds per-category numbers.
+        assertEquals(0, new BigDecimal("300.00").compareTo(result.getTotals().getGrossRevenue()));
+        assertEquals(0, new BigDecimal("200.00").compareTo(result.getTotals().getNetRevenue()));
+        assertEquals(0, new BigDecimal("1000.00").compareTo(result.getTotals().getPotentialRevenue()));
+        assertEquals(4, result.getTotals().getTotalBookings());
+        assertEquals(3, result.getTotals().getActiveBookings());
+        assertEquals(1, result.getTotals().getCancelledBookings());
     }
 
     @Test
-    void getAnalytics_sortsBookingItemsMostRecentFirst() {
+    void getEventAnalytics_paginatesBookingsListPerCategoryAndKeepsAggregatesAcrossFullSet() {
         SeatCategoryRepository categoryRepo = mock(SeatCategoryRepository.class);
         SeatRepository seatRepo = mock(SeatRepository.class);
         BookingServiceClient bookingClient = mock(BookingServiceClient.class);
+
+        when(categoryRepo.findByEventIdAndDeletedFalse(EVENT_ID)).thenReturn(List.of(
+                category(CATEGORY_VIP, "VIP", 5, 5, BigDecimal.TEN)
+        ));
+        when(seatRepo.findByCategoryId(any())).thenReturn(List.of());
+        // 5 confirmed bookings, increasing booked-at timestamps.
         LocalDateTime t0 = LocalDateTime.of(2026, 1, 1, 0, 0);
-
-        when(categoryRepo.findById(CATEGORY_ID)).thenReturn(Optional.of(category(5, 5, BigDecimal.TEN)));
-        when(seatRepo.findByCategoryId(CATEGORY_ID)).thenReturn(List.of());
-        when(bookingClient.fetchBookingsByCategory(eq(CATEGORY_ID), any())).thenReturn(Optional.of(List.of(
-                booking(CategoryBookingDTO.BookingStatus.CONFIRMED, BigDecimal.TEN, t0.plusDays(1)),
-                booking(CategoryBookingDTO.BookingStatus.CONFIRMED, BigDecimal.TEN, t0.plusDays(3)),
-                booking(CategoryBookingDTO.BookingStatus.CONFIRMED, BigDecimal.TEN, t0.plusDays(2))
+        when(bookingClient.fetchBookingsByEvent(eq(EVENT_ID), any())).thenReturn(Optional.of(List.of(
+                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.CONFIRMED, BigDecimal.TEN, t0.plusDays(1)),
+                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.CONFIRMED, BigDecimal.TEN, t0.plusDays(2)),
+                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.CONFIRMED, BigDecimal.TEN, t0.plusDays(3)),
+                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.CONFIRMED, BigDecimal.TEN, t0.plusDays(4)),
+                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.CONFIRMED, BigDecimal.TEN, t0.plusDays(5))
         )));
 
-        SeatCategoryAnalyticsService service = new SeatCategoryAnalyticsService(categoryRepo, seatRepo, bookingClient);
-        SeatCategoryAnalyticsDTO result = service.getAnalytics(CATEGORY_ID, null);
+        // page=0, size=2 → first 2 (most recent first), totalRecords still 5.
+        EventAnalyticsDTO firstPage = newService(categoryRepo, seatRepo, bookingClient)
+                .getEventAnalytics(EVENT_ID, 0, 2, null);
+        EventAnalyticsDTO.BookingStats stats = firstPage.getCategories().get(0).getBookings();
+        assertEquals(5, stats.getTotalRecords());
+        assertEquals(0, stats.getPageNumber());
+        assertEquals(2, stats.getPageSize());
+        assertEquals(3, stats.getTotalPages()); // ceil(5/2)
+        assertEquals(2, stats.getItems().size());
+        assertEquals(t0.plusDays(5), stats.getItems().get(0).getBookedAt());
+        assertEquals(t0.plusDays(4), stats.getItems().get(1).getBookedAt());
 
-        List<CategoryBookingDTO> items = result.getBookings().getItems();
-        assertEquals(t0.plusDays(3), items.get(0).getBookedAt());
-        assertEquals(t0.plusDays(2), items.get(1).getBookedAt());
-        assertEquals(t0.plusDays(1), items.get(2).getBookedAt());
-        assertEquals(t0.plusDays(3), result.getBookings().getMostRecentBookingAt());
+        // page=2, size=2 → last partial page.
+        EventAnalyticsDTO lastPage = newService(categoryRepo, seatRepo, bookingClient)
+                .getEventAnalytics(EVENT_ID, 2, 2, null);
+        assertEquals(1, lastPage.getCategories().get(0).getBookings().getItems().size());
+
+        // page out of range → empty items but stats unchanged.
+        EventAnalyticsDTO past = newService(categoryRepo, seatRepo, bookingClient)
+                .getEventAnalytics(EVENT_ID, 99, 2, null);
+        assertEquals(5, past.getCategories().get(0).getBookings().getTotalRecords());
+        assertTrue(past.getCategories().get(0).getBookings().getItems().isEmpty());
     }
 
     @Test
-    void getAnalytics_degradesGracefullyWhenBookingServiceUnreachable() {
+    void getEventAnalytics_clampsPageSizeAndPageIndex() {
         SeatCategoryRepository categoryRepo = mock(SeatCategoryRepository.class);
         SeatRepository seatRepo = mock(SeatRepository.class);
         BookingServiceClient bookingClient = mock(BookingServiceClient.class);
 
-        when(categoryRepo.findById(CATEGORY_ID)).thenReturn(Optional.of(category(10, 4, new BigDecimal("20.00"))));
-        when(seatRepo.findByCategoryId(CATEGORY_ID)).thenReturn(List.of(seat(Seat.SeatStatus.AVAILABLE)));
-        // Empty Optional → booking-service was unreachable
-        when(bookingClient.fetchBookingsByCategory(eq(CATEGORY_ID), any())).thenReturn(Optional.empty());
+        when(categoryRepo.findByEventIdAndDeletedFalse(EVENT_ID)).thenReturn(List.of(
+                category(CATEGORY_VIP, "VIP", 5, 5, BigDecimal.TEN)
+        ));
+        when(seatRepo.findByCategoryId(any())).thenReturn(List.of());
+        when(bookingClient.fetchBookingsByEvent(eq(EVENT_ID), any())).thenReturn(Optional.of(List.of()));
 
-        SeatCategoryAnalyticsService service = new SeatCategoryAnalyticsService(categoryRepo, seatRepo, bookingClient);
-        SeatCategoryAnalyticsDTO result = service.getAnalytics(CATEGORY_ID, null);
+        // Negative page → 0; size > MAX → MAX_PAGE_SIZE; size < 1 → 1.
+        EventAnalyticsDTO huge = newService(categoryRepo, seatRepo, bookingClient)
+                .getEventAnalytics(EVENT_ID, -5, 10_000, null);
+        EventAnalyticsDTO.BookingStats stats = huge.getCategories().get(0).getBookings();
+        assertEquals(0, stats.getPageNumber());
+        assertEquals(SeatCategoryAnalyticsService.MAX_PAGE_SIZE, stats.getPageSize());
+
+        EventAnalyticsDTO tiny = newService(categoryRepo, seatRepo, bookingClient)
+                .getEventAnalytics(EVENT_ID, 0, 0, null);
+        assertEquals(1, tiny.getCategories().get(0).getBookings().getPageSize());
+    }
+
+    @Test
+    void getEventAnalytics_degradesGracefullyWhenBookingServiceUnreachable() {
+        SeatCategoryRepository categoryRepo = mock(SeatCategoryRepository.class);
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        BookingServiceClient bookingClient = mock(BookingServiceClient.class);
+
+        when(categoryRepo.findByEventIdAndDeletedFalse(EVENT_ID)).thenReturn(List.of(
+                category(CATEGORY_VIP, "VIP", 10, 4, new BigDecimal("20.00"))
+        ));
+        when(seatRepo.findByCategoryId(any())).thenReturn(List.of(seat(Seat.SeatStatus.AVAILABLE)));
+        when(bookingClient.fetchBookingsByEvent(eq(EVENT_ID), any())).thenReturn(Optional.empty());
+
+        EventAnalyticsDTO result = newService(categoryRepo, seatRepo, bookingClient)
+                .getEventAnalytics(EVENT_ID, 0, 20, null);
 
         assertFalse(result.isBookingServiceReachable());
-        assertEquals(0, result.getBookings().getTotalRecords());
-        assertNotNull(result.getBookings().getItems());
-        assertTrue(result.getBookings().getItems().isEmpty());
-        // Potential revenue still computable from the local category record alone.
-        assertEquals(0, new BigDecimal("200.00").compareTo(result.getBookings().getPotentialRevenue()));
+        assertEquals(0, result.getTotals().getTotalBookings());
+        assertEquals(1, result.getCategoryCount());
+        // Potential revenue still computable from local category data.
+        assertEquals(0, new BigDecimal("200.00").compareTo(
+                result.getCategories().get(0).getBookings().getPotentialRevenue()));
     }
 
     @Test
-    void getAnalytics_includesCategoryMetadataAndBothAvailableCounts() {
+    void getEventAnalytics_includesBothCachedAndLiveAvailableCounts() {
         SeatCategoryRepository categoryRepo = mock(SeatCategoryRepository.class);
         SeatRepository seatRepo = mock(SeatRepository.class);
         BookingServiceClient bookingClient = mock(BookingServiceClient.class);
 
-        // cachedAvailable=4 disagrees with the actual seats-table count (8 AVAILABLE),
-        // which is exactly the case operators want to see.
-        when(categoryRepo.findById(CATEGORY_ID)).thenReturn(Optional.of(category(10, 4, BigDecimal.TEN)));
-        when(seatRepo.findByCategoryId(CATEGORY_ID)).thenReturn(List.of(
+        // cachedAvailable=4 disagrees with the actual seats-table count (8 AVAILABLE).
+        when(categoryRepo.findByEventIdAndDeletedFalse(EVENT_ID)).thenReturn(List.of(
+                category(CATEGORY_VIP, "VIP", 10, 4, BigDecimal.TEN)
+        ));
+        when(seatRepo.findByCategoryId(CATEGORY_VIP)).thenReturn(List.of(
                 seat(Seat.SeatStatus.AVAILABLE), seat(Seat.SeatStatus.AVAILABLE),
                 seat(Seat.SeatStatus.AVAILABLE), seat(Seat.SeatStatus.AVAILABLE),
                 seat(Seat.SeatStatus.AVAILABLE), seat(Seat.SeatStatus.AVAILABLE),
                 seat(Seat.SeatStatus.AVAILABLE), seat(Seat.SeatStatus.AVAILABLE)
         ));
-        when(bookingClient.fetchBookingsByCategory(eq(CATEGORY_ID), any())).thenReturn(Optional.of(List.of()));
+        when(bookingClient.fetchBookingsByEvent(eq(EVENT_ID), any())).thenReturn(Optional.of(List.of()));
 
-        SeatCategoryAnalyticsService service = new SeatCategoryAnalyticsService(categoryRepo, seatRepo, bookingClient);
-        SeatCategoryAnalyticsDTO result = service.getAnalytics(CATEGORY_ID, null);
+        EventAnalyticsDTO result = newService(categoryRepo, seatRepo, bookingClient)
+                .getEventAnalytics(EVENT_ID, 0, 20, null);
 
-        assertEquals("VIP", result.getCategory().getName());
-        assertEquals(EVENT_ID, result.getCategory().getEventId());
-        assertEquals(10, result.getCategory().getTotalSeats());
-        assertEquals(4, result.getCategory().getCachedAvailableSeats());
-        assertEquals(8, result.getSeatStatusCounts().getAvailable());
+        EventAnalyticsDTO.CategoryAnalytics vip = result.getCategories().get(0);
+        assertEquals(4, vip.getCategory().getCachedAvailableSeats());
+        assertEquals(8, vip.getSeatStatusCounts().getAvailable());
         assertNotNull(result.getFetchedAt());
     }
 }

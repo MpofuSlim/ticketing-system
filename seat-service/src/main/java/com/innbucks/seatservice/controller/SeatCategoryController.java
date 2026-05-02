@@ -3,7 +3,7 @@ package com.innbucks.seatservice.controller;
 import com.innbucks.seatservice.dto.ApiResult;
 import com.innbucks.seatservice.dto.CreateCategoryRequestDTO;
 import com.innbucks.seatservice.dto.CreateCategoryResponseDTO;
-import com.innbucks.seatservice.dto.SeatCategoryAnalyticsDTO;
+import com.innbucks.seatservice.dto.EventAnalyticsDTO;
 import com.innbucks.seatservice.service.SeatCategoryAnalyticsService;
 import com.innbucks.seatservice.service.SeatCategoryService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -77,33 +77,38 @@ public class SeatCategoryController {
                 .body(ApiResult.created("Seat category created successfully", created));
     }
 
-    @GetMapping("/{id}/analytics")
+    @GetMapping("/analytics")
     @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
     @Operation(
-            summary = "Get category analytics",
-            description = "Returns aggregated analytics for a seat category: " +
-                    "category metadata, per-status seat counts, plus bookings + revenue " +
-                    "fetched from booking-service (who bought tickets, when, status). " +
+            summary = "Get event analytics",
+            description = "Returns aggregated analytics for every seat category in an event: " +
+                    "category metadata, per-status seat counts, paginated bookings + per-category revenue, " +
+                    "and event-level rollup totals across all categories. " +
                     "Restricted to TENANT/ADMIN because the response includes customer emails. " +
-                    "Tolerates booking-service downtime — `bookingServiceReachable=false` " +
-                    "indicates the booking section reflects no-data, not zero-bookings."
+                    "Tolerates booking-service downtime — `bookingServiceReachable=false` indicates " +
+                    "the bookings sections reflect no-data, not zero-bookings. " +
+                    "Pagination applies per-category: each category's `bookings.items` is sliced to " +
+                    "the requested page; the aggregate counts/revenue stay computed across the full set."
     )
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Analytics returned"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Analytics returned (empty categories list if event has none)"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Category not found or deleted")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN")
     })
-    public ResponseEntity<ApiResult<SeatCategoryAnalyticsDTO>> getCategoryAnalytics(
-            @PathVariable UUID id,
+    public ResponseEntity<ApiResult<EventAnalyticsDTO>> getEventAnalytics(
+            @Parameter(description = "Event UUID") @RequestParam UUID eventId,
+            @Parameter(description = "Zero-based page index for the per-category bookings list (default 0)")
+            @RequestParam(defaultValue = "0") int page,
+            @Parameter(description = "Page size for the per-category bookings list (default 20, max 100)")
+            @RequestParam(defaultValue = "20") int size,
             HttpServletRequest httpRequest
     ) {
-        log.info("GET /seat-categories/{}/analytics", id);
+        log.info("GET /seat-categories/analytics eventId={} page={} size={}", eventId, page, size);
         // Forward the inbound Authorization header so booking-service's
         // matching role check sees the same caller.
         String authHeader = httpRequest.getHeader(HttpHeaders.AUTHORIZATION);
-        SeatCategoryAnalyticsDTO analytics = analyticsService.getAnalytics(id, authHeader);
-        return ResponseEntity.ok(ApiResult.ok("Category analytics retrieved successfully", analytics));
+        EventAnalyticsDTO analytics = analyticsService.getEventAnalytics(eventId, page, size, authHeader);
+        return ResponseEntity.ok(ApiResult.ok("Event analytics retrieved successfully", analytics));
     }
 
     @DeleteMapping("/{id}")

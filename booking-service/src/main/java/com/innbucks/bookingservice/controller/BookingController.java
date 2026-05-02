@@ -126,6 +126,26 @@ public class BookingController {
                 bookingService.getBookingsByCategory(categoryId)));
     }
 
+    @GetMapping("/by-event/{eventId}")
+    @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
+    @Operation(
+            summary = "List bookings by event",
+            description = "Analytics endpoint. Returns one row per booked seat across every category " +
+                    "in the given event. Includes CANCELLED bookings — caller filters. " +
+                    "Used by seat-service to build event-level analytics in a single round-trip. " +
+                    "Restricted to TENANT/ADMIN because it exposes customer emails."
+    )
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Bookings returned"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN")
+    })
+    public ResponseEntity<ApiResult<List<CategoryBookingDTO>>> getBookingsByEvent(@PathVariable UUID eventId) {
+        log.debug("GET /bookings/by-event/{}", eventId);
+        return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully",
+                bookingService.getBookingsByEvent(eventId)));
+    }
+
     @GetMapping("/confirmation/{number}")
     @SecurityRequirements()
     @Operation(summary = "Lookup by confirmation number", description = "Public endpoint used to verify a booking by confirmation number.")

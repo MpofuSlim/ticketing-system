@@ -34,4 +34,14 @@ public interface BookingItemRepository extends JpaRepository<BookingItem, UUID> 
         WHERE i.categoryId = :categoryId
     """)
     List<BookingItem> findByCategoryIdWithBooking(@Param("categoryId") UUID categoryId);
+
+    // Returns every booking item attached to a booking for the given event.
+    // Used by seat-service's event-level analytics so one HTTP call covers
+    // all categories at once instead of fanning out per-category.
+    @Query("""
+        SELECT i FROM BookingItem i
+        JOIN FETCH i.booking b
+        WHERE b.eventId = :eventId
+    """)
+    List<BookingItem> findByEventIdWithBooking(@Param("eventId") UUID eventId);
 }

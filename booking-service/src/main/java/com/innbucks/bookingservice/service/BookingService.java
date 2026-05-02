@@ -157,6 +157,17 @@ public class BookingService {
                 .collect(Collectors.toList());
     }
 
+    // Same shape as getBookingsByCategory but scoped to a whole event. Lets
+    // seat-service build event-level analytics in one round trip instead of
+    // calling per-category.
+    public List<CategoryBookingDTO> getBookingsByEvent(UUID eventId) {
+        log.debug("Fetching bookings by event eventId={}", eventId);
+        return bookingItemRepository.findByEventIdWithBooking(eventId)
+                .stream()
+                .map(this::toCategoryBookingDTO)
+                .collect(Collectors.toList());
+    }
+
     private CategoryBookingDTO toCategoryBookingDTO(BookingItem item) {
         Booking b = item.getBooking();
         return CategoryBookingDTO.builder()

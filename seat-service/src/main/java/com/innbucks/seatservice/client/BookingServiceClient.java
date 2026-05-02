@@ -50,9 +50,17 @@ public class BookingServiceClient {
     }
 
     public Optional<List<CategoryBookingDTO>> fetchBookingsByCategory(UUID categoryId, String authHeader) {
+        return fetch("/bookings/by-category/" + categoryId, authHeader, "categoryId=" + categoryId);
+    }
+
+    public Optional<List<CategoryBookingDTO>> fetchBookingsByEvent(UUID eventId, String authHeader) {
+        return fetch("/bookings/by-event/" + eventId, authHeader, "eventId=" + eventId);
+    }
+
+    private Optional<List<CategoryBookingDTO>> fetch(String path, String authHeader, String logCtx) {
         try {
             String body = restClient.get()
-                    .uri("/bookings/by-category/{id}", categoryId)
+                    .uri(path)
                     .headers(headers -> {
                         if (authHeader != null && !authHeader.isBlank()) {
                             headers.set(HttpHeaders.AUTHORIZATION, authHeader);
@@ -73,13 +81,13 @@ public class BookingServiceClient {
             return Optional.of(envelope.getData() != null ? envelope.getData() : List.of());
         } catch (ResourceAccessException e) {
             // Connect / read timeout, DNS, refused connection — booking-service down.
-            log.warn("booking-service unreachable categoryId={} cause={}", categoryId, e.toString());
+            log.warn("booking-service unreachable {} cause={}", logCtx, e.toString());
             return Optional.empty();
         } catch (RestClientException e) {
-            log.warn("booking-service returned an error categoryId={} cause={}", categoryId, e.toString());
+            log.warn("booking-service returned an error {} cause={}", logCtx, e.toString());
             return Optional.empty();
         } catch (Exception e) {
-            log.warn("Failed to parse booking-service response categoryId={} cause={}", categoryId, e.toString());
+            log.warn("Failed to parse booking-service response {} cause={}", logCtx, e.toString());
             return Optional.empty();
         }
     }
