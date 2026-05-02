@@ -7,6 +7,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Encoding;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.parameters.RequestBody;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
@@ -55,7 +56,68 @@ public class EventController {
                     """
     )
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Paged list of events")
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Paged list of events",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = EventResponseDTO.class),
+                            examples = @ExampleObject(name = "Events page", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Events retrieved successfully",
+                                      "data": {
+                                        "content": [
+                                          {
+                                            "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                            "eventNo": null,
+                                            "tenantId": "tenant-001",
+                                            "title": "Summer Concert",
+                                            "description": "Open-air summer concert featuring local headliners.",
+                                            "venue": "Harare Gardens",
+                                            "province": "HRE",
+                                            "location": { "latitude": -17.8252, "longitude": 31.0335 },
+                                            "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+                                            "dateTime": "2026-06-15",
+                                            "totalCapacity": 500,
+                                            "availableTickets": 420,
+                                            "active": true,
+                                            "createdAt": "2026-04-25T08:00:00",
+                                            "updatedAt": "2026-05-02T15:00:00",
+                                            "seatCategories": [
+                                              {
+                                                "name": "VIP",
+                                                "description": "Front rows",
+                                                "categoryPrice": 100.00,
+                                                "sections": [
+                                                  { "section": "A", "seatCount": 25, "price": 100.00 },
+                                                  { "section": "B", "seatCount": 25, "price": 100.00 }
+                                                ]
+                                              }
+                                            ]
+                                          }
+                                        ],
+                                        "pageable": {
+                                          "pageNumber": 0,
+                                          "pageSize": 10,
+                                          "sort": { "sorted": true, "unsorted": false, "empty": false },
+                                          "offset": 0,
+                                          "paged": true,
+                                          "unpaged": false
+                                        },
+                                        "totalElements": 1,
+                                        "totalPages": 1,
+                                        "last": true,
+                                        "first": true,
+                                        "size": 10,
+                                        "number": 0,
+                                        "numberOfElements": 1,
+                                        "empty": false
+                                      }
+                                    }
+                                    """)
+                    )
+            )
     })
     public ResponseEntity<ApiResult<Page<EventResponseDTO>>> getAllEvents(
             @Parameter(description = "Inclusive lower bound date for events (maps to start of day)")
@@ -106,7 +168,67 @@ public class EventController {
                     """
     )
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Paged list of active events")
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Paged list of active events",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = EventResponseDTO.class),
+                            examples = @ExampleObject(name = "Active events page", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Active events retrieved successfully",
+                                      "data": {
+                                        "content": [
+                                          {
+                                            "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                            "eventNo": null,
+                                            "tenantId": "tenant-001",
+                                            "title": "Summer Concert",
+                                            "description": "Open-air summer concert featuring local headliners.",
+                                            "venue": "Harare Gardens",
+                                            "province": "HRE",
+                                            "location": { "latitude": -17.8252, "longitude": 31.0335 },
+                                            "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+                                            "dateTime": "2026-06-15",
+                                            "totalCapacity": 500,
+                                            "availableTickets": 420,
+                                            "active": true,
+                                            "createdAt": "2026-04-25T08:00:00",
+                                            "updatedAt": "2026-05-02T15:00:00",
+                                            "seatCategories": [
+                                              {
+                                                "name": "VIP",
+                                                "description": "Front rows",
+                                                "categoryPrice": 100.00,
+                                                "sections": [
+                                                  { "section": "A", "seatCount": 25, "price": 100.00 }
+                                                ]
+                                              }
+                                            ]
+                                          }
+                                        ],
+                                        "pageable": {
+                                          "pageNumber": 0,
+                                          "pageSize": 10,
+                                          "sort": { "sorted": true, "unsorted": false, "empty": false },
+                                          "offset": 0,
+                                          "paged": true,
+                                          "unpaged": false
+                                        },
+                                        "totalElements": 1,
+                                        "totalPages": 1,
+                                        "last": true,
+                                        "first": true,
+                                        "size": 10,
+                                        "number": 0,
+                                        "numberOfElements": 1,
+                                        "empty": false
+                                      }
+                                    }
+                                    """)
+                    )
+            )
     })
     public ResponseEntity<ApiResult<Page<EventResponseDTO>>> getActiveEvents(
             @Parameter(description = "Inclusive lower bound date for events (maps to start of day)")
@@ -155,7 +277,56 @@ public class EventController {
                     """
     )
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Event details"),
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Event details",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = EventResponseDTO.class),
+                            examples = @ExampleObject(name = "Event details", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Event retrieved successfully",
+                                      "data": {
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "eventNo": null,
+                                        "tenantId": "tenant-001",
+                                        "title": "Summer Concert",
+                                        "description": "Open-air summer concert featuring local headliners.",
+                                        "venue": "Harare Gardens",
+                                        "province": "HRE",
+                                        "location": { "latitude": -17.8252, "longitude": 31.0335 },
+                                        "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+                                        "dateTime": "2026-06-15",
+                                        "totalCapacity": 500,
+                                        "availableTickets": 420,
+                                        "active": true,
+                                        "createdAt": "2026-04-25T08:00:00",
+                                        "updatedAt": "2026-05-02T15:00:00",
+                                        "seatCategories": [
+                                          {
+                                            "name": "VIP",
+                                            "description": "Front rows",
+                                            "categoryPrice": 100.00,
+                                            "sections": [
+                                              { "section": "A", "seatCount": 25, "price": 100.00 },
+                                              { "section": "B", "seatCount": 25, "price": 100.00 }
+                                            ]
+                                          },
+                                          {
+                                            "name": "GA",
+                                            "description": "General admission",
+                                            "categoryPrice": 60.00,
+                                            "sections": [
+                                              { "section": "F", "seatCount": 50, "price": 60.00 }
+                                            ]
+                                          }
+                                        ]
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
             @ApiResponse(responseCode = "400", description = "Event not found",
                     content = @Content(schema = @Schema(example = "{\"error\":\"Event not found\"}")))
     })
@@ -176,7 +347,58 @@ public class EventController {
                     """
     )
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Paged list of events for the province, earliest first")
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Paged list of events for the province, earliest first",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = EventResponseDTO.class),
+                            examples = @ExampleObject(name = "Events by province", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Events retrieved successfully",
+                                      "data": {
+                                        "content": [
+                                          {
+                                            "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                            "eventNo": 1,
+                                            "tenantId": "tenant-001",
+                                            "title": "Summer Concert",
+                                            "description": "Open-air summer concert featuring local headliners.",
+                                            "venue": "Harare Gardens",
+                                            "province": "HRE",
+                                            "location": { "latitude": -17.8252, "longitude": 31.0335 },
+                                            "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+                                            "dateTime": "2026-06-15",
+                                            "totalCapacity": 500,
+                                            "availableTickets": 420,
+                                            "active": true,
+                                            "createdAt": "2026-04-25T08:00:00",
+                                            "updatedAt": "2026-05-02T15:00:00",
+                                            "seatCategories": []
+                                          }
+                                        ],
+                                        "pageable": {
+                                          "pageNumber": 0,
+                                          "pageSize": 10,
+                                          "sort": { "sorted": true, "unsorted": false, "empty": false },
+                                          "offset": 0,
+                                          "paged": true,
+                                          "unpaged": false
+                                        },
+                                        "totalElements": 1,
+                                        "totalPages": 1,
+                                        "last": true,
+                                        "first": true,
+                                        "size": 10,
+                                        "number": 0,
+                                        "numberOfElements": 1,
+                                        "empty": false
+                                      }
+                                    }
+                                    """)
+                    )
+            )
     })
     public ResponseEntity<ApiResult<Page<EventResponseDTO>>> getEventsByProvince(
             @Parameter(description = "Province code, e.g. HRE")
@@ -226,7 +448,38 @@ public class EventController {
             )
     )
     @ApiResponses({
-            @ApiResponse(responseCode = "201", description = "Created"),
+            @ApiResponse(
+                    responseCode = "201",
+                    description = "Created",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = EventResponseDTO.class),
+                            examples = @ExampleObject(name = "Event created", value = """
+                                    {
+                                      "code": "201 CREATED",
+                                      "message": "Event created successfully",
+                                      "data": {
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "eventNo": null,
+                                        "tenantId": "tenant-001",
+                                        "title": "Summer Concert",
+                                        "description": "Open-air summer concert featuring local headliners.",
+                                        "venue": "Harare Gardens",
+                                        "province": "HRE",
+                                        "location": { "latitude": -17.8252, "longitude": 31.0335 },
+                                        "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+                                        "dateTime": "2026-06-15",
+                                        "totalCapacity": 500,
+                                        "availableTickets": 500,
+                                        "active": false,
+                                        "createdAt": "2026-05-02T15:00:00",
+                                        "updatedAt": "2026-05-02T15:00:00",
+                                        "seatCategories": []
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
             @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN"),
             @ApiResponse(responseCode = "422", description = "Validation errors",
@@ -295,7 +548,47 @@ public class EventController {
                     """
     )
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Updated"),
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Updated",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = EventResponseDTO.class),
+                            examples = @ExampleObject(name = "Event updated", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Event updated successfully",
+                                      "data": {
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "eventNo": null,
+                                        "tenantId": "tenant-001",
+                                        "title": "Summer Concert (Updated)",
+                                        "description": "Open-air summer concert featuring local headliners.",
+                                        "venue": "Harare Gardens",
+                                        "province": "HRE",
+                                        "location": { "latitude": -17.8252, "longitude": 31.0335 },
+                                        "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+                                        "dateTime": "2026-06-15",
+                                        "totalCapacity": 600,
+                                        "availableTickets": 520,
+                                        "active": true,
+                                        "createdAt": "2026-04-25T08:00:00",
+                                        "updatedAt": "2026-05-02T16:00:00",
+                                        "seatCategories": [
+                                          {
+                                            "name": "VIP",
+                                            "description": "Front rows",
+                                            "categoryPrice": 100.00,
+                                            "sections": [
+                                              { "section": "A", "seatCount": 25, "price": 100.00 }
+                                            ]
+                                          }
+                                        ]
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
             @ApiResponse(responseCode = "400", description = "Not found or not authorized",
                     content = @Content(schema = @Schema(example = "{\"error\":\"You are not authorized to update this event\"}"))),
             @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
@@ -327,7 +620,38 @@ public class EventController {
                     """
     )
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "Activated"),
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Activated",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = EventResponseDTO.class),
+                            examples = @ExampleObject(name = "Event activated", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Event activated successfully",
+                                      "data": {
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "eventNo": null,
+                                        "tenantId": "tenant-001",
+                                        "title": "Summer Concert",
+                                        "description": "Open-air summer concert featuring local headliners.",
+                                        "venue": "Harare Gardens",
+                                        "province": "HRE",
+                                        "location": { "latitude": -17.8252, "longitude": 31.0335 },
+                                        "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+                                        "dateTime": "2026-06-15",
+                                        "totalCapacity": 500,
+                                        "availableTickets": 500,
+                                        "active": true,
+                                        "createdAt": "2026-04-25T08:00:00",
+                                        "updatedAt": "2026-05-02T16:00:00",
+                                        "seatCategories": []
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
             @ApiResponse(responseCode = "400", description = "Not found or not authorized",
                     content = @Content(schema = @Schema(example = "{\"error\":\"You are not authorized to activate this event\"}"))),
             @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
@@ -357,7 +681,20 @@ public class EventController {
                     """
     )
     @ApiResponses({
-            @ApiResponse(responseCode = "204", description = "Deleted"),
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Deleted",
+                    content = @Content(
+                            mediaType = "application/json",
+                            examples = @ExampleObject(name = "Event deleted", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Event deleted successfully",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
             @ApiResponse(responseCode = "400", description = "Not found or not authorized",
                     content = @Content(schema = @Schema(example = "{\"error\":\"You are not authorized to delete this event\"}"))),
             @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),

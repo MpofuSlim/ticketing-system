@@ -44,7 +44,41 @@ public class BookingController {
     @MinTier(2)
     @Operation(summary = "Create booking", description = "Creates a new pending booking for the authenticated user. Requires tier 2 (ID-verified customers).")
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "201", description = "Booking created"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "201",
+                    description = "Booking created",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = BookingResponseDTO.class),
+                            examples = @ExampleObject(name = "Booking created", value = """
+                                    {
+                                      "code": "201 CREATED",
+                                      "message": "Booking created successfully",
+                                      "data": {
+                                        "id": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                        "userEmail": "alice@example.com",
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "confirmationNumber": "INN-20260502-AB12CD",
+                                        "status": "PENDING",
+                                        "totalAmount": 100.00,
+                                        "items": [
+                                          {
+                                            "seatId": "11111111-2222-3333-4444-555555555555",
+                                            "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                            "categoryName": "VIP",
+                                            "rowLabel": "A",
+                                            "seatNumber": 12,
+                                            "priceAtBooking": 100.00,
+                                            "ticketNumber": "20260502-12345A"
+                                          }
+                                        ],
+                                        "createdAt": "2026-05-02T15:45:00",
+                                        "updatedAt": "2026-05-02T15:45:00"
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "Customer tier below minimum. Envelope: { code: '422', message: <reason>, data: { requiredTier, currentTier } }"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Validation or domain error")
@@ -78,7 +112,52 @@ public class BookingController {
     @GetMapping("/my")
     @Operation(summary = "List my bookings", description = "Returns all bookings for the authenticated user.")
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Bookings returned"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Bookings returned",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = BookingResponseDTO.class),
+                            examples = @ExampleObject(name = "My bookings", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Bookings retrieved successfully",
+                                      "data": [
+                                        {
+                                          "id": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                          "userEmail": "alice@example.com",
+                                          "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                          "confirmationNumber": "INN-20260502-AB12CD",
+                                          "status": "CONFIRMED",
+                                          "totalAmount": 200.00,
+                                          "items": [
+                                            {
+                                              "seatId": "11111111-2222-3333-4444-555555555555",
+                                              "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                              "categoryName": "VIP",
+                                              "rowLabel": "A",
+                                              "seatNumber": 12,
+                                              "priceAtBooking": 100.00,
+                                              "ticketNumber": "20260502-12345A"
+                                            },
+                                            {
+                                              "seatId": "22222222-3333-4444-5555-666666666666",
+                                              "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                              "categoryName": "VIP",
+                                              "rowLabel": "A",
+                                              "seatNumber": 13,
+                                              "priceAtBooking": 100.00,
+                                              "ticketNumber": "20260502-12346B"
+                                            }
+                                          ],
+                                          "createdAt": "2026-05-02T15:45:00",
+                                          "updatedAt": "2026-05-02T15:50:00"
+                                        }
+                                      ]
+                                    }
+                                    """)
+                    )
+            ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT")
     })
     public ResponseEntity<ApiResult<List<BookingResponseDTO>>> getMyBookings(Authentication authentication) {
@@ -95,7 +174,41 @@ public class BookingController {
     @GetMapping("/{id}")
     @Operation(summary = "Get booking by id", description = "Returns a specific booking if it belongs to the authenticated user.")
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Booking returned"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Booking returned",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = BookingResponseDTO.class),
+                            examples = @ExampleObject(name = "Booking by id", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Booking retrieved successfully",
+                                      "data": {
+                                        "id": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                        "userEmail": "alice@example.com",
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "confirmationNumber": "INN-20260502-AB12CD",
+                                        "status": "CONFIRMED",
+                                        "totalAmount": 100.00,
+                                        "items": [
+                                          {
+                                            "seatId": "11111111-2222-3333-4444-555555555555",
+                                            "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                            "categoryName": "VIP",
+                                            "rowLabel": "A",
+                                            "seatNumber": 12,
+                                            "priceAtBooking": 100.00,
+                                            "ticketNumber": "20260502-12345A"
+                                          }
+                                        ],
+                                        "createdAt": "2026-05-02T15:45:00",
+                                        "updatedAt": "2026-05-02T15:50:00"
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Access denied"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Booking not found")
@@ -247,7 +360,41 @@ public class BookingController {
     @SecurityRequirements()
     @Operation(summary = "Lookup by confirmation number", description = "Public endpoint used to verify a booking by confirmation number.")
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Booking returned"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Booking returned",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = BookingResponseDTO.class),
+                            examples = @ExampleObject(name = "Booking by confirmation number", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Booking retrieved successfully",
+                                      "data": {
+                                        "id": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                        "userEmail": "alice@example.com",
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "confirmationNumber": "INN-20260502-AB12CD",
+                                        "status": "CONFIRMED",
+                                        "totalAmount": 100.00,
+                                        "items": [
+                                          {
+                                            "seatId": "11111111-2222-3333-4444-555555555555",
+                                            "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                            "categoryName": "VIP",
+                                            "rowLabel": "A",
+                                            "seatNumber": 12,
+                                            "priceAtBooking": 100.00,
+                                            "ticketNumber": "20260502-12345A"
+                                          }
+                                        ],
+                                        "createdAt": "2026-05-02T15:45:00",
+                                        "updatedAt": "2026-05-02T15:50:00"
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Confirmation number not found")
     })
     public ResponseEntity<ApiResult<BookingResponseDTO>> getByConfirmationNumber(@PathVariable String number) {
@@ -260,7 +407,41 @@ public class BookingController {
     @MinTier(2)
     @Operation(summary = "Cancel booking", description = "Cancels a booking before payment confirmation. Requires tier 2.")
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Booking cancelled"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Booking cancelled",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = BookingResponseDTO.class),
+                            examples = @ExampleObject(name = "Booking cancelled", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Booking cancelled successfully",
+                                      "data": {
+                                        "id": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                        "userEmail": "alice@example.com",
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "confirmationNumber": "INN-20260502-AB12CD",
+                                        "status": "CANCELLED",
+                                        "totalAmount": 100.00,
+                                        "items": [
+                                          {
+                                            "seatId": "11111111-2222-3333-4444-555555555555",
+                                            "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                            "categoryName": "VIP",
+                                            "rowLabel": "A",
+                                            "seatNumber": 12,
+                                            "priceAtBooking": 100.00,
+                                            "ticketNumber": "20260502-12345A"
+                                          }
+                                        ],
+                                        "createdAt": "2026-05-02T15:45:00",
+                                        "updatedAt": "2026-05-02T16:00:00"
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Cannot cancel in current state")
     })
@@ -277,7 +458,41 @@ public class BookingController {
     @PatchMapping("/{id}/confirm")
     @Operation(summary = "Confirm booking", description = "Marks a booking as confirmed (typically called by payment flow).")
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Booking confirmed"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Booking confirmed",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = BookingResponseDTO.class),
+                            examples = @ExampleObject(name = "Booking confirmed", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Booking confirmed successfully",
+                                      "data": {
+                                        "id": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                        "userEmail": "alice@example.com",
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "confirmationNumber": "INN-20260502-AB12CD",
+                                        "status": "CONFIRMED",
+                                        "totalAmount": 100.00,
+                                        "items": [
+                                          {
+                                            "seatId": "11111111-2222-3333-4444-555555555555",
+                                            "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                            "categoryName": "VIP",
+                                            "rowLabel": "A",
+                                            "seatNumber": 12,
+                                            "priceAtBooking": 100.00,
+                                            "ticketNumber": "20260502-12345A"
+                                          }
+                                        ],
+                                        "createdAt": "2026-05-02T15:45:00",
+                                        "updatedAt": "2026-05-02T15:50:00"
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid booking state")
     })

@@ -8,6 +8,7 @@ import com.innbucks.userservice.service.TokenRevocationService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
@@ -37,7 +38,28 @@ public class AuthController {
             description = "Creates a system-user account (SYSTEM_MANAGER, TENANT, MERCHANT_ADMIN, SHOP_ADMIN, SHOP_USER, ADMIN). " +
                     "Requires device registration and MFA registration. Customers must use the tiered /auth/customer/register endpoints.")
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "201", description = "User registered"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "201",
+                    description = "User registered",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = AuthResponseDTO.class),
+                            examples = @ExampleObject(name = "User registered", value = """
+                                    {
+                                      "code": "201 CREATED",
+                                      "message": "User registered successfully",
+                                      "data": {
+                                        "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSJ9.signature",
+                                        "role": "TENANT",
+                                        "email": "alice@example.com",
+                                        "mfaRequired": false,
+                                        "tier": 4,
+                                        "verified": true
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Validation failed or email already exists")
     })
     public ResponseEntity<ApiResult<AuthResponseDTO>> register(@Valid @RequestBody RegisterRequestDTO request) {
@@ -165,7 +187,20 @@ public class AuthController {
                     Safe to call multiple times — revoking an already-revoked token is a no-op.
                     """)
             @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Token revoked"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Token revoked",
+                    content = @Content(
+                            mediaType = "application/json",
+                            examples = @ExampleObject(name = "Logout successful", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Logout successful",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Missing or malformed Authorization header, or token already expired")
     })
     public ResponseEntity<ApiResult<Void>> logout(HttpServletRequest request) {
@@ -333,7 +368,20 @@ public class AuthController {
                     resets the counter.
                     """)
             @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "OTP sent"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "OTP sent",
+                    content = @Content(
+                            mediaType = "application/json",
+                            examples = @ExampleObject(name = "OTP sent", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "OTP sent",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Missing or invalid phone number"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429", description = "Retry quota exceeded — try again after the lockout expires")
     })
@@ -358,7 +406,20 @@ public class AuthController {
                     forcing the user to request a fresh one.
                     """)
             @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "OTP verified and consumed"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "OTP verified and consumed",
+                    content = @Content(
+                            mediaType = "application/json",
+                            examples = @ExampleObject(name = "OTP verified", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "OTP verified",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "OTP invalid or expired")
     })
     public ResponseEntity<ApiResult<Void>> verifyOtp(@Valid @RequestBody OtpVerifyDTO request) {

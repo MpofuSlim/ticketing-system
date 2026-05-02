@@ -48,7 +48,43 @@ public class SeatCategoryController {
     @SecurityRequirements()
     @Operation(summary = "List categories by event", description = "Returns all active seat categories for a given event.")
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Categories returned")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Categories returned",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = CreateCategoryResponseDTO.class),
+                            examples = @ExampleObject(name = "Categories by event", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Categories retrieved successfully",
+                                      "data": [
+                                        {
+                                          "seatCategoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                          "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                          "name": "VIP",
+                                          "description": "Front rows",
+                                          "price": 100.00,
+                                          "sections": [
+                                            { "section": "A", "seatCount": 25 },
+                                            { "section": "B", "seatCount": 25 }
+                                          ]
+                                        },
+                                        {
+                                          "seatCategoryId": "9e2c5b4f-2d1f-4a28-8b1c-2e5c8a7b6d22",
+                                          "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                          "name": "GA",
+                                          "description": "General admission",
+                                          "price": 60.00,
+                                          "sections": [
+                                            { "section": "F", "seatCount": 50 }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                    """)
+                    )
+            )
     })
     public ResponseEntity<ApiResult<List<CreateCategoryResponseDTO>>> getByEvent(
             @Parameter(description = "Event UUID") @RequestParam UUID eventId
@@ -66,7 +102,31 @@ public class SeatCategoryController {
     @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
     @Operation(summary = "Create category", description = "Creates a seat category for an event. Requires TENANT or ADMIN role.")
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "201", description = "Category created"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "201",
+                    description = "Category created",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = CreateCategoryResponseDTO.class),
+                            examples = @ExampleObject(name = "Category created", value = """
+                                    {
+                                      "code": "201 CREATED",
+                                      "message": "Seat category created successfully",
+                                      "data": {
+                                        "seatCategoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "name": "VIP",
+                                        "description": "Front rows",
+                                        "price": 100.00,
+                                        "sections": [
+                                          { "section": "A", "seatCount": 25 },
+                                          { "section": "B", "seatCount": 25 }
+                                        ]
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Validation or domain error")
@@ -223,7 +283,20 @@ public class SeatCategoryController {
     @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
     @Operation(summary = "Delete category", description = "Soft-deletes a seat category. Requires TENANT or ADMIN role.")
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Category deleted"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Category deleted",
+                    content = @Content(
+                            mediaType = "application/json",
+                            examples = @ExampleObject(name = "Category deleted", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Seat category deleted successfully",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Category not found")
