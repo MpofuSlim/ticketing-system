@@ -45,16 +45,17 @@ public class EventAnalyticsDTO {
         private long bookedSeats;
         // Booking record counts across every category in the event.
         // Buckets are mutually exclusive: pending + paid + cancelled = total.
+        // PENDING is a temporary seat hold, not a real booking — it is NOT
+        // rolled into a "active" bucket.
         private int totalBookings;
-        private int activeBookings;     // pending + paid (still holding seats logically)
         private int pendingBookings;    // PENDING — seat held, payment not yet received
         private int paidBookings;       // CONFIRMED — payment received, seat permanently sold
         private int cancelledBookings;  // CANCELLED — released (user-cancelled or hold expired)
-        private BigDecimal grossRevenue;     // sum priceAtBooking across all records
-        private BigDecimal netRevenue;       // sum priceAtBooking for non-CANCELLED
-        private BigDecimal pendingRevenue;   // sum priceAtBooking for PENDING only
-        private BigDecimal paidRevenue;      // sum priceAtBooking for CONFIRMED only ← real money in
-        private BigDecimal potentialRevenue; // sum (totalSeats × price) per category
+        // Revenue is reported as held vs real vs theoretical max. PENDING
+        // money is intentionally excluded from the "real money" number.
+        private BigDecimal pendingRevenue;   // sum priceAtBooking for PENDING — money on hold, not booked yet
+        private BigDecimal paidRevenue;      // sum priceAtBooking for CONFIRMED — actual money in
+        private BigDecimal potentialRevenue; // sum (totalSeats × price) per category — ceiling
         private LocalDateTime mostRecentBookingAt;
     }
 
@@ -105,15 +106,16 @@ public class EventAnalyticsDTO {
     public static class BookingStats {
         // Aggregates across the FULL set, not just the current page.
         // Buckets are mutually exclusive: pending + paid + cancelled = total.
+        // PENDING is a temporary seat hold, not a real booking — it is NOT
+        // rolled into a "active" bucket.
         private int totalRecords;
-        private int activeRecords;     // pending + paid (still holding seats logically)
         private int pendingRecords;    // PENDING — seat held, payment not yet received
         private int paidRecords;       // CONFIRMED — payment received, seat permanently sold
         private int cancelledRecords;  // CANCELLED — released (user-cancelled or hold expired)
-        private BigDecimal grossRevenue;     // sum priceAtBooking across all records
-        private BigDecimal netRevenue;       // sum priceAtBooking for non-CANCELLED only
-        private BigDecimal pendingRevenue;   // sum priceAtBooking for PENDING only
-        private BigDecimal paidRevenue;      // sum priceAtBooking for CONFIRMED only ← real money in
+        // Revenue is reported as held vs real vs theoretical max. PENDING
+        // money is intentionally excluded from the "real money" number.
+        private BigDecimal pendingRevenue;   // sum priceAtBooking for PENDING — money on hold, not booked yet
+        private BigDecimal paidRevenue;      // sum priceAtBooking for CONFIRMED — actual money in
         private BigDecimal potentialRevenue; // totalSeats × price (max if every seat sold)
         private LocalDateTime mostRecentBookingAt;
         // Pagination metadata for the items slice below.

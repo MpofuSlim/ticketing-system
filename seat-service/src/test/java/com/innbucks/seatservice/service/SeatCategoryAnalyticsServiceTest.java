@@ -145,20 +145,23 @@ class SeatCategoryAnalyticsServiceTest {
                 .filter(c -> c.getCategory().getId().equals(CATEGORY_GA))
                 .findFirst().orElseThrow();
 
-        // Per-category revenue
-        assertEquals(0, new BigDecimal("200.00").compareTo(vip.getBookings().getGrossRevenue()));
-        assertEquals(0, new BigDecimal("100.00").compareTo(vip.getBookings().getNetRevenue()));
+        // Per-category revenue split — PENDING is held money, CONFIRMED is real.
+        // VIP: 1 CONFIRMED @100 + 1 CANCELLED → paid=100, pending=0.
+        assertEquals(0, new BigDecimal("100.00").compareTo(vip.getBookings().getPaidRevenue()));
+        assertEquals(0, BigDecimal.ZERO.compareTo(vip.getBookings().getPendingRevenue()));
         assertEquals(0, new BigDecimal("500.00").compareTo(vip.getBookings().getPotentialRevenue())); // 5 × 100
-        assertEquals(0, new BigDecimal("100.00").compareTo(ga.getBookings().getGrossRevenue()));
-        assertEquals(0, new BigDecimal("100.00").compareTo(ga.getBookings().getNetRevenue()));
+        // GA: 1 CONFIRMED @50 + 1 PENDING @50 → paid=50, pending=50.
+        assertEquals(0, new BigDecimal("50.00").compareTo(ga.getBookings().getPaidRevenue()));
+        assertEquals(0, new BigDecimal("50.00").compareTo(ga.getBookings().getPendingRevenue()));
         assertEquals(0, new BigDecimal("500.00").compareTo(ga.getBookings().getPotentialRevenue())); // 10 × 50
 
         // Event rollup adds per-category numbers.
-        assertEquals(0, new BigDecimal("300.00").compareTo(result.getTotals().getGrossRevenue()));
-        assertEquals(0, new BigDecimal("200.00").compareTo(result.getTotals().getNetRevenue()));
+        assertEquals(0, new BigDecimal("150.00").compareTo(result.getTotals().getPaidRevenue()));
+        assertEquals(0, new BigDecimal("50.00").compareTo(result.getTotals().getPendingRevenue()));
         assertEquals(0, new BigDecimal("1000.00").compareTo(result.getTotals().getPotentialRevenue()));
         assertEquals(4, result.getTotals().getTotalBookings());
-        assertEquals(3, result.getTotals().getActiveBookings());
+        assertEquals(2, result.getTotals().getPaidBookings());
+        assertEquals(1, result.getTotals().getPendingBookings());
         assertEquals(1, result.getTotals().getCancelledBookings());
     }
 
@@ -183,16 +186,14 @@ class SeatCategoryAnalyticsServiceTest {
                 .getEventAnalytics(EVENT_ID, 0, 20, null);
 
         EventAnalyticsDTO.BookingStats stats = result.getCategories().get(0).getBookings();
-        // Counts: 4 total, 3 active (2 pending + 1 paid), 1 cancelled.
+        // Counts: 4 total = 2 pending + 1 paid + 1 cancelled. PENDING is a
+        // hold, not a real booking — there is no "active" rollup field.
         assertEquals(4, stats.getTotalRecords());
-        assertEquals(3, stats.getActiveRecords());
         assertEquals(2, stats.getPendingRecords());
         assertEquals(1, stats.getPaidRecords());
         assertEquals(1, stats.getCancelledRecords());
-        // Revenue: gross=400 (everything), net=300 (non-cancelled),
-        //          pendingRevenue=200 (held only), paidRevenue=100 (real money in).
-        assertEquals(0, new BigDecimal("400.00").compareTo(stats.getGrossRevenue()));
-        assertEquals(0, new BigDecimal("300.00").compareTo(stats.getNetRevenue()));
+        // Revenue: pendingRevenue=200 (held), paidRevenue=100 (real money in).
+        // Cancelled records contribute to neither.
         assertEquals(0, new BigDecimal("200.00").compareTo(stats.getPendingRevenue()));
         assertEquals(0, new BigDecimal("100.00").compareTo(stats.getPaidRevenue()));
 

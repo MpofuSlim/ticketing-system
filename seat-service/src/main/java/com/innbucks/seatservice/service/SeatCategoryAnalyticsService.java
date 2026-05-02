@@ -121,8 +121,6 @@ public class SeatCategoryAnalyticsService {
             List<CategoryBookingDTO> items, SeatCategory category, int page, int size) {
         // Aggregates across the full set so totals don't change as the
         // consumer pages through.
-        BigDecimal gross   = sumPrices(items, b -> true);
-        BigDecimal net     = sumPrices(items, b -> b.getStatus() != CategoryBookingDTO.BookingStatus.CANCELLED);
         BigDecimal pending = sumPrices(items, b -> b.getStatus() == CategoryBookingDTO.BookingStatus.PENDING);
         BigDecimal paid    = sumPrices(items, b -> b.getStatus() == CategoryBookingDTO.BookingStatus.CONFIRMED);
         int pendingCount   = (int) items.stream()
@@ -134,7 +132,6 @@ public class SeatCategoryAnalyticsService {
         int cancelled = (int) items.stream()
                 .filter(b -> b.getStatus() == CategoryBookingDTO.BookingStatus.CANCELLED)
                 .count();
-        int active = items.size() - cancelled;
         LocalDateTime mostRecent = items.stream()
                 .map(CategoryBookingDTO::getBookedAt)
                 .filter(Objects::nonNull)
@@ -154,12 +151,9 @@ public class SeatCategoryAnalyticsService {
 
         return EventAnalyticsDTO.BookingStats.builder()
                 .totalRecords(items.size())
-                .activeRecords(active)
                 .pendingRecords(pendingCount)
                 .paidRecords(paidCount)
                 .cancelledRecords(cancelled)
-                .grossRevenue(gross)
-                .netRevenue(net)
                 .pendingRevenue(pending)
                 .paidRevenue(paid)
                 .potentialRevenue(potential)
@@ -190,9 +184,7 @@ public class SeatCategoryAnalyticsService {
     private EventAnalyticsDTO.EventTotals rollUp(
             List<SeatCategory> categories, List<EventAnalyticsDTO.CategoryAnalytics> blocks) {
         long totalSeats = 0, available = 0, locked = 0, booked = 0;
-        int totalBookings = 0, activeBookings = 0, pendingBookings = 0, paidBookings = 0, cancelledBookings = 0;
-        BigDecimal gross = BigDecimal.ZERO;
-        BigDecimal net = BigDecimal.ZERO;
+        int totalBookings = 0, pendingBookings = 0, paidBookings = 0, cancelledBookings = 0;
         BigDecimal pendingRevenue = BigDecimal.ZERO;
         BigDecimal paidRevenue = BigDecimal.ZERO;
         BigDecimal potential = BigDecimal.ZERO;
@@ -207,12 +199,9 @@ public class SeatCategoryAnalyticsService {
 
             EventAnalyticsDTO.BookingStats b = block.getBookings();
             totalBookings     += b.getTotalRecords();
-            activeBookings    += b.getActiveRecords();
             pendingBookings   += b.getPendingRecords();
             paidBookings      += b.getPaidRecords();
             cancelledBookings += b.getCancelledRecords();
-            if (b.getGrossRevenue() != null)     gross          = gross.add(b.getGrossRevenue());
-            if (b.getNetRevenue() != null)       net            = net.add(b.getNetRevenue());
             if (b.getPendingRevenue() != null)   pendingRevenue = pendingRevenue.add(b.getPendingRevenue());
             if (b.getPaidRevenue() != null)      paidRevenue    = paidRevenue.add(b.getPaidRevenue());
             if (b.getPotentialRevenue() != null) potential      = potential.add(b.getPotentialRevenue());
@@ -228,12 +217,9 @@ public class SeatCategoryAnalyticsService {
                 .lockedSeats(locked)
                 .bookedSeats(booked)
                 .totalBookings(totalBookings)
-                .activeBookings(activeBookings)
                 .pendingBookings(pendingBookings)
                 .paidBookings(paidBookings)
                 .cancelledBookings(cancelledBookings)
-                .grossRevenue(gross)
-                .netRevenue(net)
                 .pendingRevenue(pendingRevenue)
                 .paidRevenue(paidRevenue)
                 .potentialRevenue(categories.isEmpty() ? null : potential)
