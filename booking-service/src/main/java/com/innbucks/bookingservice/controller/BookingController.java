@@ -7,6 +7,9 @@ import com.innbucks.bookingservice.dto.CreateBookingRequestDTO;
 import com.innbucks.bookingservice.security.MinTier;
 import com.innbucks.bookingservice.service.BookingService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -116,7 +119,54 @@ public class BookingController {
                     "to exclude them. Restricted to TENANT/ADMIN because it exposes customer emails."
     )
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Bookings returned"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Bookings returned",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = CategoryBookingDTO.class),
+                            examples = @ExampleObject(name = "Bookings by category", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Bookings retrieved successfully",
+                                      "data": [
+                                        {
+                                          "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                          "userEmail": "alice@example.com",
+                                          "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                          "status": "CONFIRMED",
+                                          "confirmationNumber": "INN-20260502-AB12CD",
+                                          "seatId": "11111111-2222-3333-4444-555555555555",
+                                          "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                          "categoryName": "VIP",
+                                          "rowLabel": "A",
+                                          "seatNumber": 12,
+                                          "ticketNumber": "20260502-12345A",
+                                          "priceAtBooking": 100.00,
+                                          "bookedAt": "2026-05-02T15:45:00",
+                                          "updatedAt": "2026-05-02T15:45:00"
+                                        },
+                                        {
+                                          "bookingId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                          "userEmail": "bob@example.com",
+                                          "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                          "status": "CANCELLED",
+                                          "confirmationNumber": "INN-20260501-EF34GH",
+                                          "seatId": "22222222-3333-4444-5555-666666666666",
+                                          "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                          "categoryName": "VIP",
+                                          "rowLabel": "A",
+                                          "seatNumber": 13,
+                                          "ticketNumber": "20260501-67890B",
+                                          "priceAtBooking": 100.00,
+                                          "bookedAt": "2026-05-01T10:30:00",
+                                          "updatedAt": "2026-05-01T11:00:00"
+                                        }
+                                      ]
+                                    }
+                                    """)
+                    )
+            ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN")
     })
@@ -136,7 +186,54 @@ public class BookingController {
                     "Restricted to TENANT/ADMIN because it exposes customer emails."
     )
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Bookings returned"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Bookings returned",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = CategoryBookingDTO.class),
+                            examples = @ExampleObject(name = "Bookings by event", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Bookings retrieved successfully",
+                                      "data": [
+                                        {
+                                          "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                          "userEmail": "alice@example.com",
+                                          "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                          "status": "CONFIRMED",
+                                          "confirmationNumber": "INN-20260502-AB12CD",
+                                          "seatId": "11111111-2222-3333-4444-555555555555",
+                                          "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                          "categoryName": "VIP",
+                                          "rowLabel": "A",
+                                          "seatNumber": 12,
+                                          "ticketNumber": "20260502-12345A",
+                                          "priceAtBooking": 100.00,
+                                          "bookedAt": "2026-05-02T15:45:00",
+                                          "updatedAt": "2026-05-02T15:45:00"
+                                        },
+                                        {
+                                          "bookingId": "c5d1e3f4-3456-7890-abcd-ef0123456789",
+                                          "userEmail": "carol@example.com",
+                                          "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                          "status": "PENDING",
+                                          "confirmationNumber": "INN-20260502-IJ56KL",
+                                          "seatId": "33333333-4444-5555-6666-777777777777",
+                                          "categoryId": "9e2c5b4f-2d1f-4a28-8b1c-2e5c8a7b6d22",
+                                          "categoryName": "GA",
+                                          "rowLabel": "F",
+                                          "seatNumber": 4,
+                                          "ticketNumber": "20260502-99999C",
+                                          "priceAtBooking": 60.00,
+                                          "bookedAt": "2026-05-02T14:00:00",
+                                          "updatedAt": "2026-05-02T14:00:00"
+                                        }
+                                      ]
+                                    }
+                                    """)
+                    )
+            ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN")
     })

@@ -10,6 +10,9 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpHeaders;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -91,7 +94,112 @@ public class SeatCategoryController {
                     "the requested page; the aggregate counts/revenue stay computed across the full set."
     )
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Analytics returned (empty categories list if event has none)"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Analytics returned (empty categories list if event has none)",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = EventAnalyticsDTO.class),
+                            examples = @ExampleObject(name = "Event analytics", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Event analytics retrieved successfully",
+                                      "data": {
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "categoryCount": 2,
+                                        "totals": {
+                                          "totalSeats": 100,
+                                          "availableSeats": 40,
+                                          "lockedSeats": 5,
+                                          "bookedSeats": 55,
+                                          "totalBookings": 53,
+                                          "activeBookings": 50,
+                                          "cancelledBookings": 3,
+                                          "grossRevenue": 5300.00,
+                                          "netRevenue": 5000.00,
+                                          "potentialRevenue": 8000.00,
+                                          "mostRecentBookingAt": "2026-05-02T15:45:00"
+                                        },
+                                        "categories": [
+                                          {
+                                            "category": {
+                                              "id": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                              "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                              "name": "VIP",
+                                              "description": "Front rows",
+                                              "price": 100.00,
+                                              "totalSeats": 50,
+                                              "cachedAvailableSeats": 12,
+                                              "createdAt": "2026-04-25T08:00:00",
+                                              "updatedAt": "2026-05-02T15:45:00"
+                                            },
+                                            "seatStatusCounts": { "total": 50, "available": 12, "locked": 3, "booked": 35 },
+                                            "bookings": {
+                                              "totalRecords": 38,
+                                              "activeRecords": 35,
+                                              "cancelledRecords": 3,
+                                              "grossRevenue": 3800.00,
+                                              "netRevenue": 3500.00,
+                                              "potentialRevenue": 5000.00,
+                                              "mostRecentBookingAt": "2026-05-02T15:45:00",
+                                              "pageNumber": 0,
+                                              "pageSize": 20,
+                                              "totalPages": 2,
+                                              "items": [
+                                                {
+                                                  "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                  "userEmail": "alice@example.com",
+                                                  "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                                  "status": "CONFIRMED",
+                                                  "confirmationNumber": "INN-20260502-AB12CD",
+                                                  "seatId": "11111111-2222-3333-4444-555555555555",
+                                                  "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                                  "categoryName": "VIP",
+                                                  "rowLabel": "A",
+                                                  "seatNumber": 12,
+                                                  "ticketNumber": "20260502-12345A",
+                                                  "priceAtBooking": 100.00,
+                                                  "bookedAt": "2026-05-02T15:45:00",
+                                                  "updatedAt": "2026-05-02T15:45:00"
+                                                }
+                                              ]
+                                            }
+                                          },
+                                          {
+                                            "category": {
+                                              "id": "9e2c5b4f-2d1f-4a28-8b1c-2e5c8a7b6d22",
+                                              "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                              "name": "GA",
+                                              "description": "General admission",
+                                              "price": 60.00,
+                                              "totalSeats": 50,
+                                              "cachedAvailableSeats": 28,
+                                              "createdAt": "2026-04-25T08:00:00",
+                                              "updatedAt": "2026-05-02T14:00:00"
+                                            },
+                                            "seatStatusCounts": { "total": 50, "available": 28, "locked": 2, "booked": 20 },
+                                            "bookings": {
+                                              "totalRecords": 15,
+                                              "activeRecords": 15,
+                                              "cancelledRecords": 0,
+                                              "grossRevenue": 1500.00,
+                                              "netRevenue": 1500.00,
+                                              "potentialRevenue": 3000.00,
+                                              "mostRecentBookingAt": "2026-05-02T14:00:00",
+                                              "pageNumber": 0,
+                                              "pageSize": 20,
+                                              "totalPages": 1,
+                                              "items": []
+                                            }
+                                          }
+                                        ],
+                                        "bookingServiceReachable": true,
+                                        "fetchedAt": "2026-05-02T15:46:00"
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN")
     })
