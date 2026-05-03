@@ -53,9 +53,6 @@ public class SecurityConfig {
                         .requestMatchers("/swagger-ui.html").permitAll()
                         .requestMatchers("/v3/api-docs/**").permitAll()
                         .requestMatchers("/error").permitAll()
-                        // H2 console (dev only). Served from /h2-console/**;
-                        // frameOptions=sameOrigin above lets it render its iframes.
-                        .requestMatchers("/h2-console/**").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                         // Everything else requires authentication
                         .anyRequest().authenticated()

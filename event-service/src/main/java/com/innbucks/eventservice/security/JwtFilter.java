@@ -24,8 +24,7 @@ public class JwtFilter extends OncePerRequestFilter {
     private static final List<String> EXCLUDED_PATHS = List.of(
             "/swagger-ui",
             "/v3/api-docs",
-            "/error",
-            "/h2-console"
+            "/error"
     );
 
     @Override

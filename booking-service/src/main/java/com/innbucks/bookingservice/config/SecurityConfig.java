@@ -28,9 +28,6 @@ public class SecurityConfig {
                         .requestMatchers("/error").permitAll()
                         // Confirmation lookup is public — agents scan at the gate
                         .requestMatchers("/bookings/confirmation/**").permitAll()
-                        // H2 console (dev only). frameOptions=sameOrigin above
-                        // lets it render its iframes.
-                        .requestMatchers("/h2-console/**").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                         // Everything else requires authentication
                         .anyRequest().authenticated()

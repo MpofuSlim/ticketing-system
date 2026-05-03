@@ -59,10 +59,18 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- H2: now the only database (runtime + tests). -->
+        <!-- PostgreSQL is the runtime database. -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- H2 is kept for tests only (in-memory, PostgreSQL compatibility mode). -->
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
+            <scope>test</scope>
         </dependency>
 
         <!-- ZXing for per-ticket QR code generation. core has the encoder;
@@ -78,16 +86,8 @@
             <version>3.5.3</version>
         </dependency>
 
-        <!-- PostgreSQL (disabled — see application.yaml; revert by removing
-             the comment block and dropping H2 to test scope above).
-        <dependency>
-            <groupId>org.postgresql</groupId>
-            <artifactId>postgresql</artifactId>
-            <scope>runtime</scope>
-        </dependency>
-        -->
-
-        <!-- Flyway (disabled — migrations are PostgreSQL-flavoured).
+        <!-- Flyway: schema is owned by versioned migrations under
+             src/main/resources/db/migration. -->
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-core</artifactId>
@@ -97,7 +97,6 @@
             <artifactId>flyway-database-postgresql</artifactId>
             <scope>runtime</scope>
         </dependency>
-        -->
 
         <!-- Swagger -->
         <dependency>

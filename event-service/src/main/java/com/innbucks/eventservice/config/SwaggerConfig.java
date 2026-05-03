@@ -23,7 +23,6 @@ import java.util.List;
 
                         - **Public** `GET` endpoints are available without a token.
                         - **Write** operations require a `TENANT` role and a **Bearer JWT** in the `Authorization` header.
-                        - The H2 console is for local development only; it is not a public API.
                         """
         ),
         security = @SecurityRequirement(name = "bearerAuth")

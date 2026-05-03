@@ -61,8 +61,7 @@ public class JwtFilter extends OncePerRequestFilter {
             "/swagger-ui",
             "/v3/api-docs",
             "/auth",
-            "/error",
-            "/h2-console"
+            "/error"
     );
 
     @Override

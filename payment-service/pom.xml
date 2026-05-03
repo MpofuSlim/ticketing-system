@@ -30,18 +30,18 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
-        <!-- PostgreSQL (disabled).
+        <!-- PostgreSQL is the runtime database. -->
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
         </dependency>
-        -->
 
-        <!-- H2: now the only database (runtime + tests). -->
+        <!-- H2 is kept for tests only (in-memory, PostgreSQL compatibility mode). -->
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
+            <scope>test</scope>
         </dependency>
 
         <!-- Stripe payment integration -->

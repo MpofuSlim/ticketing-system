@@ -10,29 +10,24 @@
 name: innbucks
 
 services:
-  # ----------------------------------------------------------------------
-  # Postgres (disabled — services now run on H2 in-memory).
-  # Re-enable by uncommenting this block, the DB_* env entries in each
-  # service, and the postgres_data volume at the bottom of this file.
-  # ----------------------------------------------------------------------
-  # postgres:
-  #   image: postgres:16-alpine
-  #   container_name: innbucks-postgres
-  #   restart: unless-stopped
-  #   environment:
-  #     POSTGRES_USER: ${POSTGRES_USER:-postgres}
-  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
-  #     POSTGRES_DB: postgres
-  #   ports:
-  #     - "5432:5432"
-  #   volumes:
-  #     - postgres_data:/var/lib/postgresql/data
-  #     - ./docker/postgres/init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql:ro
-  #   healthcheck:
-  #     test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
-  #     interval: 5s
-  #     timeout: 3s
-  #     retries: 20
+  postgres:
+    image: postgres:16-alpine
+    container_name: innbucks-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init-databases.sql:/docker-entrypoint-initdb.d/init-databases.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   redis:
     image: redis:7-alpine
@@ -85,25 +80,22 @@ services:
     image: ticketing-user-service:dev
     container_name: innbucks-user-service
     restart: unless-stopped
-    # depends_on:
-    #   postgres:
-    #     condition: service_healthy
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
-      # --- PostgreSQL (disabled — service runs on H2 in-memory). ---
-      # DB_URL: jdbc:postgresql://postgres:5432/user_service
-      # DB_USERNAME: ${POSTGRES_USER:-postgres}
-      # DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
-      # DB_DRIVER: org.postgresql.Driver
-      # HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
-      # JPA_DDL_AUTO: validate
-      # FLYWAY_ENABLED: "true"
+      DB_URL: jdbc:postgresql://postgres:5432/user_service
+      DB_USERNAME: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
+      DB_DRIVER: org.postgresql.Driver
+      HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+      JPA_DDL_AUTO: validate
+      FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       JWT_EXPIRATION_MS: 86400000
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
     ports:
       - "8081:8081"
-    volumes:
-      - user_data:/app/data
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/actuator/health"]
       interval: 10s
@@ -118,25 +110,22 @@ services:
     image: ticketing-event-service:dev
     container_name: innbucks-event-service
     restart: unless-stopped
-    # depends_on:
-    #   postgres:
-    #     condition: service_healthy
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
-      # --- PostgreSQL (disabled — service runs on H2 in-memory). ---
-      # DB_URL: jdbc:postgresql://postgres:5432/event_service
-      # DB_USERNAME: ${POSTGRES_USER:-postgres}
-      # DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
-      # DB_DRIVER: org.postgresql.Driver
-      # HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
-      # JPA_DDL_AUTO: validate
-      # FLYWAY_ENABLED: "true"
+      DB_URL: jdbc:postgresql://postgres:5432/event_service
+      DB_USERNAME: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
+      DB_DRIVER: org.postgresql.Driver
+      HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+      JPA_DDL_AUTO: validate
+      FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       SEAT_SERVICE_BASE_URL: http://seat-service:8083
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
     ports:
       - "8082:8082"
-    volumes:
-      - event_data:/app/data
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8082/actuator/health"]
       interval: 10s
@@ -152,27 +141,24 @@ services:
     container_name: innbucks-seat-service
     restart: unless-stopped
     depends_on:
-      # postgres:
-      #   condition: service_healthy
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
     environment:
-      # --- PostgreSQL (disabled — service runs on H2 in-memory). ---
-      # DB_URL: jdbc:postgresql://postgres:5432/seat_service
-      # DB_USERNAME: ${POSTGRES_USER:-postgres}
-      # DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
-      # DB_DRIVER: org.postgresql.Driver
-      # HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
-      # JPA_DDL_AUTO: validate
-      # FLYWAY_ENABLED: "true"
+      DB_URL: jdbc:postgresql://postgres:5432/seat_service
+      DB_USERNAME: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
+      DB_DRIVER: org.postgresql.Driver
+      HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+      JPA_DDL_AUTO: validate
+      FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       LOCK_STORE: redis
     ports:
       - "8083:8083"
-    volumes:
-      - seat_data:/app/data
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8083/actuator/health"]
       interval: 10s
@@ -188,21 +174,20 @@ services:
     container_name: innbucks-booking-service
     restart: unless-stopped
     depends_on:
-      # postgres:
-      #   condition: service_healthy
+      postgres:
+        condition: service_healthy
       redis:
         condition: service_healthy
       kafka:
         condition: service_healthy
     environment:
-      # --- PostgreSQL (disabled — service runs on H2 in-memory). ---
-      # DB_URL: jdbc:postgresql://postgres:5432/booking_service
-      # DB_USERNAME: ${POSTGRES_USER:-postgres}
-      # DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
-      # DB_DRIVER: org.postgresql.Driver
-      # HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
-      # JPA_DDL_AUTO: validate
-      # FLYWAY_ENABLED: "true"
+      DB_URL: jdbc:postgresql://postgres:5432/booking_service
+      DB_USERNAME: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
+      DB_DRIVER: org.postgresql.Driver
+      HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+      JPA_DDL_AUTO: validate
+      FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
@@ -211,8 +196,6 @@ services:
       SEAT_SERVICE_URL: http://seat-service:8083
     ports:
       - "8084:8084"
-    volumes:
-      - booking_data:/app/data
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8084/actuator/health"]
       interval: 10s
@@ -235,13 +218,14 @@ services:
     depends_on:
       booking-service:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
     environment:
-      # --- PostgreSQL (disabled — service runs on H2 in-memory). ---
-      # SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/payment_service
-      # SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-postgres}
-      # SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
-      # SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
-      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      DB_URL: jdbc:postgresql://postgres:5432/payment_service
+      DB_USERNAME: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
+      DB_DRIVER: org.postgresql.Driver
+      JPA_DDL_AUTO: update
       BOOKING_SERVICE_URL: http://booking-service:8084
     ports:
       - "8085:8085"
@@ -292,13 +276,6 @@ services:
       start_period: 45s
 
 volumes:
-  # postgres_data:   # disabled — see Postgres service block above
+  postgres_data:
   redis_data:
   kafka_data:
-  # H2 file-based databases. Mounted at /app/data inside each service so the
-  # JDBC URL `jdbc:h2:file:./data/<service>` survives `docker compose down`
-  # and image rebuilds. Wipe with `docker compose down -v`.
-  user_data:
-  event_data:
-  seat_data:
-  booking_data:

@@ -52,12 +52,11 @@ public class Event {
     @Column(nullable = false)
     private Integer availableTickets;
 
-    // Banner image bytes. Declared as BYTEA so it works in H2 (running in
-    // MODE=PostgreSQL) and real Postgres alike — neither has a length cap that
-    // would truncate real-world images, unlike the default Hibernate
-    // varbinary mapping. Lazy-loaded so list endpoints don't pull bytes into
-    // memory; clients fetch the bytes via GET /events/{id}/banner using the
-    // bannerUrl on the response.
+    // Banner image bytes. Declared as BYTEA — Postgres has no length cap that
+    // would truncate real-world images, unlike the default Hibernate varbinary
+    // mapping. Lazy-loaded so list endpoints don't pull bytes into memory;
+    // clients fetch the bytes via GET /events/{id}/banner using the bannerUrl
+    // on the response.
     @Basic(fetch = FetchType.LAZY)
     @Column(name = "banner_image", columnDefinition = "BYTEA")
     private byte[] bannerImage;

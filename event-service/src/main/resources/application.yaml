@@ -2,21 +2,14 @@ spring:
   application:
     name: event-service
 
-  # H2-only mode: file-based database under ./data so writes survive restart;
-  # AUTO_SERVER=TRUE lets a SQL client connect while the app is running. The
-  # PostgreSQL config is preserved below (commented) for easy reversal. Tests
-  # still use in-memory H2 via src/test/resources/application-test.yaml +
-  # @ActiveProfiles("test") for clean isolation between runs.
+  # Tests run on in-memory H2 (PostgreSQL compatibility mode) via
+  # src/test/resources/application-test.yaml + @ActiveProfiles("test"); the
+  # main runtime is PostgreSQL.
   datasource:
-    url: jdbc:h2:file:./data/event-service;MODE=PostgreSQL;AUTO_SERVER=TRUE
-    driver-class-name: org.h2.Driver
-    username: sa
-    password:
-    # --- PostgreSQL (disabled) ---
-    # url: ${DB_URL:jdbc:postgresql://localhost:5432/event_service}
-    # driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
-    # username: ${DB_USERNAME:postgres}
-    # password: ${DB_PASSWORD}
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/event_service}
+    driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD}
     hikari:
       pool-name: event-service-pool
       maximum-pool-size: ${DB_POOL_MAX:20}
@@ -27,29 +20,22 @@ spring:
 
   jpa:
     hibernate:
-      # H2 in-memory: Hibernate generates the schema on each boot.
-      ddl-auto: ${JPA_DDL_AUTO:update}
+      # Schema is owned by Flyway migrations; Hibernate only validates that
+      # the JPA model matches the actual columns at boot.
+      ddl-auto: ${JPA_DDL_AUTO:validate}
     show-sql: ${JPA_SHOW_SQL:false}
     properties:
       hibernate:
-        dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.H2Dialect}
-        # --- PostgreSQL dialect (disabled) ---
-        # dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
+        dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
 
-  # Flyway migrations are PostgreSQL-flavoured; disabled when running on H2.
   flyway:
-    enabled: ${FLYWAY_ENABLED:false}
+    enabled: ${FLYWAY_ENABLED:true}
     baseline-on-migrate: true
     baseline-version: 0
     locations: classpath:db/migration
 
   lifecycle:
     timeout-per-shutdown-phase: 30s
-
-  h2:
-    console:
-      enabled: true
-      path: /h2-console
 
   # POST /events accepts a multipart payload (JSON `event` part + optional
   # `eventBanner` image part). Bumped above Spring's 1MB/10MB defaults so the
