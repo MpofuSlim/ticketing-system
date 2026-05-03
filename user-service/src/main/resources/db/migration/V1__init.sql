@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS customer_profiles (
     passport_number             VARCHAR(255),
     address                     VARCHAR(255),
     gender                      VARCHAR(255),
-    selfie_picture_path         VARCHAR(255),
+    selfie_picture              TEXT,
     biometrics_reference        VARCHAR(255),
     id_document_path            VARCHAR(255),
     proof_of_residence_path     VARCHAR(255),

@@ -6,10 +6,12 @@
 CREATE TABLE IF NOT EXISTS bookings (
     id                    UUID            PRIMARY KEY,
     user_email            VARCHAR(255)    NOT NULL,
+    phone_number          VARCHAR(255),
     event_id              UUID            NOT NULL,
     confirmation_number   VARCHAR(255)    NOT NULL,
     status                VARCHAR(255)    NOT NULL,
     total_amount          NUMERIC(10, 2)  NOT NULL,
+    expires_at            TIMESTAMP,
     created_at            TIMESTAMP,
     updated_at            TIMESTAMP,
     CONSTRAINT uk_bookings_confirmation_number
