@@ -85,6 +85,18 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
+            - id: loyalty-service-route
+              uri: ${LOYALTY_SERVICE_URI:http://localhost:8086}
+              predicates:
+                - Path=/loyalty/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
+
             - id: user-service-proxy-route
               uri: ${USER_SERVICE_URI:http://localhost:8081}
               predicates:
@@ -117,6 +129,13 @@ spring:
               uri: ${PAYMENT_SERVICE_URI:http://localhost:8085}
               predicates:
                 - Path=/payment-service/**
+              filters:
+                - StripPrefix=1
+
+            - id: loyalty-service-proxy-route
+              uri: ${LOYALTY_SERVICE_URI:http://localhost:8086}
+              predicates:
+                - Path=/loyalty-service/**
               filters:
                 - StripPrefix=1
 
@@ -185,3 +204,5 @@ springdoc:
         url: /booking-service/v3/api-docs
       - name: payment-service
         url: /payment-service/v3/api-docs
+      - name: loyalty-service
+        url: /loyalty-service/v3/api-docs

@@ -3,6 +3,7 @@ package com.innbucks.bookingservice.controller;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.BookingResponseDTO;
 import com.innbucks.bookingservice.dto.CategoryBookingDTO;
+import com.innbucks.bookingservice.dto.ConfirmBookingRequestDTO;
 import com.innbucks.bookingservice.dto.CreateBookingRequestDTO;
 import com.innbucks.bookingservice.security.JwtAuthDetails;
 import com.innbucks.bookingservice.security.MinTier;
@@ -574,9 +575,14 @@ public class BookingController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid booking state")
     })
-    public ResponseEntity<ApiResult<BookingResponseDTO>> confirmBooking(@PathVariable UUID id) {
-        log.info("PATCH /bookings/{}/confirm", id);
+    public ResponseEntity<ApiResult<BookingResponseDTO>> confirmBooking(
+            @PathVariable UUID id,
+            @RequestBody(required = false) ConfirmBookingRequestDTO request
+    ) {
+        log.info("PATCH /bookings/{}/confirm pointsToUse={} cashAmount={}", id,
+                request == null ? null : request.getPointsToUse(),
+                request == null ? null : request.getCashAmount());
         return ResponseEntity.ok(ApiResult.ok("Booking confirmed successfully",
-                bookingService.confirmBooking(id)));
+                bookingService.confirmBooking(id, request)));
     }
 }

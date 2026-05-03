@@ -1,0 +1,25 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:loyalty_service_test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+  # Flyway migrations are PostgreSQL-flavoured; Hibernate generates the
+  # schema against H2 in tests, so Flyway must be off here.
+  flyway:
+    enabled: false
+
+jwt:
+  secret: test-test-test-test-test-test-test-test
+  expiration: 3600000
+
+app:
+  loyalty:
+    default-earn-rate: 1.0
+    default-redeem-rate: 10.0

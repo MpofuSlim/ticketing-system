@@ -111,8 +111,10 @@ class BookingServiceTest {
         // Real QrCodeGenerator — fast (in-memory ZXing) and lets us assert
         // qrCode round-trips without mocking. Tests that don't care about
         // QRs simply ignore the field.
+        // null loyalty/event providers — BookingService treats these as
+        // "loyalty not wired" and just confirms cash-only bookings.
         return new BookingService(bookingRepo, itemRepo, seatClient, eventPublisher,
-                new QrCodeGenerator());
+                new QrCodeGenerator(), null, null);
     }
 
     @Test

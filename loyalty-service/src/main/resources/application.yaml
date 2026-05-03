@@ -1,0 +1,87 @@
+spring:
+  application:
+    name: loyalty-service
+
+  # H2-only mode: file-based database under ./data so writes survive restart;
+  # AUTO_SERVER=TRUE lets a SQL client connect while the app is running. The
+  # PostgreSQL config is preserved below (commented) for easy reversal.
+  datasource:
+    url: jdbc:h2:file:./data/loyalty-service;MODE=PostgreSQL;AUTO_SERVER=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+    # --- PostgreSQL (disabled) ---
+    # url: ${DB_URL:jdbc:postgresql://localhost:5432/loyalty_service}
+    # driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
+    # username: ${DB_USERNAME:postgres}
+    # password: ${DB_PASSWORD}
+    hikari:
+      pool-name: loyalty-service-pool
+      maximum-pool-size: ${DB_POOL_MAX:20}
+      minimum-idle: ${DB_POOL_MIN:5}
+      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:5000}
+      idle-timeout: ${DB_IDLE_TIMEOUT_MS:600000}
+      max-lifetime: ${DB_MAX_LIFETIME_MS:1800000}
+
+  jpa:
+    hibernate:
+      # H2: Hibernate generates the schema on each boot.
+      ddl-auto: ${JPA_DDL_AUTO:update}
+    show-sql: ${JPA_SHOW_SQL:false}
+    properties:
+      hibernate:
+        dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.H2Dialect}
+        # --- PostgreSQL dialect (disabled) ---
+        # dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
+
+  # Flyway disabled on H2 — the entity model owns the schema directly.
+  flyway:
+    enabled: ${FLYWAY_ENABLED:false}
+
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+
+# Default earn/redeem rule used when a tenant has no LoyaltyRule row yet.
+# earn = points credited per $1 of cash spent; redeem = points needed to
+# offset $1 of cash. Both are overridable per-tenant via PUT /loyalty/rules.
+app:
+  loyalty:
+    default-earn-rate: ${LOYALTY_DEFAULT_EARN_RATE:1.0}
+    default-redeem-rate: ${LOYALTY_DEFAULT_REDEEM_RATE:10.0}
+
+jwt:
+  secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
+  expiration: ${JWT_EXPIRATION_MS:86400000}
+
+server:
+  port: 8086
+  shutdown: graceful
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui/index.html
+  api-docs:
+    path: /v3/api-docs
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when-authorized
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+logging:
+  pattern:
+    level: "%5p [${spring.application.name:-},%X{traceId:-}]"

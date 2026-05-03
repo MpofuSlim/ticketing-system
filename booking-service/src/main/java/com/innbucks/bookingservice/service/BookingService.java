@@ -1,5 +1,7 @@
 package com.innbucks.bookingservice.service;
 
+import com.innbucks.bookingservice.client.EventServiceClient;
+import com.innbucks.bookingservice.client.LoyaltyServiceClient;
 import com.innbucks.bookingservice.client.SeatServiceClient;
 import com.innbucks.bookingservice.dto.*;
 import com.innbucks.bookingservice.entity.*;
@@ -8,11 +10,13 @@ import com.innbucks.bookingservice.exception.TierRequirementException;
 import com.innbucks.bookingservice.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -29,6 +33,15 @@ public class BookingService {
     private final SeatServiceClient seatServiceClient;
     private final ApplicationEventPublisher eventPublisher;
     private final QrCodeGenerator qrCodeGenerator;
+    // ObjectProvider so unit tests that build the service with `new` and pass
+    // null for the loyalty/event clients still work — the loyalty integration
+    // is only exercised by tests that opt in.
+    private final ObjectProvider<LoyaltyServiceClient> loyaltyClientProvider;
+    private final ObjectProvider<EventServiceClient> eventClientProvider;
+
+    // Fuzz tolerance for split-payment math: pointsToUse / redeemRate +
+    // cashAmount must equal totalAmount within $0.01.
+    private static final BigDecimal SPLIT_TOLERANCE = new BigDecimal("0.01");
 
     private static final int TIER_2_MAX_SEATS = 2;
     private static final int TIER_3_MAX_SEATS = 6;
@@ -124,10 +137,18 @@ public class BookingService {
         // so the seats are usable by other customers again.
         LocalDateTime expiresAt = LocalDateTime.now().plusMinutes(holdTtlMinutes);
 
+        // Resolve the owning tenant once at booking creation so the loyalty
+        // service can attribute earn/redeem at confirm time without another
+        // event-service round trip. Best-effort: an event-service outage
+        // doesn't block bookings — the booking just won't earn loyalty
+        // points until tenant is known.
+        String tenantId = lookupTenantId(request.getEventId());
+
         Booking booking = Booking.builder()
                 .userEmail(userEmail)
                 .phoneNumber(phoneNumber)
                 .eventId(request.getEventId())
+                .tenantId(tenantId)
                 .confirmationNumber(confirmationNumber)
                 .status(Booking.BookingStatus.PENDING)
                 .totalAmount(total)
@@ -288,9 +309,18 @@ public class BookingService {
         return toDTO(booking);
     }
 
-    @Transactional
+    // Backward-compatible overload: confirm with no points/cash split. Used
+    // by callers (tests, payment-service) that don't yet know about loyalty.
     public BookingResponseDTO confirmBooking(UUID bookingId) {
-        log.info("Confirming booking bookingId={}", bookingId);
+        return confirmBooking(bookingId, null);
+    }
+
+    @Transactional
+    public BookingResponseDTO confirmBooking(UUID bookingId, ConfirmBookingRequestDTO confirmRequest) {
+        log.info("Confirming booking bookingId={} pointsToUse={} cashAmount={}",
+                bookingId,
+                confirmRequest == null ? null : confirmRequest.getPointsToUse(),
+                confirmRequest == null ? null : confirmRequest.getCashAmount());
         Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> {
                     log.warn("Confirm failed, booking not found bookingId={}", bookingId);
@@ -314,14 +344,122 @@ public class BookingService {
                             + holdTtlMinutes + " minutes");
         }
 
+        // Default to pure-cash if the caller didn't pass a payload. This
+        // preserves the legacy contract where PATCH /confirm has no body.
+        BigDecimal pointsToUse = confirmRequest == null || confirmRequest.getPointsToUse() == null
+                ? BigDecimal.ZERO : confirmRequest.getPointsToUse();
+        BigDecimal cashAmount = confirmRequest == null || confirmRequest.getCashAmount() == null
+                ? booking.getTotalAmount() : confirmRequest.getCashAmount();
+
+        applyLoyalty(booking, pointsToUse, cashAmount);
+
+        booking.setPointsUsed(pointsToUse.signum() > 0 ? pointsToUse : null);
+        booking.setCashAmount(cashAmount);
         booking.setStatus(Booking.BookingStatus.CONFIRMED);
         booking.setExpiresAt(null); // paid — hold no longer applicable
         bookingRepository.save(booking);
 
         eventPublisher.publishEvent(BookingDomainEvent.BookingConfirmed.of(booking));
 
-        log.info("Booking confirmed bookingId={} userEmail={}", bookingId, booking.getUserEmail());
+        log.info("Booking confirmed bookingId={} userEmail={} pointsUsed={} cashAmount={}",
+                bookingId, booking.getUserEmail(), booking.getPointsUsed(), booking.getCashAmount());
         return toDTO(booking);
+    }
+
+    // Validates the points/cash split against the tenant's loyalty rule and
+    // (if everything checks out) calls redeem then earn on loyalty-service.
+    // No-op when:
+    //   - the loyalty client isn't wired (unit tests),
+    //   - the booking has no tenantId (event-service was down at create),
+    //   - both pointsToUse and cashAmount cover the full total via cash only
+    //     AND the rule isn't reachable.
+    private void applyLoyalty(Booking booking, BigDecimal pointsToUse, BigDecimal cashAmount) {
+        LoyaltyServiceClient loyalty = loyaltyClientProvider == null ? null : loyaltyClientProvider.getIfAvailable();
+        if (loyalty == null) {
+            log.debug("Loyalty client unavailable; skipping loyalty for bookingId={}", booking.getId());
+            return;
+        }
+        if (booking.getTenantId() == null) {
+            if (pointsToUse.signum() > 0) {
+                throw new RuntimeException("Cannot redeem points — booking has no tenant attached");
+            }
+            log.debug("No tenantId on booking; skipping loyalty earn for bookingId={}", booking.getId());
+            return;
+        }
+
+        LoyaltyRuleResponse rule = fetchRule(loyalty, booking.getTenantId());
+        if (rule == null) {
+            if (pointsToUse.signum() > 0) {
+                throw new RuntimeException("Loyalty rule unavailable; cannot redeem points right now");
+            }
+            log.debug("Loyalty rule unavailable; skipping earn for bookingId={}", booking.getId());
+            return;
+        }
+
+        // Cross-check the math: pointsToUse / redeemRate + cashAmount ≈ totalAmount
+        BigDecimal pointsAsCash = pointsToUse.signum() == 0
+                ? BigDecimal.ZERO
+                : pointsToUse.divide(rule.getRedeemRate(), 4, RoundingMode.HALF_UP);
+        BigDecimal reconstructedTotal = pointsAsCash.add(cashAmount);
+        BigDecimal diff = reconstructedTotal.subtract(booking.getTotalAmount()).abs();
+        if (diff.compareTo(SPLIT_TOLERANCE) > 0) {
+            throw new RuntimeException(String.format(
+                    "Payment split does not match total: points worth %s + cash %s = %s, expected %s",
+                    pointsAsCash, cashAmount, reconstructedTotal, booking.getTotalAmount()));
+        }
+
+        String reference = booking.getId().toString();
+        if (pointsToUse.signum() > 0) {
+            loyalty.redeem(LoyaltyRedeemRequest.builder()
+                    .customerId(booking.getUserEmail())
+                    .tenantId(booking.getTenantId())
+                    .points(pointsToUse)
+                    .reference(reference)
+                    .build());
+        }
+        // Earn ONLY on the cash portion, per the program rule. Pure-points
+        // confirmations don't accumulate.
+        if (cashAmount.signum() > 0) {
+            try {
+                loyalty.earn(LoyaltyEarnRequest.builder()
+                        .customerId(booking.getUserEmail())
+                        .tenantId(booking.getTenantId())
+                        .cashAmount(cashAmount)
+                        .reference(reference)
+                        .build());
+            } catch (Exception ex) {
+                // Earning is best-effort; never fail a paid booking because we
+                // couldn't credit points. The redeem (if any) already succeeded
+                // and is idempotent on retry.
+                log.warn("Loyalty earn failed bookingId={} cashAmount={} reason={}",
+                        booking.getId(), cashAmount, ex.getMessage());
+            }
+        }
+    }
+
+    private LoyaltyRuleResponse fetchRule(LoyaltyServiceClient loyalty, String tenantId) {
+        try {
+            ApiResult<LoyaltyRuleResponse> envelope = loyalty.getRule(tenantId);
+            return envelope == null ? null : envelope.getData();
+        } catch (Exception ex) {
+            log.warn("Failed to fetch loyalty rule tenantId={} reason={}", tenantId, ex.getMessage());
+            return null;
+        }
+    }
+
+    private String lookupTenantId(UUID eventId) {
+        EventServiceClient event = eventClientProvider == null ? null : eventClientProvider.getIfAvailable();
+        if (event == null) {
+            return null;
+        }
+        try {
+            ApiResult<EventLookupDTO> envelope = event.getEvent(eventId);
+            EventLookupDTO data = envelope == null ? null : envelope.getData();
+            return data == null ? null : data.getTenantId();
+        } catch (Exception ex) {
+            log.warn("Failed to fetch event for tenant lookup eventId={} reason={}", eventId, ex.getMessage());
+            return null;
+        }
     }
 
     // ==================== HELPERS ====================
@@ -434,9 +572,12 @@ public class BookingService {
                 .userEmail(booking.getUserEmail())
                 .phoneNumber(booking.getPhoneNumber())
                 .eventId(booking.getEventId())
+                .tenantId(booking.getTenantId())
                 .confirmationNumber(booking.getConfirmationNumber())
                 .status(booking.getStatus())
                 .totalAmount(booking.getTotalAmount())
+                .pointsUsed(booking.getPointsUsed())
+                .cashAmount(booking.getCashAmount())
                 .items(itemDTOs)
                 .createdAt(booking.getCreatedAt())
                 .updatedAt(booking.getUpdatedAt())
