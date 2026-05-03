@@ -70,6 +70,16 @@
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-registry-prometheus</artifactId>
         </dependency>
+        <!-- Spring Boot 4 split FlywayAutoConfiguration out of
+             spring-boot-autoconfigure into its own module. Without this
+             dependency Flyway is on the classpath but never runs, so
+             ddl-auto=validate fails with "missing table" against real
+             Postgres. (api-gateway has no DataSource bean, so the
+             autoconfig deactivates harmlessly there.) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-flyway</artifactId>
+        </dependency>
         <!-- Boot 4 ships Jackson 3 (tools.jackson) by default; this module
              also registers the legacy com.fasterxml.jackson.databind.ObjectMapper
              bean expected by jjwt-jackson and existing test code. -->
