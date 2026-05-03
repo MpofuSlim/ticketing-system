@@ -14,6 +14,7 @@ communicates over REST.
 | `seat-service`    | 8083 | Seat inventory, categories, optimistic-locked holds.    |
 | `booking-service` | 8084 | Booking creation, idempotency, payment hand-off.        |
 | `payment-service` | 8085 | Payment integration (Stripe). Off by default; opt-in.   |
+| `loyalty-service` | 8086 | Multi-tenant loyalty + voucher management (LVMP).       |
 
 Shared infrastructure: PostgreSQL 16 (one DB per service) and Redis 7
 (distributed locks + idempotency).
@@ -56,6 +57,8 @@ fill in real values. Required:
 | `JWT_SECRET`           | HS256 signing key. Must be ≥32 chars; share across services. |
 | `POSTGRES_USER`        | Postgres user (dev default: `innbucks`).            |
 | `POSTGRES_PASSWORD`    | Postgres password (dev default: `innbucks`).        |
+| `LOYALTY_VOUCHER_SECRET` | HMAC key for voucher code signatures. Generate with `openssl rand -base64 48`. |
+| `LOYALTY_QR_SECRET`    | HMAC key for QR token signatures. Independent from the voucher key. |
 | `CORS_ALLOWED_ORIGINS` | Comma-separated list of origins allowed by the gateway and event-service. Defaults to `http://localhost:3000`. |
 
 Per-service overrides (`DB_URL`, `DB_POOL_MAX`, `FEIGN_*_TIMEOUT_MS`, etc.)
