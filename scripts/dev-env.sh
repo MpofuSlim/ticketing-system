@@ -51,10 +51,11 @@ while IFS= read -r _line || [ -n "$_line" ]; do
   export "$_key=$_val"
 done < "$_env_file"
 
-# Postgres mapping disabled — services now run on H2 in-memory and the
-# application.yaml files no longer read DB_USERNAME / DB_PASSWORD.
-# export DB_USERNAME="${DB_USERNAME:-${POSTGRES_USER:-postgres}}"
-# export DB_PASSWORD="${DB_PASSWORD:-${POSTGRES_PASSWORD:-}}"
+# Map the Postgres credentials onto the DB_* vars each service's
+# application.yaml expects (jdbc:postgresql://localhost:5432/<db>,
+# DB_USERNAME, DB_PASSWORD).
+export DB_USERNAME="${DB_USERNAME:-${POSTGRES_USER:-postgres}}"
+export DB_PASSWORD="${DB_PASSWORD:-${POSTGRES_PASSWORD:-}}"
 
 echo "loaded $_env_file"
 unset _env_file _line _key _val
