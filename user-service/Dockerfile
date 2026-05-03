@@ -16,6 +16,7 @@ COPY event-service/pom.xml event-service/
 COPY seat-service/pom.xml seat-service/
 COPY booking-service/pom.xml booking-service/
 COPY payment-service/pom.xml payment-service/
+COPY loyalty-service/pom.xml loyalty-service/
 
 # Warm the dependency cache. Layer survives until a pom changes.
 RUN ./mvnw -B -pl user-service -am -DskipTests dependency:go-offline || true
