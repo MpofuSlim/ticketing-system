@@ -42,6 +42,22 @@ public class Booking {
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal totalAmount;
 
+    // tenantId of the event being booked. Captured at booking creation by
+    // calling event-service. Null when event-service was unreachable at the
+    // time, in which case loyalty earn/redeem will be skipped at confirm.
+    @Column
+    private String tenantId;
+
+    // Filled in at /confirm when the customer redeems points. Null on
+    // pending or pure-cash confirmations.
+    @Column(precision = 18, scale = 4)
+    private BigDecimal pointsUsed;
+
+    // The cash portion paid at /confirm. Defaults to totalAmount on a
+    // pure-cash confirmation; reduced when points were used.
+    @Column(precision = 10, scale = 2)
+    private BigDecimal cashAmount;
+
     @OneToMany(mappedBy = "booking", cascade = CascadeType.ALL, fetch = FetchType.EAGER)
     private List<BookingItem> items;
 

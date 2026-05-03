@@ -87,10 +87,44 @@ resilience4j:
         wait-duration-in-open-state: 30s
         permitted-number-of-calls-in-half-open-state: 3
         automatic-transition-from-open-to-half-open-enabled: true
+      LoyaltyServiceClient:
+        register-health-indicator: true
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+      EventServiceClient:
+        register-health-indicator: true
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
   retry:
     instances:
       SeatServiceClient:
         max-attempts: 3
+        wait-duration: 500ms
+        exponential-backoff-multiplier: 2.0
+        retry-exceptions:
+          - feign.RetryableException
+          - java.io.IOException
+          - org.springframework.web.client.ResourceAccessException
+      LoyaltyServiceClient:
+        max-attempts: 3
+        wait-duration: 500ms
+        exponential-backoff-multiplier: 2.0
+        retry-exceptions:
+          - feign.RetryableException
+          - java.io.IOException
+          - org.springframework.web.client.ResourceAccessException
+      EventServiceClient:
+        max-attempts: 2
         wait-duration: 500ms
         exponential-backoff-multiplier: 2.0
         retry-exceptions:
@@ -102,6 +136,16 @@ seat-service:
   # Explicit URL (no service discovery). docker-compose sets this to
   # http://seat-service:8083 via SEAT_SERVICE_URL.
   url: ${SEAT_SERVICE_URL:http://localhost:8083}
+
+# Used at /bookings/{id}/confirm to redeem and earn loyalty points, and at
+# booking creation to attach the owning tenantId to the booking. Both calls
+# are wrapped in Resilience4j circuit breakers (see below) so a loyalty
+# outage degrades gracefully: cash bookings still work, redeem fails fast.
+loyalty-service:
+  url: ${LOYALTY_SERVICE_URL:http://localhost:8086}
+
+event-service:
+  url: ${EVENT_SERVICE_URL:http://localhost:8082}
 
 app:
   booking:
