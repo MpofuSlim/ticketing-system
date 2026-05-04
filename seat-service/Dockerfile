@@ -24,6 +24,10 @@ RUN ./mvnw -B -pl seat-service -am -DskipTests package \
     && cp seat-service/target/seat-service-*.jar /workspace/app.jar
 
 FROM eclipse-temurin:21-jre-alpine AS runtime
+# Pull in the latest patched alpine packages on every rebuild so CVEs
+# fixed upstream (e.g. CVE-2026-33845 in gnutls) close as soon as the
+# alpine repo publishes them, without waiting for a base-image retag.
+RUN apk --no-cache upgrade
 RUN addgroup -S app && adduser -S -G app app
 WORKDIR /app
 USER app
