@@ -45,7 +45,10 @@ public class BookingController {
     private final BookingService bookingService;
 
     @PostMapping
-    @Operation(summary = "Create booking", description = "Creates a new pending booking for the authenticated user. Open to any authenticated customer regardless of tier (the per-tier seat-count limit in BookingService still applies).")
+    @MinTier(2)
+    @Operation(summary = "Create booking", description = "Creates a new pending booking. Requires tier 2 (ID-verified customers). " +
+            "When the request is authenticated, userEmail and phoneNumber are taken from the JWT. " +
+            "Web bookings made without a logged-in account may supply `phoneNumber` in the request body — it's ignored when the JWT carries one.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -96,6 +99,11 @@ public class BookingController {
         String userEmail = authentication.getName();
         int tier = currentTier(httpRequest);
         String phoneNumber = extractPhoneNumber(authentication);
+        // JWT phone wins; fall back to the body for online bookings whose
+        // JWT doesn't carry a phoneNumber claim.
+        if (phoneNumber == null || phoneNumber.isBlank()) {
+            phoneNumber = request.getPhoneNumber();
+        }
         log.info("POST /bookings userEmail={} tier={} phoneNumber={} eventId={} seats={}",
                 userEmail, tier, phoneNumber, request.getEventId(), request.getSeats().size());
         BookingResponseDTO created = bookingService.createBooking(userEmail, tier, phoneNumber, request);
