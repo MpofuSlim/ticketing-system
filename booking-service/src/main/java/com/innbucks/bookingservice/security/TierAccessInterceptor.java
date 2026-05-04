@@ -18,6 +18,7 @@ import org.springframework.web.servlet.HandlerInterceptor;
 public class TierAccessInterceptor implements HandlerInterceptor {
 
     private final ObjectMapper objectMapper;
+    private final LiveTierService liveTierService;
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
@@ -33,7 +34,13 @@ public class TierAccessInterceptor implements HandlerInterceptor {
         }
 
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        int currentTier = currentTier(auth);
+        // Live-tier lookup wins over the JWT claim so a tier upgrade made
+        // mid-session is honored immediately. Falls back to the JWT claim
+        // only if user-service is unreachable, so an outage in user-service
+        // doesn't lock every authenticated caller out.
+        Integer liveTier = auth == null ? null
+                : liveTierService.tierForSubject(String.valueOf(auth.getPrincipal()));
+        int currentTier = liveTier != null ? liveTier : currentTier(auth);
         if (currentTier >= minTier.value()) {
             return true;
         }

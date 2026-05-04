@@ -276,6 +276,24 @@ public class AuthController {
         return ResponseEntity.ok(ApiResult.ok("Customer tier retrieved", response));
     }
 
+    /**
+     * Live-tier lookup keyed by the JWT subject (email-or-phone). Used by
+     * downstream services so MinTier checks never see a stale tier from a
+     * still-valid token. System users return tier 4.
+     */
+    @GetMapping("/customer/tier/by-subject")
+    @SecurityRequirements()
+    @Operation(summary = "Get customer registration tier by JWT subject (email or phone)",
+            description = "Authoritative live-tier lookup used by booking-service / seat-service to bypass " +
+                    "the tier claim baked into a still-valid JWT. Resolves the user by email first, then " +
+                    "phone number. System (non-CUSTOMER) users always report tier 4.")
+    public ResponseEntity<ApiResult<CustomerTierResponseDTO>> getCustomerTierBySubject(
+            @RequestParam("subject") String subject) {
+        log.debug("Get customer tier by subject");
+        CustomerTierResponseDTO response = customerService.getCustomerTierBySubject(subject);
+        return ResponseEntity.ok(ApiResult.ok("Customer tier retrieved", response));
+    }
+
     @PostMapping("/otp/request")
     @SecurityRequirements()
     @Operation(summary = "Request (or re-send) an OTP",

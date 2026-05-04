@@ -159,6 +159,7 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       LOCK_STORE: redis
+      USER_SERVICE_URL: http://user-service:8081
     ports:
       - "8083:8083"
     healthcheck:
@@ -197,6 +198,7 @@ services:
       IDEMPOTENCY_STORE: redis
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       SEAT_SERVICE_URL: http://seat-service:8083
+      USER_SERVICE_URL: http://user-service:8081
     ports:
       - "8084:8084"
     healthcheck:
