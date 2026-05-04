@@ -42,7 +42,7 @@ public class VoucherTemplateService {
         t.setValue(req.value());
         if (req.currency() != null) t.setCurrency(req.currency());
         t.setFreeItemSku(req.freeItemSku());
-        t.setUsageLimit(Math.max(1, req.usageLimit()));
+        t.setUsageLimit(req.usageLimit());
         t.setValidityDays(req.validityDays());
         t.setApplicableOutlets(req.applicableOutlets());
         return templates.save(t);

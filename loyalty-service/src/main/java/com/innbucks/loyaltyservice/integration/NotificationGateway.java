@@ -23,7 +23,6 @@ public class NotificationGateway {
             case EMAIL -> log.info("Email voucher {} -> assignee {}", voucher.getCode(), voucher.getAssignedUserId());
             case PUSH -> log.info("Push voucher {} -> assignee {}", voucher.getCode(), voucher.getAssignedUserId());
             case POS -> log.info("POS voucher {} forwarded to terminal", voucher.getCode());
-            case NONE -> { /* no-op */ }
         }
     }
 }
