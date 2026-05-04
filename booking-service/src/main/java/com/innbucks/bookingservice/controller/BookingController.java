@@ -45,8 +45,7 @@ public class BookingController {
     private final BookingService bookingService;
 
     @PostMapping
-    @MinTier(2)
-    @Operation(summary = "Create booking", description = "Creates a new pending booking for the authenticated user. Requires tier 2 (ID-verified customers).")
+    @Operation(summary = "Create booking", description = "Creates a new pending booking for the authenticated user. Open to any authenticated customer regardless of tier (the per-tier seat-count limit in BookingService still applies).")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
