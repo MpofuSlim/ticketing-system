@@ -1,25 +1,33 @@
 spring:
   datasource:
-    url: jdbc:h2:mem:loyalty_service_test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
-    driver-class-name: org.h2.Driver
+    url: jdbc:h2:mem:loyalty;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
     username: sa
-    password:
+    password: ""
+    driver-class-name: org.h2.Driver
   jpa:
     hibernate:
       ddl-auto: create-drop
     properties:
       hibernate:
         dialect: org.hibernate.dialect.H2Dialect
-  # Flyway migrations are PostgreSQL-flavoured; Hibernate generates the
-  # schema against H2 in tests, so Flyway must be off here.
   flyway:
     enabled: false
 
-jwt:
-  secret: test-test-test-test-test-test-test-test
-  expiration: 3600000
+loyalty:
+  voucher:
+    secret: test-voucher-secret-test-voucher-secret-test-voucher-secret
+    default-validity-days: 30
+    fraud-velocity-threshold: 3
+    fraud-window-seconds: 60
+  qr:
+    secret: test-qr-secret-test-qr-secret-test-qr-secret-test-qr-secret
+    ttl-seconds: 60
+  integration:
+    mpesa-enabled: false
+  invoice:
+    prefix: INV
 
-app:
-  loyalty:
-    default-earn-rate: 1.0
-    default-redeem-rate: 10.0
+logging:
+  level:
+    root: WARN
+    com.innbucks.loyaltyservice: INFO
