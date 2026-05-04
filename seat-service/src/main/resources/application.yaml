@@ -61,6 +61,14 @@ booking-service:
   connect-timeout-ms: ${BOOKING_SERVICE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${BOOKING_SERVICE_READ_TIMEOUT_MS:5000}
 
+# user-service is queried by the @MinTier interceptor so the registration tier
+# always matches the system of record (instead of trusting the JWT's possibly
+# stale tier claim).
+user-service:
+  base-url: ${USER_SERVICE_URL:http://localhost:8081}
+  connect-timeout-ms: ${USER_SERVICE_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${USER_SERVICE_READ_TIMEOUT_MS:5000}
+
 jwt:
   secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
   expiration: ${JWT_EXPIRATION_MS:86400000}

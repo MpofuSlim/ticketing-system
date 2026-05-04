@@ -1,11 +1,14 @@
 package com.innbucks.seatservice.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.innbucks.seatservice.client.UserServiceClient;
 import com.innbucks.seatservice.dto.ApiResult;
+import com.innbucks.seatservice.dto.CustomerTierResponseDTO;
 import com.innbucks.seatservice.dto.TierViolationData;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -13,11 +16,15 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.HandlerInterceptor;
 
+import java.util.Optional;
+
 @Component
 @RequiredArgsConstructor
+@Slf4j
 public class TierAccessInterceptor implements HandlerInterceptor {
 
     private final ObjectMapper objectMapper;
+    private final UserServiceClient userServiceClient;
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
@@ -33,7 +40,7 @@ public class TierAccessInterceptor implements HandlerInterceptor {
         }
 
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        int currentTier = currentTier(auth);
+        int currentTier = resolveCurrentTier(auth);
         if (currentTier >= minTier.value()) {
             return true;
         }
@@ -55,17 +62,19 @@ public class TierAccessInterceptor implements HandlerInterceptor {
         return false;
     }
 
-    private int currentTier(Authentication auth) {
+    // Tier comes from user-service (the system of record), not the JWT claim,
+    // so an upgrade lands immediately without forcing the customer to re-login.
+    // One extra hop per @MinTier request — acceptable for these gated flows.
+    private int resolveCurrentTier(Authentication auth) {
         if (auth == null) return 0;
-        int tier = 0;
-        for (var authority : auth.getAuthorities()) {
-            String name = authority.getAuthority();
-            if (name != null && name.startsWith("TIER_")) {
-                try {
-                    tier = Math.max(tier, Integer.parseInt(name.substring(5)));
-                } catch (NumberFormatException ignored) { }
-            }
+        String phoneNumber = null;
+        if (auth.getDetails() instanceof JwtAuthDetails details) {
+            phoneNumber = details.phoneNumber();
         }
-        return tier;
+        if (phoneNumber == null || phoneNumber.isBlank()) {
+            return 0;
+        }
+        Optional<CustomerTierResponseDTO> result = userServiceClient.getCustomerTier(phoneNumber);
+        return result.map(CustomerTierResponseDTO::getCurrentTier).orElse(0);
     }
 }

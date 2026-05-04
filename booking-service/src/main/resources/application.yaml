@@ -147,6 +147,9 @@ loyalty-service:
 event-service:
   url: ${EVENT_SERVICE_URL:http://localhost:8082}
 
+user-service:
+  url: ${USER_SERVICE_URL:http://localhost:8081}
+
 app:
   booking:
     # How long a PENDING booking holds its seats before the expiration
