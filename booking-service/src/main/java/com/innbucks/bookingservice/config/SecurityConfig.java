@@ -34,6 +34,10 @@ public class SecurityConfig {
                         // tier is enforced by TierAccessInterceptor. When
                         // absent, the controller treats them as a guest.
                         .requestMatchers(HttpMethod.POST, "/bookings").permitAll()
+                        // Confirm is called by payment-service after a (dummy)
+                        // payment. Guests have no JWT, so the endpoint must
+                        // be reachable without one.
+                        .requestMatchers(HttpMethod.PATCH, "/bookings/*/confirm").permitAll()
                         // H2 console (dev only). frameOptions=sameOrigin above
                         // lets it render its iframes.
                         .requestMatchers("/h2-console/**").permitAll()
