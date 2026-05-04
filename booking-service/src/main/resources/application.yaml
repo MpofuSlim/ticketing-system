@@ -98,6 +98,18 @@ seat-service:
   # http://seat-service:8083 via SEAT_SERVICE_URL.
   url: ${SEAT_SERVICE_URL:http://localhost:8083}
 
+user-service:
+  # Used by LiveTierService to fetch the caller's authoritative tier from
+  # /auth/customer/tier/by-subject instead of trusting the (possibly stale)
+  # tier claim baked into a still-valid JWT.
+  url: ${USER_SERVICE_URL:http://localhost:8081}
+
+tier:
+  # Cache TTL for live-tier lookups, seconds. Short on purpose: tier upgrades
+  # become visible within this window, and a brief user-service blip doesn't
+  # add up to seconds of latency on every protected request.
+  cache-ttl-seconds: ${TIER_CACHE_TTL_SECONDS:5}
+
 app:
   idempotency:
     # Set to "redis" for shared idempotency across replicas. Defaults to

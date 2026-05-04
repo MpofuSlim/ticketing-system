@@ -166,6 +166,42 @@ public class CustomerService {
                 .build();
     }
 
+    /**
+     * Resolve a customer's live tier from a JWT subject. The login flow embeds
+     * either the email (if set) or the phone number, so downstream services
+     * can't always know which one they're holding — they just pass it through.
+     * System (non-CUSTOMER) users are reported as tier 4 so admin endpoints
+     * stay reachable.
+     */
+    @Transactional(readOnly = true)
+    public CustomerTierResponseDTO getCustomerTierBySubject(String subject) {
+        if (subject == null || subject.isBlank()) {
+            throw new RuntimeException("subject is required");
+        }
+        User user = userRepository.findByEmail(subject)
+                .or(() -> userRepository.findByPhoneNumber(subject))
+                .orElseThrow(() -> new RuntimeException("User not found for subject"));
+
+        if (user.getRole() != User.Role.CUSTOMER) {
+            return CustomerTierResponseDTO.builder()
+                    .phoneNumber(user.getPhoneNumber())
+                    .currentTier(MAX_TIER)
+                    .nextTier(null)
+                    .build();
+        }
+
+        CustomerProfile profile = customerProfileRepository.findByUserId(user.getId())
+                .orElseThrow(() -> new RuntimeException("Customer profile not found"));
+
+        int currentTier = profile.getRegistrationTier();
+        Integer nextTier = currentTier < MAX_TIER ? currentTier + 1 : null;
+        return CustomerTierResponseDTO.builder()
+                .phoneNumber(user.getPhoneNumber())
+                .currentTier(currentTier)
+                .nextTier(nextTier)
+                .build();
+    }
+
     private CustomerProfile loadProfile(String phoneNumber, int requiredCurrentTier) {
         User user = userRepository.findByPhoneNumber(phoneNumber)
                 .orElseThrow(() -> new RuntimeException("Customer not found for phone " + phoneNumber));
