@@ -420,13 +420,14 @@ public class BookingController {
     }
 
     @GetMapping("/phone/{phoneNumber}")
-    @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
+    @PreAuthorize("hasAnyRole('TENANT','ADMIN','CUSTOMER')")
     @Operation(
             summary = "Lookup bookings by phone number",
-            description = "Returns every booking attached to the given phone number, most recent first. " +
+            description = "Returns the bookings attached to the given phone number, most recent first. " +
                     "Phone is set from the JWT's `phoneNumber` claim at booking time. " +
-                    "Restricted to TENANT/ADMIN — phone numbers aren't secret like confirmation numbers, " +
-                    "so this is not a public lookup. Empty list if no bookings exist for the phone."
+                    "TENANT/ADMIN may look up any phone; CUSTOMER may only look up their own (the JWT's " +
+                    "`phoneNumber` claim must match the path). Cancelled bookings are excluded — only " +
+                    "active (PENDING / CONFIRMED) tickets come back. Empty list if no bookings exist."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -470,12 +471,28 @@ public class BookingController {
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Customer attempting to read another phone's bookings")
     })
-    public ResponseEntity<ApiResult<List<BookingResponseDTO>>> getBookingsByPhoneNumber(@PathVariable String phoneNumber) {
+    public ResponseEntity<ApiResult<List<BookingResponseDTO>>> getBookingsByPhoneNumber(
+            @PathVariable String phoneNumber,
+            Authentication authentication) {
         log.debug("GET /bookings/phone/{}", phoneNumber);
+        // Customers can only read their own bookings — staff (TENANT/ADMIN)
+        // are allowed to look up any phone for support / reconciliation.
+        if (isCustomer(authentication)) {
+            String ownPhone = extractPhoneNumber(authentication);
+            if (ownPhone == null || !ownPhone.equals(phoneNumber)) {
+                throw new org.springframework.security.access.AccessDeniedException(
+                        "Customers may only look up their own bookings");
+            }
+        }
         return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully",
-                bookingService.getByPhoneNumber(phoneNumber)));
+                bookingService.getActiveByPhoneNumber(phoneNumber)));
+    }
+
+    private boolean isCustomer(Authentication authentication) {
+        return authentication.getAuthorities().stream()
+                .anyMatch(a -> "ROLE_CUSTOMER".equals(a.getAuthority()));
     }
 
     @PatchMapping("/{id}/cancel")
