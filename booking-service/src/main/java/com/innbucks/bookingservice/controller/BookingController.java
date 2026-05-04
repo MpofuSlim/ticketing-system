@@ -130,15 +130,10 @@ public class BookingController {
 
         String userEmail = authenticated ? authentication.getName() : request.getUserEmail();
         if (userEmail == null || userEmail.isBlank()) {
-            // Guest didn't supply an email — use the one user-service has on
-            // file for this phone so the booking row's user_email column
-            // (NOT NULL) can be populated.
             userEmail = tierData.getEmail();
         }
-        if (userEmail == null || userEmail.isBlank()) {
-            throw new org.springframework.web.server.ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "Could not resolve a userEmail for this booking");
+        if (userEmail != null && userEmail.isBlank()) {
+            userEmail = null;
         }
         log.info("POST /bookings userEmail={} tier={} phoneNumber={} eventId={} seats={}",
                 userEmail, tier, phoneNumber, request.getEventId(), request.getSeats().size());

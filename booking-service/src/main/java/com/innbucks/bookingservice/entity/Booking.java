@@ -19,7 +19,7 @@ public class Booking {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    @Column(nullable = false)
+    @Column
     private String userEmail;
 
     // Captured from the JWT's phoneNumber claim at booking time. Optional —
