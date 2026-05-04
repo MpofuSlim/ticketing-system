@@ -13,6 +13,7 @@ import lombok.NoArgsConstructor;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class CustomerTierResponseDTO {
     private String phoneNumber;
+    private String email;
     private int currentTier;
     private Integer nextTier;
 }

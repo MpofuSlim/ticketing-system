@@ -161,6 +161,7 @@ public class CustomerService {
 
         return CustomerTierResponseDTO.builder()
                 .phoneNumber(user.getPhoneNumber())
+                .email(user.getEmail())
                 .currentTier(currentTier)
                 .nextTier(nextTier)
                 .build();
