@@ -2,20 +2,15 @@ spring:
   application:
     name: event-service
 
-  # Local dev: run `docker compose up -d postgres` first; the seed in
-  # docker/postgres/init-databases.sql creates event_service with the
-  # default credentials below. Tests override these to in-memory H2 via
-  # src/test/resources/application-test.yaml + @ActiveProfiles("test").
+  # Local & container dev: file-based H2 in MODE=PostgreSQL. Data persists
+  # across restarts in ${H2_DATA_DIR}/event_service.mv.db. AUTO_SERVER=TRUE
+  # lets an external H2 console connect for debugging. Tests override these
+  # to in-memory H2 via src/test/resources/application-test.yaml.
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/event_service}
-    driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
-    username: ${DB_USERNAME:postgres}
-    # No empty default: an unset DB_PASSWORD must fail at startup with an
-    # unresolved-placeholder error rather than silently sending no password
-    # and producing the cryptic "SCRAM-based authentication, but no password
-    # was provided" deep inside Hibernate bootstrap. Source scripts/dev-env.sh
-    # before `mvn spring-boot:run`, or rely on docker-compose to inject it.
-    password: ${DB_PASSWORD}
+    url: ${DB_URL:jdbc:h2:file:${H2_DATA_DIR:./data}/event_service;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;AUTO_SERVER=TRUE}
+    driver-class-name: ${DB_DRIVER:org.h2.Driver}
+    username: ${DB_USERNAME:sa}
+    password: ${DB_PASSWORD:}
     hikari:
       pool-name: event-service-pool
       maximum-pool-size: ${DB_POOL_MAX:20}
@@ -26,15 +21,18 @@ spring:
 
   jpa:
     hibernate:
-      # Flyway owns the schema; Hibernate validates entities against it.
-      ddl-auto: ${JPA_DDL_AUTO:validate}
+      # H2 file branch: Hibernate owns the schema (ddl-auto=update keeps the
+      # schema in sync with entities and preserves data across restarts).
+      ddl-auto: ${JPA_DDL_AUTO:update}
     show-sql: ${JPA_SHOW_SQL:false}
     properties:
       hibernate:
-        dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
+        dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.H2Dialect}
 
   flyway:
-    enabled: ${FLYWAY_ENABLED:true}
+    # Disabled in this branch — Hibernate owns the schema. Set FLYWAY_ENABLED=true
+    # if you switch DB_URL back to PostgreSQL and want to re-run db/migration.
+    enabled: ${FLYWAY_ENABLED:false}
     baseline-on-migrate: true
     baseline-version: 0
     locations: classpath:db/migration

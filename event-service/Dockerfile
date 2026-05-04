@@ -28,7 +28,9 @@ FROM eclipse-temurin:21-jre-alpine AS runtime
 # fixed upstream (e.g. CVE-2026-33845 in gnutls) close as soon as the
 # alpine repo publishes them, without waiting for a base-image retag.
 RUN apk --no-cache upgrade
-RUN addgroup -S app && adduser -S -G app app
+RUN addgroup -S app && adduser -S -G app app \
+    && mkdir -p /app/data \
+    && chown -R app:app /app
 WORKDIR /app
 USER app
 
