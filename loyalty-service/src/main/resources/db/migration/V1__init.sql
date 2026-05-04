@@ -24,19 +24,18 @@ CREATE TABLE merchants (
 );
 CREATE INDEX idx_merchant_tenant ON merchants(tenant_id);
 
+-- Loyalty-side projection of a customer. Identity (name, email, nationalId)
+-- lives in user-service; this table only stores the foreign reference
+-- (phone_number) plus loyalty-specific columns (role, status, merchant_id).
 CREATE TABLE loyalty_users (
     id UUID PRIMARY KEY,
     tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     merchant_id UUID REFERENCES merchants(id) ON DELETE SET NULL,
-    phone VARCHAR(32) NOT NULL,
-    email VARCHAR(200),
-    full_name VARCHAR(200),
-    national_id VARCHAR(64),
-    country VARCHAR(8),
+    phone_number VARCHAR(32) NOT NULL,
     role VARCHAR(30) NOT NULL DEFAULT 'END_USER',
     status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    CONSTRAINT uk_user_tenant_phone UNIQUE (tenant_id, phone)
+    CONSTRAINT uk_user_tenant_phone UNIQUE (tenant_id, phone_number)
 );
 CREATE INDEX idx_user_tenant ON loyalty_users(tenant_id);
 

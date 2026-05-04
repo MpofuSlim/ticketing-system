@@ -38,6 +38,14 @@ spring:
   lifecycle:
     timeout-per-shutdown-phase: 30s
 
+# user-service is the system of record for customer identity. loyalty-service
+# calls GET /auth/customer/tier to validate a phone number before lazily
+# creating its local LoyaltyUser projection — see UserService#findOrEnrol.
+user-service:
+  base-url: ${USER_SERVICE_URL:http://localhost:8081}
+  connect-timeout-ms: ${USER_SERVICE_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${USER_SERVICE_READ_TIMEOUT_MS:5000}
+
 loyalty:
   voucher:
     secret: ${LOYALTY_VOUCHER_SECRET:change-me-voucher-secret-change-me-voucher-secret}

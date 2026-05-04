@@ -8,9 +8,13 @@ import lombok.Setter;
 import java.time.Instant;
 import java.util.UUID;
 
+// Loyalty-side projection of a user. Identity (email, fullName, nationalId)
+// lives in user-service and must NOT be duplicated here. We keep only the
+// stable foreign reference (phoneNumber) plus loyalty-specific state
+// (per-tenant role, loyalty-program status, merchant attachment).
 @Entity
 @Table(name = "loyalty_users", uniqueConstraints = {
-        @UniqueConstraint(name = "uk_user_tenant_phone", columnNames = {"tenant_id", "phone"})
+        @UniqueConstraint(name = "uk_user_tenant_phone", columnNames = {"tenant_id", "phone_number"})
 }, indexes = {
         @Index(name = "idx_user_tenant", columnList = "tenant_id")
 })
@@ -29,20 +33,10 @@ public class LoyaltyUser {
     @Column(name = "merchant_id")
     private UUID merchantId;
 
-    @Column(nullable = false, length = 32)
-    private String phone;
-
-    @Column(length = 200)
-    private String email;
-
-    @Column(name = "full_name", length = 200)
-    private String fullName;
-
-    @Column(name = "national_id", length = 64)
-    private String nationalId;
-
-    @Column(length = 8)
-    private String country;
+    // Foreign reference to user-service; the customer's phone number is the
+    // stable identifier across the platform.
+    @Column(name = "phone_number", nullable = false, length = 32)
+    private String phoneNumber;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30)
@@ -56,5 +50,9 @@ public class LoyaltyUser {
     private Instant createdAt = Instant.now();
 
     public enum Role { END_USER, MERCHANT_ADMIN, MERCHANT_FINANCE, TENANT_ADMIN, PLATFORM_ADMIN, AUDITOR }
+
+    // Loyalty-program-specific status. BLOCKED here means "blocked from the
+    // loyalty program" (e.g. by FraudService); it is independent of the
+    // user's account status in user-service.
     public enum Status { ACTIVE, BLOCKED, INACTIVE }
 }

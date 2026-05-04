@@ -1,5 +1,7 @@
 package com.innbucks.loyaltyservice.service;
 
+import com.innbucks.loyaltyservice.client.UserServiceClient;
+import com.innbucks.loyaltyservice.dto.CustomerTierResponseDTO;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.LoyaltyUser;
 import com.innbucks.loyaltyservice.entity.Wallet;
@@ -9,33 +11,48 @@ import com.innbucks.loyaltyservice.repository.WalletRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Optional;
 import java.util.UUID;
 
+// Manages the loyalty-side projection of a user. Identity (name, email,
+// nationalId) lives in user-service — this service only stores foreign
+// references plus loyalty-specific state. There is intentionally no public
+// "create user" endpoint: callers (TransactionService, VoucherService, QR
+// flows) reach a user via {@link #findOrEnrol(UUID, String, UUID)} which
+// validates the phone number against user-service first.
 @Service
 @Transactional
 public class UserService {
 
     private final LoyaltyUserRepository users;
     private final WalletRepository wallets;
+    private final UserServiceClient userServiceClient;
 
-    public UserService(LoyaltyUserRepository users, WalletRepository wallets) {
+    public UserService(LoyaltyUserRepository users,
+                       WalletRepository wallets,
+                       UserServiceClient userServiceClient) {
         this.users = users;
         this.wallets = wallets;
+        this.userServiceClient = userServiceClient;
     }
 
-    public Dtos.UserResponse create(UUID tenantId, Dtos.UserRequest req) {
-        users.findByTenantIdAndPhone(tenantId, req.phone()).ifPresent(u -> {
-            throw LoyaltyException.conflict("USER_EXISTS", "user with this phone already exists");
-        });
+    // Idempotent enrolment: returns the existing LoyaltyUser for the
+    // (tenant, phone) pair, or creates one after validating the phone
+    // number resolves to a real customer in user-service.
+    public LoyaltyUser findOrEnrol(UUID tenantId, String phoneNumber, UUID merchantId) {
+        Optional<LoyaltyUser> existing = users.findByTenantIdAndPhoneNumber(tenantId, phoneNumber);
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+        Optional<CustomerTierResponseDTO> verified = userServiceClient.getCustomerTier(phoneNumber);
+        if (verified.isEmpty()) {
+            throw LoyaltyException.notFound(
+                    "user-service has no customer with phone " + phoneNumber);
+        }
         LoyaltyUser u = new LoyaltyUser();
         u.setTenantId(tenantId);
-        u.setMerchantId(req.merchantId());
-        u.setPhone(req.phone());
-        u.setEmail(req.email());
-        u.setFullName(req.fullName());
-        u.setNationalId(req.nationalId());
-        u.setCountry(req.country());
-        if (req.role() != null) u.setRole(req.role());
+        u.setMerchantId(merchantId);
+        u.setPhoneNumber(phoneNumber);
         users.save(u);
 
         Wallet main = new Wallet();
@@ -45,24 +62,22 @@ public class UserService {
         main.setType(Wallet.Type.MAIN);
         wallets.save(main);
 
-        return toResponse(u);
+        return u;
     }
 
-    public Dtos.UserResponse deactivate(UUID tenantId, UUID userId) {
+    // Internal lifecycle hooks used by FraudService and admin flows. These
+    // affect the LoyaltyUser's status within the loyalty program only — they
+    // do NOT change the user's account state in user-service.
+    public LoyaltyUser deactivate(UUID tenantId, UUID userId) {
         LoyaltyUser u = require(tenantId, userId);
         u.setStatus(LoyaltyUser.Status.INACTIVE);
-        return toResponse(u);
+        return u;
     }
 
-    public Dtos.UserResponse block(UUID tenantId, UUID userId) {
+    public LoyaltyUser block(UUID tenantId, UUID userId) {
         LoyaltyUser u = require(tenantId, userId);
         u.setStatus(LoyaltyUser.Status.BLOCKED);
-        return toResponse(u);
-    }
-
-    @Transactional(readOnly = true)
-    public Dtos.UserResponse get(UUID tenantId, UUID userId) {
-        return toResponse(require(tenantId, userId));
+        return u;
     }
 
     public LoyaltyUser require(UUID tenantId, UUID userId) {
@@ -75,7 +90,7 @@ public class UserService {
     }
 
     public static Dtos.UserResponse toResponse(LoyaltyUser u) {
-        return new Dtos.UserResponse(u.getId(), u.getTenantId(), u.getPhone(),
-                u.getEmail(), u.getFullName(), u.getRole().name(), u.getStatus().name());
+        return new Dtos.UserResponse(u.getId(), u.getTenantId(), u.getPhoneNumber(),
+                u.getRole().name(), u.getStatus().name());
     }
 }

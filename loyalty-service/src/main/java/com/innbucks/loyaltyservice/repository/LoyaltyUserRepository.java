@@ -8,6 +8,6 @@ import java.util.Optional;
 import java.util.UUID;
 
 public interface LoyaltyUserRepository extends JpaRepository<LoyaltyUser, UUID> {
-    Optional<LoyaltyUser> findByTenantIdAndPhone(UUID tenantId, String phone);
+    Optional<LoyaltyUser> findByTenantIdAndPhoneNumber(UUID tenantId, String phoneNumber);
     List<LoyaltyUser> findByTenantId(UUID tenantId);
 }
