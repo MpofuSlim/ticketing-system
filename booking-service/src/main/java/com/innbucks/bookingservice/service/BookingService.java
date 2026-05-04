@@ -244,13 +244,13 @@ public class BookingService {
                 .collect(Collectors.toList());
     }
 
-    // Same as {@link #getByPhoneNumber} but drops CANCELLED bookings — used by
-    // the public phone lookup so customers see only active tickets.
+    // Returns only CONFIRMED bookings for a phone number — excludes PENDING and
+    // CANCELLED so customers see only paid, valid tickets.
     public List<BookingResponseDTO> getActiveByPhoneNumber(String phoneNumber) {
-        log.debug("Fetching active bookings phoneNumber={}", phoneNumber);
+        log.debug("Fetching confirmed bookings phoneNumber={}", phoneNumber);
         return bookingRepository.findByPhoneNumberOrderByCreatedAtDesc(phoneNumber)
                 .stream()
-                .filter(b -> b.getStatus() != Booking.BookingStatus.CANCELLED)
+                .filter(b -> b.getStatus() == Booking.BookingStatus.CONFIRMED)
                 .map(this::toDTO)
                 .collect(Collectors.toList());
     }
