@@ -4,6 +4,8 @@ import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -39,6 +41,11 @@ public class MerchantService {
     @Transactional(readOnly = true)
     public List<Dtos.MerchantResponse> list(UUID tenantId) {
         return merchants.findByTenantId(tenantId).stream().map(MerchantService::toResponse).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public Page<Dtos.MerchantResponse> list(UUID tenantId, Pageable pageable) {
+        return merchants.findByTenantId(tenantId, pageable).map(MerchantService::toResponse);
     }
 
     public Merchant requireMerchant(UUID tenantId, UUID merchantId) {

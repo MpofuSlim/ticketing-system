@@ -9,6 +9,8 @@ import com.innbucks.loyaltyservice.entity.Wallet;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.LoyaltyTransactionRepository;
 import com.innbucks.loyaltyservice.repository.WalletRepository;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -156,5 +158,13 @@ public class TransactionService {
                         t.getPointsDelta(), null, t.getRuleId(), t.getCampaignId(),
                         t.getReference(), t.getCreatedAt()))
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public Page<Dtos.TransactionResponse> recentForUser(UUID userId, Pageable pageable) {
+        return transactions.findByUserIdOrderByCreatedAtDesc(userId, pageable)
+                .map(t -> new Dtos.TransactionResponse(t.getId(), t.getType(), t.getAmount(),
+                        t.getPointsDelta(), null, t.getRuleId(), t.getCampaignId(),
+                        t.getReference(), t.getCreatedAt()));
     }
 }

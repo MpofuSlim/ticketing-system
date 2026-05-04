@@ -4,6 +4,8 @@ import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.Tenant;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.TenantRepository;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -33,6 +35,11 @@ public class TenantService {
     @Transactional(readOnly = true)
     public List<Dtos.TenantResponse> list() {
         return tenants.findAll().stream().map(TenantService::toResponse).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public Page<Dtos.TenantResponse> list(Pageable pageable) {
+        return tenants.findAll(pageable).map(TenantService::toResponse);
     }
 
     public Dtos.TenantResponse suspend(java.util.UUID id) {

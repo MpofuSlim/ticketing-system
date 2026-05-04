@@ -1,15 +1,20 @@
 package com.innbucks.loyaltyservice.controller;
 
+import com.innbucks.loyaltyservice.dto.ApiResult;
 import com.innbucks.loyaltyservice.dto.Dtos;
+import com.innbucks.loyaltyservice.dto.PageResponse;
 import com.innbucks.loyaltyservice.security.TenantContext;
 import com.innbucks.loyaltyservice.service.InvoicingService;
 import com.innbucks.loyaltyservice.service.MerchantService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springdoc.core.annotations.ParameterObject;
+import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -38,8 +43,11 @@ public class InvoiceController {
     @Operation(summary = "List invoices for a merchant",
             description = "Returns every invoice ever generated for the merchant, most recent first. " +
                           "Includes paid, pending, and overdue. Used by the merchant billing dashboard.")
-    public List<Dtos.InvoiceResponse> listForMerchant(@PathVariable UUID merchantId) {
-        return invoicing.listForMerchant(tenantContext.requireTenantId(), merchantId);
+    public ResponseEntity<ApiResult<PageResponse<Dtos.InvoiceResponse>>> listForMerchant(@PathVariable UUID merchantId,
+                                                                                          @ParameterObject Pageable pageable) {
+        PageResponse<Dtos.InvoiceResponse> data = PageResponse.from(
+                invoicing.listForMerchant(tenantContext.requireTenantId(), merchantId, pageable));
+        return ResponseEntity.ok(ApiResult.ok("Invoices retrieved successfully", data));
     }
 
     @PostMapping("/generate")
@@ -48,13 +56,15 @@ public class InvoiceController {
                           "Body: `{ merchantId, periodStart, periodEnd }` (ISO dates). Aggregates points " +
                           "issued + vouchers issued/redeemed within the period and applies the merchant's " +
                           "fee schedule. Idempotent on (merchant, period).")
-    public Dtos.InvoiceResponse generate(@RequestBody Map<String, String> body) {
+    public ResponseEntity<ApiResult<Dtos.InvoiceResponse>> generate(@RequestBody Map<String, String> body) {
         UUID merchantId = UUID.fromString(body.get("merchantId"));
         LocalDate periodStart = LocalDate.parse(body.get("periodStart"));
         LocalDate periodEnd = LocalDate.parse(body.get("periodEnd"));
         UUID tenantId = tenantContext.requireTenantId();
         var m = merchants.requireMerchant(tenantId, merchantId);
-        return InvoicingService.toResponse(invoicing.generate(m, periodStart, periodEnd));
+        Dtos.InvoiceResponse data = InvoicingService.toResponse(invoicing.generate(m, periodStart, periodEnd));
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResult.created("Invoice generated successfully", data));
     }
 
     @PostMapping("/{id}/pay")
@@ -62,7 +72,9 @@ public class InvoiceController {
             description = "Records that the invoice has been settled (timestamps `paidAt`). Loyalty-service " +
                           "does not collect payments itself — payment-service or an external accounting " +
                           "system calls this once funds clear.")
-    public Dtos.InvoiceResponse pay(@PathVariable UUID id) {
-        return InvoicingService.toResponse(invoicing.markPaid(tenantContext.requireTenantId(), id));
+    public ResponseEntity<ApiResult<Dtos.InvoiceResponse>> pay(@PathVariable UUID id) {
+        Dtos.InvoiceResponse data = InvoicingService.toResponse(
+                invoicing.markPaid(tenantContext.requireTenantId(), id));
+        return ResponseEntity.ok(ApiResult.ok("Invoice marked as paid", data));
     }
 }

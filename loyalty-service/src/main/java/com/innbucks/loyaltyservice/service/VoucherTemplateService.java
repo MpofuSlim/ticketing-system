@@ -4,6 +4,8 @@ import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.VoucherTemplate;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.VoucherTemplateRepository;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -51,6 +53,11 @@ public class VoucherTemplateService {
     @Transactional(readOnly = true)
     public List<VoucherTemplate> list(UUID tenantId) {
         return templates.findByTenantId(tenantId);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<VoucherTemplate> list(UUID tenantId, Pageable pageable) {
+        return templates.findByTenantId(tenantId, pageable);
     }
 
     public VoucherTemplate require(UUID tenantId, UUID templateId) {

@@ -2,6 +2,8 @@ package com.innbucks.loyaltyservice.repository;
 
 import com.innbucks.loyaltyservice.entity.LoyaltyTransaction;
 import com.innbucks.loyaltyservice.entity.TransactionType;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -17,6 +19,8 @@ public interface LoyaltyTransactionRepository extends JpaRepository<LoyaltyTrans
     Optional<LoyaltyTransaction> findFirstByMerchantIdAndReference(UUID merchantId, String reference);
 
     List<LoyaltyTransaction> findTop50ByUserIdOrderByCreatedAtDesc(UUID userId);
+
+    Page<LoyaltyTransaction> findByUserIdOrderByCreatedAtDesc(UUID userId, Pageable pageable);
 
     @Query("""
         SELECT COALESCE(SUM(CASE WHEN t.pointsDelta > 0 THEN t.pointsDelta ELSE 0 END), 0)

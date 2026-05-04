@@ -2,6 +2,8 @@ package com.innbucks.loyaltyservice.repository;
 
 import com.innbucks.loyaltyservice.entity.Voucher;
 import jakarta.persistence.LockModeType;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
@@ -22,7 +24,11 @@ public interface VoucherRepository extends JpaRepository<Voucher, UUID> {
 
     List<Voucher> findByAssignedUserIdAndStatusIn(UUID userId, List<Voucher.Status> statuses);
 
+    Page<Voucher> findByAssignedUserIdAndStatusIn(UUID userId, List<Voucher.Status> statuses, Pageable pageable);
+
     List<Voucher> findByTenantIdAndStatus(UUID tenantId, Voucher.Status status);
+
+    Page<Voucher> findByTenantIdAndStatus(UUID tenantId, Voucher.Status status, Pageable pageable);
 
     @Query("SELECT v FROM Voucher v WHERE v.expiresAt IS NOT NULL AND v.expiresAt < :now AND v.status NOT IN " +
             "(com.innbucks.loyaltyservice.entity.Voucher.Status.REDEEMED, " +

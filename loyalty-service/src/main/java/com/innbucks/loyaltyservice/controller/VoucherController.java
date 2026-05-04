@@ -1,6 +1,8 @@
 package com.innbucks.loyaltyservice.controller;
 
+import com.innbucks.loyaltyservice.dto.ApiResult;
 import com.innbucks.loyaltyservice.dto.Dtos;
+import com.innbucks.loyaltyservice.dto.PageResponse;
 import com.innbucks.loyaltyservice.entity.Voucher;
 import com.innbucks.loyaltyservice.entity.VoucherTemplate;
 import com.innbucks.loyaltyservice.security.TenantContext;
@@ -9,6 +11,10 @@ import com.innbucks.loyaltyservice.service.VoucherTemplateService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springdoc.core.annotations.ParameterObject;
+import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -40,16 +46,20 @@ public class VoucherController {
             description = "Defines the *kind* of voucher (SINGLE_USE / MULTI_USE / CAMPAIGN / REFERRAL / " +
                           "CORPORATE) and how its value is expressed (AMOUNT / PERCENT / FREE_ITEM / COMBO). " +
                           "Templates are reusable — actual vouchers are minted from them via /issue or /issue-bulk.")
-    public VoucherTemplate createTemplate(@Valid @RequestBody Dtos.VoucherTemplateRequest req) {
-        return templateService.create(tenantContext.requireTenantId(), req);
+    public ResponseEntity<ApiResult<VoucherTemplate>> createTemplate(@Valid @RequestBody Dtos.VoucherTemplateRequest req) {
+        VoucherTemplate data = templateService.create(tenantContext.requireTenantId(), req);
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResult.created("Voucher template created successfully", data));
     }
 
     @GetMapping("/templates")
     @Operation(summary = "List voucher templates",
             description = "Returns every template defined for the current tenant. Used by merchant dashboards " +
                           "to populate \"issue voucher\" pickers.")
-    public List<VoucherTemplate> listTemplates() {
-        return templateService.list(tenantContext.requireTenantId());
+    public ResponseEntity<ApiResult<PageResponse<VoucherTemplate>>> listTemplates(@ParameterObject Pageable pageable) {
+        PageResponse<VoucherTemplate> data = PageResponse.from(
+                templateService.list(tenantContext.requireTenantId(), pageable));
+        return ResponseEntity.ok(ApiResult.ok("Voucher templates retrieved successfully", data));
     }
 
     @PostMapping("/issue")
@@ -58,8 +68,10 @@ public class VoucherController {
                           "(`assignedUserId`) or to an arbitrary phone (`assigneePhone`). Returns the signed " +
                           "voucher code that the customer presents at redemption. Delivery channel (SMS, " +
                           "WhatsApp, EMAIL, PUSH, POS, NONE) controls how NotificationGateway notifies the customer.")
-    public Dtos.VoucherResponse issue(@Valid @RequestBody Dtos.IssueVoucherRequest req) {
-        return voucherService.issue(tenantContext.requireTenantId(), req);
+    public ResponseEntity<ApiResult<Dtos.VoucherResponse>> issue(@Valid @RequestBody Dtos.IssueVoucherRequest req) {
+        Dtos.VoucherResponse data = voucherService.issue(tenantContext.requireTenantId(), req);
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResult.created("Voucher issued successfully", data));
     }
 
     @PostMapping("/issue-bulk")
@@ -67,8 +79,10 @@ public class VoucherController {
             description = "Mints `quantity` independent unassigned vouchers in one call (campaign / corporate / " +
                           "referral distributions). Each gets its own unique signed code. Use the returned " +
                           "`batchId` (via the codes' batch reference) to track the run.")
-    public List<Dtos.VoucherResponse> issueBulk(@Valid @RequestBody Dtos.BulkIssueRequest req) {
-        return voucherService.issueBulk(tenantContext.requireTenantId(), req);
+    public ResponseEntity<ApiResult<List<Dtos.VoucherResponse>>> issueBulk(@Valid @RequestBody Dtos.BulkIssueRequest req) {
+        List<Dtos.VoucherResponse> data = voucherService.issueBulk(tenantContext.requireTenantId(), req);
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResult.created("Vouchers issued successfully", data));
     }
 
     @PostMapping("/redeem")
@@ -77,8 +91,9 @@ public class VoucherController {
                           "device fingerprint / IP against velocity limits; and decrements `usesRemaining`. " +
                           "Failed attempts are recorded in `fraud_attempts` and may auto-block the user via " +
                           "FraudService when the velocity threshold is exceeded.")
-    public Dtos.RedemptionResponse redeem(@Valid @RequestBody Dtos.RedeemVoucherRequest req) {
-        return voucherService.redeem(tenantContext.requireTenantId(), req);
+    public ResponseEntity<ApiResult<Dtos.RedemptionResponse>> redeem(@Valid @RequestBody Dtos.RedeemVoucherRequest req) {
+        Dtos.RedemptionResponse data = voucherService.redeem(tenantContext.requireTenantId(), req);
+        return ResponseEntity.ok(ApiResult.ok("Voucher redeemed successfully", data));
     }
 
     @PostMapping("/{id}/revoke")
@@ -86,8 +101,9 @@ public class VoucherController {
             description = "Marks the voucher REVOKED so it can no longer be redeemed. Use for fraud, " +
                           "support refunds, or when a customer reports their code stolen. Already-redeemed " +
                           "vouchers cannot be revoked.")
-    public void revoke(@PathVariable UUID id) {
+    public ResponseEntity<ApiResult<Void>> revoke(@PathVariable UUID id) {
         voucherService.revoke(tenantContext.requireTenantId(), id);
+        return ResponseEntity.ok(ApiResult.ok("Voucher revoked successfully", null));
     }
 
     @PostMapping("/codes/{code}/viewed")
@@ -95,23 +111,29 @@ public class VoucherController {
             description = "Read receipt — call this when the customer's app displays the voucher. " +
                           "Used by analytics to measure delivery-to-view conversion. No tenant header required " +
                           "since the code itself identifies the tenant.")
-    public void markViewed(@PathVariable String code) {
+    public ResponseEntity<ApiResult<Void>> markViewed(@PathVariable String code) {
         voucherService.markViewed(code);
+        return ResponseEntity.ok(ApiResult.ok("Voucher view recorded", null));
     }
 
     @GetMapping("/users/{userId}/active")
     @Operation(summary = "List a user's active vouchers",
             description = "Returns all ISSUED / PARTIALLY_USED vouchers belonging to the loyalty user. " +
                           "Powers the SuperApp \"my vouchers\" wallet view.")
-    public List<Dtos.VoucherResponse> activeForUser(@PathVariable UUID userId) {
-        return voucherService.activeForUser(userId);
+    public ResponseEntity<ApiResult<PageResponse<Dtos.VoucherResponse>>> activeForUser(@PathVariable UUID userId,
+                                                                                       @ParameterObject Pageable pageable) {
+        PageResponse<Dtos.VoucherResponse> data = PageResponse.from(voucherService.activeForUser(userId, pageable));
+        return ResponseEntity.ok(ApiResult.ok("Active vouchers retrieved successfully", data));
     }
 
     @GetMapping
     @Operation(summary = "Find vouchers by status",
             description = "Operator/merchant query: list every voucher in the given status across the tenant. " +
                           "Common statuses: ISSUED, PARTIALLY_USED, REDEEMED, EXPIRED, REVOKED.")
-    public List<Dtos.VoucherResponse> findByStatus(@RequestParam("status") Voucher.Status status) {
-        return voucherService.findByStatus(tenantContext.requireTenantId(), status);
+    public ResponseEntity<ApiResult<PageResponse<Dtos.VoucherResponse>>> findByStatus(@RequestParam("status") Voucher.Status status,
+                                                                                      @ParameterObject Pageable pageable) {
+        PageResponse<Dtos.VoucherResponse> data = PageResponse.from(
+                voucherService.findByStatus(tenantContext.requireTenantId(), status, pageable));
+        return ResponseEntity.ok(ApiResult.ok("Vouchers retrieved successfully", data));
     }
 }

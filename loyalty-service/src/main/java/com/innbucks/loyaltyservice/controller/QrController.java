@@ -1,11 +1,14 @@
 package com.innbucks.loyaltyservice.controller;
 
+import com.innbucks.loyaltyservice.dto.ApiResult;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.security.TenantContext;
 import com.innbucks.loyaltyservice.service.QrService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -31,8 +34,10 @@ public class QrController {
                           "a transaction type (e.g. QR_PAY) and an amount. The merchant POS or sender app " +
                           "renders this as a QR code. `ttlSeconds` overrides the default TTL configured " +
                           "via `loyalty.qr.ttl-seconds`.")
-    public Dtos.QrPayload issue(@Valid @RequestBody Dtos.QrIssueRequest req) {
-        return qrService.issue(tenantContext.requireTenantId(), req);
+    public ResponseEntity<ApiResult<Dtos.QrPayload>> issue(@Valid @RequestBody Dtos.QrIssueRequest req) {
+        Dtos.QrPayload data = qrService.issue(tenantContext.requireTenantId(), req);
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResult.created("QR token issued successfully", data));
     }
 
     @PostMapping("/consume")
@@ -40,7 +45,8 @@ public class QrController {
             description = "Verifies the token signature + expiry + single-use flag, then posts the underlying " +
                           "transaction (earn or transfer) on behalf of the scanning user. Reusing the same " +
                           "token returns 4xx — the token is marked CONSUMED on first success.")
-    public Dtos.TransactionResponse consume(@Valid @RequestBody Dtos.QrConsumeRequest req) {
-        return qrService.consume(tenantContext.requireTenantId(), req);
+    public ResponseEntity<ApiResult<Dtos.TransactionResponse>> consume(@Valid @RequestBody Dtos.QrConsumeRequest req) {
+        Dtos.TransactionResponse data = qrService.consume(tenantContext.requireTenantId(), req);
+        return ResponseEntity.ok(ApiResult.ok("QR token consumed successfully", data));
     }
 }
