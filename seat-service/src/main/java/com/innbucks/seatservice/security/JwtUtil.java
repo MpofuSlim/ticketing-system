@@ -33,6 +33,10 @@ public class JwtUtil {
         return getClaims(token).get("verified", Boolean.class);
     }
 
+    public String extractPhoneNumber(String token) {
+        return getClaims(token).get("phoneNumber", String.class);
+    }
+
     public boolean isTokenValid(String token) {
         try {
             getClaims(token);

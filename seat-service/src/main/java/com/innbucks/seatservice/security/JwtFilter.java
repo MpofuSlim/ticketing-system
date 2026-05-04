@@ -50,6 +50,7 @@ public class JwtFilter extends OncePerRequestFilter {
                     String role  = jwtUtil.extractRole(token);
                     Integer tier = jwtUtil.extractTier(token);
                     Boolean verified = jwtUtil.extractVerified(token);
+                    String phoneNumber = jwtUtil.extractPhoneNumber(token);
 
                     List<SimpleGrantedAuthority> authorities = new ArrayList<>();
                     authorities.add(new SimpleGrantedAuthority("ROLE_" + role));
@@ -63,6 +64,10 @@ public class JwtFilter extends OncePerRequestFilter {
                     }
 
                     var auth = new UsernamePasswordAuthenticationToken(email, null, authorities);
+                    // Stash the phone claim so TierAccessInterceptor can look up
+                    // the customer's live tier in user-service without re-parsing
+                    // the JWT.
+                    auth.setDetails(new JwtAuthDetails(email, phoneNumber));
                     SecurityContextHolder.getContext().setAuthentication(auth);
                     log.debug("JWT authenticated subject={} role={} tier={} path={}", email, role, tier, request.getRequestURI());
                 }

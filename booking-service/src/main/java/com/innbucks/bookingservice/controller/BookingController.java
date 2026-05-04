@@ -7,6 +7,8 @@ import com.innbucks.bookingservice.dto.ConfirmBookingRequestDTO;
 import com.innbucks.bookingservice.dto.CreateBookingRequestDTO;
 import com.innbucks.bookingservice.security.JwtAuthDetails;
 import com.innbucks.bookingservice.security.MinTier;
+import com.innbucks.bookingservice.security.TierAccessInterceptor;
+import jakarta.servlet.http.HttpServletRequest;
 import com.innbucks.bookingservice.service.BookingService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -89,10 +91,11 @@ public class BookingController {
     })
     public ResponseEntity<ApiResult<BookingResponseDTO>> createBooking(
             @Valid @RequestBody CreateBookingRequestDTO request,
-            Authentication authentication
+            Authentication authentication,
+            HttpServletRequest httpRequest
     ) {
         String userEmail = authentication.getName();
-        int tier = extractTier(authentication);
+        int tier = currentTier(httpRequest);
         String phoneNumber = extractPhoneNumber(authentication);
         log.info("POST /bookings userEmail={} tier={} phoneNumber={} eventId={} seats={}",
                 userEmail, tier, phoneNumber, request.getEventId(), request.getSeats().size());
@@ -106,17 +109,12 @@ public class BookingController {
         return details instanceof JwtAuthDetails d ? d.phoneNumber() : null;
     }
 
-    private int extractTier(Authentication authentication) {
-        int tier = 0;
-        for (var authority : authentication.getAuthorities()) {
-            String name = authority.getAuthority();
-            if (name != null && name.startsWith("TIER_")) {
-                try {
-                    tier = Math.max(tier, Integer.parseInt(name.substring(5)));
-                } catch (NumberFormatException ignored) { }
-            }
-        }
-        return tier;
+    // Tier is stamped on the request by TierAccessInterceptor after a live
+    // user-service lookup, so the JWT's (potentially stale) tier claim never
+    // feeds the per-tier seat-count check.
+    private int currentTier(HttpServletRequest request) {
+        Object value = request.getAttribute(TierAccessInterceptor.CURRENT_TIER_ATTRIBUTE);
+        return value instanceof Integer i ? i : 0;
     }
 
     @GetMapping("/my")
