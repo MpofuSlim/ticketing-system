@@ -30,11 +30,13 @@ public class Dtos {
                                    String currency, Merchant.BillingCycle billingCycle,
                                    Merchant.Status status) {}
 
-    public record UserRequest(@NotBlank String phone, String email, String fullName,
-                              String nationalId, String country,
-                              UUID merchantId, LoyaltyUser.Role role) {}
-    public record UserResponse(UUID id, UUID tenantId, String phone, String email,
-                               String fullName, String role, String status) {}
+    // Loyalty enrolment is by phone number only — name/email/nationalId belong
+    // to user-service. Loyalty validates the phone exists there before
+    // creating its local LoyaltyUser projection.
+    public record UserEnrolRequest(@NotBlank String phoneNumber,
+                                   UUID merchantId, LoyaltyUser.Role role) {}
+    public record UserResponse(UUID id, UUID tenantId, String phoneNumber,
+                               String role, String status) {}
 
     public record WalletResponse(UUID id, UUID userId, String label, String type,
                                  String pocket, BigDecimal balance, LocalDate lockedUntil) {}

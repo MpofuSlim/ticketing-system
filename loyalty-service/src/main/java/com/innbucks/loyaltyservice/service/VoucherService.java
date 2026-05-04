@@ -103,8 +103,9 @@ public class VoucherService {
             if (!u.getTenantId().equals(tenantId)) {
                 throw LoyaltyException.forbidden("CROSS_TENANT", "user belongs to a different tenant");
             }
-            if (assigneePhone == null) assigneePhone = u.getPhone();
-            if (assigneeName == null) assigneeName = u.getFullName();
+            if (assigneePhone == null) assigneePhone = u.getPhoneNumber();
+            // assigneeName is supplied by caller — loyalty-service does not
+            // duplicate identity from user-service.
         }
 
         String code = uniqueCode();

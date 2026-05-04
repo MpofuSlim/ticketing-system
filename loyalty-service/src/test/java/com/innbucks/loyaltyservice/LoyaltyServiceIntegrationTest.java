@@ -1,6 +1,9 @@
 package com.innbucks.loyaltyservice;
 
+import com.innbucks.loyaltyservice.client.UserServiceClient;
+import com.innbucks.loyaltyservice.dto.CustomerTierResponseDTO;
 import com.innbucks.loyaltyservice.dto.Dtos;
+import com.innbucks.loyaltyservice.entity.LoyaltyUser;
 import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.QrToken;
 import com.innbucks.loyaltyservice.entity.Tenant;
@@ -19,19 +22,24 @@ import com.innbucks.loyaltyservice.service.UserService;
 import com.innbucks.loyaltyservice.service.VoucherService;
 import com.innbucks.loyaltyservice.service.VoucherTemplateService;
 import com.innbucks.loyaltyservice.service.WalletService;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
 
 @SpringBootTest
 @ActiveProfiles("test")
@@ -49,6 +57,17 @@ class LoyaltyServiceIntegrationTest {
     @Autowired QrService qrService;
     @Autowired InvoicingService invoicingService;
 
+    // Stubbed so enrolment doesn't require a running user-service. Returns a
+    // tier-1 customer for any phone number passed in.
+    @MockitoBean UserServiceClient userServiceClient;
+
+    @BeforeEach
+    void stubUserServiceLookup() {
+        when(userServiceClient.getCustomerTier(anyString()))
+                .thenAnswer(inv -> Optional.of(
+                        new CustomerTierResponseDTO(inv.getArgument(0), 1, 2)));
+    }
+
     @Test
     @Transactional
     void earnsPointsAndRedeemsVoucher() {
@@ -62,11 +81,10 @@ class LoyaltyServiceIntegrationTest {
         ruleAdminService.createRule(t.getId(),
                 new Dtos.RuleRequest(mr.id(), TransactionType.PURCHASE,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
-        Dtos.UserResponse u = userService.create(t.getId(),
-                new Dtos.UserRequest("+263770000001", null, "Alice", null, "ZW", mr.id(), null));
+        LoyaltyUser u = userService.findOrEnrol(t.getId(), "+263770000001", mr.id());
 
         var txn = transactionService.post(t.getId(),
-                new Dtos.TransactionRequest(mr.id(), u.id(), TransactionType.PURCHASE,
+                new Dtos.TransactionRequest(mr.id(), u.getId(), TransactionType.PURCHASE,
                         new BigDecimal("100"), "USD", "ref-1"));
         assertThat(txn.pointsDelta()).isEqualByComparingTo("100");
         assertThat(txn.balanceAfter()).isEqualByComparingTo("100");
@@ -79,18 +97,18 @@ class LoyaltyServiceIntegrationTest {
                         new BigDecimal("10"), "USD", null, 1, 30, null));
 
         var v = voucherService.issue(t.getId(),
-                new Dtos.IssueVoucherRequest(tpl.getId(), null, null, u.id(),
+                new Dtos.IssueVoucherRequest(tpl.getId(), null, null, u.getId(),
                         Voucher.DeliveryChannel.NONE, null, null, null));
 
         var redemption = voucherService.redeem(t.getId(),
-                new Dtos.RedeemVoucherRequest(v.code(), u.id(), mr.id(),
+                new Dtos.RedeemVoucherRequest(v.code(), u.getId(), mr.id(),
                         "OUTLET-1", "device-A", "127.0.0.1"));
         assertThat(redemption.status()).isEqualTo(Voucher.Status.REDEEMED.name());
 
         // Duplicate redemption attempt is rejected
         assertThatThrownBy(() ->
                 voucherService.redeem(t.getId(),
-                        new Dtos.RedeemVoucherRequest(v.code(), u.id(), mr.id(),
+                        new Dtos.RedeemVoucherRequest(v.code(), u.getId(), mr.id(),
                                 "OUTLET-1", "device-A", "127.0.0.1")))
                 .isInstanceOf(LoyaltyException.class);
     }
@@ -107,20 +125,18 @@ class LoyaltyServiceIntegrationTest {
                 new Dtos.RuleRequest(mr.id(), TransactionType.PURCHASE,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
 
-        Dtos.UserResponse alice = userService.create(t.getId(),
-                new Dtos.UserRequest("+263770000010", null, "Alice", null, "ZW", mr.id(), null));
-        Dtos.UserResponse bob = userService.create(t.getId(),
-                new Dtos.UserRequest("+263770000011", null, "Bob", null, "ZW", mr.id(), null));
+        LoyaltyUser alice = userService.findOrEnrol(t.getId(), "+263770000010", mr.id());
+        LoyaltyUser bob = userService.findOrEnrol(t.getId(), "+263770000011", mr.id());
 
         transactionService.post(t.getId(),
-                new Dtos.TransactionRequest(mr.id(), alice.id(), TransactionType.PURCHASE,
+                new Dtos.TransactionRequest(mr.id(), alice.getId(), TransactionType.PURCHASE,
                         new BigDecimal("50"), "USD", "ref-trans-1"));
 
         transferService.transfer(t.getId(),
-                new Dtos.TransferRequest(alice.id(), bob.id(), new BigDecimal("20"), "gift"));
+                new Dtos.TransferRequest(alice.getId(), bob.getId(), new BigDecimal("20"), "gift"));
 
-        assertThat(walletService.totalBalance(alice.id())).isEqualByComparingTo("30");
-        assertThat(walletService.totalBalance(bob.id())).isEqualByComparingTo("20");
+        assertThat(walletService.totalBalance(alice.getId())).isEqualByComparingTo("30");
+        assertThat(walletService.totalBalance(bob.getId())).isEqualByComparingTo("20");
     }
 
     @Test
@@ -134,20 +150,19 @@ class LoyaltyServiceIntegrationTest {
         ruleAdminService.createRule(t.getId(),
                 new Dtos.RuleRequest(mr.id(), TransactionType.QR_PAY,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
-        Dtos.UserResponse u = userService.create(t.getId(),
-                new Dtos.UserRequest("+263770000020", null, "Carol", null, "ZW", mr.id(), null));
+        LoyaltyUser u = userService.findOrEnrol(t.getId(), "+263770000020", mr.id());
 
         var qr = qrService.issue(t.getId(),
                 new Dtos.QrIssueRequest(QrToken.SourceType.MERCHANT, mr.id(),
                         TransactionType.QR_PAY, new BigDecimal("25"), "USD", 60));
 
         var txn = qrService.consume(t.getId(),
-                new Dtos.QrConsumeRequest(qr.token(), qr.signature(), u.id(), "ref-qr-1"));
+                new Dtos.QrConsumeRequest(qr.token(), qr.signature(), u.getId(), "ref-qr-1"));
         assertThat(txn.pointsDelta()).isEqualByComparingTo("25");
 
         // Reuse must fail
         assertThatThrownBy(() -> qrService.consume(t.getId(),
-                new Dtos.QrConsumeRequest(qr.token(), qr.signature(), u.id(), "ref-qr-2")))
+                new Dtos.QrConsumeRequest(qr.token(), qr.signature(), u.getId(), "ref-qr-2")))
                 .isInstanceOf(LoyaltyException.class);
     }
 
@@ -164,11 +179,10 @@ class LoyaltyServiceIntegrationTest {
         ruleAdminService.createRule(t.getId(),
                 new Dtos.RuleRequest(mr.id(), TransactionType.PURCHASE,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
-        Dtos.UserResponse u = userService.create(t.getId(),
-                new Dtos.UserRequest("+263770000030", null, "Dan", null, "ZW", mr.id(), null));
+        LoyaltyUser u = userService.findOrEnrol(t.getId(), "+263770000030", mr.id());
 
         transactionService.post(t.getId(),
-                new Dtos.TransactionRequest(mr.id(), u.id(), TransactionType.PURCHASE,
+                new Dtos.TransactionRequest(mr.id(), u.getId(), TransactionType.PURCHASE,
                         new BigDecimal("100"), "USD", "ref-inv-1"));
 
         var merchant = merchantService.requireMerchant(t.getId(), mr.id());
