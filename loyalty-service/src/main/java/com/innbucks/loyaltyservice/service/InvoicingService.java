@@ -9,6 +9,8 @@ import com.innbucks.loyaltyservice.repository.InvoiceRepository;
 import com.innbucks.loyaltyservice.repository.LoyaltyTransactionRepository;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
 import com.innbucks.loyaltyservice.repository.VoucherRepository;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -105,6 +107,17 @@ public class InvoicingService {
         }
         return invoices.findByMerchantIdOrderByPeriodEndDesc(merchantId).stream()
                 .map(InvoicingService::toResponse).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public Page<Dtos.InvoiceResponse> listForMerchant(UUID tenantId, UUID merchantId, Pageable pageable) {
+        Merchant m = merchants.findById(merchantId)
+                .orElseThrow(() -> LoyaltyException.notFound("merchant"));
+        if (!m.getTenantId().equals(tenantId)) {
+            throw LoyaltyException.forbidden("CROSS_TENANT", "wrong tenant");
+        }
+        return invoices.findByMerchantIdOrderByPeriodEndDesc(merchantId, pageable)
+                .map(InvoicingService::toResponse);
     }
 
     public LocalDate previousPeriodStart(LocalDate today, Merchant.BillingCycle cycle) {

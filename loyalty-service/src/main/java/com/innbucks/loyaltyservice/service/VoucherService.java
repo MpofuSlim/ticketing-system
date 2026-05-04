@@ -15,6 +15,8 @@ import com.innbucks.loyaltyservice.repository.VoucherBatchRepository;
 import com.innbucks.loyaltyservice.repository.VoucherRedemptionRepository;
 import com.innbucks.loyaltyservice.repository.VoucherRepository;
 import com.innbucks.loyaltyservice.security.CryptoSigner;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -263,9 +265,23 @@ public class VoucherService {
     }
 
     @Transactional(readOnly = true)
+    public Page<Dtos.VoucherResponse> activeForUser(UUID userId, Pageable pageable) {
+        return vouchers.findByAssignedUserIdAndStatusIn(userId, List.of(
+                Voucher.Status.ISSUED, Voucher.Status.DELIVERED, Voucher.Status.VIEWED,
+                Voucher.Status.PARTIALLY_USED), pageable)
+                .map(VoucherService::toResponse);
+    }
+
+    @Transactional(readOnly = true)
     public List<Dtos.VoucherResponse> findByStatus(UUID tenantId, Voucher.Status status) {
         return vouchers.findByTenantIdAndStatus(tenantId, status).stream()
                 .map(VoucherService::toResponse).toList();
+    }
+
+    @Transactional(readOnly = true)
+    public Page<Dtos.VoucherResponse> findByStatus(UUID tenantId, Voucher.Status status, Pageable pageable) {
+        return vouchers.findByTenantIdAndStatus(tenantId, status, pageable)
+                .map(VoucherService::toResponse);
     }
 
     public static Dtos.VoucherResponse toResponse(Voucher v) {

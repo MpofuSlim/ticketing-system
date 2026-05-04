@@ -1,13 +1,17 @@
 package com.innbucks.loyaltyservice.controller;
 
+import com.innbucks.loyaltyservice.dto.ApiResult;
 import com.innbucks.loyaltyservice.dto.Dtos;
+import com.innbucks.loyaltyservice.dto.PageResponse;
 import com.innbucks.loyaltyservice.security.TenantContext;
 import com.innbucks.loyaltyservice.service.MiniAppService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springdoc.core.annotations.ParameterObject;
+import org.springframework.data.domain.Pageable;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -32,7 +36,11 @@ public class MiniAppController {
                           "single merchant via the `merchantId` query param. Each manifest carries the " +
                           "entry URL, icon, and human-readable name the SuperApp shell renders on the home " +
                           "screen.")
-    public List<Dtos.MiniAppManifest> manifest(@RequestParam(required = false) UUID merchantId) {
-        return miniApps.manifest(tenantContext.requireTenantId(), merchantId);
+    public ResponseEntity<ApiResult<PageResponse<Dtos.MiniAppManifest>>> manifest(
+            @RequestParam(required = false) UUID merchantId,
+            @ParameterObject Pageable pageable) {
+        PageResponse<Dtos.MiniAppManifest> data = PageResponse.from(
+                miniApps.manifest(tenantContext.requireTenantId(), merchantId), pageable);
+        return ResponseEntity.ok(ApiResult.ok("Mini-app manifests retrieved successfully", data));
     }
 }

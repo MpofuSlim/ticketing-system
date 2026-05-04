@@ -6,6 +6,8 @@ import com.innbucks.loyaltyservice.entity.LoyaltyRule;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.CampaignRepository;
 import com.innbucks.loyaltyservice.repository.LoyaltyRuleRepository;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -48,6 +50,11 @@ public class RuleAdminService {
         return rules.findByTenantId(tenantId);
     }
 
+    @Transactional(readOnly = true)
+    public Page<LoyaltyRule> listRules(UUID tenantId, Pageable pageable) {
+        return rules.findByTenantId(tenantId, pageable);
+    }
+
     public LoyaltyRule deactivateRule(UUID tenantId, UUID ruleId) {
         LoyaltyRule r = rules.findById(ruleId).orElseThrow(() -> LoyaltyException.notFound("rule"));
         if (!r.getTenantId().equals(tenantId)) throw LoyaltyException.forbidden("CROSS_TENANT", "wrong tenant");
@@ -74,5 +81,10 @@ public class RuleAdminService {
     @Transactional(readOnly = true)
     public List<Campaign> listCampaigns(UUID tenantId) {
         return campaigns.findByTenantId(tenantId);
+    }
+
+    @Transactional(readOnly = true)
+    public Page<Campaign> listCampaigns(UUID tenantId, Pageable pageable) {
+        return campaigns.findByTenantId(tenantId, pageable);
     }
 }

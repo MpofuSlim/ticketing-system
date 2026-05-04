@@ -1,14 +1,18 @@
 package com.innbucks.loyaltyservice.controller;
 
+import com.innbucks.loyaltyservice.dto.ApiResult;
 import com.innbucks.loyaltyservice.dto.Dtos;
+import com.innbucks.loyaltyservice.dto.PageResponse;
 import com.innbucks.loyaltyservice.service.TenantService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springdoc.core.annotations.ParameterObject;
+import org.springframework.data.domain.Pageable;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -29,16 +33,19 @@ public class TenantController {
     @Operation(summary = "Register a new tenant",
             description = "Onboards a new tenant onto the platform. The returned `id` is what every other " +
                           "endpoint expects in the `X-Tenant-Id` header. Operator-only — no tenant header required.")
-    public ResponseEntity<Dtos.TenantResponse> create(@Valid @RequestBody Dtos.TenantRequest req) {
-        return ResponseEntity.ok(tenantService.create(req));
+    public ResponseEntity<ApiResult<Dtos.TenantResponse>> create(@Valid @RequestBody Dtos.TenantRequest req) {
+        Dtos.TenantResponse data = tenantService.create(req);
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResult.created("Tenant created successfully", data));
     }
 
     @GetMapping
     @Operation(summary = "List all tenants",
             description = "Returns every tenant on the platform. Intended for operator dashboards. " +
                           "Operator-only — no tenant header required.")
-    public List<Dtos.TenantResponse> list() {
-        return tenantService.list();
+    public ResponseEntity<ApiResult<PageResponse<Dtos.TenantResponse>>> list(@ParameterObject Pageable pageable) {
+        PageResponse<Dtos.TenantResponse> data = PageResponse.from(tenantService.list(pageable));
+        return ResponseEntity.ok(ApiResult.ok("Tenants retrieved successfully", data));
     }
 
     @PostMapping("/{id}/suspend")
@@ -46,15 +53,17 @@ public class TenantController {
             description = "Marks the tenant as SUSPENDED. While suspended, all the tenant's customer-facing " +
                           "loyalty operations (earn, redeem, voucher issue/redeem) will be rejected. " +
                           "Use to halt activity during billing disputes or compliance reviews.")
-    public Dtos.TenantResponse suspend(@PathVariable UUID id) {
-        return tenantService.suspend(id);
+    public ResponseEntity<ApiResult<Dtos.TenantResponse>> suspend(@PathVariable UUID id) {
+        Dtos.TenantResponse data = tenantService.suspend(id);
+        return ResponseEntity.ok(ApiResult.ok("Tenant suspended successfully", data));
     }
 
     @PostMapping("/{id}/activate")
     @Operation(summary = "Reactivate a suspended tenant",
             description = "Reverses /suspend by setting status back to ACTIVE. Idempotent — safe to call " +
                           "on an already-active tenant.")
-    public Dtos.TenantResponse activate(@PathVariable UUID id) {
-        return tenantService.activate(id);
+    public ResponseEntity<ApiResult<Dtos.TenantResponse>> activate(@PathVariable UUID id) {
+        Dtos.TenantResponse data = tenantService.activate(id);
+        return ResponseEntity.ok(ApiResult.ok("Tenant activated successfully", data));
     }
 }

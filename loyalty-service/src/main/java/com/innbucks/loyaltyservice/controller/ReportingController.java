@@ -1,18 +1,21 @@
 package com.innbucks.loyaltyservice.controller;
 
+import com.innbucks.loyaltyservice.dto.ApiResult;
 import com.innbucks.loyaltyservice.dto.Dtos;
+import com.innbucks.loyaltyservice.dto.PageResponse;
 import com.innbucks.loyaltyservice.security.TenantContext;
 import com.innbucks.loyaltyservice.service.ReportingService;
 import com.innbucks.loyaltyservice.service.SuperAppService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.springdoc.core.annotations.ParameterObject;
+import org.springframework.data.domain.Pageable;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -41,24 +44,27 @@ public class ReportingController {
             description = "Cross-tenant aggregates for the platform operator: total tenants, active " +
                           "merchants, transactions/vouchers/points today, fraud attempts in last 24h, " +
                           "invoice and voucher-expiry counts. No tenant header required.")
-    public Dtos.OperatorDashboard operator() {
-        return reporting.operator();
+    public ResponseEntity<ApiResult<Dtos.OperatorDashboard>> operator() {
+        Dtos.OperatorDashboard data = reporting.operator();
+        return ResponseEntity.ok(ApiResult.ok("Operator dashboard retrieved successfully", data));
     }
 
     @GetMapping("/tenant")
     @Operation(summary = "Tenant dashboard",
             description = "Per-tenant rollup for the current X-Tenant-Id: merchants, active campaigns, " +
                           "outstanding/expired vouchers, total wallet balance, pending invoices.")
-    public Dtos.TenantDashboard tenant() {
-        return reporting.tenant(tenantContext.requireTenantId());
+    public ResponseEntity<ApiResult<Dtos.TenantDashboard>> tenant() {
+        Dtos.TenantDashboard data = reporting.tenant(tenantContext.requireTenantId());
+        return ResponseEntity.ok(ApiResult.ok("Tenant dashboard retrieved successfully", data));
     }
 
     @GetMapping("/merchant/{id}")
     @Operation(summary = "Merchant dashboard",
             description = "Per-merchant operational view: redemptions today, vouchers issued/redeemed, points " +
                           "issued/redeemed, fraud alerts in last 24h, next invoice date and estimated amount.")
-    public Dtos.MerchantDashboard merchant(@PathVariable UUID id) {
-        return reporting.merchant(id);
+    public ResponseEntity<ApiResult<Dtos.MerchantDashboard>> merchant(@PathVariable UUID id) {
+        Dtos.MerchantDashboard data = reporting.merchant(id);
+        return ResponseEntity.ok(ApiResult.ok("Merchant dashboard retrieved successfully", data));
     }
 
     @GetMapping("/user/{id}")
@@ -66,18 +72,20 @@ public class ReportingController {
             description = "Customer-facing dashboard: total points across all wallets, the wallet list, " +
                           "active vouchers, and recent transactions. The {id} is the LoyaltyUser UUID, not " +
                           "the user-service userId.")
-    public Dtos.UserDashboard user(@PathVariable UUID id) {
-        return superApp.dashboard(id);
+    public ResponseEntity<ApiResult<Dtos.UserDashboard>> user(@PathVariable UUID id) {
+        Dtos.UserDashboard data = superApp.dashboard(id);
+        return ResponseEntity.ok(ApiResult.ok("User dashboard retrieved successfully", data));
     }
 
     @GetMapping("/transactions/mix")
     @Operation(summary = "Transaction mix (counts per type)",
             description = "Returns a map of `TransactionType -> count` for the (optional) merchant within " +
                           "[from, to]. Use for revenue-mix charts. `from` and `to` are required ISO dates.")
-    public Map<String, Long> transactionMix(@RequestParam(required = false) UUID merchantId,
+    public ResponseEntity<ApiResult<Map<String, Long>>> transactionMix(@RequestParam(required = false) UUID merchantId,
                                             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
                                             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
-        return reporting.transactionMix(tenantContext.requireTenantId(), merchantId, from, to);
+        Map<String, Long> data = reporting.transactionMix(tenantContext.requireTenantId(), merchantId, from, to);
+        return ResponseEntity.ok(ApiResult.ok("Transaction mix retrieved successfully", data));
     }
 
     @GetMapping("/fraud")
@@ -85,8 +93,10 @@ public class ReportingController {
             description = "Returns rejected redemption attempts (signature mismatch, expired, duplicate, " +
                           "wrong-merchant, blocked-user, blocked-device) for the current tenant. Used by " +
                           "compliance dashboards and to triage velocity-blocked users.")
-    public List<Dtos.FraudAttemptResponse> fraud() {
-        return reporting.recentFraud(tenantContext.requireTenantId());
+    public ResponseEntity<ApiResult<PageResponse<Dtos.FraudAttemptResponse>>> fraud(@ParameterObject Pageable pageable) {
+        PageResponse<Dtos.FraudAttemptResponse> data = PageResponse.from(
+                reporting.recentFraud(tenantContext.requireTenantId()), pageable);
+        return ResponseEntity.ok(ApiResult.ok("Fraud attempts retrieved successfully", data));
     }
 
     @GetMapping(value = "/transactions/export", produces = "text/csv")
