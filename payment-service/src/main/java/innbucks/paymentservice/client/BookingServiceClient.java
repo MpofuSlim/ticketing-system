@@ -5,7 +5,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import innbucks.paymentservice.dto.ApiResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -20,8 +19,8 @@ import java.util.UUID;
 /**
  * Calls booking-service's PATCH /bookings/{id}/confirm to flip a booking from
  * PENDING to CONFIRMED. The dummy payment endpoint uses this once it's
- * "processed" the (fake) payment. The Authorization header from the inbound
- * /payments call is forwarded so booking-service sees the real caller.
+ * "processed" the (fake) payment. The endpoint is publicly accessible on
+ * booking-service, so no Authorization header is needed.
  */
 @Component
 @Slf4j
@@ -54,15 +53,10 @@ public class BookingServiceClient {
      * on a non-2xx so the caller can surface booking-service's reason
      * (e.g. "Seat hold expired", "Booking not found").
      */
-    public Map<String, Object> confirmBooking(UUID bookingId, String authHeader) {
+    public Map<String, Object> confirmBooking(UUID bookingId) {
         try {
             String body = restClient.patch()
                     .uri("/bookings/{id}/confirm", bookingId)
-                    .headers(headers -> {
-                        if (authHeader != null && !authHeader.isBlank()) {
-                            headers.set(HttpHeaders.AUTHORIZATION, authHeader);
-                        }
-                    })
                     .retrieve()
                     .body(String.class);
             ApiResult<Map<String, Object>> envelope = objectMapper.readValue(

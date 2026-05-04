@@ -11,11 +11,9 @@ import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
-import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -46,9 +44,8 @@ public class PaymentController {
     @PostMapping
     @Operation(
             summary = "Process payment (dummy)",
-            description = "Confirms the booking referenced by `bookingId` by calling booking-service's " +
-                    "PATCH /bookings/{id}/confirm. The Authorization header on this request is forwarded " +
-                    "to booking-service, so the same JWT must be valid there. " +
+            description = "Public endpoint — no Authorization header required. Confirms the booking referenced " +
+                    "by `bookingId` by calling booking-service's PATCH /bookings/{id}/confirm. " +
                     "No real charge is made; the receipt's `amountPaid` is read from booking-service's " +
                     "`totalAmount` (the source of truth) — clients do not quote the amount. " +
                     "`currency` (defaults to USD) and `cardLast4` are optional and echoed back on the receipt."
@@ -83,15 +80,13 @@ public class PaymentController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503", description = "booking-service unreachable")
     })
     public ResponseEntity<ApiResult<PaymentResponse>> processPayment(
-            @Valid @RequestBody PaymentRequest request,
-            HttpServletRequest httpRequest
+            @Valid @RequestBody PaymentRequest request
     ) {
         log.info("POST /payments bookingId={}", request.getBookingId());
 
-        String authHeader = httpRequest.getHeader(HttpHeaders.AUTHORIZATION);
         Map<String, Object> confirmedBooking;
         try {
-            confirmedBooking = bookingServiceClient.confirmBooking(request.getBookingId(), authHeader);
+            confirmedBooking = bookingServiceClient.confirmBooking(request.getBookingId());
         } catch (BookingConfirmationException e) {
             HttpStatus status = HttpStatus.resolve(e.getStatusCode());
             if (status == null) status = HttpStatus.BAD_GATEWAY;
