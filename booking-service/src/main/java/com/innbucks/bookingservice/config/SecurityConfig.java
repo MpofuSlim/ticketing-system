@@ -4,6 +4,7 @@ import com.innbucks.bookingservice.security.JwtFilter;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.web.SecurityFilterChain;
@@ -28,6 +29,11 @@ public class SecurityConfig {
                         .requestMatchers("/error").permitAll()
                         // Confirmation lookup is public — agents scan at the gate
                         .requestMatchers("/bookings/confirmation/**").permitAll()
+                        // Guest web flow: customers can book without logging
+                        // in. JWT is optional — when present, the customer's
+                        // tier is enforced by TierAccessInterceptor. When
+                        // absent, the controller treats them as a guest.
+                        .requestMatchers(HttpMethod.POST, "/bookings").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                         // Everything else requires authentication
                         .anyRequest().authenticated()
