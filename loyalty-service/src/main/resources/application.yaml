@@ -1,20 +1,15 @@
 spring:
   application:
     name: loyalty-service
-
-  # H2-only mode: file-based database under ./data so writes survive restart;
-  # AUTO_SERVER=TRUE lets a SQL client connect while the app is running. The
-  # PostgreSQL config is preserved below (commented) for easy reversal.
+  # Local & container dev: file-based H2 in MODE=PostgreSQL. Data persists
+  # across restarts in ${H2_DATA_DIR}/<service>.mv.db. AUTO_SERVER=TRUE lets
+  # an external H2 console connect for debugging. Tests still override these
+  # to in-memory H2 via src/test/resources/application-test.yaml.
   datasource:
-    url: jdbc:h2:file:./data/loyalty-service;MODE=PostgreSQL;AUTO_SERVER=TRUE
-    driver-class-name: org.h2.Driver
-    username: sa
-    password:
-    # --- PostgreSQL (disabled) ---
-    # url: ${DB_URL:jdbc:postgresql://localhost:5432/loyalty_service}
-    # driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
-    # username: ${DB_USERNAME:postgres}
-    # password: ${DB_PASSWORD}
+    url: ${DB_URL:jdbc:h2:file:${H2_DATA_DIR:./data}/loyalty_service;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;AUTO_SERVER=TRUE}
+    username: ${DB_USERNAME:sa}
+    password: ${DB_PASSWORD:}
+    driver-class-name: ${DB_DRIVER:org.h2.Driver}
     hikari:
       pool-name: loyalty-service-pool
       maximum-pool-size: ${DB_POOL_MAX:20}
@@ -22,51 +17,53 @@ spring:
       connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:5000}
       idle-timeout: ${DB_IDLE_TIMEOUT_MS:600000}
       max-lifetime: ${DB_MAX_LIFETIME_MS:1800000}
-
   jpa:
     hibernate:
-      # H2: Hibernate generates the schema on each boot.
+      # H2 file branch: Hibernate owns the schema (ddl-auto=update keeps the
+      # schema in sync with entities and preserves data across restarts).
       ddl-auto: ${JPA_DDL_AUTO:update}
     show-sql: ${JPA_SHOW_SQL:false}
     properties:
       hibernate:
         dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.H2Dialect}
-        # --- PostgreSQL dialect (disabled) ---
-        # dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
 
-  # Flyway disabled on H2 — the entity model owns the schema directly.
   flyway:
+    # Disabled in this branch — Hibernate owns the schema. Set FLYWAY_ENABLED=true
+    # if you switch DB_URL back to PostgreSQL and want to re-run db/migration.
     enabled: ${FLYWAY_ENABLED:false}
+    baseline-on-migrate: true
+    baseline-version: 0
+    locations: classpath:db/migration
 
   lifecycle:
     timeout-per-shutdown-phase: 30s
 
-  h2:
-    console:
-      enabled: true
-      path: /h2-console
-
-# Default earn/redeem rule used when a tenant has no LoyaltyRule row yet.
-# earn = points credited per $1 of cash spent; redeem = points needed to
-# offset $1 of cash. Both are overridable per-tenant via PUT /loyalty/rules.
-app:
-  loyalty:
-    default-earn-rate: ${LOYALTY_DEFAULT_EARN_RATE:1.0}
-    default-redeem-rate: ${LOYALTY_DEFAULT_REDEEM_RATE:10.0}
-
-jwt:
-  secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
-  expiration: ${JWT_EXPIRATION_MS:86400000}
-
-server:
-  port: 8086
-  shutdown: graceful
+loyalty:
+  voucher:
+    secret: ${LOYALTY_VOUCHER_SECRET:change-me-voucher-secret-change-me-voucher-secret}
+    default-validity-days: ${LOYALTY_VOUCHER_DEFAULT_VALIDITY_DAYS:365}
+    fraud-velocity-threshold: ${LOYALTY_FRAUD_VELOCITY_THRESHOLD:5}
+    fraud-window-seconds: ${LOYALTY_FRAUD_WINDOW_SECONDS:60}
+  qr:
+    secret: ${LOYALTY_QR_SECRET:change-me-qr-secret-change-me-qr-secret-change-me}
+    ttl-seconds: ${LOYALTY_QR_TTL_SECONDS:300}
+  integration:
+    mpesa-enabled: ${LOYALTY_MPESA_ENABLED:false}
+  invoice:
+    prefix: ${LOYALTY_INVOICE_PREFIX:INV}
+  scheduler:
+    expiry-cron: ${LOYALTY_EXPIRY_CRON:0 5 * * * *}
+    invoice-cron: ${LOYALTY_INVOICE_CRON:0 30 1 * * *}
 
 springdoc:
   swagger-ui:
     path: /swagger-ui/index.html
   api-docs:
     path: /v3/api-docs
+
+server:
+  port: ${SERVER_PORT:8086}
+  shutdown: graceful
 
 management:
   endpoints:

@@ -1,59 +1,70 @@
 package com.innbucks.loyaltyservice.entity;
 
 import jakarta.persistence.*;
-import lombok.*;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.util.UUID;
 
-// Append-only ledger. `reference` is the caller-supplied idempotency key
-// (typically the bookingId) — a unique constraint per (account, type,
-// reference) pair stops a retried Feign call from double-crediting.
 @Entity
-@Table(
-        name = "loyalty_transactions",
-        uniqueConstraints = @UniqueConstraint(
-                name = "uk_loyalty_tx_account_type_reference",
-                columnNames = {"account_id", "type", "reference"}
-        )
-)
-@Data
+@Table(name = "loyalty_transactions", indexes = {
+        @Index(name = "idx_txn_tenant_merchant", columnList = "tenant_id,merchant_id"),
+        @Index(name = "idx_txn_user", columnList = "user_id"),
+        @Index(name = "idx_txn_reference", columnList = "reference"),
+        @Index(name = "idx_txn_created_at", columnList = "created_at")
+})
+@Getter
+@Setter
 @NoArgsConstructor
-@AllArgsConstructor
-@Builder
 public class LoyaltyTransaction {
 
-    public enum Type { EARN, REDEEM }
-
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    private Long id;
+    @GeneratedValue
+    private UUID id;
 
-    @Column(name = "account_id", nullable = false)
-    private Long accountId;
+    @Column(name = "tenant_id", nullable = false)
+    private UUID tenantId;
+
+    @Column(name = "merchant_id", nullable = false)
+    private UUID merchantId;
+
+    @Column(name = "user_id", nullable = false)
+    private UUID userId;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 16)
-    private Type type;
+    @Column(nullable = false, length = 30)
+    private TransactionType type;
 
-    // Always positive; sign is implied by `type`.
-    @Column(nullable = false, precision = 18, scale = 4)
-    private BigDecimal points;
+    @Column(precision = 19, scale = 4)
+    private BigDecimal amount;
 
-    // For EARN, this is the cash amount that produced the points. Null for
-    // REDEEM (the dollar value of redeemed points lives in the calling
-    // booking, not here).
-    @Column(name = "dollar_amount", precision = 18, scale = 4)
-    private BigDecimal dollarAmount;
+    @Column(length = 8)
+    private String currency = "USD";
 
-    @Column(nullable = false)
+    @Column(name = "points_delta", nullable = false, precision = 19, scale = 4)
+    private BigDecimal pointsDelta = BigDecimal.ZERO;
+
+    @Column(name = "rule_id")
+    private UUID ruleId;
+
+    @Column(name = "campaign_id")
+    private UUID campaignId;
+
+    @Column(name = "reference", length = 100)
     private String reference;
 
-    @Column(name = "created_at", nullable = false, updatable = false)
-    private LocalDateTime createdAt;
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private Status status = Status.POSTED;
 
-    @PrePersist
-    void onCreate() {
-        this.createdAt = LocalDateTime.now();
-    }
+    @Column(name = "reverses_id")
+    private UUID reversesId;
+
+    @Column(name = "created_at", nullable = false)
+    private Instant createdAt = Instant.now();
+
+    public enum Status { POSTED, REVERSED }
 }
