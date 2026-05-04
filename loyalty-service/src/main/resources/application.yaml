@@ -35,6 +35,11 @@ spring:
     baseline-version: 0
     locations: classpath:db/migration
 
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+
   lifecycle:
     timeout-per-shutdown-phase: 30s
 
