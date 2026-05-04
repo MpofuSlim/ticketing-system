@@ -43,12 +43,11 @@ import java.util.UUID;
 public class BookingController {
 
     private final BookingService bookingService;
+    private final com.innbucks.bookingservice.client.UserServiceClient userServiceClient;
 
     @PostMapping
-    @MinTier(2)
-    @Operation(summary = "Create booking", description = "Creates a new pending booking. Requires tier 2 (ID-verified customers). " +
-            "When the request is authenticated, userEmail and phoneNumber are taken from the JWT. " +
-            "Web bookings made without a logged-in account may supply `phoneNumber` in the request body — it's ignored when the JWT carries one.")
+    @Operation(summary = "Create booking", description = "Creates a new pending booking. The customer's tier is resolved from user-service via the phone number — JWT phone wins when present, otherwise the request body's `phoneNumber`. " +
+            "Returns 404 if the phone number is not registered in user-service. Per-tier seat-count limits in BookingService still apply.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -96,14 +95,40 @@ public class BookingController {
             Authentication authentication,
             HttpServletRequest httpRequest
     ) {
-        String userEmail = authentication.getName();
-        int tier = currentTier(httpRequest);
-        String phoneNumber = extractPhoneNumber(authentication);
-        // JWT phone wins; fall back to the body for online bookings whose
-        // JWT doesn't carry a phoneNumber claim.
+        boolean authenticated = authentication != null
+                && authentication.isAuthenticated()
+                && !"anonymousUser".equals(authentication.getPrincipal());
+
+        String phoneNumber = authenticated ? extractPhoneNumber(authentication) : null;
         if (phoneNumber == null || phoneNumber.isBlank()) {
             phoneNumber = request.getPhoneNumber();
         }
+        if (phoneNumber == null || phoneNumber.isBlank()) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "phoneNumber is required");
+        }
+
+        // Look up the customer's current tier in user-service. If the phone
+        // isn't registered there, refuse the booking with a 404 — guests
+        // must register (at least tier 1) before booking online.
+        com.innbucks.bookingservice.dto.CustomerTierResponseDTO tierData;
+        try {
+            com.innbucks.bookingservice.dto.ApiResult<com.innbucks.bookingservice.dto.CustomerTierResponseDTO> result =
+                    userServiceClient.getCustomerTier(phoneNumber);
+            tierData = result == null ? null : result.getData();
+        } catch (Exception ex) {
+            log.warn("user-service tier lookup failed phoneNumber={} cause={}", phoneNumber, ex.toString());
+            tierData = null;
+        }
+        if (tierData == null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    HttpStatus.NOT_FOUND,
+                    "Phone number " + phoneNumber + " is not registered. Please register before booking.");
+        }
+        int tier = tierData.getCurrentTier();
+
+        String userEmail = authenticated ? authentication.getName() : request.getUserEmail();
         log.info("POST /bookings userEmail={} tier={} phoneNumber={} eventId={} seats={}",
                 userEmail, tier, phoneNumber, request.getEventId(), request.getSeats().size());
         BookingResponseDTO created = bookingService.createBooking(userEmail, tier, phoneNumber, request);
