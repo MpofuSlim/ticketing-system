@@ -50,6 +50,13 @@ public class TierAccessInterceptor implements HandlerInterceptor {
         }
 
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        // Guest / anonymous: no JWT means there's no phone claim to look up
+        // the live tier with. Skip the gate and let the controller decide
+        // how to treat guests. (Used by POST /bookings, which is public.)
+        if (auth == null || !auth.isAuthenticated()
+                || "anonymousUser".equals(auth.getPrincipal())) {
+            return true;
+        }
         int currentTier = resolveCurrentTier(auth);
         request.setAttribute(CURRENT_TIER_ATTRIBUTE, currentTier);
         if (currentTier >= minTier.value()) {

@@ -13,10 +13,11 @@ public class CreateBookingRequestDTO {
     @NotNull(message = "Event ID is required")
     private UUID eventId;
 
-    // Optional. Online bookings made without a logged-in account send the
-    // phone here so the booking can still be looked up later by phone. When
-    // the request is authenticated, the JWT's phoneNumber claim wins and
-    // this field is ignored.
+    // Optional. Guest web bookings (no JWT) send userEmail and phoneNumber
+    // here so the booking can be looked up later. When the request is
+    // authenticated, the JWT's email/phone claims win and these fields are
+    // ignored.
+    private String userEmail;
     private String phoneNumber;
 
     @NotEmpty(message = "At least one seat is required")

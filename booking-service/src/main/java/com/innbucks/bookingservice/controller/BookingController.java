@@ -96,19 +96,35 @@ public class BookingController {
             Authentication authentication,
             HttpServletRequest httpRequest
     ) {
-        String userEmail = authentication.getName();
-        int tier = currentTier(httpRequest);
-        String phoneNumber = extractPhoneNumber(authentication);
-        // JWT phone wins; fall back to the body for online bookings whose
-        // JWT doesn't carry a phoneNumber claim.
-        if (phoneNumber == null || phoneNumber.isBlank()) {
+        String userEmail;
+        int tier;
+        String phoneNumber;
+        if (isGuest(authentication)) {
+            // No bearer token: trust the body. Guests are treated as tier 2,
+            // which keeps the per-tier seat-count limit in BookingService
+            // (TIER_2_MAX_SEATS = 2 seats per booking) honest for guests.
+            userEmail = request.getUserEmail();
             phoneNumber = request.getPhoneNumber();
+            tier = 2;
+        } else {
+            userEmail = authentication.getName();
+            tier = currentTier(httpRequest);
+            phoneNumber = extractPhoneNumber(authentication);
+            if (phoneNumber == null || phoneNumber.isBlank()) {
+                phoneNumber = request.getPhoneNumber();
+            }
         }
         log.info("POST /bookings userEmail={} tier={} phoneNumber={} eventId={} seats={}",
                 userEmail, tier, phoneNumber, request.getEventId(), request.getSeats().size());
         BookingResponseDTO created = bookingService.createBooking(userEmail, tier, phoneNumber, request);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Booking created successfully", created));
+    }
+
+    private boolean isGuest(Authentication authentication) {
+        return authentication == null
+                || !authentication.isAuthenticated()
+                || "anonymousUser".equals(authentication.getPrincipal());
     }
 
     private String extractPhoneNumber(Authentication authentication) {
