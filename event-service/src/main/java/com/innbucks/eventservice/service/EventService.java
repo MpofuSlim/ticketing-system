@@ -1,5 +1,6 @@
 package com.innbucks.eventservice.service;
 
+import com.innbucks.eventservice.client.BookingGateway;
 import com.innbucks.eventservice.client.SeatCategoryGateway;
 import com.innbucks.eventservice.dto.*;
 import com.innbucks.eventservice.entity.Event;
@@ -18,6 +19,7 @@ import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
@@ -34,6 +36,7 @@ public class EventService {
     private final EventRepository eventRepository;
     private final EventMapper eventMapper;
     private final SeatCategoryGateway seatCategoryGateway;
+    private final BookingGateway bookingGateway;
 
     public Page<EventResponseDTO> getAllActiveEvents(
             LocalDateTime from,
@@ -46,9 +49,7 @@ public class EventService {
         Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
         log.debug("Fetching active events from={} to={} venue={} page={} size={} sortBy={}",
                 from, to, venue, page, size, sortBy);
-        return eventRepository
-                .findAllActive(from, to, venue, pageable)
-                .map(eventMapper::toDTO);
+        return enrichWithAvailability(eventRepository.findAllActive(from, to, venue, pageable));
     }
 
     public Page<EventResponseDTO> getActiveOnlyEvents(
@@ -62,9 +63,7 @@ public class EventService {
         Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
         log.debug("Fetching active=true events from={} to={} venue={} page={} size={} sortBy={}",
                 from, to, venue, page, size, sortBy);
-        return eventRepository
-                .findAllActiveOnly(from, to, venue, pageable)
-                .map(eventMapper::toDTO);
+        return enrichWithAvailability(eventRepository.findAllActiveOnly(from, to, venue, pageable));
     }
 
     public EventResponseDTO getEventById(UUID eventId) {
@@ -74,7 +73,7 @@ public class EventService {
                     log.warn("Event not found eventId={}", eventId);
                     return new RuntimeException("Event not found");
                 });
-        EventResponseDTO response = eventMapper.toDTO(event);
+        EventResponseDTO response = toDtoWithAvailability(event, fetchActiveCounts(eventId));
         response.setSeatCategories(seatCategoryGateway.fetchForEvent(eventId));
         return response;
     }
@@ -87,8 +86,8 @@ public class EventService {
     ) {
         Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
         log.debug("Searching events q={} page={} size={} sortBy={}", q, page, size, sortBy);
-        return eventRepository.searchByKeyword(q == null ? "" : q.trim(), pageable)
-                .map(eventMapper::toDTO);
+        return enrichWithAvailability(
+                eventRepository.searchByKeyword(q == null ? "" : q.trim(), pageable));
     }
 
     public Page<EventResponseDTO> getEventsByProvince(
@@ -105,14 +104,51 @@ public class EventService {
                 .findByProvinceAndDeletedFalseAndActiveTrueAndDateTimeGreaterThanEqual(
                         province, now, pageable);
 
+        Map<UUID, Long> activeCounts = bookingGateway.activeCountsByEventIds(
+                entities.getContent().stream().map(Event::getEventId).toList());
+
         List<EventResponseDTO> dtos = new ArrayList<>(entities.getNumberOfElements());
         int n = 1;
         for (Event event : entities.getContent()) {
-            EventResponseDTO dto = eventMapper.toDTO(event);
+            EventResponseDTO dto = toDtoWithAvailability(event, activeCounts);
             dto.setEventNo(n++);
             dtos.add(dto);
         }
         return new PageImpl<>(dtos, pageable, entities.getTotalElements());
+    }
+
+    // Returns the event mapped to its DTO with availableTickets recomputed as
+    // (totalCapacity − active booking items). Falls back to the stored value
+    // when booking-service is unreachable (the gateway returns an empty map).
+    private EventResponseDTO toDtoWithAvailability(Event event, Map<UUID, Long> activeCounts) {
+        EventResponseDTO dto = eventMapper.toDTO(event);
+        Long active = activeCounts == null ? null : activeCounts.get(event.getEventId());
+        if (active != null && event.getTotalCapacity() != null) {
+            int remaining = Math.max(0, event.getTotalCapacity() - active.intValue());
+            dto.setAvailableTickets(remaining);
+        }
+        return dto;
+    }
+
+    private Page<EventResponseDTO> enrichWithAvailability(Page<Event> page) {
+        List<UUID> ids = page.getContent().stream()
+                .map(Event::getEventId)
+                .filter(java.util.Objects::nonNull)
+                .toList();
+        Map<UUID, Long> activeCounts = ids.isEmpty()
+                ? java.util.Collections.emptyMap()
+                : bookingGateway.activeCountsByEventIds(ids);
+        if (activeCounts == null) activeCounts = java.util.Collections.emptyMap();
+        Map<UUID, Long> finalCounts = activeCounts;
+        return page.map(e -> toDtoWithAvailability(e, finalCounts));
+    }
+
+    private Map<UUID, Long> fetchActiveCounts(UUID eventId) {
+        if (eventId == null) {
+            return java.util.Collections.emptyMap();
+        }
+        Map<UUID, Long> counts = bookingGateway.activeCountsByEventIds(List.of(eventId));
+        return counts == null ? java.util.Collections.emptyMap() : counts;
     }
 
     public EventResponseDTO createEvent(String tenantId, CreateEventRequestDTO request) {
@@ -152,7 +188,7 @@ public class EventService {
 
         Event saved = eventRepository.save(event);
         log.info("Event created eventId={} tenantId={}", saved.getEventId(), tenantId);
-        return eventMapper.toDTO(saved);
+        return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
     }
 
     @Transactional(readOnly = true)
@@ -227,7 +263,7 @@ public class EventService {
         Event saved = eventRepository.save(event);
         log.info("Event updated eventId={} tenantId={} title={} venue={} dateTime={}",
                 eventId, tenantId, saved.getTitle(), saved.getVenue(), saved.getDateTime());
-        return eventMapper.toDTO(saved);
+        return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
     }
 
     public EventResponseDTO updateEvent(String tenantId, UUID eventId, UpdateEventRequestDTO request) {
@@ -253,7 +289,7 @@ public class EventService {
         event.setActive(true);
         Event saved = eventRepository.save(event);
         log.info("Event activated eventId={} tenantId={}", eventId, tenantId);
-        return eventMapper.toDTO(saved);
+        return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
     }
 
     @Transactional

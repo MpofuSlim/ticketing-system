@@ -1,5 +1,6 @@
 package com.innbucks.eventservice.service;
 
+import com.innbucks.eventservice.client.BookingGateway;
 import com.innbucks.eventservice.client.SeatCategoryGateway;
 import com.innbucks.eventservice.dto.CreateEventRequestDTO;
 import com.innbucks.eventservice.dto.EventResponseDTO;
@@ -27,7 +28,7 @@ class EventServiceTest {
         EventRepository repo = mock(EventRepository.class);
         EventMapper mapper = mock(EventMapper.class);
         SeatCategoryGateway gateway = mock(SeatCategoryGateway.class);
-        EventService service = new EventService(repo, mapper, gateway);
+        EventService service = new EventService(repo, mapper, gateway, mock(BookingGateway.class));
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder()
@@ -56,7 +57,7 @@ class EventServiceTest {
         EventRepository repo = mock(EventRepository.class);
         EventMapper mapper = mock(EventMapper.class);
         SeatCategoryGateway gateway = mock(SeatCategoryGateway.class);
-        EventService service = new EventService(repo, mapper, gateway);
+        EventService service = new EventService(repo, mapper, gateway, mock(BookingGateway.class));
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder()
@@ -92,7 +93,7 @@ class EventServiceTest {
     void createEvent_initializesAvailableTicketsToTotalCapacity() {
         EventRepository repo = mock(EventRepository.class);
         EventMapper mapper = mock(EventMapper.class);
-        EventService service = new EventService(repo, mapper, mock(SeatCategoryGateway.class));
+        EventService service = new EventService(repo, mapper, mock(SeatCategoryGateway.class), mock(BookingGateway.class));
 
         CreateEventRequestDTO req = new CreateEventRequestDTO();
         req.setTitle("Concert"); req.setDescription("desc"); req.setVenue("Venue");
@@ -115,7 +116,7 @@ class EventServiceTest {
     @Test
     void createEvent_rejectsDuplicateForSameTenantTitleVenueDate() {
         EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class));
+        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class));
 
         LocalDateTime when = LocalDateTime.now().plusDays(10);
         CreateEventRequestDTO req = new CreateEventRequestDTO();
@@ -135,7 +136,7 @@ class EventServiceTest {
     void updateEvent_asAdmin_canEditEventOwnedByAnotherTenant() {
         EventRepository repo = mock(EventRepository.class);
         EventMapper mapper = mock(EventMapper.class);
-        EventService service = new EventService(repo, mapper, mock(SeatCategoryGateway.class));
+        EventService service = new EventService(repo, mapper, mock(SeatCategoryGateway.class), mock(BookingGateway.class));
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder()
@@ -156,7 +157,7 @@ class EventServiceTest {
     @Test
     void deleteEvent_rejectsNonOwnerTenant() {
         EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class));
+        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class));
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder().eventId(eventId).tenantId("owner-tenant")
@@ -174,7 +175,7 @@ class EventServiceTest {
     @Test
     void deleteEvent_asAdmin_softDeletesEventOwnedByAnotherTenant() {
         EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class));
+        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class));
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder().eventId(eventId).tenantId("owner-tenant")
@@ -191,7 +192,7 @@ class EventServiceTest {
     @Test
     void getEventById_throwsWhenMissing() {
         EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class));
+        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class));
         when(repo.findByEventIdAndDeletedFalse(any())).thenReturn(Optional.empty());
 
         RuntimeException ex = assertThrows(RuntimeException.class,
@@ -200,11 +201,37 @@ class EventServiceTest {
     }
 
     @Test
+    void getEventById_recomputesAvailableTicketsFromBookingGateway() {
+        EventRepository repo = mock(EventRepository.class);
+        EventMapper mapper = new EventMapper();
+        SeatCategoryGateway seats = mock(SeatCategoryGateway.class);
+        BookingGateway bookings = mock(BookingGateway.class);
+        EventService service = new EventService(repo, mapper, seats, bookings);
+
+        UUID eventId = UUID.randomUUID();
+        Event existing = Event.builder().eventId(eventId).tenantId("a").title("T")
+                .venue("V").province(Province.HRE)
+                .dateTime(LocalDateTime.now().plusDays(1))
+                .totalCapacity(100).availableTickets(100).deleted(false).build();
+        when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
+        when(seats.fetchForEvent(eventId)).thenReturn(Collections.emptyList());
+        // 30 active booking items → response should report 70 tickets remaining,
+        // even though the entity's stored availableTickets is still 100.
+        when(bookings.activeCountsByEventIds(java.util.List.of(eventId)))
+                .thenReturn(java.util.Map.of(eventId, 30L));
+
+        EventResponseDTO result = service.getEventById(eventId);
+
+        assertEquals(70, result.getAvailableTickets());
+        assertEquals(100, result.getTotalCapacity());
+    }
+
+    @Test
     void getEventById_fallsBackToEmptySeatCategories_whenSeatServiceFails() {
         EventRepository repo = mock(EventRepository.class);
         EventMapper mapper = mock(EventMapper.class);
         SeatCategoryGateway gateway = mock(SeatCategoryGateway.class);
-        EventService service = new EventService(repo, mapper, gateway);
+        EventService service = new EventService(repo, mapper, gateway, mock(BookingGateway.class));
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder().eventId(eventId).tenantId("a").title("T")

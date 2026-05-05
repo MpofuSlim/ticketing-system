@@ -62,9 +62,14 @@ springdoc:
 seat-service:
   base-url: ${SEAT_SERVICE_BASE_URL:http://localhost:8083}
 
-# Circuit breaker + retry around the outbound call to seat-service
-# (SeatCategoryGateway). Fallback returns an empty category list, so events
-# remain visible even while seat-service is degraded.
+booking-service:
+  base-url: ${BOOKING_SERVICE_BASE_URL:http://localhost:8082}
+
+# Circuit breaker + retry around outbound calls.
+#  - seatCategories: SeatCategoryGateway (fallback = empty category list).
+#  - bookingActiveCounts: BookingGateway, used to compute availableTickets on
+#    every event response. Fallback = empty map, so events fall back to the
+#    stored availableTickets value rather than blocking the response.
 resilience4j:
   circuitbreaker:
     instances:
@@ -77,9 +82,25 @@ resilience4j:
         wait-duration-in-open-state: 30s
         permitted-number-of-calls-in-half-open-state: 3
         automatic-transition-from-open-to-half-open-enabled: true
+      bookingActiveCounts:
+        register-health-indicator: true
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
   retry:
     instances:
       seatCategories:
+        max-attempts: 3
+        wait-duration: 500ms
+        exponential-backoff-multiplier: 2.0
+        retry-exceptions:
+          - org.springframework.web.client.ResourceAccessException
+          - java.io.IOException
+      bookingActiveCounts:
         max-attempts: 3
         wait-duration: 500ms
         exponential-backoff-multiplier: 2.0
