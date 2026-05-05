@@ -79,6 +79,18 @@ public class EventService {
         return response;
     }
 
+    public Page<EventResponseDTO> searchEvents(
+            String q,
+            int page,
+            int size,
+            String sortBy
+    ) {
+        Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
+        log.debug("Searching events q={} page={} size={} sortBy={}", q, page, size, sortBy);
+        return eventRepository.searchByKeyword(q == null ? "" : q.trim(), pageable)
+                .map(eventMapper::toDTO);
+    }
+
     public Page<EventResponseDTO> getEventsByProvince(
             Province province,
             int page,

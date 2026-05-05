@@ -419,6 +419,100 @@ public class EventController {
         return ResponseEntity.ok(ApiResult.ok("Events retrieved successfully", result));
     }
 
+    @GetMapping("/search")
+    @SecurityRequirements()
+    @Operation(
+            summary = "Search events by keyword",
+            description = """
+                    Free-text search across `title`, `description`, and `venue`.
+                    Case-insensitive substring match — typing `H` returns every
+                    event with `H` anywhere in those fields; typing `Harare`
+                    narrows to events whose title, description, or venue mentions
+                    Harare. Powers the customer-facing search bar.
+
+                    Only returns **active**, non-deleted events (the same set
+                    surfaced by `GET /events/active`). Empty result sets return
+                    a 200 with an empty `content` array — the frontend should
+                    show a "No results" state, not treat it as an error.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Paged list of events matching the keyword (may be empty)",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = EventResponseDTO.class),
+                            examples = @ExampleObject(name = "Search results", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Events retrieved successfully",
+                                      "data": {
+                                        "content": [
+                                          {
+                                            "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                            "eventNo": null,
+                                            "tenantId": "tenant-001",
+                                            "title": "Summer Concert",
+                                            "description": "Open-air summer concert featuring local headliners.",
+                                            "venue": "Harare Gardens",
+                                            "province": "HRE",
+                                            "location": { "latitude": -17.8252, "longitude": 31.0335 },
+                                            "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+                                            "dateTime": "2026-06-15",
+                                            "totalCapacity": 500,
+                                            "availableTickets": 420,
+                                            "active": true,
+                                            "createdAt": "2026-04-25T08:00:00",
+                                            "updatedAt": "2026-05-02T15:00:00",
+                                            "seatCategories": []
+                                          }
+                                        ],
+                                        "pageable": {
+                                          "pageNumber": 0,
+                                          "pageSize": 10,
+                                          "sort": { "sorted": true, "unsorted": false, "empty": false },
+                                          "offset": 0,
+                                          "paged": true,
+                                          "unpaged": false
+                                        },
+                                        "totalElements": 1,
+                                        "totalPages": 1,
+                                        "last": true,
+                                        "first": true,
+                                        "size": 10,
+                                        "number": 0,
+                                        "numberOfElements": 1,
+                                        "empty": false
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @ApiResponse(responseCode = "400", description = "Missing or blank `q` parameter")
+    })
+    public ResponseEntity<ApiResult<Page<EventResponseDTO>>> searchEvents(
+            @Parameter(description = "Search keyword — matches title, description, or venue (case-insensitive substring)")
+            @RequestParam("q") String q,
+
+            @Parameter(description = "Zero-based page index")
+            @RequestParam(defaultValue = "0") int page,
+
+            @Parameter(description = "Page size")
+            @RequestParam(defaultValue = "10") int size,
+
+            @Parameter(description = "Sort field name (must match an entity property), ascending")
+            @RequestParam(defaultValue = "dateTime") String sortBy
+    ) {
+        if (q == null || q.isBlank()) {
+            return ResponseEntity.badRequest()
+                    .body(ApiResult.error(HttpStatus.BAD_REQUEST, "Search keyword 'q' is required"));
+        }
+        log.debug("GET /events/search q={} page={} size={} sortBy={}", q, page, size, sortBy);
+        Page<EventResponseDTO> result = eventService.searchEvents(q, page, size, sortBy);
+        return ResponseEntity.ok(ApiResult.ok("Events retrieved successfully", result));
+    }
+
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
     @Operation(
