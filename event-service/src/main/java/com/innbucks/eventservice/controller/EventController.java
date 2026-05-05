@@ -804,6 +804,44 @@ public class EventController {
         return ResponseEntity.ok(ApiResult.ok("Event deleted successfully", null));
     }
 
+    @PatchMapping("/{id}/availability/consume")
+    @SecurityRequirements()
+    @Operation(
+            summary = "Consume availability (internal)",
+            description = """
+                    Internal endpoint: booking-service calls this when a booking is
+                    confirmed so the event's stored `availableTickets` decrements
+                    atomically. Returns the new value. Refuses to underflow — a
+                    request that would push availability below zero is rejected.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Availability decremented",
+                    content = @Content(
+                            mediaType = "application/json",
+                            examples = @ExampleObject(name = "Availability consumed", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Availability consumed",
+                                      "data": { "availableTickets": 7 }
+                                    }
+                                    """)
+                    )
+            ),
+            @ApiResponse(responseCode = "400", description = "count missing/non-positive or insufficient availability")
+    })
+    public ResponseEntity<ApiResult<AvailabilityResponseDTO>> consumeAvailability(
+            @Parameter(description = "Event UUID") @PathVariable UUID id,
+            @RequestParam("count") int count
+    ) {
+        log.info("PATCH /events/{}/availability/consume count={}", id, count);
+        int remaining = eventService.consumeAvailability(id, count);
+        return ResponseEntity.ok(ApiResult.ok("Availability consumed",
+                new AvailabilityResponseDTO(remaining)));
+    }
+
     private String getCurrentRole(Authentication authentication) {
         return authentication.getAuthorities().stream()
                 .findFirst()

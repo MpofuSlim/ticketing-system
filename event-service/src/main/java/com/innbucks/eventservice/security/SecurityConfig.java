@@ -46,6 +46,8 @@ public class SecurityConfig {
                         .requestMatchers("/v3/api-docs/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/events").permitAll()
                         .requestMatchers(HttpMethod.GET, "/events/**").permitAll()
+                        // Internal: booking-service decrements availability on confirm.
+                        .requestMatchers(HttpMethod.PATCH, "/events/*/availability/consume").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                         .anyRequest().authenticated()
                 )

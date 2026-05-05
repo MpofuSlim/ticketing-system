@@ -202,7 +202,7 @@ public class BookingService {
             return List.of();
         }
         return bookingItemRepository
-                .countActiveItemsByEventIds(eventIds, Booking.BookingStatus.CANCELLED)
+                .countActiveItemsByEventIds(eventIds, Booking.BookingStatus.CONFIRMED)
                 .stream()
                 .map(p -> EventActiveCountDTO.builder()
                         .eventId(p.getEventId())
@@ -387,6 +387,12 @@ public class BookingService {
         booking.setExpiresAt(null); // paid — hold no longer applicable
         bookingRepository.save(booking);
 
+        // Decrement the event's stored availableTickets in event-service so its
+        // DB column actually drops as tickets are bought. Best-effort: if the
+        // gateway is degraded the booking still confirms and the event-service
+        // read-time enrichment keeps the response in sync until next call.
+        consumeEventAvailability(booking);
+
         eventPublisher.publishEvent(BookingDomainEvent.BookingConfirmed.of(booking));
 
         log.info("Booking confirmed bookingId={} userEmail={} pointsUsed={} cashAmount={}",
@@ -472,6 +478,38 @@ public class BookingService {
         } catch (Exception ex) {
             log.warn("Failed to fetch loyalty rule tenantId={} reason={}", tenantId, ex.getMessage());
             return null;
+        }
+    }
+
+    private void consumeEventAvailability(Booking booking) {
+        EventServiceClient client = eventClientProvider == null
+                ? null : eventClientProvider.getIfAvailable();
+        if (client == null) {
+            log.debug("event client unavailable; skipping availability decrement bookingId={}",
+                    booking.getId());
+            return;
+        }
+        int count = booking.getItems() == null ? 0 : booking.getItems().size();
+        if (count <= 0) {
+            return;
+        }
+        try {
+            ApiResult<AvailabilityResponseDTO> envelope =
+                    client.consumeAvailability(booking.getEventId(), count);
+            AvailabilityResponseDTO data = envelope == null ? null : envelope.getData();
+            if (data != null) {
+                log.info("Decremented event availability eventId={} consumed={} remaining={}",
+                        booking.getEventId(), count, data.getAvailableTickets());
+            } else {
+                log.warn("Availability decrement returned no data eventId={} consumed={}",
+                        booking.getEventId(), count);
+            }
+        } catch (Exception ex) {
+            // Don't block confirmation on event-service trouble. The read-time
+            // enrichment in event-service still subtracts confirmed booking
+            // items so the API response stays correct.
+            log.warn("Failed to decrement event availability eventId={} count={} reason={}",
+                    booking.getEventId(), count, ex.getMessage());
         }
     }
 

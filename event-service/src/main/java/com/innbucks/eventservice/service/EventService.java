@@ -270,6 +270,31 @@ public class EventService {
         return updateEvent(tenantId, "ROLE_TENANT", eventId, request);
     }
 
+    // Internal: called by booking-service when a booking transitions to
+    // CONFIRMED so the event's stored availableTickets matches reality.
+    // Returns the new availableTickets value. Throws when the event is
+    // missing or capacity would underflow.
+    @Transactional
+    public int consumeAvailability(UUID eventId, int count) {
+        if (count <= 0) {
+            throw new RuntimeException("count must be positive");
+        }
+        log.info("Consuming availability eventId={} count={}", eventId, count);
+        int updated = eventRepository.decrementAvailableTickets(eventId, count);
+        if (updated == 0) {
+            // Either the event doesn't exist or available < count.
+            Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
+                    .orElseThrow(() -> new RuntimeException("Event not found"));
+            throw new RuntimeException("Insufficient availability: requested=" + count
+                    + " available=" + event.getAvailableTickets());
+        }
+        Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
+                .orElseThrow(() -> new RuntimeException("Event not found"));
+        log.info("Availability consumed eventId={} count={} remaining={}",
+                eventId, count, event.getAvailableTickets());
+        return event.getAvailableTickets();
+    }
+
     @Transactional
     public EventResponseDTO activateEvent(String tenantId, String role, UUID eventId) {
         log.info("Activating event eventId={} tenantId={} role={}", eventId, tenantId, role);
