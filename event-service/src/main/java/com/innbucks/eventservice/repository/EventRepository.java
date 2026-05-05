@@ -61,4 +61,21 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     boolean existsByTenantIdAndTitleAndVenueAndDateTimeAndDeletedFalse(
             String tenantId, String title, String venue, LocalDateTime dateTime
     );
+
+    // Free-text search across title, description and venue. Case-insensitive
+    // substring match — typing "H" matches every event with H anywhere in
+    // those fields; typing "Harare" narrows to events whose title/description/
+    // venue mentions Harare. Excludes soft-deleted and inactive events so the
+    // public search bar only surfaces bookable events.
+    @Query("""
+        SELECT e FROM Event e
+        WHERE e.deleted = false
+        AND e.active = true
+        AND (
+            LOWER(e.title)       LIKE LOWER(CONCAT('%', :q, '%'))
+         OR LOWER(e.description) LIKE LOWER(CONCAT('%', :q, '%'))
+         OR LOWER(e.venue)       LIKE LOWER(CONCAT('%', :q, '%'))
+        )
+    """)
+    Page<Event> searchByKeyword(@Param("q") String q, Pageable pageable);
 }
