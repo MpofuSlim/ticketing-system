@@ -194,7 +194,9 @@ public class EventService {
 
     @Transactional
     public EventResponseDTO updateEvent(String tenantId, String role, UUID eventId, UpdateEventRequestDTO request) {
-        log.info("Updating event eventId={} tenantId={} role={}", eventId, tenantId, role);
+        log.info("Updating event eventId={} tenantId={} role={} req.title={} req.venue={} req.dateTime={} req.totalCapacity={}",
+                eventId, tenantId, role,
+                request.getTitle(), request.getVenue(), request.getDateTime(), request.getTotalCapacity());
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
                 .orElseThrow(() -> {
                     log.warn("Update failed, event not found eventId={} tenantId={}", eventId, tenantId);

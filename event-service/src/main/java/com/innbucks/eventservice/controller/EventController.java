@@ -9,7 +9,6 @@ import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Encoding;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.media.Schema;
-import io.swagger.v3.oas.annotations.parameters.RequestBody;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
@@ -530,7 +529,7 @@ public class EventController {
                     - `dateTime` must be **in the future**.
                     - `location.latitude` ∈ [-90, 90]; `location.longitude` ∈ [-180, 180].
                     """,
-            requestBody = @RequestBody(
+            requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
                     content = @Content(
                             mediaType = MediaType.MULTIPART_FORM_DATA_VALUE,
                             schema = @Schema(implementation = CreateEventMultipartRequest.class),
@@ -695,7 +694,7 @@ public class EventController {
     ) {
         String tenantId = authentication.getName();
         String role = getCurrentRole(authentication);
-        log.info("Updating event eventId={} tenantId={}", id, tenantId);
+        log.info("Updating event eventId={} tenantId={} request={}", id, tenantId, request);
         EventResponseDTO updated = eventService.updateEvent(tenantId, role, id, request);
         return ResponseEntity.ok(ApiResult.ok("Event updated successfully", updated));
     }
