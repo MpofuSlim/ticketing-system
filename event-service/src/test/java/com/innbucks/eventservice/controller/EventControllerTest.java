@@ -126,6 +126,39 @@ class EventControllerTest {
                 .andExpect(jsonPath("$.data.bannerUrl", containsString("/banner")));
     }
 
+    @Test
+    @WithMockUser(username = "tenant-1", roles = "TENANT")
+    void updateEvent_persistsChangesToDatabase() throws Exception {
+        Event saved = eventRepository.save(Event.builder()
+                .tenantId("tenant-1")
+                .title("Original Title")
+                .description("Original")
+                .venue("Old Venue")
+                .province(Province.HRE)
+                .dateTime(LocalDateTime.of(2030, 1, 1, 10, 0))
+                .totalCapacity(100)
+                .availableTickets(100)
+                .deleted(false)
+                .build());
+
+        String body = "{\"title\":\"Updated Title\",\"venue\":\"New Venue\",\"dateTime\":\"2031-06-15T19:00:00.000Z\"}";
+
+        mockMvc.perform(put("/events/" + saved.getEventId())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.title", is("Updated Title")))
+                .andExpect(jsonPath("$.data.venue", is("New Venue")))
+                .andExpect(jsonPath("$.data.dateTime", is("2031-06-15T19:00:00")));
+
+        // Verify DB row was actually updated, not just the response.
+        Event reloaded = eventRepository.findById(saved.getEventId()).orElseThrow();
+        org.junit.jupiter.api.Assertions.assertEquals("Updated Title", reloaded.getTitle());
+        org.junit.jupiter.api.Assertions.assertEquals("New Venue", reloaded.getVenue());
+        org.junit.jupiter.api.Assertions.assertEquals(
+                LocalDateTime.of(2031, 6, 15, 19, 0), reloaded.getDateTime());
+    }
+
     private static CreateEventRequestDTO sampleRequest(String title, Province province) {
         CreateEventRequestDTO req = new CreateEventRequestDTO();
         req.setTitle(title);
