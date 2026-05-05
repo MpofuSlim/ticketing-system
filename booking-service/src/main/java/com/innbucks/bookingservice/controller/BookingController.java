@@ -5,6 +5,7 @@ import com.innbucks.bookingservice.dto.BookingResponseDTO;
 import com.innbucks.bookingservice.dto.CategoryBookingDTO;
 import com.innbucks.bookingservice.dto.ConfirmBookingRequestDTO;
 import com.innbucks.bookingservice.dto.CreateBookingRequestDTO;
+import com.innbucks.bookingservice.dto.EventActiveCountDTO;
 import com.innbucks.bookingservice.security.JwtAuthDetails;
 import com.innbucks.bookingservice.security.MinTier;
 import com.innbucks.bookingservice.security.TierAccessInterceptor;
@@ -30,6 +31,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
@@ -407,6 +409,42 @@ public class BookingController {
         log.debug("GET /bookings/by-event/{}", eventId);
         return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully",
                 bookingService.getBookingsByEvent(eventId)));
+    }
+
+    @GetMapping("/active-counts")
+    @SecurityRequirements()
+    @Operation(
+            summary = "Active booking item counts per event",
+            description = "Internal endpoint used by event-service to compute `availableTickets` " +
+                    "(`totalCapacity − count`). Returns one row per supplied eventId that has at least " +
+                    "one PENDING or CONFIRMED booking item; eventIds with no active bookings are absent " +
+                    "from the response. CANCELLED bookings are excluded so released seats free up capacity."
+    )
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Counts returned",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = EventActiveCountDTO.class),
+                            examples = @ExampleObject(name = "Active counts", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Active booking counts retrieved successfully",
+                                      "data": [
+                                        { "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6", "count": 42 },
+                                        { "eventId": "9b1c5d2e-8f3a-4b1c-a4d2-1e2c5d4f8a3b", "count": 7 }
+                                      ]
+                                    }
+                                    """)
+                    )
+            )
+    })
+    public ResponseEntity<ApiResult<List<EventActiveCountDTO>>> getActiveCounts(
+            @RequestParam("eventIds") List<UUID> eventIds) {
+        log.debug("GET /bookings/active-counts eventIds={}", eventIds);
+        return ResponseEntity.ok(ApiResult.ok("Active booking counts retrieved successfully",
+                bookingService.getActiveItemCountsByEvents(eventIds)));
     }
 
     @GetMapping("/confirmation/{number}")

@@ -34,6 +34,9 @@ public class SecurityConfig {
                         // tier is enforced by TierAccessInterceptor. When
                         // absent, the controller treats them as a guest.
                         .requestMatchers(HttpMethod.GET, "/bookings/phone/**").permitAll()
+                        // Internal endpoint: event-service reads it to compute
+                        // availableTickets on every event response.
+                        .requestMatchers(HttpMethod.GET, "/bookings/active-counts").permitAll()
                         .requestMatchers(HttpMethod.POST, "/bookings").permitAll()
                         // Confirm is called by payment-service after a (dummy)
                         // payment. Guests have no JWT, so the endpoint must

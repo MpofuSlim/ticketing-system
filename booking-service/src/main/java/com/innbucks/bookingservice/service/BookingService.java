@@ -194,6 +194,23 @@ public class BookingService {
                 .collect(Collectors.toList());
     }
 
+    // Returns the count of active (PENDING + CONFIRMED) booking items per
+    // eventId. event-service uses this to compute availableTickets on read so
+    // its responses tally with reality, without maintaining a stored counter.
+    public List<EventActiveCountDTO> getActiveItemCountsByEvents(Collection<UUID> eventIds) {
+        if (eventIds == null || eventIds.isEmpty()) {
+            return List.of();
+        }
+        return bookingItemRepository
+                .countActiveItemsByEventIds(eventIds, Booking.BookingStatus.CANCELLED)
+                .stream()
+                .map(p -> EventActiveCountDTO.builder()
+                        .eventId(p.getEventId())
+                        .count(p.getCount() == null ? 0L : p.getCount())
+                        .build())
+                .collect(Collectors.toList());
+    }
+
     // Same shape as getBookingsByCategory but scoped to a whole event. Lets
     // seat-service build event-level analytics in one round trip instead of
     // calling per-category.
