@@ -1,5 +1,7 @@
 package com.innbucks.eventservice.dto;
 
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import com.innbucks.eventservice.config.FlexibleLocalDateTimeDeserializer;
 import com.innbucks.eventservice.entity.Province;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
@@ -47,6 +49,7 @@ public class UpdateEventRequestDTO {
                     """
     )
     @Future(message = "Event date must be in the future")
+    @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
     private LocalDateTime dateTime;
 
     @Schema(description = "If set, must be >= 1.")
