@@ -36,10 +36,11 @@ public class CreateEventRequestDTO {
     private LocationDTO location;
 
     @Schema(
+            example = "2026-06-15T19:00:00",
             description = """
-                    Full event schedule timestamp.
-
-                    Must be strictly **in the future** at request time (`@Future`).
+                    Event start timestamp (`yyyy-MM-ddTHH:mm:ss`). Must be strictly **in the future**.
+                    Send the full ISO-8601 datetime including the time portion (e.g. `"2026-06-15T19:00:00"`);
+                    a date-only value is rejected.
                     """
     )
     @NotNull(message = "Date and time is required")

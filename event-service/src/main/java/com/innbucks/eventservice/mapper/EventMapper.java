@@ -21,7 +21,7 @@ public class EventMapper {
                 .bannerUrl(event.getBannerContentType() != null && !event.getBannerContentType().isBlank()
                         ? "/events/" + event.getEventId() + "/banner"
                         : null)
-                .dateTime(event.getDateTime() == null ? null : event.getDateTime().toLocalDate())
+                .dateTime(event.getDateTime())
                 .totalCapacity(event.getTotalCapacity())
                 .availableTickets(event.getAvailableTickets())
                 .active(event.isActive())

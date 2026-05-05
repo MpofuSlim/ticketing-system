@@ -3,7 +3,6 @@ package com.innbucks.eventservice.dto;
 import com.innbucks.eventservice.entity.Province;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.*;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -46,13 +45,10 @@ public class EventResponseDTO {
     private String bannerUrl;
 
     @Schema(
-            description = """
-                    Event date exposed as a calendar date (`yyyy-MM-dd`).
-
-                    Note: Internally events store a full timestamp (`LocalDateTime`). This API returns only the date portion.
-                    """
+            example = "2026-06-15T19:00:00",
+            description = "Event start timestamp (`yyyy-MM-ddTHH:mm:ss`) — full ISO-8601 datetime including the start time."
     )
-    private LocalDate dateTime;
+    private LocalDateTime dateTime;
 
     @Schema(description = "Maximum venue capacity.")
     private Integer totalCapacity;

@@ -44,7 +44,7 @@ class EventControllerTest {
     }
 
     @Test
-    void getAllEvents_isPublic_andReturnsLocalDateInDto() throws Exception {
+    void getAllEvents_isPublic_andReturnsLocalDateTimeInDto() throws Exception {
         Event saved = eventRepository.save(Event.builder()
                 .tenantId("tenant-1")
                 .title("Test Event")
@@ -63,7 +63,7 @@ class EventControllerTest {
                 .andExpect(jsonPath("$.code", is("200 OK")))
                 .andExpect(jsonPath("$.data.content", hasSize(greaterThanOrEqualTo(1))))
                 .andExpect(jsonPath("$.data.content[0].eventId", is(saved.getEventId().toString())))
-                .andExpect(jsonPath("$.data.content[0].dateTime", is("2030-04-18"))); // LocalDate in response
+                .andExpect(jsonPath("$.data.content[0].dateTime", is("2030-04-18T10:30:00"))); // LocalDateTime in response
     }
 
     @Test
