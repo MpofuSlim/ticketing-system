@@ -119,6 +119,7 @@ public class EventService {
         return createEvent(tenantId, request, null);
     }
 
+    @Transactional
     public EventResponseDTO createEvent(String tenantId, CreateEventRequestDTO request, MultipartFile eventBanner) {
         log.info("Creating event tenantId={} title={} venue={} dateTime={} capacity={} hasBanner={}",
                 tenantId, request.getTitle(), request.getVenue(), request.getDateTime(), request.getTotalCapacity(),
@@ -191,6 +192,7 @@ public class EventService {
         }
     }
 
+    @Transactional
     public EventResponseDTO updateEvent(String tenantId, String role, UUID eventId, UpdateEventRequestDTO request) {
         log.info("Updating event eventId={} tenantId={} role={}", eventId, tenantId, role);
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
@@ -230,6 +232,7 @@ public class EventService {
         return updateEvent(tenantId, "ROLE_TENANT", eventId, request);
     }
 
+    @Transactional
     public EventResponseDTO activateEvent(String tenantId, String role, UUID eventId) {
         log.info("Activating event eventId={} tenantId={} role={}", eventId, tenantId, role);
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
@@ -251,6 +254,7 @@ public class EventService {
         return eventMapper.toDTO(saved);
     }
 
+    @Transactional
     public void deleteEvent(String tenantId, String role, UUID eventId) {
         log.info("Deleting event eventId={} tenantId={} role={}", eventId, tenantId, role);
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
