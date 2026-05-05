@@ -49,6 +49,8 @@ public class SecurityConfig {
                         // H2 console (dev only). Served from /h2-console/**;
                         // frameOptions=sameOrigin above lets it render its iframes.
                         .requestMatchers("/h2-console/**").permitAll()
+                        // Internal: booking-service decrements availability on confirm.
+                        .requestMatchers(HttpMethod.PATCH, "/events/*/availability/consume").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                         .anyRequest().authenticated()
                 )

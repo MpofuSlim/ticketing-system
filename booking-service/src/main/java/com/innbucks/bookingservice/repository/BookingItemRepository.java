@@ -45,21 +45,22 @@ public interface BookingItemRepository extends JpaRepository<BookingItem, UUID> 
     """)
     List<BookingItem> findByEventIdWithBooking(@Param("eventId") UUID eventId);
 
-    // Counts non-CANCELLED booking items grouped by event. Powers
-    // event-service's availableTickets calculation: events return
-    // availableTickets = totalCapacity − activeCount, so the response
-    // tallies in real time without a stored counter.
+    // Counts CONFIRMED booking items grouped by event. Powers event-service's
+    // availableTickets safety net: events return availableTickets = totalCapacity
+    // − confirmedCount when the stored field falls behind (e.g. a confirm where
+    // the event-service availability call failed). PENDING bookings don't count
+    // because the user only sees the seat consumed once they've paid.
     @Query("""
         SELECT b.eventId AS eventId, COUNT(i) AS count
         FROM BookingItem i
         JOIN i.booking b
         WHERE b.eventId IN :eventIds
-          AND b.status <> :cancelledStatus
+          AND b.status = :confirmedStatus
         GROUP BY b.eventId
     """)
     List<EventActiveItemCount> countActiveItemsByEventIds(
             @Param("eventIds") Collection<UUID> eventIds,
-            @Param("cancelledStatus") Booking.BookingStatus cancelledStatus
+            @Param("confirmedStatus") Booking.BookingStatus confirmedStatus
     );
 
     interface EventActiveItemCount {

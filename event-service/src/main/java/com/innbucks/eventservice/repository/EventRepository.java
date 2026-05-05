@@ -5,6 +5,7 @@ import com.innbucks.eventservice.entity.Province;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -78,4 +79,18 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
         )
     """)
     Page<Event> searchByKeyword(@Param("q") String q, Pageable pageable);
+
+    // Atomically decrements availableTickets without ever going below zero.
+    // Returns the number of rows updated (1 on success, 0 if the event is
+    // missing/deleted or the requested count would underflow). Atomic at the
+    // SQL level so concurrent confirms can't race past zero.
+    @Modifying
+    @Query("""
+        UPDATE Event e
+        SET e.availableTickets = e.availableTickets - :count
+        WHERE e.eventId = :eventId
+          AND e.deleted = false
+          AND e.availableTickets >= :count
+    """)
+    int decrementAvailableTickets(@Param("eventId") UUID eventId, @Param("count") int count);
 }
