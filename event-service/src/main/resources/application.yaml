@@ -77,7 +77,7 @@ seat-service:
   base-url: ${SEAT_SERVICE_BASE_URL:http://localhost:8083}
 
 booking-service:
-  base-url: ${BOOKING_SERVICE_BASE_URL:http://localhost:8082}
+  base-url: ${BOOKING_SERVICE_BASE_URL:http://localhost:8084}
 
 # Circuit breaker + retry around outbound calls.
 #  - seatCategories: SeatCategoryGateway (fallback = empty category list).
