@@ -39,8 +39,11 @@ public class UpdateEventRequestDTO {
     private LocationDTO location;
 
     @Schema(
+            example = "2026-06-15T19:00:00",
             description = """
-                    If provided, must be strictly **in the future** at request time (`@Future`).
+                    Event start timestamp (`yyyy-MM-ddTHH:mm:ss`). If provided, must be strictly **in the future**.
+                    Updates both the date and the start time. Send the full ISO-8601 datetime;
+                    a date-only value (e.g. `"2026-06-15"`) is rejected.
                     """
     )
     @Future(message = "Event date must be in the future")
