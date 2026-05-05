@@ -8,6 +8,10 @@ import com.innbucks.loyaltyservice.service.RedemptionService;
 import com.innbucks.loyaltyservice.service.TransactionService;
 import com.innbucks.loyaltyservice.service.TransferService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springdoc.core.annotations.ParameterObject;
@@ -48,6 +52,63 @@ public class TransactionController {
                           "`points_ledger`. Idempotent on `(merchantId, reference)` — duplicate references " +
                           "return DUPLICATE_REFERENCE so POS retries can be safely repeated. Rejects with " +
                           "USER_BLOCKED if the loyalty user is blocked from the program.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "201",
+                    description = "Transaction posted",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Transaction posted", value = """
+                                    {
+                                      "code": "201 CREATED",
+                                      "message": "Transaction posted successfully",
+                                      "data": {
+                                        "id": "11111111-2222-3333-4444-555555555555",
+                                        "type": "PURCHASE",
+                                        "amount": 100.00,
+                                        "pointsDelta": 100.0000,
+                                        "balanceAfter": 5100.0000,
+                                        "ruleId": "d6e2f4a5-4567-8901-bcde-f01234567890",
+                                        "campaignId": "f8a4b6c7-6789-0123-def0-123456789012",
+                                        "reference": "POS-20260504-0001",
+                                        "createdAt": "2026-05-04T11:00:00Z"
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "Validation error",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Validation error", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "userId: must not be null",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "422",
+                    description = "Business rule violation (DUPLICATE_REFERENCE, USER_BLOCKED, MERCHANT_INACTIVE)",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Duplicate reference", value = """
+                                    {
+                                      "code": "422 UNPROCESSABLE_ENTITY",
+                                      "message": "DUPLICATE_REFERENCE",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
+    })
     public ResponseEntity<ApiResult<Dtos.TransactionResponse>> post(@Valid @RequestBody Dtos.TransactionRequest req) {
         Dtos.TransactionResponse data = transactions.post(tenantContext.requireTenantId(), req);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -59,6 +120,63 @@ public class TransactionController {
             description = "Issues a compensating ledger entry that negates the points originally awarded by " +
                           "transaction `{id}`. The original row is preserved (immutable ledger). Used for " +
                           "refunds and chargebacks. Optional JSON body: `{ \"reason\": \"...\" }`.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Transaction reversed",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Reversal posted", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Transaction reversed successfully",
+                                      "data": {
+                                        "id": "22222222-3333-4444-5555-666666666666",
+                                        "type": "REFUND",
+                                        "amount": 100.00,
+                                        "pointsDelta": -100.0000,
+                                        "balanceAfter": 5000.0000,
+                                        "ruleId": null,
+                                        "campaignId": null,
+                                        "reference": "REVERSE:POS-20260504-0001",
+                                        "createdAt": "2026-05-04T12:30:00Z"
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "Original transaction not found",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not found", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "Transaction not found",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "422",
+                    description = "Already reversed or otherwise non-reversible",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Already reversed", value = """
+                                    {
+                                      "code": "422 UNPROCESSABLE_ENTITY",
+                                      "message": "ALREADY_REVERSED",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
+    })
     public ResponseEntity<ApiResult<Dtos.TransactionResponse>> reverse(@PathVariable UUID id,
                                             @RequestBody(required = false) Map<String, String> body) {
         String reason = body == null ? null : body.get("reason");
@@ -72,6 +190,63 @@ public class TransactionController {
                           "flow. Body: `{ userId, merchantId, points, reason }` where `points` may be " +
                           "positive (credit) or negative (debit). Always recorded in the ledger with " +
                           "type=ADJUSTMENT for audit.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Adjustment applied",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Adjustment applied", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Adjustment applied successfully",
+                                      "data": {
+                                        "id": "33333333-4444-5555-6666-777777777777",
+                                        "type": "ADJUSTMENT",
+                                        "amount": null,
+                                        "pointsDelta": 250.0000,
+                                        "balanceAfter": 5250.0000,
+                                        "ruleId": null,
+                                        "campaignId": null,
+                                        "reference": "Goodwill credit",
+                                        "createdAt": "2026-05-04T13:15:00Z"
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "Malformed body (bad UUID / non-numeric points)",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Bad request", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "Invalid UUID string: foo",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "User or merchant not found",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not found", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "User not found",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
+    })
     public ResponseEntity<ApiResult<Dtos.TransactionResponse>> adjust(@RequestBody Map<String, Object> body) {
         UUID userId = UUID.fromString(String.valueOf(body.get("userId")));
         UUID merchantId = UUID.fromString(String.valueOf(body.get("merchantId")));
@@ -86,6 +261,54 @@ public class TransactionController {
     @Operation(summary = "Get a user's recent transactions",
             description = "Returns the most recent transactions for the loyalty user `{id}` (the LoyaltyUser " +
                           "UUID, not the user-service userId). Powers the SuperApp activity feed.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Transactions returned",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Paginated transactions", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Transactions retrieved successfully",
+                                      "data": {
+                                        "content": [
+                                          {
+                                            "id": "11111111-2222-3333-4444-555555555555",
+                                            "type": "PURCHASE",
+                                            "amount": 100.00,
+                                            "pointsDelta": 100.0000,
+                                            "balanceAfter": 5100.0000,
+                                            "ruleId": "d6e2f4a5-4567-8901-bcde-f01234567890",
+                                            "campaignId": null,
+                                            "reference": "POS-20260504-0001",
+                                            "createdAt": "2026-05-04T11:00:00Z"
+                                          },
+                                          {
+                                            "id": "22222222-3333-4444-5555-666666666666",
+                                            "type": "REDEMPTION",
+                                            "amount": null,
+                                            "pointsDelta": -500.0000,
+                                            "balanceAfter": 4600.0000,
+                                            "ruleId": null,
+                                            "campaignId": null,
+                                            "reference": "VOUCHER:VCH-AB12CD",
+                                            "createdAt": "2026-05-04T12:00:00Z"
+                                          }
+                                        ],
+                                        "page": 0,
+                                        "size": 20,
+                                        "totalElements": 2,
+                                        "totalPages": 1,
+                                        "first": true,
+                                        "last": true
+                                      }
+                                    }
+                                    """)
+                    )
+            )
+    })
     public ResponseEntity<ApiResult<PageResponse<Dtos.TransactionResponse>>> recent(@PathVariable UUID id,
                                                                                     @ParameterObject Pageable pageable) {
         PageResponse<Dtos.TransactionResponse> data = PageResponse.from(transactions.recentForUser(id, pageable));
@@ -97,6 +320,56 @@ public class TransactionController {
             description = "Moves points from `fromUserId` to `toUserId` atomically using canonical-order " +
                           "wallet locking to avoid deadlocks. Both must belong to the current tenant. " +
                           "Returns the sender's new balance.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Transfer completed",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Transfer ok", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Transfer completed successfully",
+                                      "data": {
+                                        "status": "OK",
+                                        "newSenderBalance": 4500.0000
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "Validation error",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Validation error", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "points: must be positive",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "422",
+                    description = "Insufficient balance or sender/recipient cross-tenant",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Insufficient balance", value = """
+                                    {
+                                      "code": "422 UNPROCESSABLE_ENTITY",
+                                      "message": "INSUFFICIENT_BALANCE",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
+    })
     public ResponseEntity<ApiResult<Map<String, Object>>> transfer(@Valid @RequestBody Dtos.TransferRequest req) {
         BigDecimal balance = transferService.transfer(tenantContext.requireTenantId(), req);
         Map<String, Object> data = Map.of("status", "OK", "newSenderBalance", balance);
@@ -108,6 +381,56 @@ public class TransactionController {
             description = "Burns points from the user's main wallet at the merchant's redeem rate without " +
                           "going through a voucher. Used by checkout flows that apply a points discount " +
                           "directly. For voucher-based redemption, use `POST /api/loyalty/vouchers/redeem`.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Points redeemed",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Points redeemed", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Points redeemed successfully",
+                                      "data": {
+                                        "status": "OK",
+                                        "newBalance": 4500.0000
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "Validation error",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Validation error", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "points: must be positive",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "422",
+                    description = "Insufficient balance",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Insufficient balance", value = """
+                                    {
+                                      "code": "422 UNPROCESSABLE_ENTITY",
+                                      "message": "INSUFFICIENT_BALANCE",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
+    })
     public ResponseEntity<ApiResult<Map<String, Object>>> redeem(@Valid @RequestBody Dtos.RedemptionRequest req) {
         BigDecimal balance = redemptionService.redeemPoints(tenantContext.requireTenantId(), req);
         Map<String, Object> data = Map.of("status", "OK", "newBalance", balance);
@@ -119,6 +442,26 @@ public class TransactionController {
             description = "Placeholder for the M-Pesa/airtime integration. Returns NOT_ENABLED in this build. " +
                           "Kept on the API surface so client apps can detect feature availability without " +
                           "version sniffing.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Feature flag response",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not enabled", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Airtime conversion not enabled",
+                                      "data": {
+                                        "status": "NOT_ENABLED",
+                                        "message": "M-Pesa / airtime conversion is not enabled in this build."
+                                      }
+                                    }
+                                    """)
+                    )
+            )
+    })
     public ResponseEntity<ApiResult<Map<String, Object>>> convertToAirtime() {
         Map<String, Object> data = Map.of(
                 "status", "NOT_ENABLED",

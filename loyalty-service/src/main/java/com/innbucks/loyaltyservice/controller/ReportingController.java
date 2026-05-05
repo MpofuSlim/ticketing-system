@@ -7,6 +7,10 @@ import com.innbucks.loyaltyservice.security.TenantContext;
 import com.innbucks.loyaltyservice.service.ReportingService;
 import com.innbucks.loyaltyservice.service.SuperAppService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.data.domain.Pageable;
@@ -44,6 +48,36 @@ public class ReportingController {
             description = "Cross-tenant aggregates for the platform operator: total tenants, active " +
                           "merchants, transactions/vouchers/points today, fraud attempts in last 24h, " +
                           "invoice and voucher-expiry counts. No tenant header required.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Operator dashboard",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Operator dashboard", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Operator dashboard retrieved successfully",
+                                      "data": {
+                                        "totalTenants": 14,
+                                        "activeMerchants": 132,
+                                        "transactionsToday": 4821,
+                                        "vouchersIssuedToday": 612,
+                                        "vouchersRedeemedToday": 388,
+                                        "pointsIssuedToday": 152340.0000,
+                                        "pointsRedeemedToday": 47820.0000,
+                                        "fraudAttempts24h": 27,
+                                        "invoicesPending": 23,
+                                        "invoicesPaid": 411,
+                                        "expiringIn7Days": 84,
+                                        "expiringIn30Days": 921
+                                      }
+                                    }
+                                    """)
+                    )
+            )
+    })
     public ResponseEntity<ApiResult<Dtos.OperatorDashboard>> operator() {
         Dtos.OperatorDashboard data = reporting.operator();
         return ResponseEntity.ok(ApiResult.ok("Operator dashboard retrieved successfully", data));
@@ -53,6 +87,31 @@ public class ReportingController {
     @Operation(summary = "Tenant dashboard",
             description = "Per-tenant rollup for the current X-Tenant-Id: merchants, active campaigns, " +
                           "outstanding/expired vouchers, total wallet balance, pending invoices.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Tenant dashboard",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Tenant dashboard", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Tenant dashboard retrieved successfully",
+                                      "data": {
+                                        "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "merchants": 24,
+                                        "activeCampaigns": 3,
+                                        "vouchersOutstanding": 1842,
+                                        "vouchersExpired": 305,
+                                        "totalWalletBalance": 4218750.0000,
+                                        "invoicesPending": 4
+                                      }
+                                    }
+                                    """)
+                    )
+            )
+    })
     public ResponseEntity<ApiResult<Dtos.TenantDashboard>> tenant() {
         Dtos.TenantDashboard data = reporting.tenant(tenantContext.requireTenantId());
         return ResponseEntity.ok(ApiResult.ok("Tenant dashboard retrieved successfully", data));
@@ -62,6 +121,48 @@ public class ReportingController {
     @Operation(summary = "Merchant dashboard",
             description = "Per-merchant operational view: redemptions today, vouchers issued/redeemed, points " +
                           "issued/redeemed, fraud alerts in last 24h, next invoice date and estimated amount.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Merchant dashboard",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Merchant dashboard", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Merchant dashboard retrieved successfully",
+                                      "data": {
+                                        "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                        "redemptionsToday": 38,
+                                        "vouchersIssued": 612,
+                                        "vouchersRedeemed": 388,
+                                        "pointsIssued": 12500.0000,
+                                        "pointsRedeemed": 4300.0000,
+                                        "fraudAlerts24h": 2,
+                                        "nextInvoiceDate": "2026-06-01",
+                                        "estimatedInvoice": 245.50
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "Merchant not found",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not found", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "Merchant not found",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
+    })
     public ResponseEntity<ApiResult<Dtos.MerchantDashboard>> merchant(@PathVariable UUID id) {
         Dtos.MerchantDashboard data = reporting.merchant(id);
         return ResponseEntity.ok(ApiResult.ok("Merchant dashboard retrieved successfully", data));
@@ -72,6 +173,87 @@ public class ReportingController {
             description = "Customer-facing dashboard: total points across all wallets, the wallet list, " +
                           "active vouchers, and recent transactions. The {id} is the LoyaltyUser UUID, not " +
                           "the user-service userId.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "User dashboard",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "User dashboard", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "User dashboard retrieved successfully",
+                                      "data": {
+                                        "userId": "d2c8f0a1-0123-4567-1234-567890123456",
+                                        "totalPoints": 5300.0000,
+                                        "wallets": [
+                                          {
+                                            "id": "w1a2b3c4-d5e6-f708-1929-3a4b5c6d7e8f",
+                                            "userId": "d2c8f0a1-0123-4567-1234-567890123456",
+                                            "label": "Main",
+                                            "type": "STANDARD",
+                                            "pocket": "MAIN",
+                                            "balance": 4800.0000,
+                                            "lockedUntil": null
+                                          },
+                                          {
+                                            "id": "w2b3c4d5-e6f7-0819-2a3b-4c5d6e7f8091",
+                                            "userId": "d2c8f0a1-0123-4567-1234-567890123456",
+                                            "label": "Holiday Savings",
+                                            "type": "LOCKED",
+                                            "pocket": "SAVINGS",
+                                            "balance": 500.0000,
+                                            "lockedUntil": "2026-12-24"
+                                          }
+                                        ],
+                                        "activeVouchers": [
+                                          {
+                                            "id": "c1b7e9f0-9012-3456-0123-456789012345",
+                                            "code": "VCH-AB12CD34",
+                                            "status": "ISSUED",
+                                            "templateId": "a9b5c7d8-7890-1234-ef01-234567890123",
+                                            "assignedUserId": "d2c8f0a1-0123-4567-1234-567890123456",
+                                            "assigneePhone": "+254700000000",
+                                            "usesRemaining": 1,
+                                            "issuedAt": "2026-05-04T10:30:00Z",
+                                            "expiresAt": "2026-06-03T10:30:00Z"
+                                          }
+                                        ],
+                                        "recentTransactions": [
+                                          {
+                                            "id": "11111111-2222-3333-4444-555555555555",
+                                            "type": "PURCHASE",
+                                            "amount": 100.00,
+                                            "pointsDelta": 100.0000,
+                                            "balanceAfter": 5100.0000,
+                                            "ruleId": "d6e2f4a5-4567-8901-bcde-f01234567890",
+                                            "campaignId": null,
+                                            "reference": "POS-20260504-0001",
+                                            "createdAt": "2026-05-04T11:00:00Z"
+                                          }
+                                        ]
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "User not found",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not found", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "User not found",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
+    })
     public ResponseEntity<ApiResult<Dtos.UserDashboard>> user(@PathVariable UUID id) {
         Dtos.UserDashboard data = superApp.dashboard(id);
         return ResponseEntity.ok(ApiResult.ok("User dashboard retrieved successfully", data));
@@ -81,6 +263,45 @@ public class ReportingController {
     @Operation(summary = "Transaction mix (counts per type)",
             description = "Returns a map of `TransactionType -> count` for the (optional) merchant within " +
                           "[from, to]. Use for revenue-mix charts. `from` and `to` are required ISO dates.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Transaction mix",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Mix", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Transaction mix retrieved successfully",
+                                      "data": {
+                                        "PURCHASE": 1842,
+                                        "QR_PAY": 612,
+                                        "REDEMPTION": 388,
+                                        "REFUND": 14,
+                                        "ADJUSTMENT": 7,
+                                        "TRANSFER": 32
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "Missing/invalid date range",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Bad date", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "from: failed to convert value of type 'java.lang.String'",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
+    })
     public ResponseEntity<ApiResult<Map<String, Long>>> transactionMix(@RequestParam(required = false) UUID merchantId,
                                             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
                                             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
@@ -93,6 +314,50 @@ public class ReportingController {
             description = "Returns rejected redemption attempts (signature mismatch, expired, duplicate, " +
                           "wrong-merchant, blocked-user, blocked-device) for the current tenant. Used by " +
                           "compliance dashboards and to triage velocity-blocked users.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Fraud attempts returned",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Paginated fraud", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Fraud attempts retrieved successfully",
+                                      "data": {
+                                        "content": [
+                                          {
+                                            "id": "fa1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9",
+                                            "voucherCode": "VCH-AB12CD34",
+                                            "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                            "reason": "WRONG_MERCHANT",
+                                            "detail": "voucher scoped to merchant c5d1e3f4 but presented at b4c0d2e3",
+                                            "deviceFingerprint": "fp-deadbeef-0001",
+                                            "createdAt": "2026-05-04T13:42:00Z"
+                                          },
+                                          {
+                                            "id": "fa2c3d4e-5f60-7182-93a4-b5c6d7e8f900",
+                                            "voucherCode": "VCH-EF56GH78",
+                                            "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                            "reason": "VELOCITY_BLOCKED",
+                                            "detail": "5 redemptions from device fp-cafebabe-0009 in 60s",
+                                            "deviceFingerprint": "fp-cafebabe-0009",
+                                            "createdAt": "2026-05-04T14:11:00Z"
+                                          }
+                                        ],
+                                        "page": 0,
+                                        "size": 20,
+                                        "totalElements": 2,
+                                        "totalPages": 1,
+                                        "first": true,
+                                        "last": true
+                                      }
+                                    }
+                                    """)
+                    )
+            )
+    })
     public ResponseEntity<ApiResult<PageResponse<Dtos.FraudAttemptResponse>>> fraud(@ParameterObject Pageable pageable) {
         PageResponse<Dtos.FraudAttemptResponse> data = PageResponse.from(
                 reporting.recentFraud(tenantContext.requireTenantId()), pageable);
@@ -104,6 +369,26 @@ public class ReportingController {
             description = "Streams a CSV of every transaction in [from, to], optionally scoped to a single " +
                           "merchant. Returns `Content-Disposition: attachment; filename=transactions.csv` so " +
                           "browsers download rather than render.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "CSV body (no ApiResult envelope)",
+                    content = @Content(
+                            mediaType = "text/csv",
+                            schema = @Schema(type = "string", format = "binary"),
+                            examples = @ExampleObject(name = "CSV", value = """
+                                    id,createdAt,type,amount,pointsDelta,balanceAfter,merchantId,userId,reference
+                                    11111111-2222-3333-4444-555555555555,2026-05-04T11:00:00Z,PURCHASE,100.00,100.0000,5100.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,d2c8f0a1-0123-4567-1234-567890123456,POS-20260504-0001
+                                    22222222-3333-4444-5555-666666666666,2026-05-04T12:00:00Z,REDEMPTION,,-500.0000,4600.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,d2c8f0a1-0123-4567-1234-567890123456,VOUCHER:VCH-AB12CD
+                                    33333333-4444-5555-6666-777777777777,2026-05-04T13:15:00Z,ADJUSTMENT,,250.0000,5250.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,d2c8f0a1-0123-4567-1234-567890123456,Goodwill credit
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "Missing/invalid date range"
+            )
+    })
     public ResponseEntity<String> exportCsv(@RequestParam(required = false) UUID merchantId,
                                             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
                                             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
