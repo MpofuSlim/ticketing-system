@@ -5,6 +5,10 @@ import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.dto.PageResponse;
 import com.innbucks.loyaltyservice.service.TenantService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springdoc.core.annotations.ParameterObject;
@@ -33,6 +37,43 @@ public class TenantController {
     @Operation(summary = "Register a new tenant",
             description = "Onboards a new tenant onto the platform. The returned `id` is what every other " +
                           "endpoint expects in the `X-Tenant-Id` header. Operator-only — no tenant header required.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "201",
+                    description = "Tenant created",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Tenant created", value = """
+                                    {
+                                      "code": "201 CREATED",
+                                      "message": "Tenant created successfully",
+                                      "data": {
+                                        "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "code": "innbucks",
+                                        "name": "Innbucks",
+                                        "status": "ACTIVE"
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "Validation failure (blank code/name or duplicate code)",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Validation error", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "code: must not be blank",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
+    })
     public ResponseEntity<ApiResult<Dtos.TenantResponse>> create(@Valid @RequestBody Dtos.TenantRequest req) {
         Dtos.TenantResponse data = tenantService.create(req);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -43,6 +84,44 @@ public class TenantController {
     @Operation(summary = "List all tenants",
             description = "Returns every tenant on the platform. Intended for operator dashboards. " +
                           "Operator-only — no tenant header required.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Tenants returned",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Paginated tenants", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Tenants retrieved successfully",
+                                      "data": {
+                                        "content": [
+                                          {
+                                            "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                            "code": "innbucks",
+                                            "name": "Innbucks",
+                                            "status": "ACTIVE"
+                                          },
+                                          {
+                                            "id": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                            "code": "acme",
+                                            "name": "Acme Coffee",
+                                            "status": "SUSPENDED"
+                                          }
+                                        ],
+                                        "page": 0,
+                                        "size": 20,
+                                        "totalElements": 2,
+                                        "totalPages": 1,
+                                        "first": true,
+                                        "last": true
+                                      }
+                                    }
+                                    """)
+                    )
+            )
+    })
     public ResponseEntity<ApiResult<PageResponse<Dtos.TenantResponse>>> list(@ParameterObject Pageable pageable) {
         PageResponse<Dtos.TenantResponse> data = PageResponse.from(tenantService.list(pageable));
         return ResponseEntity.ok(ApiResult.ok("Tenants retrieved successfully", data));
@@ -53,6 +132,43 @@ public class TenantController {
             description = "Marks the tenant as SUSPENDED. While suspended, all the tenant's customer-facing " +
                           "loyalty operations (earn, redeem, voucher issue/redeem) will be rejected. " +
                           "Use to halt activity during billing disputes or compliance reviews.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Tenant suspended",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Tenant suspended", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Tenant suspended successfully",
+                                      "data": {
+                                        "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "code": "innbucks",
+                                        "name": "Innbucks",
+                                        "status": "SUSPENDED"
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "Tenant not found",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not found", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "Tenant not found",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
+    })
     public ResponseEntity<ApiResult<Dtos.TenantResponse>> suspend(@PathVariable UUID id) {
         Dtos.TenantResponse data = tenantService.suspend(id);
         return ResponseEntity.ok(ApiResult.ok("Tenant suspended successfully", data));
@@ -62,6 +178,43 @@ public class TenantController {
     @Operation(summary = "Reactivate a suspended tenant",
             description = "Reverses /suspend by setting status back to ACTIVE. Idempotent — safe to call " +
                           "on an already-active tenant.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Tenant activated",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Tenant activated", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Tenant activated successfully",
+                                      "data": {
+                                        "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "code": "innbucks",
+                                        "name": "Innbucks",
+                                        "status": "ACTIVE"
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "Tenant not found",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not found", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "Tenant not found",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
+    })
     public ResponseEntity<ApiResult<Dtos.TenantResponse>> activate(@PathVariable UUID id) {
         Dtos.TenantResponse data = tenantService.activate(id);
         return ResponseEntity.ok(ApiResult.ok("Tenant activated successfully", data));

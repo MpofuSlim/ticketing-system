@@ -8,6 +8,10 @@ import com.innbucks.loyaltyservice.entity.LoyaltyRule;
 import com.innbucks.loyaltyservice.security.TenantContext;
 import com.innbucks.loyaltyservice.service.RuleAdminService;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
+import io.swagger.v3.oas.annotations.media.Schema;
+import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springdoc.core.annotations.ParameterObject;
@@ -41,6 +45,51 @@ public class RuleController {
                           "or the whole tenant (`merchantId` null). Merchant-specific rules override tenant " +
                           "defaults. `pointsPerUnit` × `multiplier` is applied to the transaction amount; " +
                           "`maxPointsPerTxn` caps the result if set.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "201",
+                    description = "Rule created",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Rule created", value = """
+                                    {
+                                      "code": "201 CREATED",
+                                      "message": "Rule created successfully",
+                                      "data": {
+                                        "id": "d6e2f4a5-4567-8901-bcde-f01234567890",
+                                        "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                        "transactionType": "PURCHASE",
+                                        "pointsPerUnit": 1.000000,
+                                        "multiplier": 1.0000,
+                                        "maxPointsPerTxn": 500.0000,
+                                        "pocket": "MAIN",
+                                        "active": true,
+                                        "startsAt": "2026-05-04T00:00:00Z",
+                                        "endsAt": null,
+                                        "createdAt": "2026-05-04T10:15:00Z"
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "Validation failure (missing required fields)",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Validation error", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "transactionType: must not be null",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
+    })
     public ResponseEntity<ApiResult<LoyaltyRule>> create(@Valid @RequestBody Dtos.RuleRequest req) {
         LoyaltyRule data = rules.createRule(tenantContext.requireTenantId(), req);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -51,6 +100,60 @@ public class RuleController {
     @Operation(summary = "List rules for the current tenant",
             description = "Returns every rule belonging to the tenant — both merchant-specific and tenant-wide. " +
                           "Useful to audit which earn rates are currently in effect.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Rules returned",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Paginated rules", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Rules retrieved successfully",
+                                      "data": {
+                                        "content": [
+                                          {
+                                            "id": "d6e2f4a5-4567-8901-bcde-f01234567890",
+                                            "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                            "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                            "transactionType": "PURCHASE",
+                                            "pointsPerUnit": 1.000000,
+                                            "multiplier": 1.0000,
+                                            "maxPointsPerTxn": 500.0000,
+                                            "pocket": "MAIN",
+                                            "active": true,
+                                            "startsAt": "2026-05-01T00:00:00Z",
+                                            "endsAt": null,
+                                            "createdAt": "2026-05-01T08:00:00Z"
+                                          },
+                                          {
+                                            "id": "e7f3a5b6-5678-9012-cdef-012345678901",
+                                            "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                            "merchantId": null,
+                                            "transactionType": "QR_PAY",
+                                            "pointsPerUnit": 2.000000,
+                                            "multiplier": 1.0000,
+                                            "maxPointsPerTxn": null,
+                                            "pocket": "MAIN",
+                                            "active": true,
+                                            "startsAt": null,
+                                            "endsAt": null,
+                                            "createdAt": "2026-04-30T12:00:00Z"
+                                          }
+                                        ],
+                                        "page": 0,
+                                        "size": 20,
+                                        "totalElements": 2,
+                                        "totalPages": 1,
+                                        "first": true,
+                                        "last": true
+                                      }
+                                    }
+                                    """)
+                    )
+            )
+    })
     public ResponseEntity<ApiResult<PageResponse<LoyaltyRule>>> list(@ParameterObject Pageable pageable) {
         PageResponse<LoyaltyRule> data = PageResponse.from(
                 rules.listRules(tenantContext.requireTenantId(), pageable));
@@ -62,6 +165,51 @@ public class RuleController {
             description = "Stops the rule from being applied to future transactions. Past transactions that " +
                           "earned points under this rule are unaffected. Use this rather than deletion so " +
                           "audit history (rule_id stamped on every transaction) remains valid.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Rule deactivated",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Rule deactivated", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Rule deactivated successfully",
+                                      "data": {
+                                        "id": "d6e2f4a5-4567-8901-bcde-f01234567890",
+                                        "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                        "transactionType": "PURCHASE",
+                                        "pointsPerUnit": 1.000000,
+                                        "multiplier": 1.0000,
+                                        "maxPointsPerTxn": 500.0000,
+                                        "pocket": "MAIN",
+                                        "active": false,
+                                        "startsAt": "2026-05-01T00:00:00Z",
+                                        "endsAt": "2026-05-04T15:30:00Z",
+                                        "createdAt": "2026-05-01T08:00:00Z"
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "Rule not found in this tenant",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not found", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "Rule not found",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
+    })
     public ResponseEntity<ApiResult<LoyaltyRule>> deactivate(@PathVariable UUID id) {
         LoyaltyRule data = rules.deactivateRule(tenantContext.requireTenantId(), id);
         return ResponseEntity.ok(ApiResult.ok("Rule deactivated successfully", data));
@@ -72,6 +220,50 @@ public class RuleController {
             description = "Creates a campaign that multiplies points earned during the [startsAt, endsAt] " +
                           "window. RulesEngine picks the highest-multiplier active campaign per transaction. " +
                           "Scope to a merchant (`merchantId` set) or the whole tenant.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "201",
+                    description = "Campaign created",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Campaign created", value = """
+                                    {
+                                      "code": "201 CREATED",
+                                      "message": "Campaign created successfully",
+                                      "data": {
+                                        "id": "f8a4b6c7-6789-0123-def0-123456789012",
+                                        "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                        "name": "Weekend 2x Points",
+                                        "multiplier": 2.0000,
+                                        "transactionType": "PURCHASE",
+                                        "startsAt": "2026-05-04T00:00:00Z",
+                                        "endsAt": "2026-05-31T23:59:59Z",
+                                        "active": true,
+                                        "matchedTransactions": 0,
+                                        "createdAt": "2026-05-04T09:30:00Z"
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "Validation failure (missing or invalid window)",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Validation error", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "endsAt must be after startsAt",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
+    })
     public ResponseEntity<ApiResult<Campaign>> createCampaign(@Valid @RequestBody Dtos.CampaignRequest req) {
         Campaign data = rules.createCampaign(tenantContext.requireTenantId(), req);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -82,6 +274,45 @@ public class RuleController {
     @Operation(summary = "List campaigns for the current tenant",
             description = "Returns past, current, and future campaigns. Filter client-side by " +
                           "`startsAt`/`endsAt` to find live ones.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Campaigns returned",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Paginated campaigns", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Campaigns retrieved successfully",
+                                      "data": {
+                                        "content": [
+                                          {
+                                            "id": "f8a4b6c7-6789-0123-def0-123456789012",
+                                            "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                            "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                            "name": "Weekend 2x Points",
+                                            "multiplier": 2.0000,
+                                            "transactionType": "PURCHASE",
+                                            "startsAt": "2026-05-04T00:00:00Z",
+                                            "endsAt": "2026-05-31T23:59:59Z",
+                                            "active": true,
+                                            "matchedTransactions": 142,
+                                            "createdAt": "2026-05-01T09:30:00Z"
+                                          }
+                                        ],
+                                        "page": 0,
+                                        "size": 20,
+                                        "totalElements": 1,
+                                        "totalPages": 1,
+                                        "first": true,
+                                        "last": true
+                                      }
+                                    }
+                                    """)
+                    )
+            )
+    })
     public ResponseEntity<ApiResult<PageResponse<Campaign>>> listCampaigns(@ParameterObject Pageable pageable) {
         PageResponse<Campaign> data = PageResponse.from(
                 rules.listCampaigns(tenantContext.requireTenantId(), pageable));
