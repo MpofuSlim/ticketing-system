@@ -1,6 +1,5 @@
 package com.innbucks.userservice.dto;
 
-import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 
@@ -28,12 +27,4 @@ public class RegisterRequestDTO {
 
     @NotBlank(message = "Role is required")
     private String role;
-
-    @Valid
-    @NotNull(message = "Device registration is required")
-    private DeviceRegistrationDTO device;
-
-    @Valid
-    @NotNull(message = "MFA registration is required")
-    private MfaRegistrationDTO mfa;
 }
