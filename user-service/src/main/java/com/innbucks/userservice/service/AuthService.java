@@ -30,7 +30,6 @@ public class AuthService {
     private final UserRepository userRepository;
     private final TenantProfileRepository tenantProfileRepository;
     private final CustomerProfileRepository customerProfileRepository;
-    private final DeviceRepository deviceRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
     private final TokenRevocationService tokenRevocationService;
@@ -64,22 +63,11 @@ public class AuthService {
                 .email(request.getEmail())
                 .password(passwordEncoder.encode(request.getPassword()))
                 .role(role)
-                .mfaEnabled(true)
-                .mfaSecret(request.getMfa().getSecret())
+                .mfaEnabled(false)
                 .build();
 
         userRepository.save(user);
         log.info("User entity saved email={} userId={} role={}", user.getEmail(), user.getId(), role);
-
-        Device device = Device.builder()
-                .user(user)
-                .deviceId(request.getDevice().getDeviceId())
-                .deviceName(request.getDevice().getDeviceName())
-                .platform(request.getDevice().getPlatform())
-                .pushToken(request.getDevice().getPushToken())
-                .build();
-        deviceRepository.save(device);
-        log.info("Device registered userId={} deviceId={}", user.getId(), device.getDeviceId());
 
         if (role == User.Role.TENANT) {
             log.info("Role=TENANT, creating tenant profile userId={}", user.getId());

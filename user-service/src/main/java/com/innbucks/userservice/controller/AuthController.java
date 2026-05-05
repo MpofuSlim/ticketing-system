@@ -36,7 +36,7 @@ public class AuthController {
     @SecurityRequirements()
     @Operation(summary = "Register system user",
             description = "Creates a system-user account (SYSTEM_MANAGER, TENANT, MERCHANT_ADMIN, SHOP_ADMIN, SHOP_USER, ADMIN). " +
-                    "Requires device registration and MFA registration. Customers must use the tiered /auth/customer/register endpoints.")
+                    "Customers must use the tiered /auth/customer/register endpoints.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
