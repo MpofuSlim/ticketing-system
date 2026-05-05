@@ -33,6 +33,7 @@ public class SecurityConfig {
                         // in. JWT is optional — when present, the customer's
                         // tier is enforced by TierAccessInterceptor. When
                         // absent, the controller treats them as a guest.
+                        .requestMatchers(HttpMethod.GET, "/bookings/phone/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/bookings").permitAll()
                         // Confirm is called by payment-service after a (dummy)
                         // payment. Guests have no JWT, so the endpoint must
