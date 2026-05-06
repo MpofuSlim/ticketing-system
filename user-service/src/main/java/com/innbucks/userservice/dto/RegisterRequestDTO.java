@@ -6,7 +6,7 @@ import lombok.Data;
 
 @Data
 @Schema(name = "RegisterRequest",
-        description = "Payload for creating a system-user account (TENANT, ADMIN, MERCHANT_ADMIN, etc.).")
+        description = "Payload for creating a system-user account (SUPER_ADMIN, EVENT_ORGANIZER, or MERCHANT_ADMIN).")
 public class RegisterRequestDTO {
 
     @Schema(example = "Alice")
@@ -34,9 +34,9 @@ public class RegisterRequestDTO {
     @Size(min = 8, message = "Password must be at least 8 characters")
     private String password;
 
-    @Schema(example = "TENANT",
-            allowableValues = {"SYSTEM_MANAGER", "TENANT", "MERCHANT_ADMIN", "SHOP_ADMIN", "SHOP_USER", "ADMIN"},
-            description = "Role assigned to this system account.")
+    @Schema(example = "EVENT_ORGANIZER",
+            allowableValues = {"SUPER_ADMIN", "EVENT_ORGANIZER", "MERCHANT_ADMIN"},
+            description = "Role assigned to this system account. SUPER_ADMIN has access to all endpoints.")
     @NotBlank(message = "Role is required")
     private String role;
 }

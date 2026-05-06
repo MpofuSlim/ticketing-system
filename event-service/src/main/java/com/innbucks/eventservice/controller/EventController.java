@@ -513,11 +513,11 @@ public class EventController {
     }
 
     @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(
             summary = "Create event",
             description = """
-                    Creates a new event for the authenticated **TENANT** or **ADMIN**.
+                    Creates a new event for the authenticated **EVENT_ORGANIZER** or **ADMIN**.
 
                     The authenticated principal (`Authentication#getName()`) becomes the owning `tenantId`.
 
@@ -574,7 +574,7 @@ public class EventController {
                     )
             ),
             @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN"),
+            @ApiResponse(responseCode = "403", description = "Authenticated but not EVENT_ORGANIZER"),
             @ApiResponse(responseCode = "422", description = "Validation errors",
                     content = @Content(schema = @Schema(example = "{\"title\":\"Title is required\"}")))
     })
@@ -625,15 +625,15 @@ public class EventController {
     }
 
     @PutMapping("/{id}")
-    @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(
             summary = "Update event",
             description = """
                     Updates an existing event.
 
                     Authorization:
-                    - Requires **TENANT** or **ADMIN**.
-                    - TENANT can update only their own event. ADMIN can update any event.
+                    - Requires **EVENT_ORGANIZER**.
+                    - EVENT_ORGANIZER can update only their own event. .
 
                     Behavior:
                     - Fields omitted from the body remain unchanged (partial update).
@@ -685,7 +685,7 @@ public class EventController {
             @ApiResponse(responseCode = "400", description = "Not found or not authorized",
                     content = @Content(schema = @Schema(example = "{\"error\":\"You are not authorized to update this event\"}"))),
             @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN")
+            @ApiResponse(responseCode = "403", description = "Authenticated but not EVENT_ORGANIZER")
     })
     public ResponseEntity<ApiResult<EventResponseDTO>> updateEvent(
             @Parameter(description = "Event UUID") @PathVariable UUID id,
@@ -700,14 +700,14 @@ public class EventController {
     }
 
     @PutMapping("/{id}/activate")
-    @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(
             summary = "Activate event",
             description = """
                     Flips the event's `active` flag to `true`.
 
                     Newly created events start with `active=false`; the owning
-                    **TENANT** (or an **ADMIN**) calls this endpoint once the event
+                    **EVENT_ORGANIZER** calls this endpoint once the event
                     is ready to be surfaced via `GET /events/active` and
                     `GET /events/by-province`.
                     """
@@ -748,7 +748,7 @@ public class EventController {
             @ApiResponse(responseCode = "400", description = "Not found or not authorized",
                     content = @Content(schema = @Schema(example = "{\"error\":\"You are not authorized to activate this event\"}"))),
             @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN")
+            @ApiResponse(responseCode = "403", description = "Authenticated but not EVENT_ORGANIZER")
     })
     public ResponseEntity<ApiResult<EventResponseDTO>> activateEvent(
             @Parameter(description = "Event UUID") @PathVariable UUID id,
@@ -762,15 +762,15 @@ public class EventController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(
             summary = "Delete event (soft delete)",
             description = """
                     Soft-deletes an event (`deleted=true`).
 
                     Authorization:
-                    - Requires **TENANT** or **ADMIN**.
-                    - TENANT can delete only their own event. ADMIN can delete any event.
+                    - Requires **EVENT_ORGANIZER**.
+                    - EVENT_ORGANIZER can delete only their own event. .
                     """
     )
     @ApiResponses({
@@ -791,7 +791,7 @@ public class EventController {
             @ApiResponse(responseCode = "400", description = "Not found or not authorized",
                     content = @Content(schema = @Schema(example = "{\"error\":\"You are not authorized to delete this event\"}"))),
             @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN")
+            @ApiResponse(responseCode = "403", description = "Authenticated but not EVENT_ORGANIZER")
     })
     public ResponseEntity<ApiResult<Void>> deleteEvent(
             @Parameter(description = "Event UUID") @PathVariable UUID id,

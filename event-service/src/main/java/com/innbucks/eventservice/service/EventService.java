@@ -239,9 +239,9 @@ public class EventService {
                     return new RuntimeException("Event not found");
                 });
 
-        boolean isAdmin = "ROLE_ADMIN".equals(role);
+        boolean isAdmin = "ROLE_SUPER_ADMIN".equals(role);
 
-        // TENANT can update only own event; ADMIN can update any event
+        // EVENT_ORGANIZER can update only own event; 
         if (!isAdmin && !event.getTenantId().equals(tenantId)) {
             log.warn("Unauthorized update attempt eventId={} tenantId={} ownerTenantId={}",
                     eventId, tenantId, event.getTenantId());
@@ -267,7 +267,7 @@ public class EventService {
     }
 
     public EventResponseDTO updateEvent(String tenantId, UUID eventId, UpdateEventRequestDTO request) {
-        return updateEvent(tenantId, "ROLE_TENANT", eventId, request);
+        return updateEvent(tenantId, "ROLE_EVENT_ORGANIZER", eventId, request);
     }
 
     // Internal: called by booking-service when a booking transitions to
@@ -304,7 +304,7 @@ public class EventService {
                     return new RuntimeException("Event not found");
                 });
 
-        boolean isAdmin = "ROLE_ADMIN".equals(role);
+        boolean isAdmin = "ROLE_SUPER_ADMIN".equals(role);
         if (!isAdmin && !event.getTenantId().equals(tenantId)) {
             log.warn("Unauthorized activate attempt eventId={} tenantId={} ownerTenantId={}",
                     eventId, tenantId, event.getTenantId());
@@ -326,9 +326,9 @@ public class EventService {
                     return new RuntimeException("Event not found");
                 });
 
-        boolean isAdmin = "ROLE_ADMIN".equals(role);
+        boolean isAdmin = "ROLE_SUPER_ADMIN".equals(role);
 
-        // TENANT can delete only own event; ADMIN can delete any event
+        // EVENT_ORGANIZER can delete only own event; 
         if (!isAdmin && !event.getTenantId().equals(tenantId)) {
             log.warn("Unauthorized delete attempt eventId={} tenantId={} ownerTenantId={}",
                     eventId, tenantId, event.getTenantId());
@@ -341,7 +341,7 @@ public class EventService {
     }
 
     public void deleteEvent(String tenantId, UUID eventId) {
-        deleteEvent(tenantId, "ROLE_TENANT", eventId);
+        deleteEvent(tenantId, "ROLE_EVENT_ORGANIZER", eventId);
     }
 
 }

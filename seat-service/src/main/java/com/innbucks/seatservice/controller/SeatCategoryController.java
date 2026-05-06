@@ -99,8 +99,8 @@ public class SeatCategoryController {
     }
 
     @PostMapping
-    @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
-    @Operation(summary = "Create category", description = "Creates a seat category for an event. Requires TENANT or ADMIN role.")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @Operation(summary = "Create category", description = "Creates a seat category for an event. Requires EVENT_ORGANIZER role.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -128,7 +128,7 @@ public class SeatCategoryController {
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not EVENT_ORGANIZER"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Validation or domain error")
     })
     public ResponseEntity<ApiResult<CreateCategoryResponseDTO>> createCategory(
@@ -141,13 +141,13 @@ public class SeatCategoryController {
     }
 
     @GetMapping("/analytics")
-    @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(
             summary = "Get event analytics",
             description = "Returns aggregated analytics for every seat category in an event: " +
                     "category metadata, per-status seat counts, paginated bookings + per-category revenue, " +
                     "and event-level rollup totals across all categories. " +
-                    "Restricted to TENANT/ADMIN because the response includes customer emails. " +
+                    "Restricted to EVENT_ORGANIZER because the response includes customer emails. " +
                     "Tolerates booking-service downtime — `bookingServiceReachable=false` indicates " +
                     "the bookings sections reflect no-data, not zero-bookings. " +
                     "Pagination applies per-category: each category's `bookings.items` is sliced to " +
@@ -282,7 +282,7 @@ public class SeatCategoryController {
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not EVENT_ORGANIZER")
     })
     public ResponseEntity<ApiResult<EventAnalyticsDTO>> getEventAnalytics(
             @Parameter(description = "Event UUID") @RequestParam UUID eventId,
@@ -301,8 +301,8 @@ public class SeatCategoryController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
-    @Operation(summary = "Delete category", description = "Soft-deletes a seat category. Requires TENANT or ADMIN role.")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @Operation(summary = "Delete category", description = "Soft-deletes a seat category. Requires EVENT_ORGANIZER role.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -319,7 +319,7 @@ public class SeatCategoryController {
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not EVENT_ORGANIZER"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Category not found")
     })
     public ResponseEntity<ApiResult<Void>> deleteCategory(@PathVariable UUID id) {

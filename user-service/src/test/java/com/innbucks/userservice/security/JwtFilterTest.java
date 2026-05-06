@@ -36,7 +36,7 @@ class JwtFilterTest {
 
     @Test
     void validBearerToken_populatesSecurityContext() throws Exception {
-        String token = jwtUtil.generateToken("user@example.com", "TENANT", 4, true);
+        String token = jwtUtil.generateToken("user@example.com", "EVENT_ORGANIZER", 4, true);
         MockHttpServletRequest req = new MockHttpServletRequest("GET", "/agents/me");
         req.addHeader("Authorization", "Bearer " + token);
         MockHttpServletResponse res = new MockHttpServletResponse();
@@ -48,7 +48,7 @@ class JwtFilterTest {
         assertNotNull(auth);
         assertEquals("user@example.com", auth.getName());
         assertTrue(auth.getAuthorities().stream()
-                .anyMatch(a -> a.getAuthority().equals("ROLE_TENANT")));
+                .anyMatch(a -> a.getAuthority().equals("ROLE_EVENT_ORGANIZER")));
         assertTrue(auth.getAuthorities().stream()
                 .anyMatch(a -> a.getAuthority().equals("TIER_4")));
         assertTrue(auth.getAuthorities().stream()
