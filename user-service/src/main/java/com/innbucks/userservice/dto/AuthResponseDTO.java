@@ -4,6 +4,8 @@ import lombok.*;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import io.swagger.v3.oas.annotations.media.Schema;
 
+import java.util.List;
+
 @Data
 @Builder
 @AllArgsConstructor
@@ -21,10 +23,14 @@ public class AuthResponseDTO {
             nullable = true)
     private String token;
 
-    @Schema(description = "Principal's role.",
-            example = "CUSTOMER",
-            allowableValues = {"CUSTOMER", "SUPER_ADMIN", "EVENT_ORGANIZER", "MERCHANT_ADMIN"})
-    private String role;
+    @Schema(description = "Principal's roles. A user may hold any combination of SUPER_ADMIN, EVENT_ORGANIZER, MERCHANT_ADMIN. CUSTOMER accounts always have exactly one role: CUSTOMER.",
+            example = "[\"EVENT_ORGANIZER\"]")
+    private List<String> roles;
+
+    @Schema(description = "Default services this user is enrolled in (ticketing, loyalty).",
+            example = "[\"ticketing\"]",
+            nullable = true)
+    private List<String> defaultServices;
 
     @Schema(description = "Email address if the account has one. Null / omitted for customers who registered " +
             "with a phone number only.",

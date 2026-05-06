@@ -10,8 +10,15 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.EnumSet;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -33,15 +40,19 @@ public class AuthService {
 
     @Transactional
     public AuthResponseDTO register(RegisterRequestDTO request) {
-        log.info("Starting system user registration email={} role={}", request.getEmail(), request.getRole());
+        log.info("Starting system user registration email={} roles={}", request.getEmail(), request.getRoles());
 
-        User.Role role = parseRole(request.getRole());
-        if (role == User.Role.CUSTOMER) {
+        Set<User.Role> roles = parseRoles(request.getRoles());
+        if (roles.contains(User.Role.CUSTOMER)) {
             throw new RuntimeException("Customers must register via the /auth/customer/register (tiered) flow");
         }
-        if (!SYSTEM_USER_ROLES.contains(role)) {
-            throw new RuntimeException("Unsupported role for system registration: " + role);
+        for (User.Role r : roles) {
+            if (!SYSTEM_USER_ROLES.contains(r)) {
+                throw new RuntimeException("Unsupported role for system registration: " + r);
+            }
         }
+
+        Set<String> defaultServices = normalizeServices(request.getDefaultServices());
 
         if (userRepository.existsByEmail(request.getEmail())) {
             log.warn("Registration failed, email already registered email={}", request.getEmail());
@@ -59,15 +70,17 @@ public class AuthService {
                 .phoneNumber(request.getPhoneNumber())
                 .email(request.getEmail())
                 .password(passwordEncoder.encode(request.getPassword()))
-                .role(role)
+                .roles(roles)
+                .defaultServices(defaultServices)
                 .mfaEnabled(false)
                 .build();
 
         userRepository.save(user);
-        log.info("User entity saved email={} userId={} role={}", user.getEmail(), user.getId(), role);
+        log.info("User entity saved email={} userId={} roles={} services={}",
+                user.getEmail(), user.getId(), roles, defaultServices);
 
-        if (role == User.Role.EVENT_ORGANIZER) {
-            log.info("Role=EVENT_ORGANIZER, creating tenant profile userId={}", user.getId());
+        if (roles.contains(User.Role.EVENT_ORGANIZER)) {
+            log.info("Roles include EVENT_ORGANIZER, creating tenant profile userId={}", user.getId());
             TenantProfile profile = TenantProfile.builder()
                     .user(user)
                     .build();
@@ -75,10 +88,11 @@ public class AuthService {
             log.info("Tenant profile saved userId={}", user.getId());
         }
 
-        log.info("Registration complete email={} role={}", user.getEmail(), role);
+        log.info("Registration complete email={} roles={}", user.getEmail(), roles);
         return AuthResponseDTO.builder()
                 .email(user.getEmail())
-                .role(user.getRole().name())
+                .roles(roleNames(user.getRoles()))
+                .defaultServices(new ArrayList<>(user.getDefaultServices()))
                 .mfaRequired(false)
                 .build();
     }
@@ -95,7 +109,7 @@ public class AuthService {
 
         int tier;
         boolean verified;
-        if (user.getRole() == User.Role.CUSTOMER) {
+        if (user.hasRole(User.Role.CUSTOMER)) {
             CustomerProfile profile = customerProfileRepository.findByUserId(user.getId())
                     .orElseThrow(() -> new RuntimeException("Customer profile missing"));
             tier = profile.getRegistrationTier();
@@ -106,12 +120,15 @@ public class AuthService {
             verified = true;
         }
 
-        String token = jwtUtil.generateToken(subject, user.getRole().name(), tier, verified,
-                user.getPhoneNumber());
+        List<String> roleNames = roleNames(user.getRoles());
+        List<String> services = new ArrayList<>(
+                user.getDefaultServices() == null ? Collections.emptySet() : user.getDefaultServices());
+        String token = jwtUtil.generateToken(subject, roleNames, services, tier, verified, user.getPhoneNumber());
         return AuthResponseDTO.builder()
                 .token(token)
                 .email(user.getEmail())
-                .role(user.getRole().name())
+                .roles(roleNames)
+                .defaultServices(services)
                 .mfaRequired(false)
                 .tier(tier)
                 .verified(verified)
@@ -136,7 +153,7 @@ public class AuthService {
 
         int tier;
         boolean verified;
-        if (user.getRole() == User.Role.CUSTOMER) {
+        if (user.hasRole(User.Role.CUSTOMER)) {
             CustomerProfile profile = customerProfileRepository.findByUserId(user.getId())
                     .orElseThrow(() -> new RuntimeException("Customer profile missing"));
             tier = profile.getRegistrationTier();
@@ -146,14 +163,17 @@ public class AuthService {
             verified = true;
         }
 
-        String newToken = jwtUtil.generateToken(subject, user.getRole().name(), tier, verified,
-                user.getPhoneNumber());
-        log.info("Token refreshed subject={} role={} tier={} verified={}",
-                subject, user.getRole(), tier, verified);
+        List<String> roleNames = roleNames(user.getRoles());
+        List<String> services = new ArrayList<>(
+                user.getDefaultServices() == null ? Collections.emptySet() : user.getDefaultServices());
+        String newToken = jwtUtil.generateToken(subject, roleNames, services, tier, verified, user.getPhoneNumber());
+        log.info("Token refreshed subject={} roles={} tier={} verified={}",
+                subject, roleNames, tier, verified);
         return AuthResponseDTO.builder()
                 .token(newToken)
                 .email(user.getEmail())
-                .role(user.getRole().name())
+                .roles(roleNames)
+                .defaultServices(services)
                 .mfaRequired(false)
                 .tier(tier)
                 .verified(verified)
@@ -171,14 +191,34 @@ public class AuthService {
                 : userRepository.findByPhoneNumber(trimmed);
     }
 
-    private User.Role parseRole(String raw) {
-        if (raw == null || raw.isBlank()) {
-            throw new RuntimeException("Role is required");
+    private Set<User.Role> parseRoles(List<String> raw) {
+        if (raw == null || raw.isEmpty()) {
+            throw new RuntimeException("At least one role is required");
         }
-        try {
-            return User.Role.valueOf(raw.trim().toUpperCase());
-        } catch (IllegalArgumentException ex) {
-            throw new RuntimeException("Unknown role: " + raw);
+        Set<User.Role> parsed = EnumSet.noneOf(User.Role.class);
+        for (String r : raw) {
+            if (r == null || r.isBlank()) {
+                throw new RuntimeException("Role values must be non-blank");
+            }
+            try {
+                parsed.add(User.Role.valueOf(r.trim().toUpperCase(Locale.ROOT)));
+            } catch (IllegalArgumentException ex) {
+                throw new RuntimeException("Unknown role: " + r);
+            }
         }
+        return parsed;
+    }
+
+    private Set<String> normalizeServices(List<String> raw) {
+        if (raw == null) return new HashSet<>();
+        return raw.stream()
+                .filter(s -> s != null && !s.isBlank())
+                .map(s -> s.trim().toLowerCase(Locale.ROOT))
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+    }
+
+    private List<String> roleNames(Set<User.Role> roles) {
+        if (roles == null) return List.of();
+        return roles.stream().map(Enum::name).collect(Collectors.toList());
     }
 }

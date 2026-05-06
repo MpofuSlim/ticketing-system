@@ -12,10 +12,14 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
+import java.util.EnumSet;
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -40,7 +44,7 @@ class AuthServiceTest {
                 mock(TokenRevocationService.class));
     }
 
-    private RegisterRequestDTO baseRequest(String email, String phone, String role) {
+    private RegisterRequestDTO baseRequest(String email, String phone, String... roles) {
         RegisterRequestDTO req = new RegisterRequestDTO();
         req.setFirstName("Jane");
         req.setMiddleName("M");
@@ -48,7 +52,7 @@ class AuthServiceTest {
         req.setPhoneNumber(phone);
         req.setEmail(email);
         req.setPassword("password123");
-        req.setRole(role);
+        req.setRoles(List.of(roles));
         return req;
     }
 
@@ -69,11 +73,39 @@ class AuthServiceTest {
         ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
         verify(userRepo).save(saved.capture());
         assertEquals("hashed", saved.getValue().getPassword());
-        assertEquals(User.Role.MERCHANT_ADMIN, saved.getValue().getRole());
+        assertTrue(saved.getValue().getRoles().contains(User.Role.MERCHANT_ADMIN));
         assertFalse(saved.getValue().isMfaEnabled());
         verify(tenantRepo, never()).save(any());
         assertFalse(response.isMfaRequired());
-        assertEquals("MERCHANT_ADMIN", response.getRole());
+        assertEquals(List.of("MERCHANT_ADMIN"), response.getRoles());
+    }
+
+    @Test
+    void register_multipleRoles_savesAllAndCreatesTenantProfile() {
+        UserRepository userRepo = mock(UserRepository.class);
+        TenantProfileRepository tenantRepo = mock(TenantProfileRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(userRepo.existsByEmail(any())).thenReturn(false);
+        when(userRepo.existsByPhoneNumber(any())).thenReturn(false);
+        when(encoder.encode(any())).thenReturn("hashed");
+
+        RegisterRequestDTO req = baseRequest("multi@example.com", "0777999999",
+                "EVENT_ORGANIZER", "MERCHANT_ADMIN");
+        req.setDefaultServices(List.of("ticketing", "loyalty"));
+
+        AuthResponseDTO response = newService(userRepo, tenantRepo, encoder, jwt).register(req);
+
+        ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
+        verify(userRepo).save(saved.capture());
+        assertTrue(saved.getValue().getRoles().contains(User.Role.EVENT_ORGANIZER));
+        assertTrue(saved.getValue().getRoles().contains(User.Role.MERCHANT_ADMIN));
+        assertTrue(saved.getValue().getDefaultServices().contains("ticketing"));
+        assertTrue(saved.getValue().getDefaultServices().contains("loyalty"));
+        // Tenant profile created because EVENT_ORGANIZER is one of the roles
+        verify(tenantRepo).save(any());
+        assertTrue(response.getRoles().contains("EVENT_ORGANIZER"));
+        assertTrue(response.getRoles().contains("MERCHANT_ADMIN"));
     }
 
     @Test
@@ -129,12 +161,13 @@ class AuthServiceTest {
         JwtUtil jwt = mock(JwtUtil.class);
         User user = User.builder()
                 .id(1L)
-                .email("u@example.com").password("hashed").role(User.Role.MERCHANT_ADMIN)
+                .email("u@example.com").password("hashed")
+                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
                 .mfaEnabled(false).build();
         when(userRepo.findByEmail("u@example.com")).thenReturn(Optional.of(user));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
-        // User has email only, no phone — 5th arg (phoneNumber) is null.
-        when(jwt.generateToken("u@example.com", "MERCHANT_ADMIN", 4, true, null)).thenReturn("tok");
+        when(jwt.generateToken(eq("u@example.com"), eq(List.of("MERCHANT_ADMIN")),
+                any(), eq(4), eq(true), isNull())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("u@example.com"); req.setPassword("pw");
@@ -143,7 +176,7 @@ class AuthServiceTest {
                 encoder, jwt).login(req);
 
         assertEquals("tok", resp.getToken());
-        assertEquals("MERCHANT_ADMIN", resp.getRole());
+        assertEquals(List.of("MERCHANT_ADMIN"), resp.getRoles());
         assertFalse(resp.isMfaRequired());
         assertEquals(4, resp.getTier());
         assertEquals(Boolean.TRUE, resp.getVerified());
@@ -157,15 +190,16 @@ class AuthServiceTest {
         JwtUtil jwt = mock(JwtUtil.class);
         User user = User.builder()
                 .id(7L)
-                .phoneNumber("0777000099").password("hashed").role(User.Role.CUSTOMER)
+                .phoneNumber("0777000099").password("hashed")
+                .roles(EnumSet.of(User.Role.CUSTOMER))
                 .mfaEnabled(false).build();
         CustomerProfile profile = CustomerProfile.builder()
                 .user(user).registrationTier(2).verified(false).build();
         when(userRepo.findByPhoneNumber("0777000099")).thenReturn(Optional.of(user));
         when(customerRepo.findByUserId(7L)).thenReturn(Optional.of(profile));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
-        // User has phone only — same value flows through subject AND phoneNumber claim.
-        when(jwt.generateToken("0777000099", "CUSTOMER", 2, false, "0777000099")).thenReturn("tok");
+        when(jwt.generateToken(eq("0777000099"), eq(List.of("CUSTOMER")),
+                any(), eq(2), eq(false), eq("0777000099"))).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("0777000099"); req.setPassword("pw");
@@ -174,7 +208,7 @@ class AuthServiceTest {
                 customerRepo, encoder, jwt).login(req);
 
         assertEquals("tok", resp.getToken());
-        assertEquals("CUSTOMER", resp.getRole());
+        assertEquals(List.of("CUSTOMER"), resp.getRoles());
         assertEquals(2, resp.getTier());
         assertEquals(Boolean.FALSE, resp.getVerified());
     }
@@ -184,7 +218,7 @@ class AuthServiceTest {
         UserRepository userRepo = mock(UserRepository.class);
         PasswordEncoder encoder = mock(PasswordEncoder.class);
         User user = User.builder().email("u@example.com").password("hashed")
-                .role(User.Role.CUSTOMER).build();
+                .roles(EnumSet.of(User.Role.CUSTOMER)).build();
         when(userRepo.findByEmail("u@example.com")).thenReturn(Optional.of(user));
         when(encoder.matches(any(), any())).thenReturn(false);
 
@@ -218,14 +252,14 @@ class AuthServiceTest {
         PasswordEncoder encoder = mock(PasswordEncoder.class);
         JwtUtil jwt = mock(JwtUtil.class);
         User user = User.builder().id(1L).email("u@example.com").password("hashed")
-                .role(User.Role.CUSTOMER).mfaEnabled(true).build();
+                .roles(EnumSet.of(User.Role.CUSTOMER)).mfaEnabled(true).build();
         CustomerProfile profile = CustomerProfile.builder()
                 .user(user).registrationTier(1).verified(false).build();
         when(userRepo.findByEmail(any())).thenReturn(Optional.of(user));
         when(customerRepo.findByUserId(1L)).thenReturn(Optional.of(profile));
         when(encoder.matches(any(), any())).thenReturn(true);
-        // No phone on the user → phoneNumber arg is null.
-        when(jwt.generateToken(eq("u@example.com"), eq("CUSTOMER"), eq(1), eq(false), isNull())).thenReturn("tok");
+        when(jwt.generateToken(eq("u@example.com"), eq(List.of("CUSTOMER")),
+                any(), anyInt(), anyBoolean(), isNull())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("u@example.com"); req.setPassword("pw");

@@ -9,7 +9,12 @@ import io.jsonwebtoken.security.Keys;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import java.security.Key;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.Date;
+import java.util.List;
+import java.util.stream.Collectors;
 
 @Component
 public class JwtUtil {
@@ -24,17 +29,20 @@ public class JwtUtil {
         return Keys.hmacShaKeyFor(secret.getBytes());
     }
 
-    public String generateToken(String email, String role, int tier, boolean verified, String phoneNumber) {
+    public String generateToken(String email, Collection<String> roles, Collection<String> defaultServices,
+                                int tier, boolean verified, String phoneNumber) {
+        List<String> roleList = roles == null ? List.of()
+                : roles.stream().filter(r -> r != null && !r.isBlank()).collect(Collectors.toList());
+        List<String> serviceList = defaultServices == null ? List.of()
+                : defaultServices.stream().filter(s -> s != null && !s.isBlank()).collect(Collectors.toList());
+
         JwtBuilder builder = Jwts.builder()
                 .setSubject(email)
-                .claim("role", role)
+                .claim("roles", roleList)
+                .claim("services", serviceList)
                 .claim("tier", tier)
                 .claim("verified", verified);
         if (phoneNumber != null && !phoneNumber.isBlank()) {
-            // Optional claim. Customers can register / log in by email or phone;
-            // either form gets the phone in the JWT so downstream services
-            // (booking-service in particular) can stamp it on payments without
-            // an extra round-trip back to user-service.
             builder.claim("phoneNumber", phoneNumber);
         }
         return builder
@@ -44,8 +52,11 @@ public class JwtUtil {
                 .compact();
     }
 
-    // Backwards-compat overload — left in place so older call sites compile.
-    // New call sites should use the 5-arg version with phoneNumber.
+    // Convenience overload for single-role callers (kept for tests).
+    public String generateToken(String email, String role, int tier, boolean verified, String phoneNumber) {
+        return generateToken(email, role == null ? List.of() : List.of(role), List.of(), tier, verified, phoneNumber);
+    }
+
     public String generateToken(String email, String role, int tier, boolean verified) {
         return generateToken(email, role, tier, verified, null);
     }
@@ -54,8 +65,30 @@ public class JwtUtil {
         return getClaims(token).getSubject();
     }
 
-    public String extractRole(String token) {
-        return getClaims(token).get("role", String.class);
+    @SuppressWarnings("unchecked")
+    public List<String> extractRoles(String token) {
+        Object raw = getClaims(token).get("roles");
+        if (raw instanceof Collection<?> c) {
+            List<String> out = new ArrayList<>();
+            for (Object o : c) {
+                if (o != null) out.add(o.toString());
+            }
+            return out;
+        }
+        return Collections.emptyList();
+    }
+
+    @SuppressWarnings("unchecked")
+    public List<String> extractServices(String token) {
+        Object raw = getClaims(token).get("services");
+        if (raw instanceof Collection<?> c) {
+            List<String> out = new ArrayList<>();
+            for (Object o : c) {
+                if (o != null) out.add(o.toString());
+            }
+            return out;
+        }
+        return Collections.emptyList();
     }
 
     public Integer extractTier(String token) {

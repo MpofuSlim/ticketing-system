@@ -35,8 +35,10 @@ public class AuthController {
     @PostMapping("/register")
     @SecurityRequirements()
     @Operation(summary = "Register system user",
-            description = "Creates a system-user account (SUPER_ADMIN, EVENT_ORGANIZER, or MERCHANT_ADMIN). " +
-                    "Customers must use the tiered /auth/customer/register endpoints.")
+            description = "Creates a system-user account. `roles` accepts any combination of " +
+                    "SUPER_ADMIN, EVENT_ORGANIZER, MERCHANT_ADMIN. `defaultServices` accepts a list of " +
+                    "service names (e.g. `ticketing`, `loyalty`). Customers must use the tiered " +
+                    "/auth/customer/register endpoints.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -49,11 +51,10 @@ public class AuthController {
                                       "code": "201 CREATED",
                                       "message": "User registered successfully",
                                       "data": {
-                                        "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSJ9.signature",
-                                        "role": "EVENT_ORGANIZER",
+                                        "roles": ["EVENT_ORGANIZER"],
+                                        "defaultServices": ["ticketing", "loyalty"],
                                         "email": "alice@innbucks.co.zw",
-                                        "mfaRequired": false,
-                                        "verified": true
+                                        "mfaRequired": false
                                       }
                                     }
                                     """)
@@ -100,7 +101,7 @@ public class AuthController {
                                               "code": "200 OK",
                                               "message": "Login successful",
                                               "data": {
-                                                "role": "CUSTOMER",
+                                                "roles": ["CUSTOMER"],
                                                 "tier": 2,
                                                 "verified": false
                                               }
@@ -111,7 +112,7 @@ public class AuthController {
                                               "code": "200 OK",
                                               "message": "Login successful",
                                               "data": {
-                                                "role": "EVENT_ORGANIZER",
+                                                "roles": ["EVENT_ORGANIZER"],
                                                 "verified": true
                                               }
                                             }
@@ -122,7 +123,7 @@ public class AuthController {
     public ResponseEntity<ApiResult<AuthResponseDTO>> login(@Valid @RequestBody LoginRequestDTO request) {
         log.info("Received login request identifier={}", request.getIdentifier());
         AuthResponseDTO response = authService.login(request);
-        log.info("Login successful role={}", response.getRole());
+        log.info("Login successful roles={}", response.getRoles());
         return ResponseEntity.ok(ApiResult.ok("Login successful", response));
     }
 
@@ -149,7 +150,7 @@ public class AuthController {
                                       "message": "Token refreshed",
                                       "data": {
                                         "token": "<new-jwt>",
-                                        "role": "CUSTOMER",
+                                        "roles": ["CUSTOMER"],
                                         "tier": 2,
                                         "verified": false
                                       }
