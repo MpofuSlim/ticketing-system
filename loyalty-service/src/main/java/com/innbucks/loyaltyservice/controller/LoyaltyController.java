@@ -24,10 +24,10 @@ public class LoyaltyController {
     // ==================== RULES ====================
 
     @PutMapping("/rules/{tenantId}")
-    @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     @Operation(summary = "Create or update a tenant's loyalty rule",
             description = "Sets the earn rate (points credited per $1 of cash) and redeem rate "
-                    + "(points required to offset $1) for the given tenant. TENANT/ADMIN only.")
+                    + "(points required to offset $1) for the given tenant. MERCHANT_ADMIN/SUPER_ADMIN only.")
     public ResponseEntity<ApiResult<LoyaltyRuleDTO>> upsertRule(
             @PathVariable String tenantId,
             @Valid @RequestBody LoyaltyRuleDTO body) {

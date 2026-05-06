@@ -420,12 +420,12 @@ public class BookingController {
     }
 
     @GetMapping("/phone/{phoneNumber}")
-    @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(
             summary = "Lookup bookings by phone number",
             description = "Returns every booking attached to the given phone number, most recent first. " +
                     "Phone is set from the JWT's `phoneNumber` claim at booking time. " +
-                    "Restricted to TENANT/ADMIN — phone numbers aren't secret like confirmation numbers, " +
+                    "Restricted to EVENT_ORGANIZER/SUPER_ADMIN — phone numbers aren't secret like confirmation numbers, " +
                     "so this is not a public lookup. Empty list if no bookings exist for the phone."
     )
     @ApiResponses({
@@ -470,7 +470,7 @@ public class BookingController {
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not EVENT_ORGANIZER/SUPER_ADMIN")
     })
     public ResponseEntity<ApiResult<List<BookingResponseDTO>>> getBookingsByPhoneNumber(@PathVariable String phoneNumber) {
         log.debug("GET /bookings/phone/{}", phoneNumber);
