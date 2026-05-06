@@ -22,12 +22,23 @@ public class TenantService {
     }
 
     public Dtos.TenantResponse create(Dtos.TenantRequest req) {
+        return create(req, null);
+    }
+
+    /**
+     * Creates a tenant and stamps {@code ownerEmail} so subsequent calls that
+     * pass this tenant's UUID via X-Tenant-Id can be ownership-checked. Pass
+     * {@code null} as the owner only for SUPER_ADMIN-driven seed data — every
+     * tenant created from a normal request should have an owner.
+     */
+    public Dtos.TenantResponse create(Dtos.TenantRequest req, String ownerEmail) {
         tenants.findByCode(req.code()).ifPresent(t -> {
             throw LoyaltyException.conflict("TENANT_EXISTS", "tenant code already in use");
         });
         Tenant t = new Tenant();
         t.setCode(req.code());
         t.setName(req.name());
+        t.setOwnerEmail(ownerEmail);
         tenants.save(t);
         return toResponse(t);
     }

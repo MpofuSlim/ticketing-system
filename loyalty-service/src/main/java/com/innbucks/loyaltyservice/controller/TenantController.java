@@ -15,6 +15,7 @@ import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import lombok.extern.slf4j.Slf4j;
 
@@ -76,8 +77,13 @@ public class TenantController {
                     )
             )
     })
-    public ResponseEntity<ApiResult<Dtos.TenantResponse>> create(@Valid @RequestBody Dtos.TenantRequest req) {
-        Dtos.TenantResponse data = tenantService.create(req);
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<Dtos.TenantResponse>> create(
+            @Valid @RequestBody Dtos.TenantRequest req,
+            org.springframework.security.core.Authentication authentication) {
+        String ownerEmail = authentication.getName();
+        log.info("POST /loyalty/tenants ownerEmail={} code={}", ownerEmail, req.code());
+        Dtos.TenantResponse data = tenantService.create(req, ownerEmail);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Tenant created successfully", data));
     }
@@ -124,7 +130,9 @@ public class TenantController {
                     )
             )
     })
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Dtos.TenantResponse>>> list(@ParameterObject Pageable pageable) {
+        log.info("GET /loyalty/tenants (SUPER_ADMIN listing all tenants)");
         PageResponse<Dtos.TenantResponse> data = PageResponse.from(tenantService.list(pageable));
         return ResponseEntity.ok(ApiResult.ok("Tenants retrieved successfully", data));
     }
@@ -171,7 +179,9 @@ public class TenantController {
                     )
             )
     })
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.TenantResponse>> suspend(@PathVariable UUID id) {
+        log.info("POST /loyalty/tenants/{}/suspend", id);
         Dtos.TenantResponse data = tenantService.suspend(id);
         return ResponseEntity.ok(ApiResult.ok("Tenant suspended successfully", data));
     }
@@ -217,7 +227,9 @@ public class TenantController {
                     )
             )
     })
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.TenantResponse>> activate(@PathVariable UUID id) {
+        log.info("POST /loyalty/tenants/{}/activate", id);
         Dtos.TenantResponse data = tenantService.activate(id);
         return ResponseEntity.ok(ApiResult.ok("Tenant activated successfully", data));
     }

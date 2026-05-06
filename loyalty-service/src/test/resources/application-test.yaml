@@ -27,6 +27,10 @@ loyalty:
   invoice:
     prefix: INV
 
+jwt:
+  secret: test-jwt-secret-test-jwt-secret-test-jwt-secret-test
+  expiration: 86400000
+
 logging:
   level:
     root: WARN
