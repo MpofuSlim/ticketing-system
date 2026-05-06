@@ -29,6 +29,7 @@ public class DataInitializer implements CommandLineRunner {
                     .phoneNumber("0000000000")
                     .roles(EnumSet.of(User.Role.SUPER_ADMIN))
                     .defaultServices(Set.of("ticketing", "loyalty"))
+                    .active(true)
                     .build();
             userRepository.save(admin);
             System.out.println("Super admin user created successfully.");
