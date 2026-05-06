@@ -61,7 +61,7 @@ public class SeatCategoryAnalyticsService {
         for (SeatCategory category : categories) {
             List<CategoryBookingDTO> categoryBookings =
                     bookingsByCategory.getOrDefault(category.getId(), List.of());
-            blocks.add(buildCategoryBlock(category, categoryBookings, safePage, safeSize));
+            blocks.add(buildCategoryBlock(category, categoryBookings, reachable, safePage, safeSize));
         }
 
         EventAnalyticsDTO.EventTotals totals = rollUp(categories, blocks);
@@ -77,10 +77,11 @@ public class SeatCategoryAnalyticsService {
     }
 
     private EventAnalyticsDTO.CategoryAnalytics buildCategoryBlock(
-            SeatCategory category, List<CategoryBookingDTO> categoryBookings, int page, int size) {
+            SeatCategory category, List<CategoryBookingDTO> categoryBookings,
+            boolean bookingsReachable, int page, int size) {
         return EventAnalyticsDTO.CategoryAnalytics.builder()
                 .category(toCategoryInfo(category))
-                .seatStatusCounts(countSeatStatuses(category.getId()))
+                .seatStatusCounts(countSeatStatuses(category, categoryBookings, bookingsReachable))
                 .bookings(buildBookingStats(categoryBookings, category, page, size))
                 .build();
     }
@@ -99,18 +100,44 @@ public class SeatCategoryAnalyticsService {
                 .build();
     }
 
-    // Counts each Seat.SeatStatus exactly once by streaming the seats table.
-    // For categories with thousands of seats this is fine — the analytics
-    // endpoint is not on a hot path.
-    private EventAnalyticsDTO.SeatStatusCounts countSeatStatuses(UUID categoryId) {
-        Map<Seat.SeatStatus, Long> grouped = seatRepository.findByCategoryId(categoryId)
-                .stream()
-                .collect(Collectors.groupingBy(Seat::getStatus, Collectors.counting()));
-        long available = grouped.getOrDefault(Seat.SeatStatus.AVAILABLE, 0L);
-        long locked = grouped.getOrDefault(Seat.SeatStatus.LOCKED, 0L);
-        long booked = grouped.getOrDefault(Seat.SeatStatus.BOOKED, 0L);
+    // When booking-service is reachable, derive seat status counts from the
+    // booking items so the response reflects live booking state instead of the
+    // seat-table mirror (which can drift when seat status flips aren't
+    // synchronously applied on confirm/cancel). Falls back to the seats table
+    // when booking-service is down.
+    private EventAnalyticsDTO.SeatStatusCounts countSeatStatuses(
+            SeatCategory category, List<CategoryBookingDTO> categoryBookings, boolean reachable) {
+        if (!reachable) {
+            Map<Seat.SeatStatus, Long> grouped = seatRepository.findByCategoryId(category.getId())
+                    .stream()
+                    .collect(Collectors.groupingBy(Seat::getStatus, Collectors.counting()));
+            long available = grouped.getOrDefault(Seat.SeatStatus.AVAILABLE, 0L);
+            long locked = grouped.getOrDefault(Seat.SeatStatus.LOCKED, 0L);
+            long booked = grouped.getOrDefault(Seat.SeatStatus.BOOKED, 0L);
+            return EventAnalyticsDTO.SeatStatusCounts.builder()
+                    .total(available + locked + booked)
+                    .available(available)
+                    .locked(locked)
+                    .booked(booked)
+                    .build();
+        }
+
+        long booked = categoryBookings.stream()
+                .filter(b -> b.getStatus() == CategoryBookingDTO.BookingStatus.CONFIRMED)
+                .map(CategoryBookingDTO::getSeatId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .count();
+        long locked = categoryBookings.stream()
+                .filter(b -> b.getStatus() == CategoryBookingDTO.BookingStatus.PENDING)
+                .map(CategoryBookingDTO::getSeatId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .count();
+        long total = category.getTotalSeats() == null ? (booked + locked) : category.getTotalSeats();
+        long available = Math.max(0L, total - booked - locked);
         return EventAnalyticsDTO.SeatStatusCounts.builder()
-                .total(available + locked + booked)
+                .total(total)
                 .available(available)
                 .locked(locked)
                 .booked(booked)
