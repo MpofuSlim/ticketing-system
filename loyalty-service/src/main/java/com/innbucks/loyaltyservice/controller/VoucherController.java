@@ -20,11 +20,13 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.List;
 import java.util.UUID;
 
 @RestController
+@Slf4j
 @RequestMapping("/loyalty/vouchers")
 @Tag(name = "Vouchers",
      description = "Voucher templates and individual voucher lifecycle. Each voucher carries an HMAC-SHA256 " +

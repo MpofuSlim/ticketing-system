@@ -14,8 +14,10 @@ import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import lombok.extern.slf4j.Slf4j;
 
 @RestController
+@Slf4j
 @RequestMapping("/loyalty/qr")
 @Tag(name = "QR",
      description = "Signed QR tokens for in-person flows: a merchant generates a token at the till; the " +

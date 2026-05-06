@@ -16,10 +16,12 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.UUID;
 
 @RestController
+@Slf4j
 @RequestMapping("/loyalty/tenants")
 @Tag(name = "Tenants",
      description = "Top-level platform tenants — the white-label customers of the loyalty platform. " +
