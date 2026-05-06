@@ -22,6 +22,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -132,10 +133,17 @@ public class SeatCategoryController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Validation or domain error")
     })
     public ResponseEntity<ApiResult<CreateCategoryResponseDTO>> createCategory(
-            @Valid @RequestBody CreateCategoryRequestDTO request
+            @Valid @RequestBody CreateCategoryRequestDTO request,
+            Authentication authentication,
+            HttpServletRequest httpRequest
     ) {
-        log.info("POST /seat-categories eventId={} name={}", request.getEventId(), request.getName());
-        CreateCategoryResponseDTO created = categoryService.createCategory(request);
+        String requesterEmail = authentication.getName();
+        boolean isAdmin = hasRole(authentication, "ROLE_SUPER_ADMIN");
+        String authHeader = httpRequest.getHeader("Authorization");
+        log.info("POST /seat-categories eventId={} name={} requesterEmail={} isAdmin={}",
+                request.getEventId(), request.getName(), requesterEmail, isAdmin);
+        CreateCategoryResponseDTO created = categoryService.createCategory(
+                request, requesterEmail, isAdmin, authHeader);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Seat category created successfully", created));
     }
@@ -322,9 +330,21 @@ public class SeatCategoryController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not EVENT_ORGANIZER"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Category not found")
     })
-    public ResponseEntity<ApiResult<Void>> deleteCategory(@PathVariable UUID id) {
-        log.info("DELETE /seat-categories/{}", id);
-        categoryService.deleteCategory(id);
+    public ResponseEntity<ApiResult<Void>> deleteCategory(
+            @PathVariable UUID id,
+            Authentication authentication,
+            HttpServletRequest httpRequest) {
+        String requesterEmail = authentication.getName();
+        boolean isAdmin = hasRole(authentication, "ROLE_SUPER_ADMIN");
+        String authHeader = httpRequest.getHeader("Authorization");
+        log.info("DELETE /seat-categories/{} requesterEmail={} isAdmin={}", id, requesterEmail, isAdmin);
+        categoryService.deleteCategory(id, requesterEmail, isAdmin, authHeader);
         return ResponseEntity.ok(ApiResult.ok("Seat category deleted successfully", null));
+    }
+
+    private static boolean hasRole(Authentication authentication, String role) {
+        if (authentication == null || authentication.getAuthorities() == null) return false;
+        return authentication.getAuthorities().stream()
+                .anyMatch(a -> role.equals(a.getAuthority()));
     }
 }

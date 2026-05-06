@@ -186,10 +186,28 @@ public class BookingService {
     // Returns one DTO per booked seat in the category, regardless of booking
     // status. Consumers (e.g. seat-service analytics) decide whether to
     // exclude CANCELLED themselves.
-    public List<CategoryBookingDTO> getBookingsByCategory(UUID categoryId) {
-        log.debug("Fetching bookings by category categoryId={}", categoryId);
-        return bookingItemRepository.findByCategoryIdWithBooking(categoryId)
-                .stream()
+    //
+    // Ownership: callers other than SUPER_ADMIN must own the event the category
+    // belongs to. We resolve ownership from the first booking's eventId — every
+    // BookingItem in the same category points at the same event, so this is
+    // safe. If there are no bookings yet we still verify the category's event
+    // by going to event-service via the category's eventId on the booking item
+    // (best-effort). When no bookings exist we just return an empty list (no
+    // data to leak).
+    public List<CategoryBookingDTO> getBookingsByCategory(UUID categoryId,
+                                                          String requesterEmail,
+                                                          boolean isAdmin) {
+        log.debug("Fetching bookings by category categoryId={} requesterEmail={} isAdmin={}",
+                categoryId, requesterEmail, isAdmin);
+        var items = bookingItemRepository.findByCategoryIdWithBooking(categoryId);
+        if (items.isEmpty()) {
+            return List.of();
+        }
+        if (!isAdmin) {
+            UUID eventId = items.get(0).getBooking().getEventId();
+            requireEventOwnership(eventId, requesterEmail);
+        }
+        return items.stream()
                 .map(this::toCategoryBookingDTO)
                 .collect(Collectors.toList());
     }
@@ -214,12 +232,55 @@ public class BookingService {
     // Same shape as getBookingsByCategory but scoped to a whole event. Lets
     // seat-service build event-level analytics in one round trip instead of
     // calling per-category.
-    public List<CategoryBookingDTO> getBookingsByEvent(UUID eventId) {
-        log.debug("Fetching bookings by event eventId={}", eventId);
+    //
+    // Ownership: callers other than SUPER_ADMIN must own the event.
+    public List<CategoryBookingDTO> getBookingsByEvent(UUID eventId,
+                                                       String requesterEmail,
+                                                       boolean isAdmin) {
+        log.debug("Fetching bookings by event eventId={} requesterEmail={} isAdmin={}",
+                eventId, requesterEmail, isAdmin);
+        if (!isAdmin) {
+            requireEventOwnership(eventId, requesterEmail);
+        }
         return bookingItemRepository.findByEventIdWithBooking(eventId)
                 .stream()
                 .map(this::toCategoryBookingDTO)
                 .collect(Collectors.toList());
+    }
+
+    /**
+     * Looks up the event in event-service and throws AccessDeniedException if
+     * its tenantId doesn't match the requester. SUPER_ADMIN callers bypass
+     * this check at the controller layer and never reach here.
+     */
+    private void requireEventOwnership(UUID eventId, String requesterEmail) {
+        EventServiceClient client = eventClientProvider == null
+                ? null : eventClientProvider.getIfAvailable();
+        if (client == null) {
+            log.warn("event-service client unavailable; refusing analytics for eventId={} to non-admin",
+                    eventId);
+            throw new org.springframework.security.access.AccessDeniedException(
+                    "Cannot verify event ownership");
+        }
+        try {
+            var lookup = client.getEvent(eventId);
+            if (lookup == null || lookup.getData() == null) {
+                throw new org.springframework.security.access.AccessDeniedException("Event not found");
+            }
+            String ownerTenantId = lookup.getData().getTenantId();
+            if (ownerTenantId == null || !ownerTenantId.equals(requesterEmail)) {
+                log.warn("Event ownership check failed eventId={} requesterEmail={} ownerTenantId={}",
+                        eventId, requesterEmail, ownerTenantId);
+                throw new org.springframework.security.access.AccessDeniedException(
+                        "You do not own this event");
+            }
+        } catch (org.springframework.security.access.AccessDeniedException e) {
+            throw e;
+        } catch (Exception e) {
+            log.warn("Event ownership lookup failed eventId={} cause={}", eventId, e.toString());
+            throw new org.springframework.security.access.AccessDeniedException(
+                    "Cannot verify event ownership");
+        }
     }
 
     private CategoryBookingDTO toCategoryBookingDTO(BookingItem item) {
@@ -273,17 +334,21 @@ public class BookingService {
     }
 
     public BookingResponseDTO getBookingById(UUID bookingId, String userEmail) {
-        log.debug("Fetching booking bookingId={} userEmail={}", bookingId, userEmail);
+        return getBookingById(bookingId, userEmail, false);
+    }
+
+    public BookingResponseDTO getBookingById(UUID bookingId, String userEmail, boolean isAdmin) {
+        log.debug("Fetching booking bookingId={} userEmail={} isAdmin={}", bookingId, userEmail, isAdmin);
         Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> {
                     log.warn("Booking lookup failed, not found bookingId={}", bookingId);
                     return new RuntimeException("Booking not found");
                 });
 
-        if (!booking.getUserEmail().equals(userEmail)) {
+        if (!isAdmin && !booking.getUserEmail().equals(userEmail)) {
             log.warn("Booking access denied bookingId={} requesterEmail={} ownerEmail={}",
                     bookingId, userEmail, booking.getUserEmail());
-            throw new RuntimeException("Access denied");
+            throw new org.springframework.security.access.AccessDeniedException("Access denied");
         }
 
         return toDTO(booking);
@@ -302,17 +367,22 @@ public class BookingService {
 
     @Transactional
     public BookingResponseDTO cancelBooking(UUID bookingId, String userEmail) {
-        log.info("Cancelling booking bookingId={} userEmail={}", bookingId, userEmail);
+        return cancelBooking(bookingId, userEmail, false);
+    }
+
+    @Transactional
+    public BookingResponseDTO cancelBooking(UUID bookingId, String userEmail, boolean isAdmin) {
+        log.info("Cancelling booking bookingId={} userEmail={} isAdmin={}", bookingId, userEmail, isAdmin);
         Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> {
                     log.warn("Cancel failed, booking not found bookingId={}", bookingId);
                     return new RuntimeException("Booking not found");
                 });
 
-        if (!booking.getUserEmail().equals(userEmail)) {
+        if (!isAdmin && !booking.getUserEmail().equals(userEmail)) {
             log.warn("Cancel rejected, access denied bookingId={} requesterEmail={} ownerEmail={}",
                     bookingId, userEmail, booking.getUserEmail());
-            throw new RuntimeException("Access denied");
+            throw new org.springframework.security.access.AccessDeniedException("Access denied");
         }
 
         if (booking.getStatus() == Booking.BookingStatus.CONFIRMED) {

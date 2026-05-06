@@ -269,9 +269,16 @@ public class BookingController {
             Authentication authentication
     ) {
         String userEmail = authentication.getName();
-        log.debug("GET /bookings/{} userEmail={}", id, userEmail);
+        boolean isAdmin = hasRole(authentication, "ROLE_SUPER_ADMIN");
+        log.debug("GET /bookings/{} userEmail={} isAdmin={}", id, userEmail, isAdmin);
         return ResponseEntity.ok(ApiResult.ok("Booking retrieved successfully",
-                bookingService.getBookingById(id, userEmail)));
+                bookingService.getBookingById(id, userEmail, isAdmin)));
+    }
+
+    private static boolean hasRole(Authentication authentication, String role) {
+        if (authentication == null || authentication.getAuthorities() == null) return false;
+        return authentication.getAuthorities().stream()
+                .anyMatch(a -> role.equals(a.getAuthority()));
     }
 
     @GetMapping("/by-category/{categoryId}")
@@ -336,10 +343,15 @@ public class BookingController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not EVENT_ORGANIZER")
     })
-    public ResponseEntity<ApiResult<List<CategoryBookingDTO>>> getBookingsByCategory(@PathVariable UUID categoryId) {
-        log.debug("GET /bookings/by-category/{}", categoryId);
+    public ResponseEntity<ApiResult<List<CategoryBookingDTO>>> getBookingsByCategory(
+            @PathVariable UUID categoryId,
+            Authentication authentication) {
+        String requesterEmail = authentication.getName();
+        boolean isAdmin = hasRole(authentication, "ROLE_SUPER_ADMIN");
+        log.debug("GET /bookings/by-category/{} requesterEmail={} isAdmin={}",
+                categoryId, requesterEmail, isAdmin);
         return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully",
-                bookingService.getBookingsByCategory(categoryId)));
+                bookingService.getBookingsByCategory(categoryId, requesterEmail, isAdmin)));
     }
 
     @GetMapping("/by-event/{eventId}")
@@ -405,10 +417,15 @@ public class BookingController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not EVENT_ORGANIZER")
     })
-    public ResponseEntity<ApiResult<List<CategoryBookingDTO>>> getBookingsByEvent(@PathVariable UUID eventId) {
-        log.debug("GET /bookings/by-event/{}", eventId);
+    public ResponseEntity<ApiResult<List<CategoryBookingDTO>>> getBookingsByEvent(
+            @PathVariable UUID eventId,
+            Authentication authentication) {
+        String requesterEmail = authentication.getName();
+        boolean isAdmin = hasRole(authentication, "ROLE_SUPER_ADMIN");
+        log.debug("GET /bookings/by-event/{} requesterEmail={} isAdmin={}",
+                eventId, requesterEmail, isAdmin);
         return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully",
-                bookingService.getBookingsByEvent(eventId)));
+                bookingService.getBookingsByEvent(eventId, requesterEmail, isAdmin)));
     }
 
     @GetMapping("/active-counts")
@@ -600,9 +617,10 @@ public class BookingController {
             Authentication authentication
     ) {
         String userEmail = authentication.getName();
-        log.info("PATCH /bookings/{}/cancel userEmail={}", id, userEmail);
+        boolean isAdmin = hasRole(authentication, "ROLE_SUPER_ADMIN");
+        log.info("PATCH /bookings/{}/cancel userEmail={} isAdmin={}", id, userEmail, isAdmin);
         return ResponseEntity.ok(ApiResult.ok("Booking cancelled successfully",
-                bookingService.cancelBooking(id, userEmail)));
+                bookingService.cancelBooking(id, userEmail, isAdmin)));
     }
 
     @PatchMapping("/{id}/confirm")

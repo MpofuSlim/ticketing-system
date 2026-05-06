@@ -153,6 +153,62 @@ public class EventController {
     }
 
 
+    @GetMapping("/my")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @Operation(
+            summary = "List the authenticated organizer's own events",
+            description = """
+                    Returns a paginated list of **non-deleted** events owned by the
+                    authenticated principal (matched by `tenantId == Authentication#getName()`).
+                    Includes both active=true and active=false events.
+
+                    Filters and sorting follow the same rules as `GET /events`.
+
+                    Use this instead of `GET /events` when the caller wants to see
+                    only their own events. SUPER_ADMIN can also call this — they
+                    will see only events they personally created (their own
+                    Authentication#getName()), since this endpoint is scoped by
+                    the principal. To see *every* tenant's events, SUPER_ADMIN
+                    should call `GET /events`.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Paged list of the caller's events"),
+            @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @ApiResponse(responseCode = "403", description = "Authenticated but lacks the required role")
+    })
+    public ResponseEntity<ApiResult<Page<EventResponseDTO>>> getMyEvents(
+            Authentication authentication,
+            @Parameter(description = "Inclusive lower bound date for events (maps to start of day)")
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+
+            @Parameter(description = "Inclusive upper bound date for events (maps to end of day)")
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+
+            @Parameter(description = "Venue substring filter (case-insensitive)")
+            @RequestParam(required = false) String venue,
+
+            @Parameter(description = "Zero-based page index")
+            @RequestParam(defaultValue = "0") int page,
+
+            @Parameter(description = "Page size")
+            @RequestParam(defaultValue = "10") int size,
+
+            @Parameter(description = "Sort field name (must match an entity property), ascending")
+            @RequestParam(defaultValue = "dateTime") String sortBy
+    ) {
+        String tenantId = authentication.getName();
+        LocalDateTime fromDateTime = from == null ? null : from.atStartOfDay();
+        LocalDateTime toDateTime = to == null ? null : to.atTime(LocalTime.MAX);
+        log.info("GET /events/my tenantId={} from={} to={} venue={} page={} size={}",
+                tenantId, from, to, venue, page, size);
+        Page<EventResponseDTO> result = eventService.getMyEvents(
+                tenantId, fromDateTime, toDateTime, venue, page, size, sortBy);
+        return ResponseEntity.ok(ApiResult.ok("Events retrieved successfully", result));
+    }
+
     @GetMapping("/active")
     @SecurityRequirements()
     @Operation(
