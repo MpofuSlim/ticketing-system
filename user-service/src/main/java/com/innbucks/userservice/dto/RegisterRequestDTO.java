@@ -45,4 +45,16 @@ public class RegisterRequestDTO {
     @NotNull(message = "defaultServices is required")
     @Size(min = 1, message = "At least one default service is required")
     private List<@NotBlank(message = "Service values must be non-blank") String> defaultServices;
+
+    @Schema(example = "InnBucks Ticketing Ltd", nullable = true,
+            description = "Legal or trading name of the business. Stored in the tenant profile.")
+    private String businessName;
+
+    @Schema(example = "123 Samora Machel Ave, Harare", nullable = true,
+            description = "Physical address of the business.")
+    private String businessAddress;
+
+    @Schema(example = "+263771234567", nullable = true,
+            description = "Primary contact number for the business.")
+    private String businessContactNumber;
 }

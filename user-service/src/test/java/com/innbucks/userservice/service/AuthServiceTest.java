@@ -58,7 +58,7 @@ class AuthServiceTest {
     }
 
     @Test
-    void register_loyaltyBundle_assignsMerchantAdminRole_noTenantProfile() {
+    void register_loyaltyBundle_assignsMerchantAdminRole_createsTenantProfile() {
         UserRepository userRepo = mock(UserRepository.class);
         TenantProfileRepository tenantRepo = mock(TenantProfileRepository.class);
         PasswordEncoder encoder = mock(PasswordEncoder.class);
@@ -77,7 +77,8 @@ class AuthServiceTest {
         assertTrue(saved.getValue().getRoles().contains(User.Role.MERCHANT_ADMIN));
         // Bundle list (not the expanded microservices) is what we store and surface
         assertEquals(new LinkedHashSet<>(List.of("loyalty")), saved.getValue().getDefaultServices());
-        verify(tenantRepo, never()).save(any());
+        // MERCHANT_ADMIN now gets a tenant profile (for business info)
+        verify(tenantRepo).save(any());
         assertEquals(List.of("MERCHANT_ADMIN"), response.getRoles());
         assertEquals(List.of("loyalty"), response.getDefaultServices());
     }

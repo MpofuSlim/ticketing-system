@@ -65,10 +65,13 @@ public class AuthService {
         log.info("User entity saved email={} userId={} roles={} bundles={}",
                 user.getEmail(), user.getId(), roles, bundles);
 
-        if (roles.contains(User.Role.EVENT_ORGANIZER)) {
-            log.info("Roles include EVENT_ORGANIZER, creating tenant profile userId={}", user.getId());
+        if (roles.contains(User.Role.EVENT_ORGANIZER) || roles.contains(User.Role.MERCHANT_ADMIN)) {
+            log.info("Roles include business role, creating tenant profile userId={}", user.getId());
             TenantProfile profile = TenantProfile.builder()
                     .user(user)
+                    .businessName(request.getBusinessName())
+                    .businessAddress(request.getBusinessAddress())
+                    .businessPhoneNumber(request.getBusinessContactNumber())
                     .build();
             tenantProfileRepository.save(profile);
             log.info("Tenant profile saved userId={}", user.getId());
