@@ -94,16 +94,15 @@ class SeatCategoryAnalyticsServiceTest {
                 category(CATEGORY_VIP, "VIP", 4, 2, new BigDecimal("100.00")),
                 category(CATEGORY_GA,  "GA",  6, 3, new BigDecimal("50.00"))
         ));
-        when(seatRepo.findByCategoryId(CATEGORY_VIP)).thenReturn(List.of(
-                seat(Seat.SeatStatus.AVAILABLE), seat(Seat.SeatStatus.AVAILABLE),
-                seat(Seat.SeatStatus.LOCKED), seat(Seat.SeatStatus.BOOKED)
-        ));
-        when(seatRepo.findByCategoryId(CATEGORY_GA)).thenReturn(List.of(
-                seat(Seat.SeatStatus.AVAILABLE), seat(Seat.SeatStatus.AVAILABLE),
-                seat(Seat.SeatStatus.AVAILABLE), seat(Seat.SeatStatus.BOOKED),
-                seat(Seat.SeatStatus.BOOKED), seat(Seat.SeatStatus.BOOKED)
-        ));
-        when(bookingClient.fetchBookingsByEvent(eq(EVENT_ID), any())).thenReturn(Optional.of(List.of()));
+        // Seat-table counts are not consulted when booking-service is reachable;
+        // status counts are derived live from booking items below.
+        when(bookingClient.fetchBookingsByEvent(eq(EVENT_ID), any())).thenReturn(Optional.of(List.of(
+                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.CONFIRMED, new BigDecimal("100.00"), LocalDateTime.now()),
+                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.PENDING,   new BigDecimal("100.00"), LocalDateTime.now()),
+                booking(CATEGORY_GA,  CategoryBookingDTO.BookingStatus.CONFIRMED, new BigDecimal("50.00"),  LocalDateTime.now()),
+                booking(CATEGORY_GA,  CategoryBookingDTO.BookingStatus.CONFIRMED, new BigDecimal("50.00"),  LocalDateTime.now()),
+                booking(CATEGORY_GA,  CategoryBookingDTO.BookingStatus.CONFIRMED, new BigDecimal("50.00"),  LocalDateTime.now())
+        )));
 
         EventAnalyticsDTO result = newService(categoryRepo, seatRepo, bookingClient)
                 .getEventAnalytics(EVENT_ID, 0, 20, null);
@@ -301,17 +300,15 @@ class SeatCategoryAnalyticsServiceTest {
         SeatRepository seatRepo = mock(SeatRepository.class);
         BookingServiceClient bookingClient = mock(BookingServiceClient.class);
 
-        // cachedAvailable=4 disagrees with the actual seats-table count (8 AVAILABLE).
+        // cachedAvailable=4 disagrees with the live count derived from bookings:
+        // category has 10 seats and 2 are CONFIRMED, so 8 are actually available.
         when(categoryRepo.findByEventIdAndDeletedFalse(EVENT_ID)).thenReturn(List.of(
                 category(CATEGORY_VIP, "VIP", 10, 4, BigDecimal.TEN)
         ));
-        when(seatRepo.findByCategoryId(CATEGORY_VIP)).thenReturn(List.of(
-                seat(Seat.SeatStatus.AVAILABLE), seat(Seat.SeatStatus.AVAILABLE),
-                seat(Seat.SeatStatus.AVAILABLE), seat(Seat.SeatStatus.AVAILABLE),
-                seat(Seat.SeatStatus.AVAILABLE), seat(Seat.SeatStatus.AVAILABLE),
-                seat(Seat.SeatStatus.AVAILABLE), seat(Seat.SeatStatus.AVAILABLE)
-        ));
-        when(bookingClient.fetchBookingsByEvent(eq(EVENT_ID), any())).thenReturn(Optional.of(List.of()));
+        when(bookingClient.fetchBookingsByEvent(eq(EVENT_ID), any())).thenReturn(Optional.of(List.of(
+                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.CONFIRMED, BigDecimal.TEN, LocalDateTime.now()),
+                booking(CATEGORY_VIP, CategoryBookingDTO.BookingStatus.CONFIRMED, BigDecimal.TEN, LocalDateTime.now())
+        )));
 
         EventAnalyticsDTO result = newService(categoryRepo, seatRepo, bookingClient)
                 .getEventAnalytics(EVENT_ID, 0, 20, null);
@@ -319,6 +316,7 @@ class SeatCategoryAnalyticsServiceTest {
         EventAnalyticsDTO.CategoryAnalytics vip = result.getCategories().get(0);
         assertEquals(4, vip.getCategory().getCachedAvailableSeats());
         assertEquals(8, vip.getSeatStatusCounts().getAvailable());
+        assertEquals(2, vip.getSeatStatusCounts().getBooked());
         assertNotNull(result.getFetchedAt());
     }
 }
