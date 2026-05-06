@@ -163,7 +163,7 @@ class AuthServiceTest {
                 .id(1L)
                 .email("u@example.com").password("hashed")
                 .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
-                .mfaEnabled(false).build();
+                .active(true).mfaEnabled(false).build();
         when(userRepo.findByEmail("u@example.com")).thenReturn(Optional.of(user));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
         when(jwt.generateToken(eq("u@example.com"), eq(List.of("MERCHANT_ADMIN")),
@@ -192,7 +192,7 @@ class AuthServiceTest {
                 .id(7L)
                 .phoneNumber("0777000099").password("hashed")
                 .roles(EnumSet.of(User.Role.CUSTOMER))
-                .mfaEnabled(false).build();
+                .active(true).mfaEnabled(false).build();
         CustomerProfile profile = CustomerProfile.builder()
                 .user(user).registrationTier(2).verified(false).build();
         when(userRepo.findByPhoneNumber("0777000099")).thenReturn(Optional.of(user));
@@ -232,6 +232,25 @@ class AuthServiceTest {
     }
 
     @Test
+    void login_withInactiveAccount_throws() {
+        UserRepository userRepo = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        User user = User.builder().email("u@example.com").password("hashed")
+                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .active(false).build();
+        when(userRepo.findByEmail("u@example.com")).thenReturn(Optional.of(user));
+        when(encoder.matches(any(), any())).thenReturn(true);
+
+        LoginRequestDTO req = new LoginRequestDTO();
+        req.setIdentifier("u@example.com"); req.setPassword("pw");
+
+        AuthService service = newService(userRepo, mock(TenantProfileRepository.class),
+                encoder, mock(JwtUtil.class));
+        RuntimeException ex = assertThrows(RuntimeException.class, () -> service.login(req));
+        assertTrue(ex.getMessage().toLowerCase().contains("not active"));
+    }
+
+    @Test
     void login_withUnknownEmail_throws() {
         UserRepository userRepo = mock(UserRepository.class);
         when(userRepo.findByEmail(any())).thenReturn(Optional.empty());
@@ -252,7 +271,7 @@ class AuthServiceTest {
         PasswordEncoder encoder = mock(PasswordEncoder.class);
         JwtUtil jwt = mock(JwtUtil.class);
         User user = User.builder().id(1L).email("u@example.com").password("hashed")
-                .roles(EnumSet.of(User.Role.CUSTOMER)).mfaEnabled(true).build();
+                .roles(EnumSet.of(User.Role.CUSTOMER)).active(true).mfaEnabled(true).build();
         CustomerProfile profile = CustomerProfile.builder()
                 .user(user).registrationTier(1).verified(false).build();
         when(userRepo.findByEmail(any())).thenReturn(Optional.of(user));
