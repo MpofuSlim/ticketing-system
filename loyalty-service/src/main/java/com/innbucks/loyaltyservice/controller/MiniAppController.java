@@ -19,7 +19,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/loyalty/mini-apps")
+@RequestMapping("/loyalty/mini-apps")
 @Tag(name = "Mini-apps",
      description = "SuperApp shell metadata. The SuperApp client renders a list of mini-apps (merchant " +
                    "storefronts, sub-experiences) and uses each manifest's `entryUrl` and icon to launch " +

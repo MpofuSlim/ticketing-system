@@ -21,7 +21,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/loyalty/merchants")
+@RequestMapping("/loyalty/merchants")
 @Tag(name = "Merchants",
      description = "Merchants are the brands/outlets that issue points and vouchers within a tenant. " +
                    "Each merchant has its own billing cycle and fee schedule (per-point, per-voucher-issued, " +

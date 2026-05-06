@@ -20,7 +20,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/loyalty/tenants")
+@RequestMapping("/loyalty/tenants")
 @Tag(name = "Tenants",
      description = "Top-level platform tenants — the white-label customers of the loyalty platform. " +
                    "These endpoints are operator-level: they do NOT require an X-Tenant-Id header, " +

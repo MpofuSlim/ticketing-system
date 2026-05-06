@@ -16,7 +16,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
-@RequestMapping("/api/loyalty/qr")
+@RequestMapping("/loyalty/qr")
 @Tag(name = "QR",
      description = "Signed QR tokens for in-person flows: a merchant generates a token at the till; the " +
                    "customer scans it with the SuperApp, which calls /consume to award points or complete " +
