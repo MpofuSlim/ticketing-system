@@ -82,20 +82,20 @@ class AuthServiceTest {
         when(userRepo.existsByPhoneNumber(any())).thenReturn(false);
         when(encoder.encode("password123")).thenReturn("hashed");
 
-        RegisterRequestDTO req = baseRequest("sm@example.com", "0777000001", "SYSTEM_MANAGER");
+        RegisterRequestDTO req = baseRequest("sm@example.com", "0777000001", "MERCHANT_ADMIN");
 
         AuthResponseDTO response = newService(userRepo, tenantRepo, deviceRepo, encoder, jwt).register(req);
 
         ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
         verify(userRepo).save(saved.capture());
         assertEquals("hashed", saved.getValue().getPassword());
-        assertEquals(User.Role.SYSTEM_MANAGER, saved.getValue().getRole());
+        assertEquals(User.Role.MERCHANT_ADMIN, saved.getValue().getRole());
         assertTrue(saved.getValue().isMfaEnabled());
         assertEquals("SECRET", saved.getValue().getMfaSecret());
         verify(tenantRepo, never()).save(any());
         verify(deviceRepo).save(any(Device.class));
         assertFalse(response.isMfaRequired());
-        assertEquals("SYSTEM_MANAGER", response.getRole());
+        assertEquals("MERCHANT_ADMIN", response.getRole());
     }
 
     @Test
@@ -109,7 +109,7 @@ class AuthServiceTest {
         when(userRepo.existsByPhoneNumber(any())).thenReturn(false);
         when(encoder.encode(any())).thenReturn("hashed");
 
-        RegisterRequestDTO req = baseRequest("tenant@example.com", "0777111111", "TENANT");
+        RegisterRequestDTO req = baseRequest("tenant@example.com", "0777111111", "EVENT_ORGANIZER");
 
         newService(userRepo, tenantRepo, deviceRepo, encoder, jwt).register(req);
 
@@ -138,7 +138,7 @@ class AuthServiceTest {
         AuthService service = newService(userRepo, mock(TenantProfileRepository.class),
                 mock(DeviceRepository.class), mock(PasswordEncoder.class), mock(JwtUtil.class));
 
-        RegisterRequestDTO req = baseRequest("dup@example.com", "0777000002", "SHOP_USER");
+        RegisterRequestDTO req = baseRequest("dup@example.com", "0777000002", "MERCHANT_ADMIN");
 
         RuntimeException ex = assertThrows(RuntimeException.class, () -> service.register(req));
         assertEquals("Email already registered", ex.getMessage());
@@ -152,12 +152,12 @@ class AuthServiceTest {
         JwtUtil jwt = mock(JwtUtil.class);
         User user = User.builder()
                 .id(1L)
-                .email("u@example.com").password("hashed").role(User.Role.SHOP_USER)
+                .email("u@example.com").password("hashed").role(User.Role.MERCHANT_ADMIN)
                 .mfaEnabled(false).build();
         when(userRepo.findByEmail("u@example.com")).thenReturn(Optional.of(user));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
         // User has email only, no phone — 5th arg (phoneNumber) is null.
-        when(jwt.generateToken("u@example.com", "SHOP_USER", 4, true, null)).thenReturn("tok");
+        when(jwt.generateToken("u@example.com", "MERCHANT_ADMIN", 4, true, null)).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("u@example.com"); req.setPassword("pw");
@@ -166,7 +166,7 @@ class AuthServiceTest {
                 mock(DeviceRepository.class), encoder, jwt).login(req);
 
         assertEquals("tok", resp.getToken());
-        assertEquals("SHOP_USER", resp.getRole());
+        assertEquals("MERCHANT_ADMIN", resp.getRole());
         assertFalse(resp.isMfaRequired());
         assertEquals(4, resp.getTier());
         assertEquals(Boolean.TRUE, resp.getVerified());
