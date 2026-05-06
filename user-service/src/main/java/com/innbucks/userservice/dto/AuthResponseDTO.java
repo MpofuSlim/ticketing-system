@@ -36,7 +36,7 @@ public class AuthResponseDTO {
             example = "false")
     private boolean mfaRequired;
 
-    @Schema(description = "Customer registration tier (1..4). System users (TENANT/ADMIN/etc.) are reported as tier 4.",
+    @Schema(description = "Customer registration tier (1..4). Present only for CUSTOMER accounts; null for system users.",
             example = "2",
             nullable = true)
     private Integer tier;
