@@ -8,7 +8,11 @@ import java.util.List;
 
 @Data
 @Schema(name = "RegisterRequest",
-        description = "Payload for creating a system-user account. `roles` is a list — a single user may hold any combination of SUPER_ADMIN, EVENT_ORGANIZER, MERCHANT_ADMIN. Default microservices are assigned by the server based on the role(s) granted.")
+        description = "Payload for creating a system-user account. The caller picks one or more " +
+                "service bundles in `defaultServices` (e.g. `ticketing`, `loyalty`). The server " +
+                "derives the appropriate role(s) and the underlying microservice access from those " +
+                "selections — `ticketing` grants events/seats/bookings/payments behind the scenes, " +
+                "`loyalty` grants loyalty/payments. Pick both to be granted access to everything.")
 public class RegisterRequestDTO {
 
     @Schema(example = "Alice")
@@ -36,9 +40,9 @@ public class RegisterRequestDTO {
     @Size(min = 8, message = "Password must be at least 8 characters")
     private String password;
 
-    @Schema(example = "[\"EVENT_ORGANIZER\"]",
-            description = "Roles assigned to this system account. Allowed values: SUPER_ADMIN, EVENT_ORGANIZER, MERCHANT_ADMIN. SUPER_ADMIN has access to all endpoints.")
-    @NotNull(message = "Roles are required")
-    @Size(min = 1, message = "At least one role is required")
-    private List<@NotBlank(message = "Role values must be non-blank") String> roles;
+    @Schema(example = "[\"ticketing\"]",
+            description = "Service bundles to enrol this user into. Allowed values: `ticketing`, `loyalty`.")
+    @NotNull(message = "defaultServices is required")
+    @Size(min = 1, message = "At least one default service is required")
+    private List<@NotBlank(message = "Service values must be non-blank") String> defaultServices;
 }

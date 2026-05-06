@@ -35,10 +35,10 @@ public class AuthController {
     @PostMapping("/register")
     @SecurityRequirements()
     @Operation(summary = "Register system user",
-            description = "Creates a system-user account. `roles` accepts any combination of " +
-                    "SUPER_ADMIN, EVENT_ORGANIZER, MERCHANT_ADMIN. The server assigns `defaultServices` " +
-                    "from the role(s): SUPER_ADMIN gets all microservices; EVENT_ORGANIZER gets " +
-                    "events/seats/bookings/payments; MERCHANT_ADMIN gets loyalty/payments. " +
+            description = "Creates a system-user account. The caller picks one or more `defaultServices` " +
+                    "(`ticketing`, `loyalty`); the server derives the role and the underlying " +
+                    "microservice access. `ticketing` -> EVENT_ORGANIZER (events/seats/bookings/payments). " +
+                    "`loyalty` -> MERCHANT_ADMIN (loyalty/payments). Picking both grants both. " +
                     "Customers must use the tiered /auth/customer/register endpoints.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -53,7 +53,7 @@ public class AuthController {
                                       "message": "User registered successfully",
                                       "data": {
                                         "roles": ["EVENT_ORGANIZER"],
-                                        "defaultServices": ["events", "seats", "bookings", "payments"],
+                                        "defaultServices": ["ticketing"],
                                         "email": "alice@innbucks.co.zw",
                                         "mfaRequired": false
                                       }
