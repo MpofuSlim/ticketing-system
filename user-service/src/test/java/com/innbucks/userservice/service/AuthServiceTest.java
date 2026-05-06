@@ -153,7 +153,7 @@ class AuthServiceTest {
         User user = User.builder()
                 .id(1L)
                 .email("u@example.com").password("hashed").role(User.Role.MERCHANT_ADMIN)
-                .mfaEnabled(false).build();
+                .active(true).mfaEnabled(false).build();
         when(userRepo.findByEmail("u@example.com")).thenReturn(Optional.of(user));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
         // User has email only, no phone — 5th arg (phoneNumber) is null.
@@ -181,7 +181,7 @@ class AuthServiceTest {
         User user = User.builder()
                 .id(7L)
                 .phoneNumber("0777000099").password("hashed").role(User.Role.CUSTOMER)
-                .mfaEnabled(false).build();
+                .active(true).mfaEnabled(false).build();
         CustomerProfile profile = CustomerProfile.builder()
                 .user(user).registrationTier(2).verified(false).build();
         when(userRepo.findByPhoneNumber("0777000099")).thenReturn(Optional.of(user));
@@ -241,7 +241,7 @@ class AuthServiceTest {
         PasswordEncoder encoder = mock(PasswordEncoder.class);
         JwtUtil jwt = mock(JwtUtil.class);
         User user = User.builder().id(1L).email("u@example.com").password("hashed")
-                .role(User.Role.CUSTOMER).mfaEnabled(true).build();
+                .role(User.Role.CUSTOMER).active(true).mfaEnabled(true).build();
         CustomerProfile profile = CustomerProfile.builder()
                 .user(user).registrationTier(1).verified(false).build();
         when(userRepo.findByEmail(any())).thenReturn(Optional.of(user));

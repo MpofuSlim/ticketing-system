@@ -39,6 +39,9 @@ public class User {
     private boolean mfaEnabled = false;
     private String mfaSecret;
 
+    @Column(nullable = false)
+    private boolean active = false;
+
     @Column(updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 

@@ -102,6 +102,9 @@ public class AuthService {
         if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
             throw new RuntimeException("Invalid credentials");
         }
+        if (!user.isActive()) {
+            throw new RuntimeException("Account is not active. Please contact a SUPER_ADMIN for approval.");
+        }
 
         String subject = user.getEmail() != null ? user.getEmail() : user.getPhoneNumber();
 

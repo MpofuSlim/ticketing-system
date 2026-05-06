@@ -1,6 +1,8 @@
 package com.innbucks.userservice.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.innbucks.userservice.entity.User;
+import com.innbucks.userservice.repository.UserRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -23,6 +25,18 @@ class AuthControllerIT {
 
     @Autowired MockMvc mockMvc;
     @Autowired ObjectMapper objectMapper;
+    @Autowired UserRepository userRepository;
+
+    /**
+     * Newly registered system users are inactive by default and must be approved
+     * by a SUPER_ADMIN before they can log in. Tests that exercise login flip
+     * the flag directly via the repository to mimic that approval step.
+     */
+    private void approveByEmail(String email) {
+        User user = userRepository.findByEmail(email).orElseThrow();
+        user.setActive(true);
+        userRepository.save(user);
+    }
 
     private RegisterPayload baseSystemPayload(String email, String phone, String role) {
         RegisterPayload payload = new RegisterPayload();
@@ -72,6 +86,9 @@ class AuthControllerIT {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(register)))
                 .andExpect(status().isCreated());
+
+        // SUPER_ADMIN approval step.
+        approveByEmail("user1@example.com");
 
         // The registered user has MFA enabled by default; supply OTP to pass the gate.
         LoginPayload login = new LoginPayload();
