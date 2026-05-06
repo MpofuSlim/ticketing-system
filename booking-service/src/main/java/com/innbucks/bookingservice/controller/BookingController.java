@@ -235,12 +235,12 @@ public class BookingController {
     }
 
     @GetMapping("/by-category/{categoryId}")
-    @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(
             summary = "List bookings by seat category",
             description = "Analytics endpoint. Returns one row per booked seat in the given category, " +
                     "including who bought it and when. Includes CANCELLED bookings — filter client-side if you need " +
-                    "to exclude them. Restricted to TENANT/ADMIN because it exposes customer emails."
+                    "to exclude them. Restricted to EVENT_ORGANIZER because it exposes customer emails."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -294,7 +294,7 @@ public class BookingController {
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not EVENT_ORGANIZER")
     })
     public ResponseEntity<ApiResult<List<CategoryBookingDTO>>> getBookingsByCategory(@PathVariable UUID categoryId) {
         log.debug("GET /bookings/by-category/{}", categoryId);
@@ -303,13 +303,13 @@ public class BookingController {
     }
 
     @GetMapping("/by-event/{eventId}")
-    @PreAuthorize("hasAnyRole('TENANT','ADMIN')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(
             summary = "List bookings by event",
             description = "Analytics endpoint. Returns one row per booked seat across every category " +
                     "in the given event. Includes CANCELLED bookings — caller filters. " +
                     "Used by seat-service to build event-level analytics in a single round-trip. " +
-                    "Restricted to TENANT/ADMIN because it exposes customer emails."
+                    "Restricted to EVENT_ORGANIZER because it exposes customer emails."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -363,7 +363,7 @@ public class BookingController {
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not TENANT/ADMIN")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not EVENT_ORGANIZER")
     })
     public ResponseEntity<ApiResult<List<CategoryBookingDTO>>> getBookingsByEvent(@PathVariable UUID eventId) {
         log.debug("GET /bookings/by-event/{}", eventId);

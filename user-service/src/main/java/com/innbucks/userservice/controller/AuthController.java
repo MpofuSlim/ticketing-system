@@ -35,7 +35,7 @@ public class AuthController {
     @PostMapping("/register")
     @SecurityRequirements()
     @Operation(summary = "Register system user",
-            description = "Creates a system-user account (SYSTEM_MANAGER, TENANT, MERCHANT_ADMIN, SHOP_ADMIN, SHOP_USER, ADMIN). " +
+            description = "Creates a system-user account (SUPER_ADMIN, EVENT_ORGANIZER, or MERCHANT_ADMIN). " +
                     "Requires device registration and MFA registration. Customers must use the tiered /auth/customer/register endpoints.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -50,10 +50,9 @@ public class AuthController {
                                       "message": "User registered successfully",
                                       "data": {
                                         "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhbGljZUBleGFtcGxlLmNvbSJ9.signature",
-                                        "role": "TENANT",
-                                        "email": "alice@example.com",
+                                        "role": "EVENT_ORGANIZER",
+                                        "email": "alice@innbucks.co.zw",
                                         "mfaRequired": false,
-                                        "tier": 4,
                                         "verified": true
                                       }
                                     }
@@ -80,11 +79,11 @@ public class AuthController {
                     number, together with `password`. The server picks the matching lookup based on whether the value
                     contains an `@`.
                     - Customers registered at tier 1 typically log in with their phone number.
-                    - System users (TENANT, ADMIN, MERCHANT_ADMIN, SHOP_ADMIN, SHOP_USER, SYSTEM_MANAGER) log in with email.
+                    - System users (EVENT_ORGANIZER, MERCHANT_ADMIN) log in with email.
 
                     **Tier / verified claims:** on success the response includes the customer's `tier` (1..4) and `verified` flag.
                     These are also embedded in the JWT as claims, so every downstream service can enforce tier-based access
-                    without re-querying user-service. System users are reported as tier 4, verified=true.
+                    without re-querying user-service. System users get `verified=true`; `tier` is null for system accounts.
 
                     **Using the token:** send it on every authenticated request as `Authorization: Bearer <token>`.
                     To pick up a new tier after the customer upgrades (e.g. tier 2 → tier 3), log in again to receive
@@ -112,8 +111,7 @@ public class AuthController {
                                               "code": "200 OK",
                                               "message": "Login successful",
                                               "data": {
-                                                "role": "TENANT",
-                                                "tier": 4,
+                                                "role": "EVENT_ORGANIZER",
                                                 "verified": true
                                               }
                                             }

@@ -23,7 +23,7 @@ public class AuthResponseDTO {
 
     @Schema(description = "Principal's role.",
             example = "CUSTOMER",
-            allowableValues = {"CUSTOMER", "TENANT", "ADMIN", "SYSTEM_MANAGER", "MERCHANT_ADMIN", "SHOP_ADMIN", "SHOP_USER"})
+            allowableValues = {"CUSTOMER", "SUPER_ADMIN", "EVENT_ORGANIZER", "MERCHANT_ADMIN"})
     private String role;
 
     @Schema(description = "Email address if the account has one. Null / omitted for customers who registered " +

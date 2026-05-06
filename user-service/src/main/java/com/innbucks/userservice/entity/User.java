@@ -43,12 +43,9 @@ public class User {
     private LocalDateTime createdAt = LocalDateTime.now();
 
     public enum Role {
-        SYSTEM_MANAGER,
-        TENANT,
+        SUPER_ADMIN,
+        EVENT_ORGANIZER,
         MERCHANT_ADMIN,
-        SHOP_ADMIN,
-        SHOP_USER,
-        CUSTOMER,
-        ADMIN
+        CUSTOMER
     }
 }

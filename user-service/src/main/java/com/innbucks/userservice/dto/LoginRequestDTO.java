@@ -9,7 +9,7 @@ import lombok.Data;
         name = "LoginRequest",
         description = "Login payload. Supply the account's `identifier` (either an email address or a phone number) " +
                 "together with `password`. Tier-1 customers typically use their phone number; system users " +
-                "(TENANT, ADMIN, etc.) use their email."
+                "(EVENT_ORGANIZER, MERCHANT_ADMIN) use their email."
 )
 public class LoginRequestDTO {
 

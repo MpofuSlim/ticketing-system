@@ -148,7 +148,7 @@ class EventServiceTest {
         UpdateEventRequestDTO req = new UpdateEventRequestDTO();
         req.setTitle("New Title");
 
-        service.updateEvent("admin-user", "ROLE_ADMIN", eventId, req);
+        service.updateEvent("admin-user", "ROLE_SUPER_ADMIN", eventId, req);
 
         verify(repo).save(argThat(e -> "New Title".equals(e.getTitle())));
     }
@@ -166,7 +166,7 @@ class EventServiceTest {
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> service.deleteEvent("other-tenant", "ROLE_TENANT", eventId));
+                () -> service.deleteEvent("other-tenant", "ROLE_EVENT_ORGANIZER", eventId));
         assertEquals("You are not authorized to delete this event", ex.getMessage());
         verify(repo, never()).save(any());
     }
@@ -183,7 +183,7 @@ class EventServiceTest {
                 .totalCapacity(1).availableTickets(1).deleted(false).build();
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
 
-        service.deleteEvent("admin-user", "ROLE_ADMIN", eventId);
+        service.deleteEvent("admin-user", "ROLE_SUPER_ADMIN", eventId);
 
         verify(repo).save(argThat(Event::isDeleted));
     }

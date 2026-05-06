@@ -77,7 +77,7 @@ class EventControllerTest {
     }
 
     @Test
-    @WithMockUser(username = "tenant-99", roles = "TENANT")
+    @WithMockUser(username = "tenant-99", roles = "EVENT_ORGANIZER")
     void createEvent_withTenantRole_createsEvent() throws Exception {
         MockMultipartFile eventPart = new MockMultipartFile(
                 "event", "event.json", MediaType.APPLICATION_JSON_VALUE,
@@ -95,7 +95,7 @@ class EventControllerTest {
     }
 
     @Test
-    @WithMockUser(username = "tenant-99", roles = "TENANT")
+    @WithMockUser(username = "tenant-99", roles = "EVENT_ORGANIZER")
     void createEvent_withBanner_storesBytesAndReturnsBannerUrl() throws Exception {
         MockMultipartFile eventPart = new MockMultipartFile(
                 "event", "event.json", MediaType.APPLICATION_JSON_VALUE,
@@ -125,6 +125,9 @@ class EventControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.bannerUrl", containsString("/banner")));
     }
+
+
+
 
     private static CreateEventRequestDTO sampleRequest(String title, Province province) {
         CreateEventRequestDTO req = new CreateEventRequestDTO();
