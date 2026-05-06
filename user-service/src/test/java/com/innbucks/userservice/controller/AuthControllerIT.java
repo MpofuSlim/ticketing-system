@@ -25,7 +25,7 @@ class AuthControllerIT {
     @Autowired MockMvc mockMvc;
     @Autowired ObjectMapper objectMapper;
 
-    private RegisterPayload baseSystemPayload(String email, String phone, String role) {
+    private RegisterPayload baseSystemPayload(String email, String phone, String bundle) {
         RegisterPayload payload = new RegisterPayload();
         payload.firstName = "Tawanda";
         payload.middleName = "M";
@@ -33,26 +33,13 @@ class AuthControllerIT {
         payload.phoneNumber = phone;
         payload.email = email;
         payload.password = "password123";
-        payload.roles = List.of(role);
-
-        Map<String, Object> device = new HashMap<>();
-        device.put("deviceId", "device-" + phone);
-        device.put("deviceName", "iPhone");
-        device.put("platform", "iOS");
-        device.put("pushToken", "tok");
-        payload.device = device;
-
-        Map<String, Object> mfa = new HashMap<>();
-        mfa.put("method", "TOTP");
-        mfa.put("secret", "SECRET");
-        payload.mfa = mfa;
-
+        payload.defaultServices = List.of(bundle);
         return payload;
     }
 
     @Test
     void register_systemUser_createsUser_andDoesNotReturnJwt() throws Exception {
-        RegisterPayload payload = baseSystemPayload("tenant1@example.com", "0777000000", "EVENT_ORGANIZER");
+        RegisterPayload payload = baseSystemPayload("tenant1@example.com", "0777000000", "ticketing");
         mockMvc.perform(post("/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(payload)))
@@ -67,7 +54,7 @@ class AuthControllerIT {
 
     @Test
     void login_withValidCredentials_returnsJwt() throws Exception {
-        RegisterPayload register = baseSystemPayload("user1@example.com", "0777000001", "MERCHANT_ADMIN");
+        RegisterPayload register = baseSystemPayload("user1@example.com", "0777000001", "loyalty");
 
         mockMvc.perform(post("/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -94,7 +81,7 @@ class AuthControllerIT {
 
     @Test
     void login_withWrongPassword_returns400() throws Exception {
-        RegisterPayload register = baseSystemPayload("user2@example.com", "0777000002", "MERCHANT_ADMIN");
+        RegisterPayload register = baseSystemPayload("user2@example.com", "0777000002", "loyalty");
 
         mockMvc.perform(post("/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -135,10 +122,7 @@ class AuthControllerIT {
         public String phoneNumber;
         public String email;
         public String password;
-        public List<String> roles;
         public List<String> defaultServices;
-        public Map<String, Object> device;
-        public Map<String, Object> mfa;
     }
 
     static class LoginPayload {

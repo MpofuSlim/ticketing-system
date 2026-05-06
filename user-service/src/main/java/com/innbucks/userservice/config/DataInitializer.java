@@ -33,7 +33,7 @@ public class DataInitializer implements CommandLineRunner {
                     .password(passwordEncoder.encode("#Pass123"))
                     .phoneNumber("0000000000")
                     .roles(EnumSet.of(User.Role.SUPER_ADMIN))
-                    .defaultServices(new LinkedHashSet<>(Services.ALL))
+                    .defaultServices(new LinkedHashSet<>(Services.ALL_BUNDLES))
                     .active(true)
                     .build();
             userRepository.save(admin);
@@ -51,10 +51,10 @@ public class DataInitializer implements CommandLineRunner {
             existing.setRoles(roles);
             changed = true;
         }
-        LinkedHashSet<String> all = new LinkedHashSet<>(Services.ALL);
+        LinkedHashSet<String> allBundles = new LinkedHashSet<>(Services.ALL_BUNDLES);
         if (existing.getDefaultServices() == null
-                || !existing.getDefaultServices().containsAll(all)) {
-            LinkedHashSet<String> merged = new LinkedHashSet<>(all);
+                || !existing.getDefaultServices().containsAll(allBundles)) {
+            LinkedHashSet<String> merged = new LinkedHashSet<>(allBundles);
             if (existing.getDefaultServices() != null) merged.addAll(existing.getDefaultServices());
             existing.setDefaultServices(merged);
             changed = true;
