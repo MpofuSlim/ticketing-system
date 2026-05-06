@@ -6,6 +6,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.security.Key;
+import java.util.Collection;
+import java.util.List;
 
 @Component
 public class JwtUtil {
@@ -19,6 +21,24 @@ public class JwtUtil {
 
     public String extractEmail(String token) {
         return getClaims(token).getSubject();
+    }
+
+    @SuppressWarnings("unchecked")
+    public List<String> extractRoles(String token) {
+        Object raw = getClaims(token).get("roles");
+        if (raw instanceof Collection<?> c) {
+            return c.stream().map(Object::toString).toList();
+        }
+        return List.of();
+    }
+
+    @SuppressWarnings("unchecked")
+    public List<String> extractServices(String token) {
+        Object raw = getClaims(token).get("services");
+        if (raw instanceof Collection<?> c) {
+            return c.stream().map(Object::toString).toList();
+        }
+        return List.of();
     }
 
     public String extractRole(String token) {

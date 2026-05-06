@@ -46,13 +46,23 @@ public class JwtFilter extends OncePerRequestFilter {
             try {
                 if (jwtUtil.isTokenValid(token)) {
                     String email = jwtUtil.extractEmail(token);
-                    String role  = jwtUtil.extractRole(token);
+                    List<String> roles = jwtUtil.extractRoles(token);
+                    List<String> services = jwtUtil.extractServices(token);
                     Integer tier = jwtUtil.extractTier(token);
                     Boolean verified = jwtUtil.extractVerified(token);
                     String phoneNumber = jwtUtil.extractPhoneNumber(token);
 
                     List<SimpleGrantedAuthority> authorities = new ArrayList<>();
-                    authorities.add(new SimpleGrantedAuthority("ROLE_" + role));
+                    for (String role : roles) {
+                        if (role != null && !role.isBlank()) {
+                            authorities.add(new SimpleGrantedAuthority("ROLE_" + role));
+                        }
+                    }
+                    for (String service : services) {
+                        if (service != null && !service.isBlank()) {
+                            authorities.add(new SimpleGrantedAuthority("SERVICE_" + service.toUpperCase()));
+                        }
+                    }
                     if (tier != null) {
                         for (int i = 1; i <= tier && i <= 4; i++) {
                             authorities.add(new SimpleGrantedAuthority("TIER_" + i));
@@ -63,15 +73,11 @@ public class JwtFilter extends OncePerRequestFilter {
                     }
 
                     var auth = new UsernamePasswordAuthenticationToken(email, null, authorities);
-                    // Stash phone on the Authentication so controllers can read it
-                    // without re-parsing the JWT. Older tokens without the claim
-                    // surface as null here.
                     auth.setDetails(new JwtAuthDetails(email, phoneNumber));
                     SecurityContextHolder.getContext().setAuthentication(auth);
-                    log.debug("JWT authenticated subject={} role={} tier={} path={}", email, role, tier, request.getRequestURI());
+                    log.debug("JWT authenticated subject={} roles={} services={} tier={} path={}", email, roles, services, tier, request.getRequestURI());
                 }
             } catch (Exception e) {
-                // Don't log the token; just log the failure reason + request path.
                 log.warn("JWT validation error path={} message={}", request.getRequestURI(), e.getMessage());
             }
         }
