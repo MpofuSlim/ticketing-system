@@ -13,7 +13,6 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -52,7 +51,7 @@ public class AuthService {
             }
         }
 
-        Set<String> defaultServices = normalizeServices(request.getDefaultServices());
+        Set<String> defaultServices = new LinkedHashSet<>(Services.defaultsFor(roles));
 
         if (userRepository.existsByEmail(request.getEmail())) {
             log.warn("Registration failed, email already registered email={}", request.getEmail());
@@ -210,14 +209,6 @@ public class AuthService {
             }
         }
         return parsed;
-    }
-
-    private Set<String> normalizeServices(List<String> raw) {
-        if (raw == null) return new HashSet<>();
-        return raw.stream()
-                .filter(s -> s != null && !s.isBlank())
-                .map(s -> s.trim().toLowerCase(Locale.ROOT))
-                .collect(Collectors.toCollection(LinkedHashSet::new));
     }
 
     private List<String> roleNames(Set<User.Role> roles) {

@@ -8,7 +8,7 @@ import java.util.List;
 
 @Data
 @Schema(name = "RegisterRequest",
-        description = "Payload for creating a system-user account. `roles` is a list — a single user may hold any combination of SUPER_ADMIN, EVENT_ORGANIZER, MERCHANT_ADMIN.")
+        description = "Payload for creating a system-user account. `roles` is a list — a single user may hold any combination of SUPER_ADMIN, EVENT_ORGANIZER, MERCHANT_ADMIN. Default microservices are assigned by the server based on the role(s) granted.")
 public class RegisterRequestDTO {
 
     @Schema(example = "Alice")
@@ -41,9 +41,4 @@ public class RegisterRequestDTO {
     @NotNull(message = "Roles are required")
     @Size(min = 1, message = "At least one role is required")
     private List<@NotBlank(message = "Role values must be non-blank") String> roles;
-
-    @Schema(example = "[\"ticketing\", \"loyalty\"]",
-            description = "Default services this user is enrolled in. Allowed values: ticketing, loyalty.",
-            nullable = true)
-    private List<@NotBlank(message = "Service values must be non-blank") String> defaultServices;
 }
