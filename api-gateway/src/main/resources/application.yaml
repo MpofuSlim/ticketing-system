@@ -166,7 +166,7 @@ spring:
                 # wildcard). MUST be overridden in prod via
                 # CORS_ALLOWED_ORIGINS to your real client origins
                 # (e.g. https://app.example.com,https://admin.example.com).
-                allowedOriginPatterns: "${CORS_ALLOWED_ORIGINS:*}"
+                allowedOriginPatterns: "${CORS_ALLOWED_ORIGINS:https://innvents.vercel.app,https://*.vercel.app,http://localhost:[*]}"
                 allowedMethods:
                   - GET
                   - POST

@@ -145,7 +145,7 @@ cors:
   # SecurityConfig uses setAllowedOriginPatterns (not setAllowedOrigins). MUST
   # be overridden in prod via CORS_ALLOWED_ORIGINS to your real client origins
   # (e.g. https://app.example.com).
-  allowed-origins: ${CORS_ALLOWED_ORIGINS:*}
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:https://innvents.vercel.app,https://*.vercel.app,http://localhost:[*]}
 
 logging:
   pattern:
