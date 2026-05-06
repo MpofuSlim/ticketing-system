@@ -7,6 +7,9 @@ import org.springframework.boot.CommandLineRunner;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 
+import java.util.EnumSet;
+import java.util.Set;
+
 @Component
 @RequiredArgsConstructor
 public class DataInitializer implements CommandLineRunner {
@@ -24,7 +27,8 @@ public class DataInitializer implements CommandLineRunner {
                     .email(adminEmail)
                     .password(passwordEncoder.encode("#Pass123"))
                     .phoneNumber("0000000000")
-                    .role(User.Role.SUPER_ADMIN)
+                    .roles(EnumSet.of(User.Role.SUPER_ADMIN))
+                    .defaultServices(Set.of("ticketing", "loyalty"))
                     .build();
             userRepository.save(admin);
             System.out.println("Super admin user created successfully.");

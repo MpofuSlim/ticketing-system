@@ -10,6 +10,7 @@ import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.hamcrest.Matchers.*;
@@ -32,7 +33,7 @@ class AuthControllerIT {
         payload.phoneNumber = phone;
         payload.email = email;
         payload.password = "password123";
-        payload.role = role;
+        payload.roles = List.of(role);
 
         Map<String, Object> device = new HashMap<>();
         device.put("deviceId", "device-" + phone);
@@ -60,7 +61,7 @@ class AuthControllerIT {
                 .andExpect(jsonPath("$.code").value("201 CREATED"))
                 .andExpect(jsonPath("$.data.token").doesNotExist())
                 .andExpect(jsonPath("$.data.email").value("tenant1@example.com"))
-                .andExpect(jsonPath("$.data.role").value("EVENT_ORGANIZER"))
+                .andExpect(jsonPath("$.data.roles[0]").value("EVENT_ORGANIZER"))
                 .andExpect(jsonPath("$.data.mfaRequired").value(false));
     }
 
@@ -87,7 +88,7 @@ class AuthControllerIT {
                 .andExpect(jsonPath("$.code").value("200 OK"))
                 .andExpect(jsonPath("$.data.token", not(blankOrNullString())))
                 .andExpect(jsonPath("$.data.email").value("user1@example.com"))
-                .andExpect(jsonPath("$.data.role").value("MERCHANT_ADMIN"))
+                .andExpect(jsonPath("$.data.roles[0]").value("MERCHANT_ADMIN"))
                 .andExpect(jsonPath("$.data.mfaRequired").value(false));
     }
 
@@ -134,7 +135,8 @@ class AuthControllerIT {
         public String phoneNumber;
         public String email;
         public String password;
-        public String role;
+        public List<String> roles;
+        public List<String> defaultServices;
         public Map<String, Object> device;
         public Map<String, Object> mfa;
     }

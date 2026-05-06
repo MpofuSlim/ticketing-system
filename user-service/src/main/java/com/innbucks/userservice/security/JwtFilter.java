@@ -35,12 +35,22 @@ public class JwtFilter extends OncePerRequestFilter {
             String token = authHeader.substring(7);
             if (jwtUtil.isTokenValid(token) && !tokenRevocationService.isRevoked(token)) {
                 String email = jwtUtil.extractEmail(token);
-                String role = jwtUtil.extractRole(token);
+                List<String> roles = jwtUtil.extractRoles(token);
+                List<String> services = jwtUtil.extractServices(token);
                 Integer tier = jwtUtil.extractTier(token);
                 Boolean verified = jwtUtil.extractVerified(token);
 
                 List<SimpleGrantedAuthority> authorities = new ArrayList<>();
-                authorities.add(new SimpleGrantedAuthority("ROLE_" + role));
+                for (String role : roles) {
+                    if (role != null && !role.isBlank()) {
+                        authorities.add(new SimpleGrantedAuthority("ROLE_" + role));
+                    }
+                }
+                for (String service : services) {
+                    if (service != null && !service.isBlank()) {
+                        authorities.add(new SimpleGrantedAuthority("SERVICE_" + service.toUpperCase()));
+                    }
+                }
                 if (tier != null) {
                     for (int i = 1; i <= tier && i <= 4; i++) {
                         authorities.add(new SimpleGrantedAuthority("TIER_" + i));

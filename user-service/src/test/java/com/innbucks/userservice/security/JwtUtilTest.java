@@ -23,7 +23,7 @@ class JwtUtilTest {
 
         assertNotNull(token);
         assertEquals("user@example.com", jwtUtil.extractEmail(token));
-        assertEquals("EVENT_ORGANIZER", jwtUtil.extractRole(token));
+        assertTrue(jwtUtil.extractRoles(token).contains("EVENT_ORGANIZER"));
         assertEquals(4, jwtUtil.extractTier(token));
         assertEquals(Boolean.TRUE, jwtUtil.extractVerified(token));
     }

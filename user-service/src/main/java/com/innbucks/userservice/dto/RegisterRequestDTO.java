@@ -4,9 +4,11 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 
+import java.util.List;
+
 @Data
 @Schema(name = "RegisterRequest",
-        description = "Payload for creating a system-user account (SUPER_ADMIN, EVENT_ORGANIZER, or MERCHANT_ADMIN).")
+        description = "Payload for creating a system-user account. `roles` is a list — a single user may hold any combination of SUPER_ADMIN, EVENT_ORGANIZER, MERCHANT_ADMIN.")
 public class RegisterRequestDTO {
 
     @Schema(example = "Alice")
@@ -34,9 +36,14 @@ public class RegisterRequestDTO {
     @Size(min = 8, message = "Password must be at least 8 characters")
     private String password;
 
-    @Schema(example = "EVENT_ORGANIZER",
-            allowableValues = {"SUPER_ADMIN", "EVENT_ORGANIZER", "MERCHANT_ADMIN"},
-            description = "Role assigned to this system account. SUPER_ADMIN has access to all endpoints.")
-    @NotBlank(message = "Role is required")
-    private String role;
+    @Schema(example = "[\"EVENT_ORGANIZER\"]",
+            description = "Roles assigned to this system account. Allowed values: SUPER_ADMIN, EVENT_ORGANIZER, MERCHANT_ADMIN. SUPER_ADMIN has access to all endpoints.")
+    @NotNull(message = "Roles are required")
+    @Size(min = 1, message = "At least one role is required")
+    private List<@NotBlank(message = "Role values must be non-blank") String> roles;
+
+    @Schema(example = "[\"ticketing\", \"loyalty\"]",
+            description = "Default services this user is enrolled in. Allowed values: ticketing, loyalty.",
+            nullable = true)
+    private List<@NotBlank(message = "Service values must be non-blank") String> defaultServices;
 }

@@ -150,7 +150,7 @@ public class CustomerService {
     public CustomerTierResponseDTO getCustomerTierByPhoneNumber(String phoneNumber) {
         User user = userRepository.findByPhoneNumber(phoneNumber)
                 .orElseThrow(() -> new RuntimeException("Customer not found for phone " + phoneNumber));
-        if (user.getRole() != User.Role.CUSTOMER) {
+        if (!user.hasRole(User.Role.CUSTOMER)) {
             throw new RuntimeException("User is not a customer");
         }
         CustomerProfile profile = customerProfileRepository.findByUserId(user.getId())
@@ -170,7 +170,7 @@ public class CustomerService {
     private CustomerProfile loadProfile(String phoneNumber, int requiredCurrentTier) {
         User user = userRepository.findByPhoneNumber(phoneNumber)
                 .orElseThrow(() -> new RuntimeException("Customer not found for phone " + phoneNumber));
-        if (user.getRole() != User.Role.CUSTOMER) {
+        if (!user.hasRole(User.Role.CUSTOMER)) {
             throw new RuntimeException("User is not a customer");
         }
         CustomerProfile profile = customerProfileRepository.findByUserId(user.getId())

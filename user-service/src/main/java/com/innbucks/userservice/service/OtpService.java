@@ -18,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.EnumSet;
 
 @Service
 @RequiredArgsConstructor
@@ -158,7 +159,7 @@ public class OtpService {
                     .lastName("Pending")
                     .phoneNumber(pending.getPhoneNumber())
                     .password(pending.getPasswordHash())
-                    .role(User.Role.CUSTOMER)
+                    .roles(EnumSet.of(User.Role.CUSTOMER))
                     .mfaEnabled(false)
                     .build();
             userRepository.save(user);
@@ -175,7 +176,7 @@ public class OtpService {
             return;
         }
         userRepository.findByPhoneNumber(phoneNumber)
-                .filter(u -> u.getRole() == User.Role.CUSTOMER)
+                .filter(u -> u.hasRole(User.Role.CUSTOMER))
                 .flatMap(u -> customerProfileRepository.findByUserId(u.getId()))
                 .ifPresent(profile -> {
                     if (!profile.isPhoneVerified()) {
