@@ -1,10 +1,13 @@
 package com.innbucks.seatservice.service;
 
+import com.innbucks.seatservice.client.EventServiceClient;
 import com.innbucks.seatservice.dto.*;
 import com.innbucks.seatservice.entity.*;
 import com.innbucks.seatservice.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,12 +28,25 @@ public class SeatCategoryService {
 
     private final SeatCategoryRepository categoryRepository;
     private final SeatRepository seatRepository;
+    private final ObjectProvider<EventServiceClient> eventClientProvider;
 
     // Agent creates a category for an event and auto-generates all seats
     @Transactional
     public CreateCategoryResponseDTO createCategory(CreateCategoryRequestDTO request) {
-        log.info("Creating seat category eventId={} name={} sections={}",
-                request.getEventId(), request.getName(), request.getSections().size());
+        return createCategory(request, null, true, null);
+    }
+
+    @Transactional
+    public CreateCategoryResponseDTO createCategory(CreateCategoryRequestDTO request,
+                                                    String requesterEmail,
+                                                    boolean isAdmin,
+                                                    String authHeader) {
+        if (!isAdmin) {
+            requireEventOwnership(request.getEventId(), requesterEmail, authHeader);
+        }
+        log.info("Creating seat category eventId={} name={} sections={} requesterEmail={} isAdmin={}",
+                request.getEventId(), request.getName(), request.getSections().size(),
+                requesterEmail, isAdmin);
 
         if (categoryRepository.existsByEventIdAndNameAndDeletedFalse(
                 request.getEventId(), request.getName())) {
@@ -129,15 +145,53 @@ public class SeatCategoryService {
     // Soft delete a category
     @Transactional
     public void deleteCategory(UUID categoryId) {
-        log.info("Soft-deleting seat category categoryId={}", categoryId);
+        deleteCategory(categoryId, null, true, null);
+    }
+
+    @Transactional
+    public void deleteCategory(UUID categoryId,
+                               String requesterEmail,
+                               boolean isAdmin,
+                               String authHeader) {
+        log.info("Soft-deleting seat category categoryId={} requesterEmail={} isAdmin={}",
+                categoryId, requesterEmail, isAdmin);
         SeatCategory category = categoryRepository.findById(categoryId)
                 .orElseThrow(() -> {
                     log.warn("Category delete failed, not found categoryId={}", categoryId);
                     return new RuntimeException("Category not found");
                 });
+        if (!isAdmin) {
+            requireEventOwnership(category.getEventId(), requesterEmail, authHeader);
+        }
         category.setDeleted(true);
         categoryRepository.save(category);
         log.info("Seat category soft-deleted categoryId={} eventId={}", categoryId, category.getEventId());
+    }
+
+    /**
+     * Looks up the event in event-service and throws AccessDeniedException if
+     * the requester is not its tenant. SUPER_ADMIN callers are checked at the
+     * controller layer and never reach here.
+     */
+    private void requireEventOwnership(UUID eventId, String requesterEmail, String authHeader) {
+        EventServiceClient client = eventClientProvider == null
+                ? null : eventClientProvider.getIfAvailable();
+        if (client == null) {
+            log.warn("event-service client unavailable; refusing mutation for eventId={} to non-admin",
+                    eventId);
+            throw new AccessDeniedException("Cannot verify event ownership");
+        }
+        var lookup = client.fetchEvent(eventId, authHeader);
+        if (lookup.isEmpty()) {
+            log.warn("Event ownership lookup empty eventId={}", eventId);
+            throw new AccessDeniedException("Cannot verify event ownership");
+        }
+        String ownerTenantId = lookup.get().getTenantId();
+        if (ownerTenantId == null || !ownerTenantId.equals(requesterEmail)) {
+            log.warn("Event ownership check failed eventId={} requesterEmail={} ownerTenantId={}",
+                    eventId, requesterEmail, ownerTenantId);
+            throw new AccessDeniedException("You do not own this event");
+        }
     }
 
     private CategoryResponseDTO toDTO(SeatCategory c) {

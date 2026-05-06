@@ -66,6 +66,27 @@ public class EventService {
         return enrichWithAvailability(eventRepository.findAllActiveOnly(from, to, venue, pageable));
     }
 
+    /**
+     * List the events owned by a single tenant (the authenticated organizer).
+     * SUPER_ADMIN should call {@link #getAllActiveEvents} instead — they see
+     * everything. This endpoint is the per-organizer scoped view.
+     */
+    public Page<EventResponseDTO> getMyEvents(
+            String tenantId,
+            LocalDateTime from,
+            LocalDateTime to,
+            String venue,
+            int page,
+            int size,
+            String sortBy
+    ) {
+        Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
+        log.debug("Fetching events for tenantId={} from={} to={} venue={} page={} size={} sortBy={}",
+                tenantId, from, to, venue, page, size, sortBy);
+        return enrichWithAvailability(
+                eventRepository.findByTenantId(tenantId, from, to, venue, pageable));
+    }
+
     public EventResponseDTO getEventById(UUID eventId) {
         log.debug("Fetching event eventId={}", eventId);
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)

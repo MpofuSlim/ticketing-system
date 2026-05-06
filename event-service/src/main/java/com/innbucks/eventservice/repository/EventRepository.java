@@ -49,6 +49,24 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     // Only return event if it is not soft deleted
     Optional<Event> findByEventIdAndDeletedFalse(UUID eventId);
 
+    // Paginated list of an organizer's own (non-deleted) events. Used by
+    // GET /events/my so an EVENT_ORGANIZER only sees the events they created.
+    @Query("""
+        SELECT e FROM Event e
+        WHERE e.deleted = false
+        AND e.tenantId = :tenantId
+        AND (:from IS NULL OR e.dateTime >= :from)
+        AND (:to IS NULL OR e.dateTime <= :to)
+        AND (:venue IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', :venue, '%')))
+    """)
+    Page<Event> findByTenantId(
+            @Param("tenantId") String tenantId,
+            @Param("from") LocalDateTime from,
+            @Param("to") LocalDateTime to,
+            @Param("venue") String venue,
+            Pageable pageable
+    );
+
     Page<Event> findByProvinceAndDeletedFalse(Province province, Pageable pageable);
 
     // Upcoming events in a province: non-deleted, tenant-active, and scheduled
