@@ -23,7 +23,7 @@ import java.util.Map;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/loyalty/invoices")
+@RequestMapping("/loyalty/invoices")
 @Tag(name = "Invoicing",
      description = "Per-merchant periodic billing. The daily InvoiceScheduler calls `/generate` for each " +
                    "active merchant; this controller exposes manual generation, listing, and mark-as-paid " +

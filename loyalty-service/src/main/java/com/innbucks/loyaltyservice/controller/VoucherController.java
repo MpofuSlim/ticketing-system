@@ -25,7 +25,7 @@ import java.util.List;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/loyalty/vouchers")
+@RequestMapping("/loyalty/vouchers")
 @Tag(name = "Vouchers",
      description = "Voucher templates and individual voucher lifecycle. Each voucher carries an HMAC-SHA256 " +
                    "signature over its code (signed with `loyalty.voucher.secret`) so redemption can be " +

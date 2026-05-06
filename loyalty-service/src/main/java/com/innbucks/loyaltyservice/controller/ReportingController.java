@@ -24,7 +24,7 @@ import java.util.Map;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/loyalty/reports")
+@RequestMapping("/loyalty/reports")
 @Tag(name = "Reporting",
      description = "Read-only dashboards and analytics. Different scopes for different audiences: " +
                    "/operator (platform-wide, no tenant header needed), /tenant (current tenant), " +

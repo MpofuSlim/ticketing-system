@@ -23,7 +23,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/loyalty/rules")
+@RequestMapping("/loyalty/rules")
 @Tag(name = "Rules & Campaigns",
      description = "Earn-rate configuration. **Rules** define how many points are awarded per currency unit " +
                    "for each transaction type (PURCHASE, QR_PAY, etc.) and may include caps and per-pocket " +

@@ -34,7 +34,7 @@ public class OpenApiConfig {
                                 **Tenant header (required on every tenant-scoped endpoint):**
                                 send either `X-Tenant-Id: <uuid>` OR `X-Tenant-Code: <slug>`. The only
                                 endpoints that do NOT require a tenant header are
-                                `POST /api/loyalty/tenants` and `GET /api/loyalty/tenants` (operator-level).
+                                `POST /loyalty/tenants` and `GET /loyalty/tenants` (operator-level).
 
                                 **Identity boundary:** loyalty-service does NOT own user identity.
                                 Customers register and are stored in user-service. This service only

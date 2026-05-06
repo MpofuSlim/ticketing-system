@@ -25,7 +25,7 @@ import java.util.Map;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/loyalty")
+@RequestMapping("/loyalty")
 @Tag(name = "Transactions",
      description = "Points lifecycle: earn, redeem, adjust, reverse, transfer. Every successful transaction " +
                    "writes an immutable row to `points_ledger` and stamps the rule_id/campaign_id used, " +
@@ -380,7 +380,7 @@ public class TransactionController {
     @Operation(summary = "Redeem points (raw, non-voucher)",
             description = "Burns points from the user's main wallet at the merchant's redeem rate without " +
                           "going through a voucher. Used by checkout flows that apply a points discount " +
-                          "directly. For voucher-based redemption, use `POST /api/loyalty/vouchers/redeem`.")
+                          "directly. For voucher-based redemption, use `POST /loyalty/vouchers/redeem`.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
