@@ -15,10 +15,12 @@ import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import lombok.extern.slf4j.Slf4j;
 
 import java.util.UUID;
 
 @RestController
+@Slf4j
 @RequestMapping("/loyalty/mini-apps")
 @Tag(name = "Mini-apps",
      description = "SuperApp shell metadata. The SuperApp client renders a list of mini-apps (merchant " +

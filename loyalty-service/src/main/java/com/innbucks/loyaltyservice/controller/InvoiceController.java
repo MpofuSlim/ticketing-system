@@ -17,12 +17,14 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import lombok.extern.slf4j.Slf4j;
 
 import java.time.LocalDate;
 import java.util.Map;
 import java.util.UUID;
 
 @RestController
+@Slf4j
 @RequestMapping("/loyalty/invoices")
 @Tag(name = "Invoicing",
      description = "Per-merchant periodic billing. The daily InvoiceScheduler calls `/generate` for each " +

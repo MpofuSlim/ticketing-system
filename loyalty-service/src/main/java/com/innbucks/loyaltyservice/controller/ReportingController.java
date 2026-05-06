@@ -18,12 +18,14 @@ import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import lombok.extern.slf4j.Slf4j;
 
 import java.time.LocalDate;
 import java.util.Map;
 import java.util.UUID;
 
 @RestController
+@Slf4j
 @RequestMapping("/loyalty/reports")
 @Tag(name = "Reporting",
      description = "Read-only dashboards and analytics. Different scopes for different audiences: " +

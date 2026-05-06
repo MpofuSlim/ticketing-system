@@ -19,12 +19,14 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import lombok.extern.slf4j.Slf4j;
 
 import java.math.BigDecimal;
 import java.util.Map;
 import java.util.UUID;
 
 @RestController
+@Slf4j
 @RequestMapping("/loyalty")
 @Tag(name = "Transactions",
      description = "Points lifecycle: earn, redeem, adjust, reverse, transfer. Every successful transaction " +
