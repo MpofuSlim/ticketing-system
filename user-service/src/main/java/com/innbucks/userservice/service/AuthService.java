@@ -19,12 +19,9 @@ import java.util.Set;
 public class AuthService {
 
     private static final Set<User.Role> SYSTEM_USER_ROLES = EnumSet.of(
-            User.Role.SYSTEM_MANAGER,
-            User.Role.TENANT,
-            User.Role.MERCHANT_ADMIN,
-            User.Role.SHOP_ADMIN,
-            User.Role.SHOP_USER,
-            User.Role.ADMIN
+            User.Role.SUPER_ADMIN,
+            User.Role.EVENT_ORGANIZER,
+            User.Role.MERCHANT_ADMIN
     );
 
     private final UserRepository userRepository;
@@ -69,8 +66,8 @@ public class AuthService {
         userRepository.save(user);
         log.info("User entity saved email={} userId={} role={}", user.getEmail(), user.getId(), role);
 
-        if (role == User.Role.TENANT) {
-            log.info("Role=TENANT, creating tenant profile userId={}", user.getId());
+        if (role == User.Role.EVENT_ORGANIZER) {
+            log.info("Role=EVENT_ORGANIZER, creating tenant profile userId={}", user.getId());
             TenantProfile profile = TenantProfile.builder()
                     .user(user)
                     .build();
@@ -104,7 +101,7 @@ public class AuthService {
             tier = profile.getRegistrationTier();
             verified = profile.isVerified();
         } else {
-            // System users (TENANT/ADMIN/etc.) are implicitly fully trusted
+            // System users (SUPER_ADMIN / EVENT_ORGANIZER / MERCHANT_ADMIN) are implicitly fully trusted
             tier = 4;
             verified = true;
         }

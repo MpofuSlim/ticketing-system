@@ -24,7 +24,7 @@ public class DataInitializer implements CommandLineRunner {
                     .email(adminEmail)
                     .password(passwordEncoder.encode("#Pass123"))
                     .phoneNumber("0000000000")
-                    .role(User.Role.ADMIN)
+                    .role(User.Role.SUPER_ADMIN)
                     .build();
             userRepository.save(admin);
             System.out.println("Super admin user created successfully.");

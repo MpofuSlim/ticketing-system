@@ -77,7 +77,7 @@ class EventControllerTest {
     }
 
     @Test
-    @WithMockUser(username = "tenant-99", roles = "TENANT")
+    @WithMockUser(username = "tenant-99", roles = "EVENT_ORGANIZER")
     void createEvent_withTenantRole_createsEvent() throws Exception {
         MockMultipartFile eventPart = new MockMultipartFile(
                 "event", "event.json", MediaType.APPLICATION_JSON_VALUE,
@@ -95,7 +95,7 @@ class EventControllerTest {
     }
 
     @Test
-    @WithMockUser(username = "tenant-99", roles = "TENANT")
+    @WithMockUser(username = "tenant-99", roles = "EVENT_ORGANIZER")
     void createEvent_withBanner_storesBytesAndReturnsBannerUrl() throws Exception {
         MockMultipartFile eventPart = new MockMultipartFile(
                 "event", "event.json", MediaType.APPLICATION_JSON_VALUE,
@@ -127,7 +127,7 @@ class EventControllerTest {
     }
 
     @Test
-    @WithMockUser(username = "tenant-1", roles = "TENANT")
+    @WithMockUser(username = "tenant-1", roles = "EVENT_ORGANIZER")
     void updateEvent_persistsChangesToDatabase() throws Exception {
         Event saved = eventRepository.save(Event.builder()
                 .tenantId("tenant-1")
@@ -151,7 +151,6 @@ class EventControllerTest {
                 .andExpect(jsonPath("$.data.venue", is("New Venue")))
                 .andExpect(jsonPath("$.data.dateTime", is("2031-06-15T19:00:00")));
 
-        // Verify DB row was actually updated, not just the response.
         Event reloaded = eventRepository.findById(saved.getEventId()).orElseThrow();
         org.junit.jupiter.api.Assertions.assertEquals("Updated Title", reloaded.getTitle());
         org.junit.jupiter.api.Assertions.assertEquals("New Venue", reloaded.getVenue());

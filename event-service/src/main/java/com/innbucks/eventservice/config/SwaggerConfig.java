@@ -22,7 +22,7 @@ import java.util.List;
                         Manages event metadata, venues, and scheduling.
 
                         - **Public** `GET` endpoints are available without a token.
-                        - **Write** operations require a `TENANT` role and a **Bearer JWT** in the `Authorization` header.
+                        - **Write** operations require an `EVENT_ORGANIZER` or `SUPER_ADMIN` role and a **Bearer JWT** in the `Authorization` header.
                         """
         ),
         security = @SecurityRequirement(name = "bearerAuth")

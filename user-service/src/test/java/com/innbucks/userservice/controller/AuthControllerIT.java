@@ -51,7 +51,7 @@ class AuthControllerIT {
 
     @Test
     void register_systemUser_createsUser_andDoesNotReturnJwt() throws Exception {
-        RegisterPayload payload = baseSystemPayload("tenant1@example.com", "0777000000", "TENANT");
+        RegisterPayload payload = baseSystemPayload("tenant1@example.com", "0777000000", "EVENT_ORGANIZER");
         mockMvc.perform(post("/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(payload)))
@@ -60,13 +60,13 @@ class AuthControllerIT {
                 .andExpect(jsonPath("$.code").value("201 CREATED"))
                 .andExpect(jsonPath("$.data.token").doesNotExist())
                 .andExpect(jsonPath("$.data.email").value("tenant1@example.com"))
-                .andExpect(jsonPath("$.data.role").value("TENANT"))
+                .andExpect(jsonPath("$.data.role").value("EVENT_ORGANIZER"))
                 .andExpect(jsonPath("$.data.mfaRequired").value(false));
     }
 
     @Test
     void login_withValidCredentials_returnsJwt() throws Exception {
-        RegisterPayload register = baseSystemPayload("user1@example.com", "0777000001", "SHOP_USER");
+        RegisterPayload register = baseSystemPayload("user1@example.com", "0777000001", "MERCHANT_ADMIN");
 
         mockMvc.perform(post("/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -87,13 +87,13 @@ class AuthControllerIT {
                 .andExpect(jsonPath("$.code").value("200 OK"))
                 .andExpect(jsonPath("$.data.token", not(blankOrNullString())))
                 .andExpect(jsonPath("$.data.email").value("user1@example.com"))
-                .andExpect(jsonPath("$.data.role").value("SHOP_USER"))
+                .andExpect(jsonPath("$.data.role").value("MERCHANT_ADMIN"))
                 .andExpect(jsonPath("$.data.mfaRequired").value(false));
     }
 
     @Test
     void login_withWrongPassword_returns400() throws Exception {
-        RegisterPayload register = baseSystemPayload("user2@example.com", "0777000002", "SHOP_USER");
+        RegisterPayload register = baseSystemPayload("user2@example.com", "0777000002", "MERCHANT_ADMIN");
 
         mockMvc.perform(post("/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
