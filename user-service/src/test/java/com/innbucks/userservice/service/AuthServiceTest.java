@@ -92,7 +92,6 @@ class AuthServiceTest {
 
         RegisterRequestDTO req = baseRequest("multi@example.com", "0777999999",
                 "EVENT_ORGANIZER", "MERCHANT_ADMIN");
-        req.setDefaultServices(List.of("ticketing", "loyalty"));
 
         AuthResponseDTO response = newService(userRepo, tenantRepo, encoder, jwt).register(req);
 
@@ -100,12 +99,86 @@ class AuthServiceTest {
         verify(userRepo).save(saved.capture());
         assertTrue(saved.getValue().getRoles().contains(User.Role.EVENT_ORGANIZER));
         assertTrue(saved.getValue().getRoles().contains(User.Role.MERCHANT_ADMIN));
-        assertTrue(saved.getValue().getDefaultServices().contains("ticketing"));
+        // EVENT_ORGANIZER + MERCHANT_ADMIN union -> events, seats, bookings, payments, loyalty
+        assertTrue(saved.getValue().getDefaultServices().contains("events"));
         assertTrue(saved.getValue().getDefaultServices().contains("loyalty"));
+        assertTrue(saved.getValue().getDefaultServices().contains("payments"));
         // Tenant profile created because EVENT_ORGANIZER is one of the roles
         verify(tenantRepo).save(any());
         assertTrue(response.getRoles().contains("EVENT_ORGANIZER"));
         assertTrue(response.getRoles().contains("MERCHANT_ADMIN"));
+    }
+
+    @org.junit.jupiter.api.Test
+    void register_eventOrganizer_assignsEventOrganizerDefaults() {
+        UserRepository userRepo = mock(UserRepository.class);
+        TenantProfileRepository tenantRepo = mock(TenantProfileRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(userRepo.existsByEmail(any())).thenReturn(false);
+        when(userRepo.existsByPhoneNumber(any())).thenReturn(false);
+        when(encoder.encode(any())).thenReturn("hashed");
+
+        RegisterRequestDTO req = baseRequest("eo@example.com", "0777111122", "EVENT_ORGANIZER");
+
+        newService(userRepo, tenantRepo, encoder, jwt).register(req);
+
+        ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
+        verify(userRepo).save(saved.capture());
+        var services = saved.getValue().getDefaultServices();
+        assertTrue(services.contains("events"));
+        assertTrue(services.contains("seats"));
+        assertTrue(services.contains("bookings"));
+        assertTrue(services.contains("payments"));
+        assertFalse(services.contains("loyalty"));
+    }
+
+    @org.junit.jupiter.api.Test
+    void register_merchantAdmin_assignsMerchantDefaults() {
+        UserRepository userRepo = mock(UserRepository.class);
+        TenantProfileRepository tenantRepo = mock(TenantProfileRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(userRepo.existsByEmail(any())).thenReturn(false);
+        when(userRepo.existsByPhoneNumber(any())).thenReturn(false);
+        when(encoder.encode(any())).thenReturn("hashed");
+
+        RegisterRequestDTO req = baseRequest("ma@example.com", "0777222233", "MERCHANT_ADMIN");
+
+        newService(userRepo, tenantRepo, encoder, jwt).register(req);
+
+        ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
+        verify(userRepo).save(saved.capture());
+        var services = saved.getValue().getDefaultServices();
+        assertTrue(services.contains("loyalty"));
+        assertTrue(services.contains("payments"));
+        assertFalse(services.contains("events"));
+        assertFalse(services.contains("seats"));
+        assertFalse(services.contains("bookings"));
+    }
+
+    @org.junit.jupiter.api.Test
+    void register_superAdmin_assignsAllServices() {
+        UserRepository userRepo = mock(UserRepository.class);
+        TenantProfileRepository tenantRepo = mock(TenantProfileRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(userRepo.existsByEmail(any())).thenReturn(false);
+        when(userRepo.existsByPhoneNumber(any())).thenReturn(false);
+        when(encoder.encode(any())).thenReturn("hashed");
+
+        RegisterRequestDTO req = baseRequest("sa@example.com", "0777333344", "SUPER_ADMIN");
+
+        newService(userRepo, tenantRepo, encoder, jwt).register(req);
+
+        ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
+        verify(userRepo).save(saved.capture());
+        var services = saved.getValue().getDefaultServices();
+        assertTrue(services.contains("events"));
+        assertTrue(services.contains("seats"));
+        assertTrue(services.contains("bookings"));
+        assertTrue(services.contains("payments"));
+        assertTrue(services.contains("loyalty"));
     }
 
     @Test
