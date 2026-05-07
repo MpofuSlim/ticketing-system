@@ -13,6 +13,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import lombok.extern.slf4j.Slf4j;
 
@@ -80,6 +81,7 @@ public class QrController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.QrPayload>> issue(@Valid @RequestBody Dtos.QrIssueRequest req) {
         Dtos.QrPayload data = qrService.issue(tenantContext.requireTenantId(), req);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -148,6 +150,7 @@ public class QrController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.TransactionResponse>> consume(@Valid @RequestBody Dtos.QrConsumeRequest req) {
         Dtos.TransactionResponse data = qrService.consume(tenantContext.requireTenantId(), req);
         return ResponseEntity.ok(ApiResult.ok("QR token consumed successfully", data));

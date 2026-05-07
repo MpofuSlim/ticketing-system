@@ -16,6 +16,7 @@ import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import lombok.extern.slf4j.Slf4j;
 
@@ -86,6 +87,7 @@ public class MerchantController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.MerchantResponse>> create(@Valid @RequestBody Dtos.MerchantRequest req) {
         Dtos.MerchantResponse data = merchants.create(tenantContext.requireTenantId(), req);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -140,6 +142,7 @@ public class MerchantController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Dtos.MerchantResponse>>> list(@ParameterObject Pageable pageable) {
         PageResponse<Dtos.MerchantResponse> data = PageResponse.from(
                 merchants.list(tenantContext.requireTenantId(), pageable));
@@ -190,6 +193,7 @@ public class MerchantController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.MerchantResponse>> activate(@PathVariable UUID id) {
         Dtos.MerchantResponse data = merchants.setActive(tenantContext.requireTenantId(), id, true);
         return ResponseEntity.ok(ApiResult.ok("Merchant activated successfully", data));
@@ -239,6 +243,7 @@ public class MerchantController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.MerchantResponse>> deactivate(@PathVariable UUID id) {
         Dtos.MerchantResponse data = merchants.setActive(tenantContext.requireTenantId(), id, false);
         return ResponseEntity.ok(ApiResult.ok("Merchant deactivated successfully", data));

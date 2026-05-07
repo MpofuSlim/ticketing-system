@@ -19,6 +19,7 @@ import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import lombok.extern.slf4j.Slf4j;
 
@@ -99,6 +100,7 @@ public class VoucherController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<VoucherTemplate>> createTemplate(@Valid @RequestBody Dtos.VoucherTemplateRequest req) {
         VoucherTemplate data = templateService.create(tenantContext.requireTenantId(), req);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -167,6 +169,7 @@ public class VoucherController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<VoucherTemplate>>> listTemplates(@ParameterObject Pageable pageable) {
         PageResponse<VoucherTemplate> data = PageResponse.from(
                 templateService.list(tenantContext.requireTenantId(), pageable));
@@ -236,6 +239,7 @@ public class VoucherController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.VoucherResponse>> issue(@Valid @RequestBody Dtos.IssueVoucherRequest req) {
         Dtos.VoucherResponse data = voucherService.issue(tenantContext.requireTenantId(), req);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -317,6 +321,7 @@ public class VoucherController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<List<Dtos.VoucherResponse>>> issueBulk(@Valid @RequestBody Dtos.BulkIssueRequest req) {
         List<Dtos.VoucherResponse> data = voucherService.issueBulk(tenantContext.requireTenantId(), req);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -399,6 +404,7 @@ public class VoucherController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.RedemptionResponse>> redeem(@Valid @RequestBody Dtos.RedeemVoucherRequest req) {
         Dtos.RedemptionResponse data = voucherService.redeem(tenantContext.requireTenantId(), req);
         return ResponseEntity.ok(ApiResult.ok("Voucher redeemed successfully", data));
@@ -456,6 +462,7 @@ public class VoucherController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Void>> revoke(@PathVariable UUID id) {
         voucherService.revoke(tenantContext.requireTenantId(), id);
         return ResponseEntity.ok(ApiResult.ok("Voucher revoked successfully", null));
@@ -498,6 +505,7 @@ public class VoucherController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Void>> markViewed(@PathVariable String code) {
         voucherService.markViewed(code);
         return ResponseEntity.ok(ApiResult.ok("Voucher view recorded", null));
@@ -544,6 +552,7 @@ public class VoucherController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Dtos.VoucherResponse>>> activeForUser(@PathVariable UUID userId,
                                                                                        @ParameterObject Pageable pageable) {
         PageResponse<Dtos.VoucherResponse> data = PageResponse.from(voucherService.activeForUser(userId, pageable));
@@ -617,6 +626,7 @@ public class VoucherController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Dtos.VoucherResponse>>> findByStatus(@RequestParam("status") Voucher.Status status,
                                                                                       @ParameterObject Pageable pageable) {
         PageResponse<Dtos.VoucherResponse> data = PageResponse.from(
