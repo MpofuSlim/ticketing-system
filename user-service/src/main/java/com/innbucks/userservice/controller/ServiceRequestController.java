@@ -37,10 +37,11 @@ public class ServiceRequestController {
 
     @GetMapping
     @Operation(
-            summary = "List my service requests",
-            description = "Returns every service request submitted by the authenticated user, newest first, " +
-                    "regardless of status (PENDING or APPROVED). Each row is scoped to the caller — users " +
-                    "can never see another user's requests through this endpoint."
+            summary = "List my services",
+            description = "Returns every service bundle the authenticated user holds or has asked for, newest first. " +
+                    "This combines two sources: explicit requests submitted via POST (PENDING or APPROVED) and " +
+                    "any default services already on the user (e.g. picked at registration), which are surfaced " +
+                    "as APPROVED rows. Each row is scoped to the caller — users can never see another user's data."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
