@@ -98,6 +98,19 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     """)
     Page<Event> searchByKeyword(@Param("q") String q, Pageable pageable);
 
+    // Bulk-expires events whose scheduled dateTime is before the given cutoff
+    // and are still flagged active=true. Used by the nightly expiry scheduler.
+    @Modifying
+    @Query("""
+        UPDATE Event e
+        SET e.active = false, e.updatedAt = :now
+        WHERE e.deleted = false
+        AND e.active = true
+        AND e.dateTime < :cutoff
+    """)
+    int deactivateExpiredEvents(@Param("cutoff") LocalDateTime cutoff,
+                                @Param("now") LocalDateTime now);
+
     // Atomically decrements availableTickets without ever going below zero.
     // Returns the number of rows updated (1 on success, 0 if the event is
     // missing/deleted or the requested count would underflow). Atomic at the
