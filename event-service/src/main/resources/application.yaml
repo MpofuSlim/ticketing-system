@@ -2,14 +2,19 @@ spring:
   application:
     name: event-service
 
-  # Tests run on in-memory H2 (PostgreSQL compatibility mode) via
-  # src/test/resources/application-test.yaml + @ActiveProfiles("test"); the
-  # main runtime is PostgreSQL.
+  # H2-only mode: file-based database under ./data so writes survive restart;
+  # AUTO_SERVER=TRUE lets a SQL client connect while the app is running. The
+  # PostgreSQL config is preserved below (commented) for easy reversal.
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/event_service}
-    driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
-    username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD}
+    url: jdbc:h2:file:./data/event-service;MODE=PostgreSQL;AUTO_SERVER=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+    # --- PostgreSQL (disabled) ---
+    # url: ${DB_URL:jdbc:postgresql://localhost:5432/event_service}
+    # username: ${DB_USERNAME:postgres}
+    # password: ${DB_PASSWORD}
+    # driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
     hikari:
       pool-name: event-service-pool
       maximum-pool-size: ${DB_POOL_MAX:20}
@@ -20,22 +25,29 @@ spring:
 
   jpa:
     hibernate:
-      # Schema is owned by Flyway migrations; Hibernate only validates that
-      # the JPA model matches the actual columns at boot.
-      ddl-auto: ${JPA_DDL_AUTO:validate}
+      # H2: Hibernate generates the schema on each boot.
+      ddl-auto: ${JPA_DDL_AUTO:update}
     show-sql: ${JPA_SHOW_SQL:false}
     properties:
       hibernate:
-        dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
+        dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.H2Dialect}
+        # --- PostgreSQL dialect (disabled) ---
+        # dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
 
+  # Flyway migrations are PostgreSQL-flavoured; disabled when running on H2.
   flyway:
-    enabled: ${FLYWAY_ENABLED:true}
+    enabled: ${FLYWAY_ENABLED:false}
     baseline-on-migrate: true
     baseline-version: 0
     locations: classpath:db/migration
 
   lifecycle:
     timeout-per-shutdown-phase: 30s
+
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
 
   # POST /events accepts a multipart payload (JSON `event` part + optional
   # `eventBanner` image part). Modern phone photos routinely exceed 5MB, so
