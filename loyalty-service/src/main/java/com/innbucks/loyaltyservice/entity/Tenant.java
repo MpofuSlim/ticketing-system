@@ -9,7 +9,7 @@ import java.time.Instant;
 import java.util.UUID;
 
 @Entity
-@Table(name = "tenants", uniqueConstraints = @UniqueConstraint(columnNames = "code"))
+@Table(name = "tenants")
 @Getter
 @Setter
 @NoArgsConstructor
