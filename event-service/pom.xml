@@ -54,11 +54,15 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- PostgreSQL is the runtime database. -->
+        <!-- PostgreSQL is the runtime database. Default (compile) scope used
+             instead of `runtime` so the JDBC driver is on the classpath
+             regardless of how the service is launched (mvn spring-boot:run,
+             IntelliJ Run config, or fat-jar). DevTools' restart classloader
+             has been observed dropping runtime-scope deps in some IDE setups,
+             producing "Cannot load driver class: org.postgresql.Driver". -->
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
-            <scope>runtime</scope>
         </dependency>
 
         <!-- H2 is kept for tests only (in-memory, PostgreSQL compatibility mode). -->
