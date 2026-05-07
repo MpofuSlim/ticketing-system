@@ -62,8 +62,11 @@ public class TenantContext {
         }
         String codeHeader = request.getHeader("X-Tenant-Code");
         if (codeHeader != null && !codeHeader.isBlank()) {
-            return tenants.findByCode(codeHeader.trim())
-                    .orElseThrow(() -> LoyaltyException.notFound("tenant"));
+            java.util.List<Tenant> matches = tenants.findAllByCode(codeHeader.trim());
+            if (matches.isEmpty()) throw LoyaltyException.notFound("tenant");
+            if (matches.size() > 1) throw LoyaltyException.badRequest("AMBIGUOUS_TENANT",
+                    "Multiple tenants share code '" + codeHeader.trim() + "'. Use X-Tenant-Id instead.");
+            return matches.get(0);
         }
         throw LoyaltyException.badRequest("MISSING_TENANT", "X-Tenant-Id or X-Tenant-Code header is required");
     }

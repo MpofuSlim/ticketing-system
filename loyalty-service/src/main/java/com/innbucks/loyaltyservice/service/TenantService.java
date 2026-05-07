@@ -32,9 +32,6 @@ public class TenantService {
      * tenant created from a normal request should have an owner.
      */
     public Dtos.TenantResponse create(Dtos.TenantRequest req, String ownerEmail) {
-        tenants.findByCode(req.code()).ifPresent(t -> {
-            throw LoyaltyException.conflict("TENANT_EXISTS", "tenant code already in use");
-        });
         Tenant t = new Tenant();
         t.setCode(req.code());
         t.setName(req.name());
