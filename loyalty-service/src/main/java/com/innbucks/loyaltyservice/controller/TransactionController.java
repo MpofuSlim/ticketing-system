@@ -18,6 +18,7 @@ import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import lombok.extern.slf4j.Slf4j;
 
@@ -111,6 +112,7 @@ public class TransactionController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.TransactionResponse>> post(@Valid @RequestBody Dtos.TransactionRequest req) {
         Dtos.TransactionResponse data = transactions.post(tenantContext.requireTenantId(), req);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -179,6 +181,7 @@ public class TransactionController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.TransactionResponse>> reverse(@PathVariable UUID id,
                                             @RequestBody(required = false) Map<String, String> body) {
         String reason = body == null ? null : body.get("reason");
@@ -249,6 +252,7 @@ public class TransactionController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.TransactionResponse>> adjust(@RequestBody Map<String, Object> body) {
         UUID userId = UUID.fromString(String.valueOf(body.get("userId")));
         UUID merchantId = UUID.fromString(String.valueOf(body.get("merchantId")));
@@ -311,6 +315,7 @@ public class TransactionController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Dtos.TransactionResponse>>> recent(@PathVariable UUID id,
                                                                                     @ParameterObject Pageable pageable) {
         PageResponse<Dtos.TransactionResponse> data = PageResponse.from(transactions.recentForUser(id, pageable));
@@ -372,6 +377,7 @@ public class TransactionController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Map<String, Object>>> transfer(@Valid @RequestBody Dtos.TransferRequest req) {
         BigDecimal balance = transferService.transfer(tenantContext.requireTenantId(), req);
         Map<String, Object> data = Map.of("status", "OK", "newSenderBalance", balance);
@@ -433,6 +439,7 @@ public class TransactionController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Map<String, Object>>> redeem(@Valid @RequestBody Dtos.RedemptionRequest req) {
         BigDecimal balance = redemptionService.redeemPoints(tenantContext.requireTenantId(), req);
         Map<String, Object> data = Map.of("status", "OK", "newBalance", balance);
@@ -464,6 +471,7 @@ public class TransactionController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Map<String, Object>>> convertToAirtime() {
         Map<String, Object> data = Map.of(
                 "status", "NOT_ENABLED",

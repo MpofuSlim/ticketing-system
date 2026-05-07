@@ -16,6 +16,7 @@ import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import lombok.extern.slf4j.Slf4j;
 
@@ -120,6 +121,7 @@ public class InvoiceController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Dtos.InvoiceResponse>>> listForMerchant(@PathVariable UUID merchantId,
                                                                                           @ParameterObject Pageable pageable) {
         PageResponse<Dtos.InvoiceResponse> data = PageResponse.from(
@@ -194,6 +196,7 @@ public class InvoiceController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.InvoiceResponse>> generate(@RequestBody Map<String, String> body) {
         UUID merchantId = UUID.fromString(body.get("merchantId"));
         LocalDate periodStart = LocalDate.parse(body.get("periodStart"));
@@ -271,6 +274,7 @@ public class InvoiceController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.InvoiceResponse>> pay(@PathVariable UUID id) {
         Dtos.InvoiceResponse data = InvoicingService.toResponse(
                 invoicing.markPaid(tenantContext.requireTenantId(), id));

@@ -18,6 +18,7 @@ import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import lombok.extern.slf4j.Slf4j;
 
@@ -92,6 +93,7 @@ public class RuleController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<LoyaltyRule>> create(@Valid @RequestBody Dtos.RuleRequest req) {
         LoyaltyRule data = rules.createRule(tenantContext.requireTenantId(), req);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -156,6 +158,7 @@ public class RuleController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<LoyaltyRule>>> list(@ParameterObject Pageable pageable) {
         PageResponse<LoyaltyRule> data = PageResponse.from(
                 rules.listRules(tenantContext.requireTenantId(), pageable));
@@ -212,6 +215,7 @@ public class RuleController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<LoyaltyRule>> deactivate(@PathVariable UUID id) {
         LoyaltyRule data = rules.deactivateRule(tenantContext.requireTenantId(), id);
         return ResponseEntity.ok(ApiResult.ok("Rule deactivated successfully", data));
@@ -266,6 +270,7 @@ public class RuleController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Campaign>> createCampaign(@Valid @RequestBody Dtos.CampaignRequest req) {
         Campaign data = rules.createCampaign(tenantContext.requireTenantId(), req);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -315,6 +320,7 @@ public class RuleController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Campaign>>> listCampaigns(@ParameterObject Pageable pageable) {
         PageResponse<Campaign> data = PageResponse.from(
                 rules.listCampaigns(tenantContext.requireTenantId(), pageable));

@@ -14,6 +14,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springdoc.core.annotations.ParameterObject;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import lombok.extern.slf4j.Slf4j;
 
@@ -84,6 +85,7 @@ public class MiniAppController {
                     )
             )
     })
+    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Dtos.MiniAppManifest>>> manifest(
             @RequestParam(required = false) UUID merchantId,
             @ParameterObject Pageable pageable) {
