@@ -298,13 +298,18 @@ public class SeatCategoryController {
             @RequestParam(defaultValue = "0") int page,
             @Parameter(description = "Page size for the per-category bookings list (default 20, max 100)")
             @RequestParam(defaultValue = "20") int size,
+            Authentication authentication,
             HttpServletRequest httpRequest
     ) {
-        log.info("GET /seat-categories/analytics eventId={} page={} size={}", eventId, page, size);
+        String requesterEmail = authentication.getName();
+        boolean isAdmin = hasRole(authentication, "ROLE_SUPER_ADMIN");
+        log.info("GET /seat-categories/analytics eventId={} requesterEmail={} isAdmin={} page={} size={}",
+                eventId, requesterEmail, isAdmin, page, size);
         // Forward the inbound Authorization header so booking-service's
         // matching role check sees the same caller.
         String authHeader = httpRequest.getHeader(HttpHeaders.AUTHORIZATION);
-        EventAnalyticsDTO analytics = analyticsService.getEventAnalytics(eventId, page, size, authHeader);
+        EventAnalyticsDTO analytics = analyticsService.getEventAnalytics(
+                eventId, requesterEmail, isAdmin, page, size, authHeader);
         return ResponseEntity.ok(ApiResult.ok("Event analytics retrieved successfully", analytics));
     }
 

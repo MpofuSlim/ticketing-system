@@ -1,6 +1,7 @@
 package com.innbucks.seatservice.service;
 
 import com.innbucks.seatservice.client.BookingServiceClient;
+import com.innbucks.seatservice.client.EventServiceClient;
 import com.innbucks.seatservice.dto.CategoryBookingDTO;
 import com.innbucks.seatservice.dto.EventAnalyticsDTO;
 import com.innbucks.seatservice.entity.Seat;
@@ -9,6 +10,8 @@ import com.innbucks.seatservice.repository.SeatCategoryRepository;
 import com.innbucks.seatservice.repository.SeatRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -34,9 +37,16 @@ public class SeatCategoryAnalyticsService {
     private final SeatCategoryRepository categoryRepository;
     private final SeatRepository seatRepository;
     private final BookingServiceClient bookingServiceClient;
+    private final ObjectProvider<EventServiceClient> eventClientProvider;
 
     @Transactional(readOnly = true)
-    public EventAnalyticsDTO getEventAnalytics(UUID eventId, int page, int size, String authHeader) {
+    public EventAnalyticsDTO getEventAnalytics(UUID eventId,
+                                               String requesterEmail,
+                                               boolean isAdmin,
+                                               int page, int size, String authHeader) {
+        if (!isAdmin) {
+            requireEventOwnership(eventId, requesterEmail, authHeader);
+        }
         log.debug("Building event analytics eventId={} page={} size={}", eventId, page, size);
 
         int safePage = Math.max(0, page);
@@ -74,6 +84,31 @@ public class SeatCategoryAnalyticsService {
                 .bookingServiceReachable(reachable)
                 .fetchedAt(LocalDateTime.now())
                 .build();
+    }
+
+    /**
+     * Defense-in-depth ownership check — analytics expose customer emails and
+     * revenue, so a non-admin caller must own the event in event-service. Same
+     * pattern as {@link SeatCategoryService#requireEventOwnership}.
+     */
+    private void requireEventOwnership(UUID eventId, String requesterEmail, String authHeader) {
+        EventServiceClient client = eventClientProvider == null
+                ? null : eventClientProvider.getIfAvailable();
+        if (client == null) {
+            log.warn("event-service client unavailable; refusing analytics for eventId={} to non-admin", eventId);
+            throw new AccessDeniedException("Cannot verify event ownership");
+        }
+        var lookup = client.fetchEvent(eventId, authHeader);
+        if (lookup.isEmpty()) {
+            log.warn("Analytics ownership lookup empty eventId={}", eventId);
+            throw new AccessDeniedException("Cannot verify event ownership");
+        }
+        String ownerTenantId = lookup.get().getTenantId();
+        if (ownerTenantId == null || !ownerTenantId.equals(requesterEmail)) {
+            log.warn("Analytics ownership check failed eventId={} requesterEmail={} ownerTenantId={}",
+                    eventId, requesterEmail, ownerTenantId);
+            throw new AccessDeniedException("You do not own this event");
+        }
     }
 
     private EventAnalyticsDTO.CategoryAnalytics buildCategoryBlock(
