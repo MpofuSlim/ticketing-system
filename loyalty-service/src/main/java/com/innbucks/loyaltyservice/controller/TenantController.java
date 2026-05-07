@@ -137,6 +137,45 @@ public class TenantController {
         return ResponseEntity.ok(ApiResult.ok("Tenants retrieved successfully", data));
     }
 
+    @GetMapping("/me")
+    @Operation(summary = "List tenants owned by the current caller",
+            description = "Returns every tenant whose ownerEmail matches the authenticated principal's email. " +
+                          "Use this right after login to discover which tenant UUIDs you can pass as " +
+                          "X-Tenant-Id on subsequent calls. Most users own exactly one tenant; the response " +
+                          "is a list to support edge cases where one operator manages several brands.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Tenants owned by the caller",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "My tenants", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Tenants retrieved successfully",
+                                      "data": [
+                                        {
+                                          "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                          "code": "ZW",
+                                          "name": "Simbisa ZW",
+                                          "status": "ACTIVE"
+                                        }
+                                      ]
+                                    }
+                                    """)
+                    )
+            )
+    })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<java.util.List<Dtos.TenantResponse>>> mine(
+            org.springframework.security.core.Authentication authentication) {
+        String ownerEmail = authentication.getName();
+        log.info("GET /loyalty/tenants/me ownerEmail={}", ownerEmail);
+        java.util.List<Dtos.TenantResponse> data = tenantService.findMine(ownerEmail);
+        return ResponseEntity.ok(ApiResult.ok("Tenants retrieved successfully", data));
+    }
+
     @PostMapping("/{id}/suspend")
     @Operation(summary = "Suspend a tenant",
             description = "Marks the tenant as SUSPENDED. While suspended, all the tenant's customer-facing " +
