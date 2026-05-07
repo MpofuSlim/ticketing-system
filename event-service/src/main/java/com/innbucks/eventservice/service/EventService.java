@@ -87,6 +87,27 @@ public class EventService {
                 eventRepository.findByTenantId(tenantId, from, to, venue, pageable));
     }
 
+    /**
+     * Same as {@link #getMyEvents} but additionally filters {@code active=true}.
+     * Used so an EVENT_ORGANIZER hitting the public {@code /events/active}
+     * listing only sees their own bookable events.
+     */
+    public Page<EventResponseDTO> getMyActiveEvents(
+            String tenantId,
+            LocalDateTime from,
+            LocalDateTime to,
+            String venue,
+            int page,
+            int size,
+            String sortBy
+    ) {
+        Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
+        log.debug("Fetching active events for tenantId={} from={} to={} venue={} page={} size={} sortBy={}",
+                tenantId, from, to, venue, page, size, sortBy);
+        return enrichWithAvailability(
+                eventRepository.findByTenantIdActiveOnly(tenantId, from, to, venue, pageable));
+    }
+
     public EventResponseDTO getEventById(UUID eventId) {
         log.debug("Fetching event eventId={}", eventId);
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)

@@ -119,6 +119,7 @@ public class EventController {
             )
     })
     public ResponseEntity<ApiResult<Page<EventResponseDTO>>> getAllEvents(
+            Authentication authentication,
             @Parameter(description = "Inclusive lower bound date for events (maps to start of day)")
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
@@ -143,8 +144,14 @@ public class EventController {
         LocalDateTime toDateTime = to == null ? null : to.atTime(LocalTime.MAX);
         log.debug("GET /events from={} to={} venue={} page={} size={} sortBy={}",
                 from, to, venue, page, size, sortBy);
-        Page<EventResponseDTO> result = eventService.getAllActiveEvents(
-                fromDateTime, toDateTime, venue, page, size, sortBy);
+        Page<EventResponseDTO> result;
+        if (isOrganizerOnly(authentication)) {
+            String tenantId = authentication.getName();
+            log.debug("GET /events scoped to organizer tenantId={}", tenantId);
+            result = eventService.getMyEvents(tenantId, fromDateTime, toDateTime, venue, page, size, sortBy);
+        } else {
+            result = eventService.getAllActiveEvents(fromDateTime, toDateTime, venue, page, size, sortBy);
+        }
         if (result.isEmpty()) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
                     .body(ApiResult.error(HttpStatus.NOT_FOUND, "Not found"));
@@ -286,6 +293,7 @@ public class EventController {
             )
     })
     public ResponseEntity<ApiResult<Page<EventResponseDTO>>> getActiveEvents(
+            Authentication authentication,
             @Parameter(description = "Inclusive lower bound date for events (maps to start of day)")
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
@@ -310,8 +318,14 @@ public class EventController {
         LocalDateTime toDateTime = to == null ? null : to.atTime(LocalTime.MAX);
         log.debug("GET /events/active from={} to={} venue={} page={} size={} sortBy={}",
                 from, to, venue, page, size, sortBy);
-        Page<EventResponseDTO> result = eventService.getActiveOnlyEvents(
-                fromDateTime, toDateTime, venue, page, size, sortBy);
+        Page<EventResponseDTO> result;
+        if (isOrganizerOnly(authentication)) {
+            String tenantId = authentication.getName();
+            log.debug("GET /events/active scoped to organizer tenantId={}", tenantId);
+            result = eventService.getMyActiveEvents(tenantId, fromDateTime, toDateTime, venue, page, size, sortBy);
+        } else {
+            result = eventService.getActiveOnlyEvents(fromDateTime, toDateTime, venue, page, size, sortBy);
+        }
         if (result.isEmpty()) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
                     .body(ApiResult.error(HttpStatus.NOT_FOUND, "Not found"));
@@ -903,5 +917,23 @@ public class EventController {
                 .findFirst()
                 .map(authority -> authority.getAuthority())
                 .orElse("");
+    }
+
+    /**
+     * True when the caller is authenticated as an EVENT_ORGANIZER but NOT a
+     * SUPER_ADMIN. Used to auto-scope the broad listing endpoints so an
+     * organizer never sees other organizers' events; SUPER_ADMIN keeps the
+     * platform-wide view, and anonymous / customer callers also see all events.
+     */
+    private boolean isOrganizerOnly(Authentication authentication) {
+        if (authentication == null || !authentication.isAuthenticated()) return false;
+        boolean organizer = false;
+        boolean superAdmin = false;
+        for (var authority : authentication.getAuthorities()) {
+            String a = authority.getAuthority();
+            if ("ROLE_EVENT_ORGANIZER".equals(a)) organizer = true;
+            else if ("ROLE_SUPER_ADMIN".equals(a)) superAdmin = true;
+        }
+        return organizer && !superAdmin;
     }
 }
