@@ -54,22 +54,33 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- H2: now the only database (runtime + tests). -->
-        <dependency>
-            <groupId>com.h2database</groupId>
-            <artifactId>h2</artifactId>
-        </dependency>
-
-        <!-- PostgreSQL (disabled — see application.yaml; revert by removing
-             the comment block and dropping H2 to test scope above).
+        <!-- PostgreSQL is the runtime database. Default (compile) scope used
+             instead of `runtime` so the JDBC driver is on the classpath
+             regardless of how the service is launched (mvn spring-boot:run,
+             IntelliJ Run config, or fat-jar). DevTools' restart classloader
+             has been observed dropping runtime-scope deps in some IDE setups,
+             producing "Cannot load driver class: org.postgresql.Driver". -->
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
-            <scope>runtime</scope>
         </dependency>
-        -->
 
-        <!-- Flyway (disabled — migrations are PostgreSQL-flavoured).
+        <!-- H2 is kept for tests only (in-memory, PostgreSQL compatibility mode). -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Flyway: schema is owned by versioned migrations under
+             src/main/resources/db/migration. spring-boot-flyway carries the
+             auto-configuration (Spring Boot 4 split per-tech autoconfig into
+             dedicated modules); without it Flyway is on the classpath but is
+             never actually invoked at boot. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-flyway</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-core</artifactId>
@@ -79,7 +90,6 @@
             <artifactId>flyway-database-postgresql</artifactId>
             <scope>runtime</scope>
         </dependency>
-        -->
 
         <!-- Swagger -->
         <dependency>
