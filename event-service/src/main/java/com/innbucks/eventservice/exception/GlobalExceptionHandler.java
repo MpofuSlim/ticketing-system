@@ -56,9 +56,21 @@ public class GlobalExceptionHandler {
     // Catches every other multipart parse failure (truncated upload, broken
     // boundary, client disconnect mid-stream). Surfaces as 400 with a clear
     // message instead of falling into the generic RuntimeException handler.
+    // Logs the full cause chain so the underlying reason (boundary mismatch,
+    // EOF, malformed Content-Type) is visible in server logs — the wrapper
+    // message alone is "Failed to parse multipart servlet request" which is
+    // useless for diagnosis.
     @ExceptionHandler(MultipartException.class)
     public ResponseEntity<ApiResult<Void>> handleMultipart(MultipartException ex) {
-        log.warn("Multipart parse failed: {}", ex.getMessage());
+        StringBuilder chain = new StringBuilder(ex.getClass().getSimpleName())
+                .append(": ").append(ex.getMessage());
+        Throwable cause = ex.getCause();
+        while (cause != null) {
+            chain.append(" -> ").append(cause.getClass().getSimpleName())
+                 .append(": ").append(cause.getMessage());
+            cause = cause.getCause();
+        }
+        log.warn("Multipart parse failed [{}]", chain);
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ApiResult.error(HttpStatus.BAD_REQUEST,
                         "Could not read the uploaded file. Please retry the upload."));
