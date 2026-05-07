@@ -40,9 +40,12 @@ public class MerchantController {
 
     @PostMapping
     @Operation(summary = "Onboard a merchant",
-            description = "Creates a new merchant under the current tenant. The merchant ID returned here " +
-                          "is what callers reference in transaction/voucher/invoice requests. Fee fields " +
-                          "drive periodic invoicing — set them to ZERO for free-tier merchants.")
+            description = "Creates a new merchant under the current tenant. Merchant name is inherited from " +
+                          "the tenant (which was set from the user-service business profile at registration), " +
+                          "so the caller only supplies category, billing cycle, and fee schedule. " +
+                          "The merchant ID returned here is what callers reference in transaction/voucher/" +
+                          "invoice requests. Fee fields drive periodic invoicing — set them to ZERO for " +
+                          "free-tier merchants.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -69,14 +72,14 @@ public class MerchantController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "Validation failure (e.g. blank name)",
+                    description = "Validation failure (e.g. invalid currency or fee schedule)",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
                             examples = @ExampleObject(name = "Validation error", value = """
                                     {
                                       "code": "400 BAD_REQUEST",
-                                      "message": "name: must not be blank",
+                                      "message": "currency: must be a 3-letter ISO 4217 code",
                                       "data": null
                                     }
                                     """)
