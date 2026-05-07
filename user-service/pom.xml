@@ -57,28 +57,22 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
-        <!-- PostgreSQL is the runtime database. -->
-        <dependency>
-            <groupId>org.postgresql</groupId>
-            <artifactId>postgresql</artifactId>
-        </dependency>
-
-        <!-- H2 is kept for tests only (in-memory, PostgreSQL compatibility mode). -->
+        <!-- H2: now the only database (runtime + tests). -->
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
-            <scope>test</scope>
         </dependency>
 
-        <!-- Flyway: schema is owned by versioned migrations under
-             src/main/resources/db/migration. spring-boot-flyway carries the
-             auto-configuration (Spring Boot 4 split per-tech autoconfig into
-             dedicated modules); without it Flyway is on the classpath but is
-             never actually invoked at boot. -->
+        <!-- PostgreSQL (disabled — see application.yaml; revert by removing
+             the comment block and dropping H2 to test scope above).
         <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-flyway</artifactId>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
         </dependency>
+        -->
+
+        <!-- Flyway (disabled — migrations are PostgreSQL-flavoured).
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-core</artifactId>
@@ -88,6 +82,7 @@
             <artifactId>flyway-database-postgresql</artifactId>
             <scope>runtime</scope>
         </dependency>
+        -->
 
         <!-- Swagger UI -->
         <dependency>
