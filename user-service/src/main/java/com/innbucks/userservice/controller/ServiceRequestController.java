@@ -16,10 +16,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
 
 @RestController
 @RequestMapping("/users/me/service-requests")
@@ -31,6 +34,53 @@ import org.springframework.web.bind.annotation.RestController;
 public class ServiceRequestController {
 
     private final ServiceRequestService serviceRequestService;
+
+    @GetMapping
+    @Operation(
+            summary = "List my service requests",
+            description = "Returns every service request submitted by the authenticated user, newest first, " +
+                    "regardless of status (PENDING or APPROVED). Each row is scoped to the caller — users " +
+                    "can never see another user's requests through this endpoint."
+    )
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "Caller's service requests retrieved",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Service requests retrieved",
+                                      "data": [
+                                        {
+                                          "id": 12,
+                                          "userId": 42,
+                                          "userEmail": "alice@innbucks.co.zw",
+                                          "userFullName": "Alice Moyo",
+                                          "service": "loyalty",
+                                          "reason": "We are launching a rewards programme.",
+                                          "status": "PENDING",
+                                          "createdAt": "2026-05-07T10:30:00"
+                                        },
+                                        {
+                                          "id": 9,
+                                          "userId": 42,
+                                          "service": "ticketing",
+                                          "status": "APPROVED",
+                                          "createdAt": "2026-04-12T08:00:00",
+                                          "reviewedAt": "2026-04-12T09:30:00",
+                                          "reviewedBy": 1
+                                        }
+                                      ]
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
+                    description = "Missing or invalid bearer token")
+    })
+    public ResponseEntity<ApiResult<List<ServiceRequestResponseDTO>>> listMine(Authentication authentication) {
+        List<ServiceRequestResponseDTO> body = serviceRequestService.listMine(authentication.getName());
+        log.info("Service requests retrieved for {} count={}", authentication.getName(), body.size());
+        return ResponseEntity.ok(ApiResult.ok("Service requests retrieved", body));
+    }
 
     @PostMapping
     @Operation(
