@@ -38,6 +38,20 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
+            # Self-service endpoints under /users/me/** (e.g. service requests).
+            # Authenticated; rate-limited like the rest of user-service.
+            - id: user-self-route
+              uri: ${USER_SERVICE_URI:http://localhost:8081}
+              predicates:
+                - Path=/users/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
+
             - id: event-service-route
               uri: ${EVENT_SERVICE_URI:http://localhost:8082}
               predicates:
