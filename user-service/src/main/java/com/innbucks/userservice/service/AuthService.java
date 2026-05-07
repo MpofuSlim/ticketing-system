@@ -151,6 +151,13 @@ public class AuthService {
         String newToken = jwtUtil.generateToken(subject, roleNames, new ArrayList<>(microservices),
                 tier, verified, user.getPhoneNumber());
 
+        Long tenantId = null;
+        if (user.hasRole(User.Role.EVENT_ORGANIZER) || user.hasRole(User.Role.MERCHANT_ADMIN)) {
+            tenantId = tenantProfileRepository.findByUserId(user.getId())
+                    .map(TenantProfile::getId)
+                    .orElse(null);
+        }
+
         return AuthResponseDTO.builder()
                 .token(newToken)
                 .email(user.getEmail())
@@ -159,6 +166,7 @@ public class AuthService {
                 .mfaRequired(false)
                 .tier(tier)
                 .verified(verified)
+                .tenantId(tenantId)
                 .build();
     }
 
