@@ -28,7 +28,7 @@ import java.util.UUID;
 @Slf4j
 public class EventService {
 
-    private static final long MAX_BANNER_BYTES = 5L * 1024 * 1024; // 5 MB
+    private static final long MAX_BANNER_BYTES = 10L * 1024 * 1024; // 10 MB
     private static final Set<String> ALLOWED_BANNER_CONTENT_TYPES = Set.of(
             "image/jpeg", "image/png", "image/gif", "image/webp"
     );

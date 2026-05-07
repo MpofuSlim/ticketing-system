@@ -11,6 +11,8 @@ import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
 
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -37,6 +39,29 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .body(ApiResult.error(HttpStatus.CONFLICT,
                         "Event was modified by another request. Please refetch and retry."));
+    }
+
+    // Banner / multipart payload exceeded the configured size. Returns 413 with
+    // the actual byte limit so the client can show a real error and retry with
+    // a smaller image instead of seeing a generic "Failed to parse multipart".
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiResult<Void>> handleMaxUpload(MaxUploadSizeExceededException ex) {
+        log.warn("Multipart payload too large: maxBytes={}", ex.getMaxUploadSize());
+        long maxMb = Math.max(1, ex.getMaxUploadSize() / (1024 * 1024));
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                .body(ApiResult.error(HttpStatus.PAYLOAD_TOO_LARGE,
+                        "Banner image is too large. Maximum allowed size is " + maxMb + " MB."));
+    }
+
+    // Catches every other multipart parse failure (truncated upload, broken
+    // boundary, client disconnect mid-stream). Surfaces as 400 with a clear
+    // message instead of falling into the generic RuntimeException handler.
+    @ExceptionHandler(MultipartException.class)
+    public ResponseEntity<ApiResult<Void>> handleMultipart(MultipartException ex) {
+        log.warn("Multipart parse failed: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResult.error(HttpStatus.BAD_REQUEST,
+                        "Could not read the uploaded file. Please retry the upload."));
     }
 
     @ExceptionHandler(RuntimeException.class)
