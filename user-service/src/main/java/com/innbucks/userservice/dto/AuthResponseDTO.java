@@ -19,9 +19,6 @@ import java.util.List;
 )
 public class AuthResponseDTO {
 
-    @Schema(description = "The user's system ID.", example = "42")
-    private Long userId;
-
     @Schema(description = "JWT access token. Null when `mfaRequired=true` or on registration responses.",
             nullable = true)
     private String token;

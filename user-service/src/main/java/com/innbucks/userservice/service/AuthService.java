@@ -79,7 +79,6 @@ public class AuthService {
 
         log.info("Registration complete email={} roles={} bundles={}", user.getEmail(), roles, bundles);
         return AuthResponseDTO.builder()
-                .userId(user.getId())
                 .email(user.getEmail())
                 .roles(roleNames(user.getRoles()))
                 .defaultServices(new ArrayList<>(bundles))
@@ -153,7 +152,6 @@ public class AuthService {
                 tier, verified, user.getPhoneNumber());
 
         return AuthResponseDTO.builder()
-                .userId(user.getId())
                 .token(newToken)
                 .email(user.getEmail())
                 .roles(roleNames)
