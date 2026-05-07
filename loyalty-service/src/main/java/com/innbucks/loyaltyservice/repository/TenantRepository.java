@@ -8,4 +8,6 @@ import java.util.UUID;
 
 public interface TenantRepository extends JpaRepository<Tenant, UUID> {
     List<Tenant> findAllByCode(String code);
+
+    List<Tenant> findAllByOwnerEmail(String ownerEmail);
 }

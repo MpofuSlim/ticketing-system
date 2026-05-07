@@ -50,6 +50,13 @@ public class TenantService {
         return tenants.findAll(pageable).map(TenantService::toResponse);
     }
 
+    @Transactional(readOnly = true)
+    public List<Dtos.TenantResponse> findMine(String ownerEmail) {
+        return tenants.findAllByOwnerEmail(ownerEmail).stream()
+                .map(TenantService::toResponse)
+                .toList();
+    }
+
     public Dtos.TenantResponse suspend(java.util.UUID id) {
         Tenant t = tenants.findById(id).orElseThrow(() -> LoyaltyException.notFound("tenant"));
         t.setStatus(Tenant.Status.SUSPENDED);

@@ -52,10 +52,4 @@ public class AuthResponseDTO {
             example = "false",
             nullable = true)
     private Boolean verified;
-
-    @Schema(description = "Tenant profile ID for EVENT_ORGANIZER / MERCHANT_ADMIN accounts. Use this as the " +
-            "X-Tenant-Id header when calling tenant-scoped endpoints. Null for CUSTOMER and SUPER_ADMIN.",
-            example = "1",
-            nullable = true)
-    private Long tenantId;
 }
