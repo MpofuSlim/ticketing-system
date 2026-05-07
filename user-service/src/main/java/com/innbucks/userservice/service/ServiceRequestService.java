@@ -12,8 +12,13 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -60,17 +65,58 @@ public class ServiceRequestService {
         return toResponse(saved, user);
     }
 
-    /** List every service request submitted by the caller, newest first, regardless of status. */
+    /**
+     * List the caller's service bundles, newest first. Combines two sources:
+     *   1. Rows from {@code service_requests} (PENDING / APPROVED) — i.e. anything
+     *      they explicitly asked for via the request flow.
+     *   2. Bundles in {@code users.default_services} that were never represented
+     *      as an APPROVED service_request row (typically picked at registration);
+     *      these are surfaced as synthetic APPROVED rows so the caller sees the
+     *      full picture of "what services do I have / have I asked for".
+     */
     @Transactional(readOnly = true)
     public List<ServiceRequestResponseDTO> listMine(String requesterEmail) {
         User user = userRepository.findByEmail(requesterEmail)
                 .orElseThrow(() -> new RuntimeException("User not found: " + requesterEmail));
 
-        return serviceRequestRepository
-                .findByUserIdOrderByCreatedAtDesc(user.getId())
-                .stream()
-                .map(req -> toResponse(req, user))
-                .toList();
+        List<ServiceRequest> requests = serviceRequestRepository
+                .findByUserIdOrderByCreatedAtDesc(user.getId());
+
+        // Bundles already represented as APPROVED in service_requests; skip
+        // synthesising duplicates for them below.
+        Set<String> alreadyApproved = requests.stream()
+                .filter(r -> r.getStatus() == ServiceRequest.Status.APPROVED)
+                .map(ServiceRequest::getService)
+                .collect(Collectors.toCollection(HashSet::new));
+
+        List<ServiceRequestResponseDTO> result = new ArrayList<>(requests.size()
+                + (user.getDefaultServices() == null ? 0 : user.getDefaultServices().size()));
+
+        for (ServiceRequest req : requests) {
+            result.add(toResponse(req, user));
+        }
+
+        if (user.getDefaultServices() != null) {
+            String email = user.getEmail();
+            String fullName = (user.getFirstName() + " " + user.getLastName()).trim();
+            for (String svc : user.getDefaultServices()) {
+                if (alreadyApproved.contains(svc)) continue;
+                result.add(ServiceRequestResponseDTO.builder()
+                        .userId(user.getId())
+                        .userEmail(email)
+                        .userFullName(fullName)
+                        .service(svc)
+                        .status(ServiceRequest.Status.APPROVED.name())
+                        .createdAt(user.getCreatedAt())
+                        .build());
+            }
+        }
+
+        // Newest first; null createdAt (shouldn't happen) sinks to the bottom.
+        result.sort(Comparator.comparing(
+                ServiceRequestResponseDTO::getCreatedAt,
+                Comparator.nullsLast(Comparator.reverseOrder())));
+        return result;
     }
 
     /** Admin: list every pending request, oldest first. */
