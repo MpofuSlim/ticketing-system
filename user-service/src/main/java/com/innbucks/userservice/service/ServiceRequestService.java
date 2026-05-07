@@ -60,6 +60,19 @@ public class ServiceRequestService {
         return toResponse(saved, user);
     }
 
+    /** List every service request submitted by the caller, newest first, regardless of status. */
+    @Transactional(readOnly = true)
+    public List<ServiceRequestResponseDTO> listMine(String requesterEmail) {
+        User user = userRepository.findByEmail(requesterEmail)
+                .orElseThrow(() -> new RuntimeException("User not found: " + requesterEmail));
+
+        return serviceRequestRepository
+                .findByUserIdOrderByCreatedAtDesc(user.getId())
+                .stream()
+                .map(req -> toResponse(req, user))
+                .toList();
+    }
+
     /** Admin: list every pending request, oldest first. */
     @Transactional(readOnly = true)
     public List<ServiceRequestResponseDTO> listPending() {
