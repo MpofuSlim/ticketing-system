@@ -80,7 +80,12 @@ public class TenantContext {
             log.warn("Tenant access without authentication tenantId={}", tenant.getId());
             throw new AccessDeniedException("Authentication required to access tenant data");
         }
-        if (hasRole(authentication, "ROLE_SUPER_ADMIN")) {
+        // SUPER_ADMIN and MERCHANT_ADMIN both bypass ownership: SUPER_ADMIN
+        // has platform-wide privileges, and MERCHANT_ADMIN is the role used
+        // by the loyalty operator team to act across tenants. Per-tenant
+        // isolation is therefore enforced only against EVENT_ORGANIZER and
+        // CUSTOMER callers.
+        if (hasRole(authentication, "ROLE_SUPER_ADMIN") || hasRole(authentication, "ROLE_MERCHANT_ADMIN")) {
             return;
         }
         String caller = authentication.getName();
