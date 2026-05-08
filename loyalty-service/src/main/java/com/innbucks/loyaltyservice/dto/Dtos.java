@@ -31,6 +31,8 @@ public class Dtos {
     public record TenantMemberResponse(UUID id, UUID tenantId, String email, Instant joinedAt) {}
 
     public record MerchantRequest(
+            @Schema(example = "Innbucks Westgate", description = "Display name of the merchant outlet (e.g. \"Chicken Inn Westgate\").")
+            @NotBlank String name,
             @Schema(example = "Coffee", nullable = true, description = "Business category (e.g. Coffee, Grocery, Fuel).")
             String category,
             @Schema(example = "USD", nullable = true, description = "ISO 4217 currency code. Defaults to USD.")

@@ -73,7 +73,7 @@ class LoyaltyServiceIntegrationTest {
     void earnsPointsAndRedeemsVoucher() {
         Tenant t = saveTenant();
         Dtos.MerchantResponse mr = merchantService.create(t.getId(),
-                new Dtos.MerchantRequest("F&B", "USD",
+                new Dtos.MerchantRequest("Cafe Westgate", "F&B", "USD",
                         Merchant.BillingCycle.MONTHLY,
                         new BigDecimal("0.001"),
                         new BigDecimal("0.05"),
@@ -118,7 +118,7 @@ class LoyaltyServiceIntegrationTest {
     void transferDeductsAndCreditsAtomically() {
         Tenant t = saveTenant();
         Dtos.MerchantResponse mr = merchantService.create(t.getId(),
-                new Dtos.MerchantRequest("Retail", "USD",
+                new Dtos.MerchantRequest("Mall Bulawayo", "Retail", "USD",
                         Merchant.BillingCycle.MONTHLY,
                         BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
         ruleAdminService.createRule(t.getId(),
@@ -144,7 +144,7 @@ class LoyaltyServiceIntegrationTest {
     void qrConsumeAwardsPointsAndIsSingleUse() {
         Tenant t = saveTenant();
         Dtos.MerchantResponse mr = merchantService.create(t.getId(),
-                new Dtos.MerchantRequest("Fuel", "USD",
+                new Dtos.MerchantRequest("Pump Mutare", "Fuel", "USD",
                         Merchant.BillingCycle.MONTHLY,
                         BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
         ruleAdminService.createRule(t.getId(),
@@ -171,7 +171,7 @@ class LoyaltyServiceIntegrationTest {
     void invoicingAggregatesFees() {
         Tenant t = saveTenant();
         Dtos.MerchantResponse mr = merchantService.create(t.getId(),
-                new Dtos.MerchantRequest("Health", "USD",
+                new Dtos.MerchantRequest("Pharmacy Gweru", "Health", "USD",
                         Merchant.BillingCycle.MONTHLY,
                         new BigDecimal("0.01"),
                         new BigDecimal("1.00"),
