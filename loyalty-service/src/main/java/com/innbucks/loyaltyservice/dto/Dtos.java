@@ -28,6 +28,8 @@ public class Dtos {
 
     public record TenantResponse(UUID id, String code, String name, String status) {}
 
+    public record TenantMemberResponse(UUID id, UUID tenantId, String email, Instant joinedAt) {}
+
     public record MerchantRequest(
             @Schema(example = "Coffee", nullable = true, description = "Business category (e.g. Coffee, Grocery, Fuel).")
             String category,
