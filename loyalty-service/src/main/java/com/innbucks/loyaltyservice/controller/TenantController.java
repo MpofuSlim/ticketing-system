@@ -77,13 +77,13 @@ public class TenantController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.TenantResponse>> create(
             @Valid @RequestBody Dtos.TenantRequest req,
             org.springframework.security.core.Authentication authentication) {
-        String ownerEmail = authentication.getName();
-        log.info("POST /loyalty/tenants ownerEmail={} code={}", ownerEmail, req.code());
-        Dtos.TenantResponse data = tenantService.create(req, ownerEmail);
+        String creatorEmail = authentication.getName();
+        log.info("POST /loyalty/tenants creator={} code={}", creatorEmail, req.code());
+        Dtos.TenantResponse data = tenantService.create(req, creatorEmail);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Tenant created successfully", data));
     }
@@ -271,5 +271,49 @@ public class TenantController {
         log.info("POST /loyalty/tenants/{}/activate", id);
         Dtos.TenantResponse data = tenantService.activate(id);
         return ResponseEntity.ok(ApiResult.ok("Tenant activated successfully", data));
+    }
+
+    @PostMapping("/{id}/join")
+    @Operation(summary = "Join a tenant",
+            description = "Adds the authenticated caller as a member of the tenant, granting them access to " +
+                          "all tenant-scoped endpoints (merchants, rules, transactions, vouchers, etc.) when " +
+                          "they pass this tenant's UUID via X-Tenant-Id. Idempotent — joining an already-" +
+                          "joined tenant returns the existing membership without error.")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<Dtos.TenantMemberResponse>> join(
+            @PathVariable UUID id,
+            org.springframework.security.core.Authentication authentication) {
+        String email = authentication.getName();
+        log.info("POST /loyalty/tenants/{}/join caller={}", id, email);
+        Dtos.TenantMemberResponse data = tenantService.addMember(id, email);
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResult.created("Joined tenant successfully", data));
+    }
+
+    @GetMapping("/{id}/members")
+    @Operation(summary = "List tenant members",
+            description = "Returns every user with membership of this tenant. Useful for showing a tenant's " +
+                          "admin team. Membership is the gate for tenant-scoped actions (replaces the old " +
+                          "single-owner model).")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<java.util.List<Dtos.TenantMemberResponse>>> members(
+            @PathVariable UUID id) {
+        log.info("GET /loyalty/tenants/{}/members", id);
+        java.util.List<Dtos.TenantMemberResponse> data = tenantService.listMembers(id);
+        return ResponseEntity.ok(ApiResult.ok("Members retrieved successfully", data));
+    }
+
+    @DeleteMapping("/{id}/members/me")
+    @Operation(summary = "Leave a tenant",
+            description = "Removes the authenticated caller from the tenant's members. Idempotent — leaving " +
+                          "a tenant the caller isn't in returns 200 without error.")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<Void>> leave(
+            @PathVariable UUID id,
+            org.springframework.security.core.Authentication authentication) {
+        String email = authentication.getName();
+        log.info("DELETE /loyalty/tenants/{}/members/me caller={}", id, email);
+        tenantService.removeMember(id, email);
+        return ResponseEntity.ok(ApiResult.ok("Left tenant successfully", null));
     }
 }

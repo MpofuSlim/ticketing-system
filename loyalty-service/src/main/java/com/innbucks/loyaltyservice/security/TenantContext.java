@@ -2,6 +2,7 @@ package com.innbucks.loyaltyservice.security;
 
 import com.innbucks.loyaltyservice.entity.Tenant;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
+import com.innbucks.loyaltyservice.repository.TenantMemberRepository;
 import com.innbucks.loyaltyservice.repository.TenantRepository;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
@@ -18,11 +19,14 @@ import java.util.UUID;
  * or X-Tenant-Code header. Any request that hits a tenant-aware endpoint
  * without a valid tenant header is rejected.
  *
- * <p>Ownership is enforced once per request in {@link #requireTenant()}: the
- * authenticated principal must be the tenant's {@code ownerEmail}, unless they
- * hold the SUPER_ADMIN role (in which case they can act on any tenant). This
- * is the parent-child enforcement: a tenant owner can act across all merchants
- * under their tenant; SUPER_ADMIN can act across all tenants.
+ * <p>Membership is enforced once per request in {@link #requireTenant()}: the
+ * authenticated principal must be a member of the tenant (row in
+ * {@code tenant_members}), unless they hold the SUPER_ADMIN role — SUPER_ADMIN
+ * acts across every tenant on the platform without needing membership rows.
+ *
+ * <p>Members are added via {@code POST /loyalty/tenants/{id}/join} and removed
+ * via {@code DELETE /loyalty/tenants/{id}/members/me}. This replaces the older
+ * single-owner model where {@code tenant.ownerEmail} gated access.
  */
 @Component
 @RequestScope
@@ -30,18 +34,20 @@ import java.util.UUID;
 public class TenantContext {
 
     private final TenantRepository tenants;
+    private final TenantMemberRepository members;
     private final HttpServletRequest request;
     private Tenant cached;
 
-    public TenantContext(TenantRepository tenants, HttpServletRequest request) {
+    public TenantContext(TenantRepository tenants, TenantMemberRepository members, HttpServletRequest request) {
         this.tenants = tenants;
+        this.members = members;
         this.request = request;
     }
 
     public Tenant requireTenant() {
         if (cached != null) return cached;
         Tenant resolved = resolveFromHeaders();
-        verifyOwnership(resolved);
+        verifyMembership(resolved);
         cached = resolved;
         return cached;
     }
@@ -71,7 +77,7 @@ public class TenantContext {
         throw LoyaltyException.badRequest("MISSING_TENANT", "X-Tenant-Id or X-Tenant-Code header is required");
     }
 
-    private void verifyOwnership(Tenant tenant) {
+    private void verifyMembership(Tenant tenant) {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication == null) {
             // Pre-auth code path (e.g. internal callers without a JWT). We
@@ -80,20 +86,15 @@ public class TenantContext {
             log.warn("Tenant access without authentication tenantId={}", tenant.getId());
             throw new AccessDeniedException("Authentication required to access tenant data");
         }
-        // SUPER_ADMIN and MERCHANT_ADMIN both bypass ownership: SUPER_ADMIN
-        // has platform-wide privileges, and MERCHANT_ADMIN is the role used
-        // by the loyalty operator team to act across tenants. Per-tenant
-        // isolation is therefore enforced only against EVENT_ORGANIZER and
-        // CUSTOMER callers.
-        if (hasRole(authentication, "ROLE_SUPER_ADMIN") || hasRole(authentication, "ROLE_MERCHANT_ADMIN")) {
+        if (hasRole(authentication, "ROLE_SUPER_ADMIN")) {
             return;
         }
         String caller = authentication.getName();
-        String owner = tenant.getOwnerEmail();
-        if (owner == null || !owner.equals(caller)) {
-            log.warn("Tenant ownership check failed tenantId={} caller={} ownerEmail={}",
-                    tenant.getId(), caller, owner);
-            throw new AccessDeniedException("You are not the owner of this tenant");
+        if (!members.existsByTenantIdAndEmail(tenant.getId(), caller)) {
+            log.warn("Tenant membership check failed tenantId={} caller={}",
+                    tenant.getId(), caller);
+            throw new AccessDeniedException(
+                    "You are not a member of this tenant. Call POST /loyalty/tenants/{id}/join first.");
         }
     }
 
