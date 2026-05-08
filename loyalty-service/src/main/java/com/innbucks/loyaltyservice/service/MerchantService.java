@@ -2,10 +2,8 @@ package com.innbucks.loyaltyservice.service;
 
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.Merchant;
-import com.innbucks.loyaltyservice.entity.Tenant;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
-import com.innbucks.loyaltyservice.repository.TenantRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -20,23 +18,15 @@ import java.util.UUID;
 public class MerchantService {
 
     private final MerchantRepository merchants;
-    private final TenantRepository tenants;
 
-    public MerchantService(MerchantRepository merchants, TenantRepository tenants) {
+    public MerchantService(MerchantRepository merchants) {
         this.merchants = merchants;
-        this.tenants = tenants;
     }
 
     public Dtos.MerchantResponse create(UUID tenantId, Dtos.MerchantRequest req) {
-        // Merchant identity (name/location) is sourced from the Tenant — which
-        // was populated from the user-service business profile at registration.
-        // Avoids re-collecting fields the operator already provided.
-        Tenant tenant = tenants.findById(tenantId)
-                .orElseThrow(() -> LoyaltyException.notFound("tenant"));
-
         Merchant m = new Merchant();
         m.setTenantId(tenantId);
-        m.setName(tenant.getName());
+        m.setName(req.name());
         m.setCategory(req.category());
         if (req.currency() != null) m.setCurrency(req.currency());
         if (req.billingCycle() != null) m.setBillingCycle(req.billingCycle());
