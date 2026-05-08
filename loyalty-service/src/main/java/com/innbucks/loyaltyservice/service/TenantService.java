@@ -50,6 +50,23 @@ public class TenantService {
         return tenants.findAll(pageable).map(TenantService::toResponse);
     }
 
+    /**
+     * Paginated list scoped to the caller. SUPER_ADMIN sees every tenant on the
+     * platform; everyone else sees only the tenants they own. Lets the same
+     * endpoint serve both an operator dashboard and a merchant's own tenant
+     * picker without leaking tenants across owners.
+     */
+    @Transactional(readOnly = true)
+    public Page<Dtos.TenantResponse> listForCaller(Pageable pageable,
+                                                   String callerEmail,
+                                                   boolean isSuperAdmin) {
+        if (isSuperAdmin) {
+            return tenants.findAll(pageable).map(TenantService::toResponse);
+        }
+        return tenants.findAllByOwnerEmail(callerEmail, pageable)
+                .map(TenantService::toResponse);
+    }
+
     @Transactional(readOnly = true)
     public List<Dtos.TenantResponse> findMine(String ownerEmail) {
         return tenants.findAllByOwnerEmail(ownerEmail).stream()

@@ -130,10 +130,15 @@ public class TenantController {
                     )
             )
     })
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
-    public ResponseEntity<ApiResult<PageResponse<Dtos.TenantResponse>>> list(@ParameterObject Pageable pageable) {
-        log.info("GET /loyalty/tenants (SUPER_ADMIN listing all tenants)");
-        PageResponse<Dtos.TenantResponse> data = PageResponse.from(tenantService.list(pageable));
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<PageResponse<Dtos.TenantResponse>>> list(
+            @ParameterObject Pageable pageable,
+            org.springframework.security.core.Authentication authentication) {
+        boolean isSuperAdmin = authentication.getAuthorities().stream()
+                .anyMatch(a -> "ROLE_SUPER_ADMIN".equals(a.getAuthority()));
+        log.info("GET /loyalty/tenants caller={} isSuperAdmin={}", authentication.getName(), isSuperAdmin);
+        PageResponse<Dtos.TenantResponse> data = PageResponse.from(
+                tenantService.listForCaller(pageable, authentication.getName(), isSuperAdmin));
         return ResponseEntity.ok(ApiResult.ok("Tenants retrieved successfully", data));
     }
 
