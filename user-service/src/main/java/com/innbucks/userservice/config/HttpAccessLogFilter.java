@@ -10,8 +10,10 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.Ordered;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.util.ContentCachingResponseWrapper;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Set;
 
 @Configuration
@@ -39,11 +41,26 @@ public class HttpAccessLogFilter {
                 String query = request.getQueryString();
                 String fullPath = query == null ? path : path + "?" + query;
                 log.info(">> {} {}", method, fullPath);
+
+                ContentCachingResponseWrapper wrappedResponse = new ContentCachingResponseWrapper(response);
                 try {
-                    chain.doFilter(request, response);
+                    chain.doFilter(request, wrappedResponse);
                 } finally {
                     long ms = System.currentTimeMillis() - start;
-                    log.info("<< {} {} status={} duration={}ms", method, fullPath, response.getStatus(), ms);
+                    byte[] responseBody = wrappedResponse.getContentAsByteArray();
+                    String body = responseBody.length > 0
+                            ? new String(responseBody, StandardCharsets.UTF_8)
+                            : "";
+
+                    if (body.length() > 500) {
+                        body = body.substring(0, 500) + "...";
+                    }
+
+                    String logMessage = body.isEmpty()
+                            ? String.format("<< %s %s status=%d duration=%dms", method, fullPath, wrappedResponse.getStatus(), ms)
+                            : String.format("<< %s %s status=%d duration=%dms body=%s", method, fullPath, wrappedResponse.getStatus(), ms, body);
+                    log.info(logMessage);
+                    wrappedResponse.copyBodyToResponse();
                 }
             }
         });
