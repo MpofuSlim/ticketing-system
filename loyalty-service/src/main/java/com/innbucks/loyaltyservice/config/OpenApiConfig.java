@@ -7,8 +7,11 @@ import io.swagger.v3.oas.models.parameters.HeaderParameter;
 import io.swagger.v3.oas.models.media.StringSchema;
 import io.swagger.v3.oas.models.security.SecurityRequirement;
 import io.swagger.v3.oas.models.security.SecurityScheme;
+import io.swagger.v3.oas.models.servers.Server;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.util.List;
 
 @Configuration
 public class OpenApiConfig {
@@ -17,7 +20,12 @@ public class OpenApiConfig {
     public OpenAPI openAPI() {
         final String securitySchemeName = "bearerAuth";
 
+        Server server = new Server();
+        server.setUrl("/");
+        server.setDescription("Gateway relative server");
+
         return new OpenAPI()
+                .servers(List.of(server))
                 .info(new Info()
                         .title("Loyalty & Voucher Management Platform")
                         .version("1.0.0")
