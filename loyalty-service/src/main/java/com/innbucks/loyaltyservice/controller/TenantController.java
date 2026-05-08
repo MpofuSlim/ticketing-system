@@ -279,6 +279,43 @@ public class TenantController {
                           "all tenant-scoped endpoints (merchants, rules, transactions, vouchers, etc.) when " +
                           "they pass this tenant's UUID via X-Tenant-Id. Idempotent — joining an already-" +
                           "joined tenant returns the existing membership without error.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "201",
+                    description = "Caller is now a member of the tenant",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Membership created", value = """
+                                    {
+                                      "code": "201 CREATED",
+                                      "message": "Joined tenant successfully",
+                                      "data": {
+                                        "id": "8f2c6a1d-3b4e-4f78-9c0a-1b2c3d4e5f60",
+                                        "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "email": "tmpofu@simbisa.co.zw",
+                                        "joinedAt": "2026-05-08T08:14:30Z"
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "Tenant not found",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not found", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "tenant not found",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
+    })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.TenantMemberResponse>> join(
             @PathVariable UUID id,
@@ -295,6 +332,51 @@ public class TenantController {
             description = "Returns every user with membership of this tenant. Useful for showing a tenant's " +
                           "admin team. Membership is the gate for tenant-scoped actions (replaces the old " +
                           "single-owner model).")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Members of the tenant",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Member list", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Members retrieved successfully",
+                                      "data": [
+                                        {
+                                          "id": "8f2c6a1d-3b4e-4f78-9c0a-1b2c3d4e5f60",
+                                          "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                          "email": "tmpofu@simbisa.co.zw",
+                                          "joinedAt": "2026-05-08T08:14:30Z"
+                                        },
+                                        {
+                                          "id": "9a3d7b2e-4c5f-5a89-ad1b-2c3d4e5f6071",
+                                          "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                          "email": "ops@simbisa.co.zw",
+                                          "joinedAt": "2026-05-08T09:02:15Z"
+                                        }
+                                      ]
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "Tenant not found",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not found", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "tenant not found",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
+    })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<java.util.List<Dtos.TenantMemberResponse>>> members(
             @PathVariable UUID id) {
@@ -307,6 +389,38 @@ public class TenantController {
     @Operation(summary = "Leave a tenant",
             description = "Removes the authenticated caller from the tenant's members. Idempotent — leaving " +
                           "a tenant the caller isn't in returns 200 without error.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Caller is no longer a member",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Left tenant", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Left tenant successfully",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "Tenant not found",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not found", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "tenant not found",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
+    })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Void>> leave(
             @PathVariable UUID id,
