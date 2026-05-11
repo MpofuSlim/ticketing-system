@@ -96,16 +96,38 @@ public class ShopStaffService {
         return UserResponseDTO.from(staff);
     }
 
+    /**
+     * Role-aware "my staff" view backing GET /admin/shop-staff/mine:
+     * <ul>
+     *   <li>SHOP_ADMIN — lists every user at the caller's shop (JWT-stamped
+     *       {@code loyaltyShopId} on the User row). The {@code merchantId}
+     *       argument is ignored.</li>
+     *   <li>MERCHANT_ADMIN — lists every user under the supplied merchant.
+     *       Missing {@code merchantId} returns 400 since MERCHANT_ADMINs have
+     *       no merchant claim on their token to fall back on.</li>
+     * </ul>
+     */
     @Transactional(readOnly = true)
-    public List<UserResponseDTO> listForCallerShop() {
+    public List<UserResponseDTO> listForCaller(UUID merchantId) {
         User caller = requireCaller();
-        UUID shopId = caller.getLoyaltyShopId();
-        if (shopId == null) {
-            throw badRequest("Caller is not scoped to a shop");
+        if (caller.hasRole(User.Role.SHOP_ADMIN)) {
+            UUID shopId = caller.getLoyaltyShopId();
+            if (shopId == null) {
+                throw badRequest("Caller is not scoped to a shop");
+            }
+            return userRepository.findByLoyaltyShopId(shopId).stream()
+                    .map(UserResponseDTO::from)
+                    .toList();
         }
-        return userRepository.findByLoyaltyShopId(shopId).stream()
-                .map(UserResponseDTO::from)
-                .toList();
+        if (caller.hasRole(User.Role.MERCHANT_ADMIN)) {
+            if (merchantId == null) {
+                throw badRequest("merchantId query parameter is required when the caller is a MERCHANT_ADMIN");
+            }
+            return userRepository.findByLoyaltyMerchantId(merchantId).stream()
+                    .map(UserResponseDTO::from)
+                    .toList();
+        }
+        throw forbidden("Caller has no shop or merchant scope");
     }
 
     @Transactional(readOnly = true)
