@@ -5,6 +5,7 @@ import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.TransactionType;
 import com.innbucks.loyaltyservice.entity.Voucher;
 import com.innbucks.loyaltyservice.entity.VoucherTemplate;
+import io.swagger.v3.oas.annotations.media.ArraySchema;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -219,10 +220,14 @@ public class Dtos {
             @Min(1) int usageLimit,
             @Schema(example = "30", nullable = true, description = "Days from issue until the voucher expires.")
             Integer validityDays,
-            @Schema(example = "[\"11111111-aaaa-bbbb-cccc-222222222222\",\"33333333-dddd-eeee-ffff-444444444444\"]",
-                    nullable = true,
-                    description = "Shop IDs where this voucher can be redeemed. Null or empty = every shop under " +
-                                  "the merchant (or every shop in the tenant for tenant-wide templates).")
+            @ArraySchema(
+                    arraySchema = @Schema(
+                            nullable = true,
+                            description = "Shop IDs where this voucher can be redeemed. Null or empty = every " +
+                                          "shop under the merchant (or every shop in the tenant for tenant-wide " +
+                                          "templates)."),
+                    schema = @Schema(type = "string", format = "uuid",
+                            example = "11111111-aaaa-bbbb-cccc-222222222222"))
             List<UUID> applicableOutlets
     ) {}
 
