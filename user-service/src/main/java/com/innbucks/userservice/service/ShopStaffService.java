@@ -121,6 +121,20 @@ public class ShopStaffService {
                 .toList();
     }
 
+    /**
+     * Returns every SHOP_ADMIN and SHOP_USER under the given merchant — i.e. the
+     * full headcount across all shops belonging to that merchant. Used by the
+     * MERCHANT_ADMIN dashboard so they can oversee every staff member their shop
+     * admins manage in one call.
+     */
+    @Transactional(readOnly = true)
+    public List<UserResponseDTO> listForMerchant(UUID merchantId) {
+        requireCaller();
+        return userRepository.findByLoyaltyMerchantId(merchantId).stream()
+                .map(UserResponseDTO::from)
+                .toList();
+    }
+
     private User buildStaff(String firstName, String middleName, String lastName,
                             String email, String phone,
                             User.Role role, UUID merchantId, UUID shopId) {
