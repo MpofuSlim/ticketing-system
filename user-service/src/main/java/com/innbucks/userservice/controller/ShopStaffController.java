@@ -166,11 +166,19 @@ public class ShopStaffController {
     }
 
     @GetMapping("/mine")
-    @PreAuthorize("hasRole('SHOP_ADMIN')")
+    @PreAuthorize("hasAnyRole('SHOP_ADMIN','MERCHANT_ADMIN')")
     @Operation(
-            summary = "List staff at the caller's shop",
-            description = "Returns every user (SHOP_ADMINs and SHOP_USERs) attached to the caller's " +
-                          "shop. SHOP_ADMINs use this to see who they manage."
+            summary = "List staff in the caller's scope",
+            description = "Returns the staff the caller oversees:" +
+                          "<ul>" +
+                          "<li><b>SHOP_ADMIN</b> — every SHOP_ADMIN and SHOP_USER at their shop. " +
+                          "The <code>merchantId</code> query parameter is ignored.</li>" +
+                          "<li><b>MERCHANT_ADMIN</b> — every SHOP_ADMIN and SHOP_USER across all " +
+                          "shops under the merchant identified by the required <code>merchantId</code> " +
+                          "query parameter.</li>" +
+                          "</ul>" +
+                          "MERCHANT_ADMINs can also call /by-merchant/{merchantId} for the same result " +
+                          "with a path parameter."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -213,17 +221,18 @@ public class ShopStaffController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "400", description = "Caller is not scoped to a shop",
+                    responseCode = "400",
+                    description = "SHOP_ADMIN is not scoped to a shop, or MERCHANT_ADMIN omitted ?merchantId=",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     {
                                       "code": "400 BAD_REQUEST",
-                                      "message": "Caller is not scoped to a shop",
+                                      "message": "merchantId query parameter is required when the caller is a MERCHANT_ADMIN",
                                       "data": null
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "403", description = "Caller is not a SHOP_ADMIN",
+                    responseCode = "403", description = "Caller is neither SHOP_ADMIN nor MERCHANT_ADMIN",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     {
@@ -233,8 +242,11 @@ public class ShopStaffController {
                                     }
                                     """)))
     })
-    public ResponseEntity<ApiResult<List<UserResponseDTO>>> listMyShopStaff() {
-        List<UserResponseDTO> data = shopStaffService.listForCallerShop();
+    public ResponseEntity<ApiResult<List<UserResponseDTO>>> listMyStaff(
+            @io.swagger.v3.oas.annotations.Parameter(
+                    description = "Required for MERCHANT_ADMIN callers. Ignored for SHOP_ADMIN.")
+            @RequestParam(name = "merchantId", required = false) UUID merchantId) {
+        List<UserResponseDTO> data = shopStaffService.listForCaller(merchantId);
         return ResponseEntity.ok(ApiResult.ok("Shop staff retrieved", data));
     }
 
