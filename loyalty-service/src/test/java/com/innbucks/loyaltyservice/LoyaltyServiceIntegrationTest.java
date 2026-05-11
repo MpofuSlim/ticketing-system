@@ -78,8 +78,8 @@ class LoyaltyServiceIntegrationTest {
                         new BigDecimal("0.001"),
                         new BigDecimal("0.05"),
                         new BigDecimal("0.10")));
-        ruleAdminService.createRule(t.getId(),
-                new Dtos.RuleRequest(mr.id(), TransactionType.PURCHASE,
+        ruleAdminService.createRule(t.getId(), mr.id(),
+                new Dtos.RuleRequest(TransactionType.PURCHASE,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
         LoyaltyUser u = userService.findOrEnrol(t.getId(), "+263770000001", mr.id());
 
@@ -121,8 +121,8 @@ class LoyaltyServiceIntegrationTest {
                 new Dtos.MerchantRequest("Mall Bulawayo", "Retail", "USD",
                         Merchant.BillingCycle.MONTHLY,
                         BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
-        ruleAdminService.createRule(t.getId(),
-                new Dtos.RuleRequest(mr.id(), TransactionType.PURCHASE,
+        ruleAdminService.createRule(t.getId(), mr.id(),
+                new Dtos.RuleRequest(TransactionType.PURCHASE,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
 
         LoyaltyUser alice = userService.findOrEnrol(t.getId(), "+263770000010", mr.id());
@@ -147,8 +147,8 @@ class LoyaltyServiceIntegrationTest {
                 new Dtos.MerchantRequest("Pump Mutare", "Fuel", "USD",
                         Merchant.BillingCycle.MONTHLY,
                         BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
-        ruleAdminService.createRule(t.getId(),
-                new Dtos.RuleRequest(mr.id(), TransactionType.QR_PAY,
+        ruleAdminService.createRule(t.getId(), mr.id(),
+                new Dtos.RuleRequest(TransactionType.QR_PAY,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
         LoyaltyUser u = userService.findOrEnrol(t.getId(), "+263770000020", mr.id());
 
@@ -176,8 +176,8 @@ class LoyaltyServiceIntegrationTest {
                         new BigDecimal("0.01"),
                         new BigDecimal("1.00"),
                         new BigDecimal("0.50")));
-        ruleAdminService.createRule(t.getId(),
-                new Dtos.RuleRequest(mr.id(), TransactionType.PURCHASE,
+        ruleAdminService.createRule(t.getId(), mr.id(),
+                new Dtos.RuleRequest(TransactionType.PURCHASE,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
         LoyaltyUser u = userService.findOrEnrol(t.getId(), "+263770000030", mr.id());
 

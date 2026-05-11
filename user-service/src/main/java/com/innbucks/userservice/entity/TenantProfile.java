@@ -3,6 +3,8 @@ package com.innbucks.userservice.entity;
 import jakarta.persistence.*;
 import lombok.*;
 
+import java.util.UUID;
+
 @Entity
 @Table(name = "tenant_profiles")
 @Data
@@ -26,6 +28,12 @@ public class TenantProfile {
     private String registrationNumber;
 
     private String metaDataFilePath;
+
+    // Loyalty merchant this MERCHANT_ADMIN administers. Populated once the
+    // tenant onboards a merchant in loyalty-service; flows into the JWT
+    // so loyalty endpoints can scope writes without trusting the request body.
+    @Column(name = "loyalty_merchant_id")
+    private UUID loyaltyMerchantId;
 
     private int totalEvents = 0;
     private double rating = 0.0;

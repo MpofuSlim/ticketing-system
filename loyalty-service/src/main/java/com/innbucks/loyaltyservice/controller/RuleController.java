@@ -5,6 +5,7 @@ import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.dto.PageResponse;
 import com.innbucks.loyaltyservice.entity.Campaign;
 import com.innbucks.loyaltyservice.entity.LoyaltyRule;
+import com.innbucks.loyaltyservice.security.CallerDetails;
 import com.innbucks.loyaltyservice.security.TenantContext;
 import com.innbucks.loyaltyservice.service.RuleAdminService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -44,10 +45,12 @@ public class RuleController {
 
     @PostMapping
     @Operation(summary = "Create a loyalty rule",
-            description = "Creates an earn-rate rule scoped to either a specific merchant (`merchantId` set) " +
-                          "or the whole tenant (`merchantId` null). Merchant-specific rules override tenant " +
-                          "defaults. `pointsPerUnit` × `multiplier` is applied to the transaction amount; " +
-                          "`maxPointsPerTxn` caps the result if set.")
+            description = "Creates an earn-rate rule. The merchant scope is taken from the authenticated " +
+                          "caller's JWT: a MERCHANT_ADMIN token carries the merchantId they manage, " +
+                          "scoping the rule to that merchant. A SUPER_ADMIN token carries no merchantId, " +
+                          "creating a tenant-wide rule that applies to every merchant. `pointsPerUnit` × " +
+                          "`multiplier` is applied to the transaction amount; `maxPointsPerTxn` caps the " +
+                          "result if set.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -95,7 +98,8 @@ public class RuleController {
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<LoyaltyRule>> create(@Valid @RequestBody Dtos.RuleRequest req) {
-        LoyaltyRule data = rules.createRule(tenantContext.requireTenantId(), req);
+        UUID merchantId = CallerDetails.currentMerchantId();
+        LoyaltyRule data = rules.createRule(tenantContext.requireTenantId(), merchantId, req);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Rule created successfully", data));
     }

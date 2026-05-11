@@ -83,10 +83,10 @@ public class Dtos {
             LocalDate lockedUntil
     ) {}
 
+    // merchantId is sourced from the authenticated caller's JWT — a MERCHANT_ADMIN's
+    // token carries the merchantId they manage, while SUPER_ADMIN tokens carry null
+    // (creates a tenant-wide rule).
     public record RuleRequest(
-            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
-                    description = "Merchant scope — null means this rule applies to all merchants in the tenant.")
-            UUID merchantId,
             @Schema(example = "PURCHASE")
             @NotNull TransactionType transactionType,
             @Schema(example = "1.000000", description = "Points awarded per 1 unit of currency spent.")

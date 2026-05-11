@@ -14,6 +14,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
 import java.util.List;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Component
@@ -30,7 +31,7 @@ public class JwtUtil {
     }
 
     public String generateToken(String email, Collection<String> roles, Collection<String> defaultServices,
-                                int tier, boolean verified, String phoneNumber) {
+                                int tier, boolean verified, String phoneNumber, UUID merchantId) {
         List<String> roleList = roles == null ? List.of()
                 : roles.stream().filter(r -> r != null && !r.isBlank()).collect(Collectors.toList());
         List<String> serviceList = defaultServices == null ? List.of()
@@ -45,6 +46,9 @@ public class JwtUtil {
         if (phoneNumber != null && !phoneNumber.isBlank()) {
             builder.claim("phoneNumber", phoneNumber);
         }
+        if (merchantId != null) {
+            builder.claim("merchantId", merchantId.toString());
+        }
         return builder
                 .setIssuedAt(new Date())
                 .setExpiration(new Date(System.currentTimeMillis() + expiration))
@@ -52,9 +56,14 @@ public class JwtUtil {
                 .compact();
     }
 
+    public String generateToken(String email, Collection<String> roles, Collection<String> defaultServices,
+                                int tier, boolean verified, String phoneNumber) {
+        return generateToken(email, roles, defaultServices, tier, verified, phoneNumber, null);
+    }
+
     // Convenience overload for single-role callers (kept for tests).
     public String generateToken(String email, String role, int tier, boolean verified, String phoneNumber) {
-        return generateToken(email, role == null ? List.of() : List.of(role), List.of(), tier, verified, phoneNumber);
+        return generateToken(email, role == null ? List.of() : List.of(role), List.of(), tier, verified, phoneNumber, null);
     }
 
     public String generateToken(String email, String role, int tier, boolean verified) {
@@ -101,6 +110,16 @@ public class JwtUtil {
 
     public String extractPhoneNumber(String token) {
         return getClaims(token).get("phoneNumber", String.class);
+    }
+
+    public UUID extractMerchantId(String token) {
+        String raw = getClaims(token).get("merchantId", String.class);
+        if (raw == null || raw.isBlank()) return null;
+        try {
+            return UUID.fromString(raw);
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
     }
 
     public Date extractExpiration(String token) {

@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 import java.security.Key;
 import java.util.Collection;
 import java.util.List;
+import java.util.UUID;
 
 @Component
 public class JwtUtil {
@@ -51,6 +52,16 @@ public class JwtUtil {
 
     public String extractPhoneNumber(String token) {
         return getClaims(token).get("phoneNumber", String.class);
+    }
+
+    public UUID extractMerchantId(String token) {
+        String raw = getClaims(token).get("merchantId", String.class);
+        if (raw == null || raw.isBlank()) return null;
+        try {
+            return UUID.fromString(raw);
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
     }
 
     public boolean isTokenValid(String token) {
