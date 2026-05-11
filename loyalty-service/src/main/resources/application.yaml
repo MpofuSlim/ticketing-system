@@ -1,19 +1,11 @@
 spring:
   application:
     name: loyalty-service
-  # Local & container dev: file-based H2 in MODE=PostgreSQL. Data persists
-  # across restarts in ${H2_DATA_DIR}/<service>.mv.db. AUTO_SERVER=TRUE lets
-  # an external H2 console connect for debugging. Tests still override these
-  # to in-memory H2 via src/test/resources/application-test.yaml.
-  h2:
-    console:
-      enabled: true
-      path: /h2-console
   datasource:
-    url: ${DB_URL:jdbc:h2:file:${H2_DATA_DIR:./data}/loyalty_service;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;AUTO_SERVER=TRUE}
-    username: ${DB_USERNAME:sa}
-    password: ${DB_PASSWORD:}
-    driver-class-name: ${DB_DRIVER:org.h2.Driver}
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/loyalty_service}
+    driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD}
     hikari:
       pool-name: loyalty-service-pool
       maximum-pool-size: ${DB_POOL_MAX:20}
@@ -23,18 +15,16 @@ spring:
       max-lifetime: ${DB_MAX_LIFETIME_MS:1800000}
   jpa:
     hibernate:
-      # H2 file branch: Hibernate owns the schema (ddl-auto=update keeps the
-      # schema in sync with entities and preserves data across restarts).
-      ddl-auto: ${JPA_DDL_AUTO:update}
+      # Schema is owned by Flyway migrations; Hibernate only validates that
+      # the JPA model matches the actual columns at boot.
+      ddl-auto: ${JPA_DDL_AUTO:validate}
     show-sql: ${JPA_SHOW_SQL:false}
     properties:
       hibernate:
-        dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.H2Dialect}
+        dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
 
   flyway:
-    # Disabled in this branch — Hibernate owns the schema. Set FLYWAY_ENABLED=true
-    # if you switch DB_URL back to PostgreSQL and want to re-run db/migration.
-    enabled: ${FLYWAY_ENABLED:false}
+    enabled: ${FLYWAY_ENABLED:true}
     baseline-on-migrate: true
     baseline-version: 0
     locations: classpath:db/migration
