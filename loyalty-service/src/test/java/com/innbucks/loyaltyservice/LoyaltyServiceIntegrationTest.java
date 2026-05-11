@@ -83,15 +83,15 @@ class LoyaltyServiceIntegrationTest {
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
         LoyaltyUser u = userService.findOrEnrol(t.getId(), "+263770000001", mr.id());
 
-        var txn = transactionService.post(t.getId(),
-                new Dtos.TransactionRequest(mr.id(), u.getId(), TransactionType.PURCHASE,
+        var txn = transactionService.post(t.getId(), mr.id(),
+                new Dtos.TransactionRequest(u.getId(), TransactionType.PURCHASE,
                         new BigDecimal("100"), "USD", "ref-1"));
         assertThat(txn.pointsDelta()).isEqualByComparingTo("100");
         assertThat(txn.balanceAfter()).isEqualByComparingTo("100");
 
         // Issue + redeem voucher
-        VoucherTemplate tpl = voucherTemplateService.create(t.getId(),
-                new Dtos.VoucherTemplateRequest(mr.id(), "10% off",
+        VoucherTemplate tpl = voucherTemplateService.create(t.getId(), mr.id(),
+                new Dtos.VoucherTemplateRequest("10% off",
                         VoucherTemplate.VoucherType.SINGLE_USE,
                         VoucherTemplate.ValueType.PERCENT,
                         new BigDecimal("10"), "USD", null, 1, 30, null));
@@ -100,15 +100,15 @@ class LoyaltyServiceIntegrationTest {
                 new Dtos.IssueVoucherRequest(tpl.getId(), null, null, u.getId(),
                         Voucher.DeliveryChannel.NONE, null, null, null));
 
-        var redemption = voucherService.redeem(t.getId(),
-                new Dtos.RedeemVoucherRequest(v.code(), u.getId(), mr.id(),
+        var redemption = voucherService.redeem(t.getId(), mr.id(),
+                new Dtos.RedeemVoucherRequest(v.code(), u.getId(),
                         "OUTLET-1", "device-A", "127.0.0.1"));
         assertThat(redemption.status()).isEqualTo(Voucher.Status.REDEEMED.name());
 
         // Duplicate redemption attempt is rejected
         assertThatThrownBy(() ->
-                voucherService.redeem(t.getId(),
-                        new Dtos.RedeemVoucherRequest(v.code(), u.getId(), mr.id(),
+                voucherService.redeem(t.getId(), mr.id(),
+                        new Dtos.RedeemVoucherRequest(v.code(), u.getId(),
                                 "OUTLET-1", "device-A", "127.0.0.1")))
                 .isInstanceOf(LoyaltyException.class);
     }
@@ -128,8 +128,8 @@ class LoyaltyServiceIntegrationTest {
         LoyaltyUser alice = userService.findOrEnrol(t.getId(), "+263770000010", mr.id());
         LoyaltyUser bob = userService.findOrEnrol(t.getId(), "+263770000011", mr.id());
 
-        transactionService.post(t.getId(),
-                new Dtos.TransactionRequest(mr.id(), alice.getId(), TransactionType.PURCHASE,
+        transactionService.post(t.getId(), mr.id(),
+                new Dtos.TransactionRequest(alice.getId(), TransactionType.PURCHASE,
                         new BigDecimal("50"), "USD", "ref-trans-1"));
 
         transferService.transfer(t.getId(),
@@ -181,8 +181,8 @@ class LoyaltyServiceIntegrationTest {
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
         LoyaltyUser u = userService.findOrEnrol(t.getId(), "+263770000030", mr.id());
 
-        transactionService.post(t.getId(),
-                new Dtos.TransactionRequest(mr.id(), u.getId(), TransactionType.PURCHASE,
+        transactionService.post(t.getId(), mr.id(),
+                new Dtos.TransactionRequest(u.getId(), TransactionType.PURCHASE,
                         new BigDecimal("100"), "USD", "ref-inv-1"));
 
         var merchant = merchantService.requireMerchant(t.getId(), mr.id());

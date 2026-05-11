@@ -33,12 +33,12 @@ public class RedemptionService {
     /**
      * Redeem points for in-platform credit (e.g. discount). Returns new balance.
      */
-    public BigDecimal redeemPoints(UUID tenantId, Dtos.RedemptionRequest req) {
+    public BigDecimal redeemPoints(UUID tenantId, UUID merchantId, Dtos.RedemptionRequest req) {
         if (req.points() == null || req.points().signum() <= 0) {
             throw LoyaltyException.badRequest("BAD_AMOUNT", "points must be positive");
         }
         var u = users.require(tenantId, req.userId());
-        var m = merchants.requireMerchant(tenantId, req.merchantId());
+        var m = merchants.requireMerchant(tenantId, merchantId);
 
         LoyaltyTransaction t = new LoyaltyTransaction();
         t.setTenantId(tenantId);

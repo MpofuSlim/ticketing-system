@@ -24,8 +24,8 @@ public class VoucherTemplateService {
         this.merchants = merchants;
     }
 
-    public VoucherTemplate create(UUID tenantId, Dtos.VoucherTemplateRequest req) {
-        if (req.merchantId() != null) merchants.requireMerchant(tenantId, req.merchantId());
+    public VoucherTemplate create(UUID tenantId, UUID merchantId, Dtos.VoucherTemplateRequest req) {
+        if (merchantId != null) merchants.requireMerchant(tenantId, merchantId);
         if (req.valueType() == VoucherTemplate.ValueType.AMOUNT && req.value() == null) {
             throw LoyaltyException.badRequest("MISSING_VALUE", "AMOUNT vouchers require value");
         }
@@ -37,7 +37,7 @@ public class VoucherTemplateService {
         }
         VoucherTemplate t = new VoucherTemplate();
         t.setTenantId(tenantId);
-        t.setMerchantId(req.merchantId());
+        t.setMerchantId(merchantId);
         t.setName(req.name());
         t.setType(req.type());
         t.setValueType(req.valueType());

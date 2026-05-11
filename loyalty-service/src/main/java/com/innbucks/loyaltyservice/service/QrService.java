@@ -93,8 +93,8 @@ public class QrService {
 
         if (q.getSourceType() == QrToken.SourceType.MERCHANT) {
             // Merchant-issued QR awards points to the scanning user.
-            return transactionService.post(tenantId, new Dtos.TransactionRequest(
-                    q.getSourceId(), req.userId(), q.getTransactionType(),
+            return transactionService.post(tenantId, q.getSourceId(), new Dtos.TransactionRequest(
+                    req.userId(), q.getTransactionType(),
                     q.getAmount() == null ? BigDecimal.ZERO : q.getAmount(),
                     q.getCurrency(), req.reference()));
         } else {
