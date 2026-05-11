@@ -28,7 +28,6 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
     private final TokenRevocationService tokenRevocationService;
-    private final LoyaltyMerchantResolver loyaltyMerchantResolver;
 
     @Transactional
     public AuthResponseDTO register(RegisterRequestDTO request) {
@@ -184,13 +183,13 @@ public class AuthService {
                 ? Services.expandToMicroservices(Services.ALL_BUNDLES)
                 : Services.expandToMicroservices(bundles);
 
+        // Shop staff carry both shopId and merchantId stamped on their User row by
+        // ShopStaffService at creation time — no lookup required. MERCHANT_ADMIN tokens
+        // intentionally do NOT carry a merchantId claim; endpoints that need a merchant
+        // scope read it from the request body (e.g. ShopRequest.merchantId).
         java.util.UUID loyaltyMerchantId = null;
         java.util.UUID loyaltyShopId = null;
-        if (user.hasRole(User.Role.MERCHANT_ADMIN)) {
-            loyaltyMerchantId = loyaltyMerchantResolver.resolveForUser(user).orElse(null);
-        } else if (user.hasRole(User.Role.SHOP_ADMIN) || user.hasRole(User.Role.SHOP_USER)) {
-            // Shop staff carry both their shopId and merchantId on the User row.
-            // Set at creation time by ShopStaffService; no lookup required here.
+        if (user.hasRole(User.Role.SHOP_ADMIN) || user.hasRole(User.Role.SHOP_USER)) {
             loyaltyShopId = user.getLoyaltyShopId();
             loyaltyMerchantId = user.getLoyaltyMerchantId();
         }

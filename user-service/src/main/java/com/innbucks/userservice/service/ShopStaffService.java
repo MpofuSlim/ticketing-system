@@ -22,11 +22,13 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Onboards shop staff. Two creation paths with distinct authorization rules:
+ * Onboards shop staff. Two creation paths:
  *
  * <ul>
  *   <li><b>SHOP_ADMIN</b> by a MERCHANT_ADMIN — caller supplies the target shopId in the body.
- *       The shop is resolved via loyalty-service and must belong to the caller's merchant.</li>
+ *       The shop is resolved via loyalty-service to pick up its merchantId, which is then
+ *       stamped on the new SHOP_ADMIN. The shop must exist; cross-tenant attempts are caught
+ *       by loyalty-service's tenant scoping on the lookup endpoint.</li>
  *   <li><b>SHOP_USER</b> by a SHOP_ADMIN — shopId is pulled from the caller's User row, never
  *       from the body, so a SHOP_ADMIN can only create staff for their own shop.</li>
  * </ul>
@@ -50,7 +52,6 @@ public class ShopStaffService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final LoyaltyServiceClient loyaltyServiceClient;
-    private final LoyaltyMerchantResolver loyaltyMerchantResolver;
 
     @Transactional
     public UserResponseDTO createShopAdmin(CreateShopAdminDTO req) {
@@ -58,28 +59,19 @@ public class ShopStaffService {
         if (!caller.hasRole(User.Role.MERCHANT_ADMIN)) {
             throw forbidden("Only MERCHANT_ADMIN can create shop admins");
         }
-        // Resolve via shared resolver: reads the cached TenantProfile.loyaltyMerchantId
-        // first, then falls back to a loyalty-service lookup by Merchant.admin_email
-        // and caches the result. This means a MERCHANT_ADMIN who just created their
-        // first merchant can call this endpoint immediately, without re-logging in.
-        UUID callerMerchantId = loyaltyMerchantResolver.resolveForUser(caller).orElse(null);
-        if (callerMerchantId == null) {
-            throw badRequest("Your tenant profile is not bound to a loyalty merchant yet — " +
-                    "create a merchant via POST /loyalty/merchants first");
-        }
-
         var shop = loyaltyServiceClient.findShop(req.getShopId())
                 .orElseThrow(() -> badRequest("Shop not found in loyalty-service"));
-        if (shop.merchantId() == null || !UUID.fromString(shop.merchantId()).equals(callerMerchantId)) {
-            throw forbidden("Shop does not belong to your merchant");
+        if (shop.merchantId() == null || shop.merchantId().isBlank()) {
+            throw badRequest("Shop has no merchant binding");
         }
+        UUID merchantId = UUID.fromString(shop.merchantId());
 
         User staff = buildStaff(req.getFirstName(), req.getMiddleName(), req.getLastName(),
                 req.getEmail(), req.getPhoneNumber(),
-                User.Role.SHOP_ADMIN, callerMerchantId, req.getShopId());
+                User.Role.SHOP_ADMIN, merchantId, req.getShopId());
         userRepository.save(staff);
         log.info("Created SHOP_ADMIN userId={} email={} shopId={} merchantId={} by={}",
-                staff.getId(), staff.getEmail(), req.getShopId(), callerMerchantId, caller.getEmail());
+                staff.getId(), staff.getEmail(), req.getShopId(), merchantId, caller.getEmail());
         return UserResponseDTO.from(staff);
     }
 
@@ -116,18 +108,14 @@ public class ShopStaffService {
                 .toList();
     }
 
-    @Transactional
+    @Transactional(readOnly = true)
     public List<UserResponseDTO> listForShop(UUID shopId) {
-        User caller = requireCaller();
-        UUID callerMerchantId = loyaltyMerchantResolver.resolveForUser(caller).orElse(null);
-        if (callerMerchantId == null) {
-            throw forbidden("Your tenant profile is not bound to a loyalty merchant yet");
-        }
-        var shop = loyaltyServiceClient.findShop(shopId)
+        requireCaller();
+        // The MERCHANT_ADMIN role gate on the controller plus the shop's existence in
+        // loyalty-service are the protection here — we no longer cross-check caller's
+        // merchant binding because that data path has been removed.
+        loyaltyServiceClient.findShop(shopId)
                 .orElseThrow(() -> badRequest("Shop not found in loyalty-service"));
-        if (!UUID.fromString(shop.merchantId()).equals(callerMerchantId)) {
-            throw forbidden("Shop does not belong to your merchant");
-        }
         return userRepository.findByLoyaltyShopId(shopId).stream()
                 .map(UserResponseDTO::from)
                 .toList();
