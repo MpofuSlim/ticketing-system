@@ -71,6 +71,37 @@ public class LoyaltyServiceClient {
         }
     }
 
+    /**
+     * Resolve a shop by id. Used by ShopStaffService when MERCHANT_ADMIN creates
+     * a SHOP_ADMIN — we need to confirm the shop exists and belongs to the caller's
+     * merchant before stamping the new user's loyaltyShopId. Returns empty on any
+     * failure (including 404).
+     */
+    public Optional<ShopLookupResponse> findShop(UUID shopId) {
+        if (shopId == null) return Optional.empty();
+        if (internalToken == null || internalToken.isBlank()) {
+            log.warn("Skipping loyalty shop lookup; INTERNAL_API_TOKEN is not configured");
+            return Optional.empty();
+        }
+        try {
+            ShopLookupResponse body = http.get()
+                    .uri("/loyalty/internal/shops/{id}", shopId)
+                    .header("X-Internal-Token", internalToken)
+                    .retrieve()
+                    .onStatus(HttpStatusCode::is4xxClientError, (req, res) -> {})
+                    .body(ShopLookupResponse.class);
+            return Optional.ofNullable(body);
+        } catch (HttpClientErrorException.NotFound nf) {
+            return Optional.empty();
+        } catch (Exception ex) {
+            log.warn("Loyalty shop lookup failed shopId={} error={}", shopId, ex.getMessage());
+            return Optional.empty();
+        }
+    }
+
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record MerchantLookupResponse(String merchantId) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record ShopLookupResponse(String shopId, String merchantId, String tenantId, String status) {}
 }

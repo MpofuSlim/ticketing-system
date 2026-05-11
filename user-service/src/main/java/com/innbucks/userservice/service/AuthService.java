@@ -151,12 +151,18 @@ public class AuthService {
                 : Services.expandToMicroservices(bundles);
 
         java.util.UUID loyaltyMerchantId = null;
+        java.util.UUID loyaltyShopId = null;
         if (user.hasRole(User.Role.MERCHANT_ADMIN)) {
             loyaltyMerchantId = resolveLoyaltyMerchantId(user);
+        } else if (user.hasRole(User.Role.SHOP_ADMIN) || user.hasRole(User.Role.SHOP_USER)) {
+            // Shop staff carry both their shopId and merchantId on the User row.
+            // Set at creation time by ShopStaffService; no lookup required here.
+            loyaltyShopId = user.getLoyaltyShopId();
+            loyaltyMerchantId = user.getLoyaltyMerchantId();
         }
 
         String newToken = jwtUtil.generateToken(subject, roleNames, new ArrayList<>(microservices),
-                tier, verified, user.getPhoneNumber(), loyaltyMerchantId);
+                tier, verified, user.getPhoneNumber(), loyaltyMerchantId, loyaltyShopId);
 
         return AuthResponseDTO.builder()
                 .token(newToken)
