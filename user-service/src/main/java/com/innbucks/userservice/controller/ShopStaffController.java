@@ -238,6 +238,72 @@ public class ShopStaffController {
         return ResponseEntity.ok(ApiResult.ok("Shop staff retrieved", data));
     }
 
+    @GetMapping("/by-merchant/{merchantId}")
+    @PreAuthorize("hasRole('MERCHANT_ADMIN')")
+    @Operation(
+            summary = "List every staff member under a merchant",
+            description = "Returns every SHOP_ADMIN and SHOP_USER attached to any shop under the " +
+                          "given merchant — the full headcount the MERCHANT_ADMIN oversees through " +
+                          "their shop admins. E.g. as the MERCHANT_ADMIN for Zambezi, this returns " +
+                          "every staff member at Zambezi Avondale, Zambezi Westgate, etc. in one " +
+                          "call. Use /by-shop/{shopId} to drill into a single outlet."
+    )
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "Staff retrieved",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Shop staff retrieved",
+                                      "data": [
+                                        {
+                                          "id": 73,
+                                          "firstName": "Tendai",
+                                          "middleName": "M",
+                                          "lastName": "Moyo",
+                                          "email": "tendai@pizza-avondale.co.zw",
+                                          "phoneNumber": "+263771234567",
+                                          "roles": ["SHOP_ADMIN"],
+                                          "defaultServices": ["loyalty"],
+                                          "active": true,
+                                          "createdAt": "2026-05-11T10:15:00",
+                                          "loyaltyMerchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                          "loyaltyShopId": "11111111-aaaa-bbbb-cccc-222222222222"
+                                        },
+                                        {
+                                          "id": 74,
+                                          "firstName": "Rufaro",
+                                          "middleName": "T",
+                                          "lastName": "Ncube",
+                                          "email": "rufaro@pizza-avondale.co.zw",
+                                          "phoneNumber": "+263772345678",
+                                          "roles": ["SHOP_USER"],
+                                          "defaultServices": ["loyalty"],
+                                          "active": true,
+                                          "createdAt": "2026-05-11T10:20:00",
+                                          "loyaltyMerchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                          "loyaltyShopId": "11111111-aaaa-bbbb-cccc-222222222222"
+                                        }
+                                      ]
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403", description = "Caller is not a MERCHANT_ADMIN",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "403 FORBIDDEN",
+                                      "message": "Forbidden",
+                                      "data": null
+                                    }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<List<UserResponseDTO>>> listMerchantStaff(@PathVariable UUID merchantId) {
+        List<UserResponseDTO> data = shopStaffService.listForMerchant(merchantId);
+        return ResponseEntity.ok(ApiResult.ok("Shop staff retrieved", data));
+    }
+
     @GetMapping("/by-shop/{shopId}")
     @PreAuthorize("hasRole('MERCHANT_ADMIN')")
     @Operation(
