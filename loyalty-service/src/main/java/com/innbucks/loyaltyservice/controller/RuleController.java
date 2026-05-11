@@ -45,12 +45,15 @@ public class RuleController {
 
     @PostMapping
     @Operation(summary = "Create a loyalty rule",
-            description = "Creates an earn-rate rule. The merchant scope is taken from the authenticated " +
-                          "caller's JWT: a MERCHANT_ADMIN token carries the merchantId they manage, " +
-                          "scoping the rule to that merchant. A SUPER_ADMIN token carries no merchantId, " +
-                          "creating a tenant-wide rule that applies to every merchant. `pointsPerUnit` × " +
-                          "`multiplier` is applied to the transaction amount; `maxPointsPerTxn` caps the " +
-                          "result if set.")
+            description = "Creates an earn-rate rule. **Two tiers of rules are supported — global and " +
+                          "merchant-specific — and merchant-specific rules always win when both exist for " +
+                          "the same transaction type.** " +
+                          "TENANT_ADMIN (or PLATFORM_ADMIN / SUPER_ADMIN) tokens carry no merchantId, so " +
+                          "the rule is created as a **global baseline** that applies to every merchant in " +
+                          "the tenant that has no override. MERCHANT_ADMIN tokens carry the merchantId " +
+                          "they manage, creating a **merchant-specific override** that supersedes the " +
+                          "global rule for that outlet only. `pointsPerUnit` × `multiplier` is applied to " +
+                          "the transaction amount; `maxPointsPerTxn` caps the result if set.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -96,7 +99,7 @@ public class RuleController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<LoyaltyRule>> create(@Valid @RequestBody Dtos.RuleRequest req) {
         UUID merchantId = CallerDetails.currentMerchantId();
         LoyaltyRule data = rules.createRule(tenantContext.requireTenantId(), merchantId, req);
@@ -162,7 +165,7 @@ public class RuleController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<LoyaltyRule>>> list(@ParameterObject Pageable pageable) {
         PageResponse<LoyaltyRule> data = PageResponse.from(
                 rules.listRules(tenantContext.requireTenantId(), pageable));
@@ -173,7 +176,9 @@ public class RuleController {
     @Operation(summary = "Deactivate a rule",
             description = "Stops the rule from being applied to future transactions. Past transactions that " +
                           "earned points under this rule are unaffected. Use this rather than deletion so " +
-                          "audit history (rule_id stamped on every transaction) remains valid.")
+                          "audit history (rule_id stamped on every transaction) remains valid. " +
+                          "MERCHANT_ADMIN can only deactivate their own merchant-specific rules. " +
+                          "TENANT_ADMIN (or higher) can deactivate both global and any merchant-specific rules.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -219,9 +224,10 @@ public class RuleController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<LoyaltyRule>> deactivate(@PathVariable UUID id) {
-        LoyaltyRule data = rules.deactivateRule(tenantContext.requireTenantId(), id);
+        LoyaltyRule data = rules.deactivateRule(
+                tenantContext.requireTenantId(), id, CallerDetails.currentMerchantId());
         return ResponseEntity.ok(ApiResult.ok("Rule deactivated successfully", data));
     }
 
@@ -274,7 +280,7 @@ public class RuleController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Campaign>> createCampaign(@Valid @RequestBody Dtos.CampaignRequest req) {
         Campaign data = rules.createCampaign(tenantContext.requireTenantId(), CallerDetails.currentMerchantId(), req);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -324,7 +330,7 @@ public class RuleController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Campaign>>> listCampaigns(@ParameterObject Pageable pageable) {
         PageResponse<Campaign> data = PageResponse.from(
                 rules.listCampaigns(tenantContext.requireTenantId(), pageable));

@@ -55,9 +55,17 @@ public class RuleAdminService {
         return rules.findByTenantId(tenantId, pageable);
     }
 
-    public LoyaltyRule deactivateRule(UUID tenantId, UUID ruleId) {
+    public LoyaltyRule deactivateRule(UUID tenantId, UUID ruleId, UUID callerMerchantId) {
         LoyaltyRule r = rules.findById(ruleId).orElseThrow(() -> LoyaltyException.notFound("rule"));
         if (!r.getTenantId().equals(tenantId)) throw LoyaltyException.forbidden("CROSS_TENANT", "wrong tenant");
+        // Global rules (merchantId=null) can only be deactivated by TENANT_ADMIN+ (callerMerchantId=null).
+        // Merchant-specific rules can only be deactivated by that merchant's admin.
+        if (r.getMerchantId() == null && callerMerchantId != null) {
+            throw LoyaltyException.forbidden("GLOBAL_RULE", "only tenant admin can deactivate global rules");
+        }
+        if (r.getMerchantId() != null && callerMerchantId != null && !r.getMerchantId().equals(callerMerchantId)) {
+            throw LoyaltyException.forbidden("WRONG_MERCHANT", "rule belongs to a different merchant");
+        }
         r.setActive(false);
         return r;
     }
