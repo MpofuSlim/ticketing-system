@@ -3,10 +3,8 @@ package com.innbucks.userservice.service;
 import com.innbucks.userservice.dto.CreateShopAdminDTO;
 import com.innbucks.userservice.dto.CreateShopUserDTO;
 import com.innbucks.userservice.dto.UserResponseDTO;
-import com.innbucks.userservice.entity.TenantProfile;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.integration.LoyaltyServiceClient;
-import com.innbucks.userservice.repository.TenantProfileRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -50,9 +48,9 @@ public class ShopStaffService {
     static final String DEFAULT_STAFF_PASSWORD = "#Pass123";
 
     private final UserRepository userRepository;
-    private final TenantProfileRepository tenantProfileRepository;
     private final PasswordEncoder passwordEncoder;
     private final LoyaltyServiceClient loyaltyServiceClient;
+    private final LoyaltyMerchantResolver loyaltyMerchantResolver;
 
     @Transactional
     public UserResponseDTO createShopAdmin(CreateShopAdminDTO req) {
@@ -60,11 +58,14 @@ public class ShopStaffService {
         if (!caller.hasRole(User.Role.MERCHANT_ADMIN)) {
             throw forbidden("Only MERCHANT_ADMIN can create shop admins");
         }
-        UUID callerMerchantId = tenantProfileRepository.findByUserId(caller.getId())
-                .map(TenantProfile::getLoyaltyMerchantId)
-                .orElse(null);
+        // Resolve via shared resolver: reads the cached TenantProfile.loyaltyMerchantId
+        // first, then falls back to a loyalty-service lookup by Merchant.admin_email
+        // and caches the result. This means a MERCHANT_ADMIN who just created their
+        // first merchant can call this endpoint immediately, without re-logging in.
+        UUID callerMerchantId = loyaltyMerchantResolver.resolveForUser(caller).orElse(null);
         if (callerMerchantId == null) {
-            throw badRequest("Your tenant profile is not bound to a loyalty merchant yet");
+            throw badRequest("Your tenant profile is not bound to a loyalty merchant yet — " +
+                    "create a merchant via POST /loyalty/merchants first");
         }
 
         var shop = loyaltyServiceClient.findShop(req.getShopId())
@@ -115,12 +116,10 @@ public class ShopStaffService {
                 .toList();
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public List<UserResponseDTO> listForShop(UUID shopId) {
         User caller = requireCaller();
-        UUID callerMerchantId = tenantProfileRepository.findByUserId(caller.getId())
-                .map(TenantProfile::getLoyaltyMerchantId)
-                .orElse(null);
+        UUID callerMerchantId = loyaltyMerchantResolver.resolveForUser(caller).orElse(null);
         if (callerMerchantId == null) {
             throw forbidden("Your tenant profile is not bound to a loyalty merchant yet");
         }
