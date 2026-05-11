@@ -102,6 +102,41 @@ public class AuthService {
         return issueToken(user);
     }
 
+    /**
+     * Rotates the caller's password. Requires the existing (current) password as a
+     * re-authentication step. The bearer token stays valid until its natural expiry —
+     * other services already accept tokens until then, so forcing immediate revocation
+     * here would just create UX friction without a meaningful security gain.
+     */
+    @Transactional
+    public void changePassword(String token, ChangePasswordRequestDTO request) {
+        if (token == null || token.isBlank() || !jwtUtil.isTokenValid(token)) {
+            throw new RuntimeException("Invalid or expired token");
+        }
+        if (tokenRevocationService.isRevoked(token)) {
+            throw new RuntimeException("Token revoked");
+        }
+        String subject = jwtUtil.extractEmail(token);
+        if (subject == null || subject.isBlank()) {
+            throw new RuntimeException("Token has no subject");
+        }
+        User user = (subject.contains("@")
+                ? userRepository.findByEmail(subject)
+                : userRepository.findByPhoneNumber(subject))
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        if (!passwordEncoder.matches(request.getCurrentPassword(), user.getPassword())) {
+            throw new RuntimeException("Current password does not match");
+        }
+        if (passwordEncoder.matches(request.getNewPassword(), user.getPassword())) {
+            throw new RuntimeException("New password must differ from current password");
+        }
+
+        user.setPassword(passwordEncoder.encode(request.getNewPassword()));
+        userRepository.save(user);
+        log.info("Password changed userId={} subject={}", user.getId(), subject);
+    }
+
     public AuthResponseDTO refresh(String token) {
         if (token == null || token.isBlank() || !jwtUtil.isTokenValid(token)) {
             throw new RuntimeException("Invalid or expired token");

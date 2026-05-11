@@ -171,6 +171,46 @@ public class AuthController {
         return ResponseEntity.ok(ApiResult.ok("Token refreshed", response));
     }
 
+    @PostMapping("/change-password")
+    @SecurityRequirement(name = "bearerAuth")
+    @Operation(summary = "Change the caller's password",
+            description = """
+                    Replaces the current password with a new one. Both `currentPassword` and `newPassword`
+                    are required — the current password is checked against the stored hash to prevent a
+                    stolen-token attacker from locking the legitimate user out.
+
+                    Used by shop staff to replace the default password (`#Pass123`) stamped at onboarding
+                    by their merchant/shop admin. The existing JWT continues to work until it expires;
+                    no re-login is required.
+                    """)
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "Password changed",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Password changed",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "Validation failure, wrong current password, or new password matches the current one"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
+                    description = "Missing or invalid bearer token")
+    })
+    public ResponseEntity<ApiResult<Void>> changePassword(HttpServletRequest request,
+                                                          @Valid @RequestBody ChangePasswordRequestDTO body) {
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing Bearer token"));
+        }
+        String token = authHeader.substring(7);
+        authService.changePassword(token, body);
+        return ResponseEntity.ok(ApiResult.ok("Password changed", null));
+    }
+
     @PostMapping("/logout")
     @SecurityRequirement(name = "bearerAuth")
     @Operation(summary = "Logout",

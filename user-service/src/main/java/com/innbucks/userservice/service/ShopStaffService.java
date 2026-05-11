@@ -42,6 +42,13 @@ import java.util.UUID;
 @Slf4j
 public class ShopStaffService {
 
+    /**
+     * Default password stamped on every new shop staff member until a notification engine
+     * is in place to send them their own onboarding link. They must rotate it via
+     * POST /auth/change-password on first login.
+     */
+    static final String DEFAULT_STAFF_PASSWORD = "#Pass123";
+
     private final UserRepository userRepository;
     private final TenantProfileRepository tenantProfileRepository;
     private final PasswordEncoder passwordEncoder;
@@ -67,7 +74,7 @@ public class ShopStaffService {
         }
 
         User staff = buildStaff(req.getFirstName(), req.getMiddleName(), req.getLastName(),
-                req.getEmail(), req.getPhoneNumber(), req.getPassword(),
+                req.getEmail(), req.getPhoneNumber(),
                 User.Role.SHOP_ADMIN, callerMerchantId, req.getShopId());
         userRepository.save(staff);
         log.info("Created SHOP_ADMIN userId={} email={} shopId={} merchantId={} by={}",
@@ -88,7 +95,7 @@ public class ShopStaffService {
         }
 
         User staff = buildStaff(req.getFirstName(), req.getMiddleName(), req.getLastName(),
-                req.getEmail(), req.getPhoneNumber(), req.getPassword(),
+                req.getEmail(), req.getPhoneNumber(),
                 User.Role.SHOP_USER, callerMerchantId, callerShopId);
         userRepository.save(staff);
         log.info("Created SHOP_USER userId={} email={} shopId={} by={}",
@@ -128,7 +135,7 @@ public class ShopStaffService {
     }
 
     private User buildStaff(String firstName, String middleName, String lastName,
-                            String email, String phone, String rawPassword,
+                            String email, String phone,
                             User.Role role, UUID merchantId, UUID shopId) {
         if (userRepository.existsByEmail(email)) {
             throw badRequest("Email already registered");
@@ -142,7 +149,7 @@ public class ShopStaffService {
                 .lastName(lastName)
                 .email(email)
                 .phoneNumber(phone)
-                .password(passwordEncoder.encode(rawPassword))
+                .password(passwordEncoder.encode(DEFAULT_STAFF_PASSWORD))
                 .roles(EnumSet.of(role))
                 // Grants the loyalty bundle's microservices (loyalty + payments) on the JWT.
                 .defaultServices(new LinkedHashSet<>(List.of(Services.LOYALTY)))
