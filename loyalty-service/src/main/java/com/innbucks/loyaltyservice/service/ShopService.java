@@ -25,12 +25,8 @@ public class ShopService {
         this.merchants = merchants;
     }
 
-    public Dtos.ShopResponse create(UUID tenantId, UUID callerMerchantId, Dtos.ShopRequest req) {
-        if (callerMerchantId == null) {
-            throw LoyaltyException.badRequest("MERCHANT_REQUIRED",
-                    "caller has no merchant scope; only MERCHANT_ADMIN tokens can create shops");
-        }
-        Merchant m = merchants.requireMerchant(tenantId, callerMerchantId);
+    public Dtos.ShopResponse create(UUID tenantId, Dtos.ShopRequest req) {
+        Merchant m = merchants.requireMerchant(tenantId, req.merchantId());
 
         Shop s = new Shop();
         s.setTenantId(tenantId);
@@ -62,19 +58,16 @@ public class ShopService {
         return toResponse(requireShop(tenantId, shopId));
     }
 
-    public Dtos.ShopResponse update(UUID tenantId, UUID callerMerchantId, UUID shopId,
-                                    Dtos.ShopRequest req) {
+    public Dtos.ShopResponse update(UUID tenantId, UUID shopId, Dtos.ShopRequest req) {
         Shop s = requireShop(tenantId, shopId);
-        guardCallerOwnsShop(s, callerMerchantId);
         s.setName(req.name());
         if (req.code() != null) s.setCode(req.code());
         if (req.address() != null) s.setAddress(req.address());
         return toResponse(s);
     }
 
-    public Dtos.ShopResponse setActive(UUID tenantId, UUID callerMerchantId, UUID shopId, boolean active) {
+    public Dtos.ShopResponse setActive(UUID tenantId, UUID shopId, boolean active) {
         Shop s = requireShop(tenantId, shopId);
-        guardCallerOwnsShop(s, callerMerchantId);
         s.setStatus(active ? Shop.Status.ACTIVE : Shop.Status.INACTIVE);
         return toResponse(s);
     }
@@ -85,13 +78,6 @@ public class ShopService {
             throw LoyaltyException.forbidden("CROSS_TENANT", "shop belongs to a different tenant");
         }
         return s;
-    }
-
-    private void guardCallerOwnsShop(Shop s, UUID callerMerchantId) {
-        if (callerMerchantId != null && !callerMerchantId.equals(s.getMerchantId())) {
-            throw LoyaltyException.forbidden("WRONG_MERCHANT",
-                    "shop belongs to a different merchant");
-        }
     }
 
     public static Dtos.ShopResponse toResponse(Shop s) {

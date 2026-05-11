@@ -56,8 +56,10 @@ public class Dtos {
     // Shops inherit their merchant's rules; if the merchant has none, they
     // fall back to global tenant-wide rules (handled transparently by
     // RulesEngine when transactions reference the shop's merchantId).
-    // merchantId is sourced from the authenticated caller's JWT.
     public record ShopRequest(
+            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                    description = "Merchant this shop belongs to.")
+            @NotNull UUID merchantId,
             @Schema(example = "Pizza Inn Avondale", description = "Display name of the shop outlet.")
             @NotBlank String name,
             @Schema(example = "AVONDALE", nullable = true,
