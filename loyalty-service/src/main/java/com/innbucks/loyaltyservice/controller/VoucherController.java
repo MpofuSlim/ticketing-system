@@ -5,6 +5,7 @@ import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.dto.PageResponse;
 import com.innbucks.loyaltyservice.entity.Voucher;
 import com.innbucks.loyaltyservice.entity.VoucherTemplate;
+import com.innbucks.loyaltyservice.security.CallerDetails;
 import com.innbucks.loyaltyservice.security.TenantContext;
 import com.innbucks.loyaltyservice.service.VoucherService;
 import com.innbucks.loyaltyservice.service.VoucherTemplateService;
@@ -102,7 +103,7 @@ public class VoucherController {
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<VoucherTemplate>> createTemplate(@Valid @RequestBody Dtos.VoucherTemplateRequest req) {
-        VoucherTemplate data = templateService.create(tenantContext.requireTenantId(), req);
+        VoucherTemplate data = templateService.create(tenantContext.requireTenantId(), CallerDetails.currentMerchantId(), req);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Voucher template created successfully", data));
     }
@@ -406,7 +407,7 @@ public class VoucherController {
     })
     @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.RedemptionResponse>> redeem(@Valid @RequestBody Dtos.RedeemVoucherRequest req) {
-        Dtos.RedemptionResponse data = voucherService.redeem(tenantContext.requireTenantId(), req);
+        Dtos.RedemptionResponse data = voucherService.redeem(tenantContext.requireTenantId(), CallerDetails.currentMerchantId(), req);
         return ResponseEntity.ok(ApiResult.ok("Voucher redeemed successfully", data));
     }
 

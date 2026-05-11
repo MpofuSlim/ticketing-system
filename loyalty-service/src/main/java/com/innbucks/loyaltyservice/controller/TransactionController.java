@@ -3,6 +3,7 @@ package com.innbucks.loyaltyservice.controller;
 import com.innbucks.loyaltyservice.dto.ApiResult;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.dto.PageResponse;
+import com.innbucks.loyaltyservice.security.CallerDetails;
 import com.innbucks.loyaltyservice.security.TenantContext;
 import com.innbucks.loyaltyservice.service.RedemptionService;
 import com.innbucks.loyaltyservice.service.TransactionService;
@@ -114,7 +115,7 @@ public class TransactionController {
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.TransactionResponse>> post(@Valid @RequestBody Dtos.TransactionRequest req) {
-        Dtos.TransactionResponse data = transactions.post(tenantContext.requireTenantId(), req);
+        Dtos.TransactionResponse data = transactions.post(tenantContext.requireTenantId(), CallerDetails.currentMerchantId(), req);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Transaction posted successfully", data));
     }
@@ -441,7 +442,7 @@ public class TransactionController {
     })
     @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Map<String, Object>>> redeem(@Valid @RequestBody Dtos.RedemptionRequest req) {
-        BigDecimal balance = redemptionService.redeemPoints(tenantContext.requireTenantId(), req);
+        BigDecimal balance = redemptionService.redeemPoints(tenantContext.requireTenantId(), CallerDetails.currentMerchantId(), req);
         Map<String, Object> data = Map.of("status", "OK", "newBalance", balance);
         return ResponseEntity.ok(ApiResult.ok("Points redeemed successfully", data));
     }

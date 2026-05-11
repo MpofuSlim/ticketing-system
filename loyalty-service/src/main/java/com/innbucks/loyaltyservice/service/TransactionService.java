@@ -43,8 +43,8 @@ public class TransactionService {
         this.rulesEngine = rulesEngine;
     }
 
-    public Dtos.TransactionResponse post(UUID tenantId, Dtos.TransactionRequest req) {
-        Merchant m = merchants.requireMerchant(tenantId, req.merchantId());
+    public Dtos.TransactionResponse post(UUID tenantId, UUID merchantId, Dtos.TransactionRequest req) {
+        Merchant m = merchants.requireMerchant(tenantId, merchantId);
         if (m.getStatus() != Merchant.Status.ACTIVE) {
             throw LoyaltyException.badRequest("MERCHANT_INACTIVE", "merchant is not active; no points will be awarded");
         }
@@ -54,7 +54,7 @@ public class TransactionService {
         }
 
         if (req.reference() != null) {
-            transactions.findFirstByMerchantIdAndReference(req.merchantId(), req.reference())
+            transactions.findFirstByMerchantIdAndReference(merchantId, req.reference())
                     .ifPresent(existing -> {
                         throw LoyaltyException.conflict("DUPLICATE_REFERENCE",
                                 "transaction with this merchant reference already exists");

@@ -276,7 +276,7 @@ public class RuleController {
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Campaign>> createCampaign(@Valid @RequestBody Dtos.CampaignRequest req) {
-        Campaign data = rules.createCampaign(tenantContext.requireTenantId(), req);
+        Campaign data = rules.createCampaign(tenantContext.requireTenantId(), CallerDetails.currentMerchantId(), req);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Campaign created successfully", data));
     }

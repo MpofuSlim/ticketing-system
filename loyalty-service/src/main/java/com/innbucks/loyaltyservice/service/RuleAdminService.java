@@ -62,14 +62,14 @@ public class RuleAdminService {
         return r;
     }
 
-    public Campaign createCampaign(UUID tenantId, Dtos.CampaignRequest req) {
-        if (req.merchantId() != null) merchants.requireMerchant(tenantId, req.merchantId());
+    public Campaign createCampaign(UUID tenantId, UUID merchantId, Dtos.CampaignRequest req) {
+        if (merchantId != null) merchants.requireMerchant(tenantId, merchantId);
         if (req.endsAt().isBefore(req.startsAt())) {
             throw LoyaltyException.badRequest("BAD_DATES", "endsAt must be after startsAt");
         }
         Campaign c = new Campaign();
         c.setTenantId(tenantId);
-        c.setMerchantId(req.merchantId());
+        c.setMerchantId(merchantId);
         c.setName(req.name());
         c.setMultiplier(req.multiplier());
         c.setTransactionType(req.transactionType());

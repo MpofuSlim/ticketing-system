@@ -158,10 +158,10 @@ public class VoucherService {
         });
     }
 
-    public Dtos.RedemptionResponse redeem(UUID tenantId, Dtos.RedeemVoucherRequest req) {
+    public Dtos.RedemptionResponse redeem(UUID tenantId, UUID merchantId, Dtos.RedeemVoucherRequest req) {
         Voucher v = vouchers.lockByCode(req.code()).orElse(null);
         if (v == null || !v.getTenantId().equals(tenantId)) {
-            fraud.record(tenantId, req.userId(), req.merchantId(), req.code(),
+            fraud.record(tenantId, req.userId(), merchantId, req.code(),
                     FraudAttempt.Reason.INVALID_CODE, "voucher not found",
                     req.deviceFingerprint(), req.ipAddress());
             throw LoyaltyException.notFound("voucher");
@@ -169,7 +169,7 @@ public class VoucherService {
 
         String expectedSig = signer.sign(tenantId + ":" + v.getTemplateId() + ":" + v.getCode());
         if (!expectedSig.equals(v.getSignature())) {
-            fraud.record(tenantId, req.userId(), req.merchantId(), req.code(),
+            fraud.record(tenantId, req.userId(), merchantId, req.code(),
                     FraudAttempt.Reason.BAD_SIGNATURE, "tampered signature",
                     req.deviceFingerprint(), req.ipAddress());
             throw LoyaltyException.forbidden("BAD_SIGNATURE", "voucher signature invalid");
@@ -177,29 +177,29 @@ public class VoucherService {
 
         if (v.getExpiresAt() != null && Instant.now().isAfter(v.getExpiresAt())) {
             v.setStatus(Voucher.Status.EXPIRED);
-            VoucherRedemption rj = recordRedemption(v, req, VoucherRedemption.Result.REJECTED, "expired");
-            fraud.record(tenantId, req.userId(), req.merchantId(), v.getCode(),
+            VoucherRedemption rj = recordRedemption(v, merchantId, req, VoucherRedemption.Result.REJECTED, "expired");
+            fraud.record(tenantId, req.userId(), merchantId, v.getCode(),
                     FraudAttempt.Reason.EXPIRED, "redemption after expiry",
                     req.deviceFingerprint(), req.ipAddress());
             throw LoyaltyException.badRequest("EXPIRED", "voucher has expired");
         }
 
         if (v.getStatus() == Voucher.Status.REDEEMED || v.getUsesRemaining() <= 0) {
-            recordRedemption(v, req, VoucherRedemption.Result.REJECTED, "already redeemed");
-            fraud.record(tenantId, req.userId(), req.merchantId(), v.getCode(),
+            recordRedemption(v, merchantId, req, VoucherRedemption.Result.REJECTED, "already redeemed");
+            fraud.record(tenantId, req.userId(), merchantId, v.getCode(),
                     FraudAttempt.Reason.ALREADY_REDEEMED, "duplicate redemption attempt",
                     req.deviceFingerprint(), req.ipAddress());
             throw LoyaltyException.conflict("ALREADY_REDEEMED", "voucher already fully redeemed");
         }
         if (v.getStatus() == Voucher.Status.REVOKED) {
-            recordRedemption(v, req, VoucherRedemption.Result.REJECTED, "revoked");
+            recordRedemption(v, merchantId, req, VoucherRedemption.Result.REJECTED, "revoked");
             throw LoyaltyException.conflict("REVOKED", "voucher has been revoked");
         }
 
-        if (v.getMerchantId() != null && !v.getMerchantId().equals(req.merchantId())) {
-            fraud.record(tenantId, req.userId(), req.merchantId(), v.getCode(),
+        if (v.getMerchantId() != null && !v.getMerchantId().equals(merchantId)) {
+            fraud.record(tenantId, req.userId(), merchantId, v.getCode(),
                     FraudAttempt.Reason.WRONG_MERCHANT,
-                    "expected " + v.getMerchantId() + " got " + req.merchantId(),
+                    "expected " + v.getMerchantId() + " got " + merchantId,
                     req.deviceFingerprint(), req.ipAddress());
             throw LoyaltyException.forbidden("WRONG_MERCHANT", "voucher not redeemable at this merchant");
         }
@@ -207,8 +207,8 @@ public class VoucherService {
         if (req.userId() != null) {
             LoyaltyUser u = users.findById(req.userId()).orElse(null);
             if (u != null && u.getStatus() == LoyaltyUser.Status.BLOCKED) {
-                recordRedemption(v, req, VoucherRedemption.Result.REJECTED, "user blocked");
-                fraud.record(tenantId, req.userId(), req.merchantId(), v.getCode(),
+                recordRedemption(v, merchantId, req, VoucherRedemption.Result.REJECTED, "user blocked");
+                fraud.record(tenantId, req.userId(), merchantId, v.getCode(),
                         FraudAttempt.Reason.BLOCKED_USER, "blocked user attempted redemption",
                         req.deviceFingerprint(), req.ipAddress());
                 throw LoyaltyException.forbidden("USER_BLOCKED", "user is blocked");
@@ -216,7 +216,7 @@ public class VoucherService {
         }
 
         // ensure merchant belongs to the tenant
-        merchants.requireMerchant(tenantId, req.merchantId());
+        merchants.requireMerchant(tenantId, merchantId);
 
         v.setUsesRemaining(v.getUsesRemaining() - 1);
         if (v.getUsesRemaining() <= 0) {
@@ -226,19 +226,19 @@ public class VoucherService {
             v.setStatus(Voucher.Status.PARTIALLY_USED);
         }
 
-        VoucherRedemption r = recordRedemption(v, req, VoucherRedemption.Result.SUCCESS, null);
+        VoucherRedemption r = recordRedemption(v, merchantId, req, VoucherRedemption.Result.SUCCESS, null);
         VoucherTemplate tpl = templateService.require(tenantId, v.getTemplateId());
         return new Dtos.RedemptionResponse(r.getId(), v.getId(), v.getStatus().name(),
                 v.getUsesRemaining(), tpl.getValue(), tpl.getValueType().name(), r.getRedeemedAt());
     }
 
-    private VoucherRedemption recordRedemption(Voucher v, Dtos.RedeemVoucherRequest req,
+    private VoucherRedemption recordRedemption(Voucher v, UUID merchantId, Dtos.RedeemVoucherRequest req,
                                                VoucherRedemption.Result result, String reason) {
         VoucherRedemption r = new VoucherRedemption();
         r.setTenantId(v.getTenantId());
         r.setVoucherId(v.getId());
         r.setUserId(req.userId());
-        r.setMerchantId(req.merchantId());
+        r.setMerchantId(merchantId);
         r.setOutletCode(req.outletCode());
         r.setIpAddress(req.ipAddress());
         r.setDeviceFingerprint(req.deviceFingerprint());

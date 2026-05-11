@@ -103,9 +103,8 @@ public class Dtos {
             Instant endsAt
     ) {}
 
+    // merchantId sourced from JWT claim, same as RuleRequest.
     public record CampaignRequest(
-            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true)
-            UUID merchantId,
             @Schema(example = "Weekend 2x Points")
             @NotBlank String name,
             @Schema(example = "2.0000", description = "Points multiplier during the campaign window.")
@@ -118,9 +117,8 @@ public class Dtos {
             @NotNull Instant endsAt
     ) {}
 
+    // merchantId sourced from JWT claim.
     public record TransactionRequest(
-            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789")
-            @NotNull UUID merchantId,
             @Schema(example = "11111111-2222-3333-4444-555555555555")
             @NotNull UUID userId,
             @Schema(example = "PURCHASE", allowableValues = {"PURCHASE", "QR_PAY", "REDEMPTION", "REFUND", "ADJUSTMENT", "TRANSFER_IN", "TRANSFER_OUT"})
@@ -149,21 +147,18 @@ public class Dtos {
             String reason
     ) {}
 
+    // merchantId sourced from JWT claim.
     public record RedemptionRequest(
             @Schema(example = "11111111-2222-3333-4444-555555555555")
             @NotNull UUID userId,
-            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789")
-            @NotNull UUID merchantId,
             @Schema(example = "500.0000", description = "Points to redeem.")
             @Positive BigDecimal points,
             @Schema(example = "Counter redemption by cashier", nullable = true)
             String reason
     ) {}
 
+    // merchantId sourced from JWT claim.
     public record VoucherTemplateRequest(
-            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
-                    description = "Merchant scope — null means tenant-wide template.")
-            UUID merchantId,
             @Schema(example = "$5 Off Your Next Coffee")
             @NotBlank String name,
             @Schema(example = "SINGLE_USE", allowableValues = {"SINGLE_USE", "MULTI_USE", "FREE_ITEM"})
@@ -221,13 +216,12 @@ public class Dtos {
                                   String assigneePhone, int usesRemaining,
                                   Instant issuedAt, Instant expiresAt) {}
 
+    // merchantId sourced from JWT claim.
     public record RedeemVoucherRequest(
             @Schema(example = "VCH-AB12CD34", description = "Voucher redemption code from the customer.")
             @NotBlank String code,
             @Schema(example = "11111111-2222-3333-4444-555555555555", nullable = true)
             UUID userId,
-            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", description = "Merchant redeeming the voucher.")
-            @NotNull UUID merchantId,
             @Schema(example = "WESTGATE", nullable = true, description = "Outlet code within the merchant.")
             String outletCode,
             @Schema(example = "abc123def456", nullable = true, description = "Device fingerprint for fraud detection.")
