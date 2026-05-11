@@ -63,7 +63,7 @@ public class Dtos {
             @Schema(example = "Pizza Inn Avondale", description = "Display name of the shop outlet.")
             @NotBlank String name,
             @Schema(example = "AVONDALE", nullable = true,
-                    description = "Short outlet code referenced by VoucherTemplate.applicableOutlets.")
+                    description = "Optional human-friendly outlet code for receipts and back-office search.")
             String code,
             @Schema(example = "123 King George Rd, Avondale, Harare", nullable = true)
             String address
@@ -219,9 +219,11 @@ public class Dtos {
             @Min(1) int usageLimit,
             @Schema(example = "30", nullable = true, description = "Days from issue until the voucher expires.")
             Integer validityDays,
-            @Schema(example = "WESTGATE,EASTGATE", nullable = true,
-                    description = "Comma-separated outlet codes where this voucher can be redeemed. Null = all outlets.")
-            String applicableOutlets
+            @Schema(example = "[\"11111111-aaaa-bbbb-cccc-222222222222\",\"33333333-dddd-eeee-ffff-444444444444\"]",
+                    nullable = true,
+                    description = "Shop IDs where this voucher can be redeemed. Null or empty = every shop under " +
+                                  "the merchant (or every shop in the tenant for tenant-wide templates).")
+            List<UUID> applicableOutlets
     ) {}
 
     public record IssueVoucherRequest(

@@ -77,7 +77,10 @@ public class VoucherController {
                                         "freeItemSku": null,
                                         "usageLimit": 1,
                                         "validityDays": 30,
-                                        "applicableOutlets": "WESTGATE,SANDTON",
+                                        "applicableOutlets": [
+                                          "11111111-aaaa-bbbb-cccc-222222222222",
+                                          "33333333-dddd-eeee-ffff-444444444444"
+                                        ],
                                         "active": true,
                                         "createdAt": "2026-05-04T10:00:00Z"
                                       }
@@ -139,7 +142,10 @@ public class VoucherController {
                                             "freeItemSku": null,
                                             "usageLimit": 1,
                                             "validityDays": 30,
-                                            "applicableOutlets": "WESTGATE,SANDTON",
+                                            "applicableOutlets": [
+                                              "11111111-aaaa-bbbb-cccc-222222222222",
+                                              "33333333-dddd-eeee-ffff-444444444444"
+                                            ],
                                             "active": true,
                                             "createdAt": "2026-05-04T10:00:00Z"
                                           },
