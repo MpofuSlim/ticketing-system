@@ -26,21 +26,11 @@ public class ShopService {
     }
 
     public Dtos.ShopResponse create(UUID tenantId, UUID callerMerchantId, Dtos.ShopRequest req) {
-        UUID merchantId = req.merchantId();
-        // A MERCHANT_ADMIN may only create shops under their own merchant; the
-        // request's merchantId, if supplied, must match the JWT merchantId.
-        if (callerMerchantId != null) {
-            if (merchantId != null && !merchantId.equals(callerMerchantId)) {
-                throw LoyaltyException.forbidden("WRONG_MERCHANT",
-                        "shop must belong to your own merchant");
-            }
-            merchantId = callerMerchantId;
-        }
-        if (merchantId == null) {
+        if (callerMerchantId == null) {
             throw LoyaltyException.badRequest("MERCHANT_REQUIRED",
-                    "merchantId is required when caller has no merchant scope");
+                    "caller has no merchant scope; only MERCHANT_ADMIN tokens can create shops");
         }
-        Merchant m = merchants.requireMerchant(tenantId, merchantId);
+        Merchant m = merchants.requireMerchant(tenantId, callerMerchantId);
 
         Shop s = new Shop();
         s.setTenantId(tenantId);
