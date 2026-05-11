@@ -2,6 +2,7 @@ package com.innbucks.userservice.service;
 
 import com.innbucks.userservice.dto.*;
 import com.innbucks.userservice.entity.*;
+import com.innbucks.userservice.integration.LoyaltyServiceClient;
 import com.innbucks.userservice.repository.*;
 import com.innbucks.userservice.security.JwtUtil;
 import lombok.RequiredArgsConstructor;
@@ -28,6 +29,7 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
     private final TokenRevocationService tokenRevocationService;
+    private final LoyaltyServiceClient loyaltyServiceClient;
 
     @Transactional
     public AuthResponseDTO register(RegisterRequestDTO request) {
@@ -150,9 +152,7 @@ public class AuthService {
 
         java.util.UUID loyaltyMerchantId = null;
         if (user.hasRole(User.Role.MERCHANT_ADMIN)) {
-            loyaltyMerchantId = tenantProfileRepository.findByUserId(user.getId())
-                    .map(TenantProfile::getLoyaltyMerchantId)
-                    .orElse(null);
+            loyaltyMerchantId = resolveLoyaltyMerchantId(user);
         }
 
         String newToken = jwtUtil.generateToken(subject, roleNames, new ArrayList<>(microservices),
@@ -167,6 +167,33 @@ public class AuthService {
                 .tier(tier)
                 .verified(verified)
                 .build();
+    }
+
+    /**
+     * Resolve which loyalty merchant a MERCHANT_ADMIN administers. The bound value
+     * lives on TenantProfile.loyaltyMerchantId; if it's missing we ask loyalty-service
+     * to look it up by Merchant.admin_email (stamped when the user created their
+     * merchant) and cache the answer back onto TenantProfile so future logins skip
+     * the round-trip. Returns null when no merchant is bound and none can be resolved
+     * — login proceeds without the JWT merchantId claim and loyalty endpoints that
+     * require merchant scope will reject the call with MERCHANT_REQUIRED.
+     */
+    private java.util.UUID resolveLoyaltyMerchantId(User user) {
+        java.util.Optional<TenantProfile> profileOpt = tenantProfileRepository.findByUserId(user.getId());
+        if (profileOpt.isEmpty()) return null;
+        TenantProfile profile = profileOpt.get();
+        if (profile.getLoyaltyMerchantId() != null) {
+            return profile.getLoyaltyMerchantId();
+        }
+        if (user.getEmail() == null || user.getEmail().isBlank()) return null;
+        java.util.Optional<java.util.UUID> looked = loyaltyServiceClient.findMerchantIdByAdminEmail(user.getEmail());
+        if (looked.isEmpty()) return null;
+        java.util.UUID resolved = looked.get();
+        profile.setLoyaltyMerchantId(resolved);
+        tenantProfileRepository.save(profile);
+        log.info("Resolved loyalty merchant via lookup userId={} email={} merchantId={}",
+                user.getId(), user.getEmail(), resolved);
+        return resolved;
     }
 
     private java.util.Optional<User> resolveUser(LoginRequestDTO request) {

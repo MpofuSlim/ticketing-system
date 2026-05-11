@@ -54,6 +54,12 @@ public class Merchant {
     @Column(nullable = false, length = 20)
     private Status status = Status.ACTIVE;
 
+    // Email of the user-service identity that admins this merchant. Stamped
+    // at create time from the JWT subject so AuthService can resolve a
+    // MERCHANT_ADMIN's merchantId at login without manual binding.
+    @Column(name = "admin_email", length = 255)
+    private String adminEmail;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();
 

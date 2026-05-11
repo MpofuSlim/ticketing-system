@@ -6,6 +6,8 @@ import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -33,8 +35,16 @@ public class MerchantService {
         if (req.feePerPointIssued() != null) m.setFeePerPointIssued(req.feePerPointIssued());
         if (req.feePerVoucherIssued() != null) m.setFeePerVoucherIssued(req.feePerVoucherIssued());
         if (req.feePerVoucherRedeemed() != null) m.setFeePerVoucherRedeemed(req.feePerVoucherRedeemed());
+        m.setAdminEmail(callerEmail());
         merchants.save(m);
         return toResponse(m);
+    }
+
+    private static String callerEmail() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null) return null;
+        String name = auth.getName();
+        return name == null || name.isBlank() ? null : name;
     }
 
     @Transactional(readOnly = true)
