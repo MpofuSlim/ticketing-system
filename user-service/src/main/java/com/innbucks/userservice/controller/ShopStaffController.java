@@ -149,7 +149,15 @@ public class ShopStaffController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "403", description = "Caller is not a SHOP_ADMIN")
+                    responseCode = "403", description = "Caller is not a SHOP_ADMIN",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "403 FORBIDDEN",
+                                      "message": "Forbidden",
+                                      "data": null
+                                    }
+                                    """)))
     })
     public ResponseEntity<ApiResult<UserResponseDTO>> createShopUser(@Valid @RequestBody CreateShopUserDTO req) {
         UserResponseDTO data = shopStaffService.createShopUser(req);
@@ -205,9 +213,25 @@ public class ShopStaffController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "400", description = "Caller is not scoped to a shop"),
+                    responseCode = "400", description = "Caller is not scoped to a shop",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "Caller is not scoped to a shop",
+                                      "data": null
+                                    }
+                                    """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "403", description = "Caller is not a SHOP_ADMIN")
+                    responseCode = "403", description = "Caller is not a SHOP_ADMIN",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "403 FORBIDDEN",
+                                      "message": "Forbidden",
+                                      "data": null
+                                    }
+                                    """)))
     })
     public ResponseEntity<ApiResult<List<UserResponseDTO>>> listMyShopStaff() {
         List<UserResponseDTO> data = shopStaffService.listForCallerShop();
@@ -244,14 +268,44 @@ public class ShopStaffController {
                                           "createdAt": "2026-05-11T10:15:00",
                                           "loyaltyMerchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                           "loyaltyShopId": "11111111-aaaa-bbbb-cccc-222222222222"
+                                        },
+                                        {
+                                          "id": 74,
+                                          "firstName": "Rufaro",
+                                          "middleName": "T",
+                                          "lastName": "Ncube",
+                                          "email": "rufaro@pizza-avondale.co.zw",
+                                          "phoneNumber": "+263772345678",
+                                          "roles": ["SHOP_USER"],
+                                          "defaultServices": ["loyalty"],
+                                          "active": true,
+                                          "createdAt": "2026-05-11T10:20:00",
+                                          "loyaltyMerchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                          "loyaltyShopId": "11111111-aaaa-bbbb-cccc-222222222222"
                                         }
                                       ]
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "400", description = "Shop not found in loyalty-service, or caller has no merchant binding"),
+                    responseCode = "400", description = "Shop not found in loyalty-service, or caller has no merchant binding",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "Shop not found in loyalty-service",
+                                      "data": null
+                                    }
+                                    """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "403", description = "Shop belongs to a different merchant, or caller is not a MERCHANT_ADMIN")
+                    responseCode = "403", description = "Shop belongs to a different merchant, or caller is not a MERCHANT_ADMIN",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "403 FORBIDDEN",
+                                      "message": "Shop does not belong to your merchant",
+                                      "data": null
+                                    }
+                                    """)))
     })
     public ResponseEntity<ApiResult<List<UserResponseDTO>>> listShopStaff(@PathVariable UUID shopId) {
         List<UserResponseDTO> data = shopStaffService.listForShop(shopId);
