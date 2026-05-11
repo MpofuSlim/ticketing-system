@@ -105,7 +105,30 @@ public class VoucherController {
             )
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
-    public ResponseEntity<ApiResult<VoucherTemplate>> createTemplate(@Valid @RequestBody Dtos.VoucherTemplateRequest req) {
+    public ResponseEntity<ApiResult<VoucherTemplate>> createTemplate(
+            @io.swagger.v3.oas.annotations.parameters.RequestBody(
+                    required = true,
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = Dtos.VoucherTemplateRequest.class),
+                            examples = @ExampleObject(name = "Create template", value = """
+                                    {
+                                      "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                      "name": "$5 Off Your Next Coffee",
+                                      "type": "SINGLE_USE",
+                                      "valueType": "AMOUNT",
+                                      "value": 5,
+                                      "currency": "USD",
+                                      "freeItemSku": null,
+                                      "usageLimit": 1,
+                                      "validityDays": 30,
+                                      "applicableOutlets": [
+                                        "11111111-aaaa-bbbb-cccc-222222222222",
+                                        "33333333-dddd-eeee-ffff-444444444444"
+                                      ]
+                                    }
+                                    """)))
+            @Valid @RequestBody Dtos.VoucherTemplateRequest req) {
         // Templates may be tenant-wide (null merchantId) so use merchantIdOrBody.
         VoucherTemplate data = templateService.create(tenantContext.requireTenantId(),
                 CallerDetails.merchantIdOrBody(req.merchantId()), req);
