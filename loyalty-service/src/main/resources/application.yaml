@@ -1,19 +1,20 @@
 spring:
   application:
     name: loyalty-service
-  # Local & container dev: file-based H2 in MODE=PostgreSQL. Data persists
-  # across restarts in ${H2_DATA_DIR}/<service>.mv.db. AUTO_SERVER=TRUE lets
-  # an external H2 console connect for debugging. Tests still override these
-  # to in-memory H2 via src/test/resources/application-test.yaml.
-  h2:
-    console:
-      enabled: true
-      path: /h2-console
+
+  # H2-only mode: file-based database under ./data so writes survive restart;
+  # AUTO_SERVER=TRUE lets a SQL client connect while the app is running. The
+  # PostgreSQL config is preserved below (commented) for easy reversal.
   datasource:
-    url: ${DB_URL:jdbc:h2:file:${H2_DATA_DIR:./data}/loyalty_service;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;AUTO_SERVER=TRUE}
-    username: ${DB_USERNAME:sa}
-    password: ${DB_PASSWORD:}
-    driver-class-name: ${DB_DRIVER:org.h2.Driver}
+    url: jdbc:h2:file:./data/loyalty-service;MODE=PostgreSQL;AUTO_SERVER=TRUE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+    # --- PostgreSQL (disabled) ---
+    # url: ${DB_URL:jdbc:postgresql://localhost:5432/loyalty_service}
+    # driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
+    # username: ${DB_USERNAME:postgres}
+    # password: ${DB_PASSWORD}
     hikari:
       pool-name: loyalty-service-pool
       maximum-pool-size: ${DB_POOL_MAX:20}
@@ -21,19 +22,20 @@ spring:
       connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:5000}
       idle-timeout: ${DB_IDLE_TIMEOUT_MS:600000}
       max-lifetime: ${DB_MAX_LIFETIME_MS:1800000}
+
   jpa:
     hibernate:
-      # H2 file branch: Hibernate owns the schema (ddl-auto=update keeps the
-      # schema in sync with entities and preserves data across restarts).
+      # H2 in-memory: Hibernate generates the schema on each boot.
       ddl-auto: ${JPA_DDL_AUTO:update}
     show-sql: ${JPA_SHOW_SQL:false}
     properties:
       hibernate:
         dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.H2Dialect}
+        # --- PostgreSQL dialect (disabled) ---
+        # dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
 
+  # Flyway migrations are PostgreSQL-flavoured; disabled when running on H2.
   flyway:
-    # Disabled in this branch — Hibernate owns the schema. Set FLYWAY_ENABLED=true
-    # if you switch DB_URL back to PostgreSQL and want to re-run db/migration.
     enabled: ${FLYWAY_ENABLED:false}
     baseline-on-migrate: true
     baseline-version: 0
@@ -41,6 +43,11 @@ spring:
 
   lifecycle:
     timeout-per-shutdown-phase: 30s
+
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
 
 # user-service is the system of record for customer identity. loyalty-service
 # calls GET /auth/customer/tier to validate a phone number before lazily
@@ -73,15 +80,19 @@ loyalty:
 innbucks:
   internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
 
+jwt:
+  secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
+  expiration: ${JWT_EXPIRATION_MS:86400000}
+
+server:
+  port: ${SERVER_PORT:8086}
+  shutdown: graceful
+
 springdoc:
   swagger-ui:
     path: /swagger-ui/index.html
   api-docs:
     path: /v3/api-docs
-
-server:
-  port: ${SERVER_PORT:8086}
-  shutdown: graceful
 
 management:
   endpoints:
@@ -92,6 +103,8 @@ management:
     health:
       probes:
         enabled: true
+      # 'when-authorized' hides component breakdown from anonymous callers
+      # (probes still get UP/DOWN) while letting authenticated tooling debug.
       show-details: when-authorized
   metrics:
     tags:
@@ -100,15 +113,8 @@ management:
 logging:
   pattern:
     level: "%5p [${spring.application.name:-},%X{traceId:-}]"
-
 cors:
   # Comma-separated list of allowed origin patterns. Default whitelists the
   # production frontend (innvents.vercel.app), Vercel preview deploys, and
   # any localhost port for dev. Override in prod via CORS_ALLOWED_ORIGINS.
   allowed-origins: ${CORS_ALLOWED_ORIGINS:https://innvents.vercel.app,https://innbucks-ticketing.vercel.app,https://*.vercel.app,http://localhost:[*]}
-
-# Match the JWT secret used by user-service (and the other microservices) so
-# loyalty-service can verify tokens minted at /auth/login.
-jwt:
-  secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
-  expiration: ${JWT_EXPIRATION_MS:86400000}

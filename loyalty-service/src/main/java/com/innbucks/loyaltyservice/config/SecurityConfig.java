@@ -2,9 +2,7 @@ package com.innbucks.loyaltyservice.config;
 
 import com.innbucks.loyaltyservice.security.JwtFilter;
 import lombok.RequiredArgsConstructor;
-import org.h2.server.web.JakartaWebServlet;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.web.servlet.ServletRegistrationBean;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -103,19 +101,5 @@ public class SecurityConfig {
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);
         return source;
-    }
-
-    /**
-     * Spring Boot 4's H2ConsoleAutoConfiguration wasn't registering the servlet
-     * here (the request fell through to DispatcherServlet and 404-ed as a
-     * missing static resource). Registering manually as a ServletRegistrationBean
-     * mounts H2's console at /h2-console/* unambiguously.
-     */
-    @Bean
-    public ServletRegistrationBean<JakartaWebServlet> h2ConsoleServlet() {
-        ServletRegistrationBean<JakartaWebServlet> bean =
-                new ServletRegistrationBean<>(new JakartaWebServlet(), "/h2-console/*");
-        bean.setLoadOnStartup(1);
-        return bean;
     }
 }
