@@ -148,8 +148,15 @@ public class AuthService {
                 ? Services.expandToMicroservices(Services.ALL_BUNDLES)
                 : Services.expandToMicroservices(bundles);
 
+        java.util.UUID loyaltyMerchantId = null;
+        if (user.hasRole(User.Role.MERCHANT_ADMIN)) {
+            loyaltyMerchantId = tenantProfileRepository.findByUserId(user.getId())
+                    .map(TenantProfile::getLoyaltyMerchantId)
+                    .orElse(null);
+        }
+
         String newToken = jwtUtil.generateToken(subject, roleNames, new ArrayList<>(microservices),
-                tier, verified, user.getPhoneNumber());
+                tier, verified, user.getPhoneNumber(), loyaltyMerchantId);
 
         return AuthResponseDTO.builder()
                 .token(newToken)

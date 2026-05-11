@@ -13,6 +13,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 @Component
 @RequiredArgsConstructor
@@ -73,9 +74,13 @@ public class JwtFilter extends OncePerRequestFilter {
                         authorities.add(new SimpleGrantedAuthority("VERIFIED"));
                     }
 
+                    UUID merchantId = jwtUtil.extractMerchantId(token);
+
                     var auth = new UsernamePasswordAuthenticationToken(email, null, authorities);
+                    auth.setDetails(new CallerDetails(merchantId));
                     SecurityContextHolder.getContext().setAuthentication(auth);
-                    log.debug("JWT authenticated subject={} roles={} path={}", email, roles, request.getRequestURI());
+                    log.debug("JWT authenticated subject={} roles={} merchantId={} path={}",
+                            email, roles, merchantId, request.getRequestURI());
                 }
             } catch (Exception e) {
                 log.warn("JWT validation error path={} message={}", request.getRequestURI(), e.getMessage());

@@ -30,11 +30,11 @@ public class RuleAdminService {
         this.merchants = merchants;
     }
 
-    public LoyaltyRule createRule(UUID tenantId, Dtos.RuleRequest req) {
-        if (req.merchantId() != null) merchants.requireMerchant(tenantId, req.merchantId());
+    public LoyaltyRule createRule(UUID tenantId, UUID merchantId, Dtos.RuleRequest req) {
+        if (merchantId != null) merchants.requireMerchant(tenantId, merchantId);
         LoyaltyRule r = new LoyaltyRule();
         r.setTenantId(tenantId);
-        r.setMerchantId(req.merchantId());
+        r.setMerchantId(merchantId);
         r.setTransactionType(req.transactionType());
         r.setPointsPerUnit(req.pointsPerUnit());
         r.setMultiplier(req.multiplier() == null ? BigDecimal.ONE : req.multiplier());
