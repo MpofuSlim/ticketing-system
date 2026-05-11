@@ -116,7 +116,7 @@ public class ReportingController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.TenantDashboard>> tenant() {
         Dtos.TenantDashboard data = reporting.tenant(tenantContext.requireTenantId());
         return ResponseEntity.ok(ApiResult.ok("Tenant dashboard retrieved successfully", data));
@@ -168,7 +168,7 @@ public class ReportingController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.MerchantDashboard>> merchant(@PathVariable UUID id) {
         Dtos.MerchantDashboard data = reporting.merchant(id);
         return ResponseEntity.ok(ApiResult.ok("Merchant dashboard retrieved successfully", data));
@@ -260,7 +260,7 @@ public class ReportingController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.UserDashboard>> user(@PathVariable UUID id) {
         Dtos.UserDashboard data = superApp.dashboard(id);
         return ResponseEntity.ok(ApiResult.ok("User dashboard retrieved successfully", data));
@@ -309,7 +309,7 @@ public class ReportingController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Map<String, Long>>> transactionMix(@RequestParam(required = false) UUID merchantId,
                                             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
                                             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
@@ -366,7 +366,7 @@ public class ReportingController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Dtos.FraudAttemptResponse>>> fraud(@ParameterObject Pageable pageable) {
         PageResponse<Dtos.FraudAttemptResponse> data = PageResponse.from(
                 reporting.recentFraud(tenantContext.requireTenantId()), pageable);
@@ -398,7 +398,7 @@ public class ReportingController {
                     description = "Missing/invalid date range"
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<String> exportCsv(@RequestParam(required = false) UUID merchantId,
                                             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
                                             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {

@@ -1,5 +1,6 @@
 package com.innbucks.loyaltyservice.security;
 
+import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 
@@ -9,9 +10,10 @@ import java.util.UUID;
  * Extra claims pulled from the authenticated JWT. Attached to the request's
  * Authentication as {@code details} by {@link JwtFilter}.
  *
- * <p>{@code merchantId} is set for MERCHANT_ADMIN principals whose user-service
- * profile is linked to a specific loyalty merchant; null for callers that act
- * tenant-wide (e.g. SUPER_ADMIN).
+ * <p>{@code merchantId} is set for principals whose JWT carries the claim —
+ * today that's SHOP_ADMIN and SHOP_USER. MERCHANT_ADMIN tokens do NOT carry a
+ * merchantId; those callers supply it in the request body, and write endpoints
+ * use {@link #resolveMerchantId(UUID)} to pick the right source.
  */
 public record CallerDetails(UUID merchantId) {
 
@@ -21,5 +23,34 @@ public record CallerDetails(UUID merchantId) {
         Object details = auth.getDetails();
         if (details instanceof CallerDetails cd) return cd.merchantId();
         return null;
+    }
+
+    /**
+     * Returns the JWT merchantId claim if present, otherwise the supplied body value.
+     * Throws BAD_REQUEST if neither is set. Used by write endpoints that need a
+     * merchant scope and accept callers from both classes:
+     * <ul>
+     *   <li>SHOP_ADMIN — claim is set in the JWT, {@code bodyMerchantId} is ignored.</li>
+     *   <li>MERCHANT_ADMIN — no claim, must supply the value in the request body.</li>
+     * </ul>
+     */
+    public static UUID resolveMerchantId(UUID bodyMerchantId) {
+        UUID merged = merchantIdOrBody(bodyMerchantId);
+        if (merged == null) {
+            throw LoyaltyException.badRequest("MERCHANT_REQUIRED",
+                    "merchantId must be supplied in the request body when the caller's JWT carries no merchant scope");
+        }
+        return merged;
+    }
+
+    /**
+     * Same merging logic as {@link #resolveMerchantId(UUID)} but returns {@code null}
+     * when neither source supplies a value, instead of throwing. Used by endpoints
+     * where a null merchantId is meaningful — rule/campaign/voucher-template creation
+     * treats it as "tenant-wide".
+     */
+    public static UUID merchantIdOrBody(UUID bodyMerchantId) {
+        UUID fromJwt = currentMerchantId();
+        return fromJwt != null ? fromJwt : bodyMerchantId;
     }
 }

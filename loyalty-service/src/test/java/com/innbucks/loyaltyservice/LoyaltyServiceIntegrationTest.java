@@ -79,36 +79,36 @@ class LoyaltyServiceIntegrationTest {
                         new BigDecimal("0.05"),
                         new BigDecimal("0.10")));
         ruleAdminService.createRule(t.getId(), mr.id(),
-                new Dtos.RuleRequest(TransactionType.PURCHASE,
+                new Dtos.RuleRequest(null, TransactionType.PURCHASE,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
         LoyaltyUser u = userService.findOrEnrol(t.getId(), "+263770000001", mr.id());
 
         var txn = transactionService.post(t.getId(), mr.id(),
-                new Dtos.TransactionRequest(u.getId(), TransactionType.PURCHASE,
+                new Dtos.TransactionRequest(null, u.getId(), TransactionType.PURCHASE,
                         new BigDecimal("100"), "USD", "ref-1"));
         assertThat(txn.pointsDelta()).isEqualByComparingTo("100");
         assertThat(txn.balanceAfter()).isEqualByComparingTo("100");
 
         // Issue + redeem voucher
         VoucherTemplate tpl = voucherTemplateService.create(t.getId(), mr.id(),
-                new Dtos.VoucherTemplateRequest("10% off",
+                new Dtos.VoucherTemplateRequest(null, "10% off",
                         VoucherTemplate.VoucherType.SINGLE_USE,
                         VoucherTemplate.ValueType.PERCENT,
                         new BigDecimal("10"), "USD", null, 1, 30, null));
 
         var v = voucherService.issue(t.getId(),
-                new Dtos.IssueVoucherRequest(tpl.getId(), null, null, u.getId(),
+                new Dtos.IssueVoucherRequest(null, tpl.getId(), null, null, u.getId(),
                         Voucher.DeliveryChannel.NONE, null, null, null));
 
         var redemption = voucherService.redeem(t.getId(), mr.id(),
-                new Dtos.RedeemVoucherRequest(v.code(), u.getId(),
+                new Dtos.RedeemVoucherRequest(null, v.code(), u.getId(),
                         "OUTLET-1", "device-A", "127.0.0.1"));
         assertThat(redemption.status()).isEqualTo(Voucher.Status.REDEEMED.name());
 
         // Duplicate redemption attempt is rejected
         assertThatThrownBy(() ->
                 voucherService.redeem(t.getId(), mr.id(),
-                        new Dtos.RedeemVoucherRequest(v.code(), u.getId(),
+                        new Dtos.RedeemVoucherRequest(null, v.code(), u.getId(),
                                 "OUTLET-1", "device-A", "127.0.0.1")))
                 .isInstanceOf(LoyaltyException.class);
     }
@@ -122,14 +122,14 @@ class LoyaltyServiceIntegrationTest {
                         Merchant.BillingCycle.MONTHLY,
                         BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
         ruleAdminService.createRule(t.getId(), mr.id(),
-                new Dtos.RuleRequest(TransactionType.PURCHASE,
+                new Dtos.RuleRequest(null, TransactionType.PURCHASE,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
 
         LoyaltyUser alice = userService.findOrEnrol(t.getId(), "+263770000010", mr.id());
         LoyaltyUser bob = userService.findOrEnrol(t.getId(), "+263770000011", mr.id());
 
         transactionService.post(t.getId(), mr.id(),
-                new Dtos.TransactionRequest(alice.getId(), TransactionType.PURCHASE,
+                new Dtos.TransactionRequest(null, alice.getId(), TransactionType.PURCHASE,
                         new BigDecimal("50"), "USD", "ref-trans-1"));
 
         transferService.transfer(t.getId(),
@@ -148,7 +148,7 @@ class LoyaltyServiceIntegrationTest {
                         Merchant.BillingCycle.MONTHLY,
                         BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
         ruleAdminService.createRule(t.getId(), mr.id(),
-                new Dtos.RuleRequest(TransactionType.QR_PAY,
+                new Dtos.RuleRequest(null, TransactionType.QR_PAY,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
         LoyaltyUser u = userService.findOrEnrol(t.getId(), "+263770000020", mr.id());
 
@@ -177,12 +177,12 @@ class LoyaltyServiceIntegrationTest {
                         new BigDecimal("1.00"),
                         new BigDecimal("0.50")));
         ruleAdminService.createRule(t.getId(), mr.id(),
-                new Dtos.RuleRequest(TransactionType.PURCHASE,
+                new Dtos.RuleRequest(null, TransactionType.PURCHASE,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
         LoyaltyUser u = userService.findOrEnrol(t.getId(), "+263770000030", mr.id());
 
         transactionService.post(t.getId(), mr.id(),
-                new Dtos.TransactionRequest(u.getId(), TransactionType.PURCHASE,
+                new Dtos.TransactionRequest(null, u.getId(), TransactionType.PURCHASE,
                         new BigDecimal("100"), "USD", "ref-inv-1"));
 
         var merchant = merchantService.requireMerchant(t.getId(), mr.id());

@@ -101,9 +101,11 @@ public class VoucherController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<VoucherTemplate>> createTemplate(@Valid @RequestBody Dtos.VoucherTemplateRequest req) {
-        VoucherTemplate data = templateService.create(tenantContext.requireTenantId(), CallerDetails.currentMerchantId(), req);
+        // Templates may be tenant-wide (null merchantId) so use merchantIdOrBody.
+        VoucherTemplate data = templateService.create(tenantContext.requireTenantId(),
+                CallerDetails.merchantIdOrBody(req.merchantId()), req);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Voucher template created successfully", data));
     }
@@ -170,7 +172,7 @@ public class VoucherController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<VoucherTemplate>>> listTemplates(@ParameterObject Pageable pageable) {
         PageResponse<VoucherTemplate> data = PageResponse.from(
                 templateService.list(tenantContext.requireTenantId(), pageable));
@@ -240,7 +242,7 @@ public class VoucherController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.VoucherResponse>> issue(@Valid @RequestBody Dtos.IssueVoucherRequest req) {
         Dtos.VoucherResponse data = voucherService.issue(tenantContext.requireTenantId(), req);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -322,7 +324,7 @@ public class VoucherController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<List<Dtos.VoucherResponse>>> issueBulk(@Valid @RequestBody Dtos.BulkIssueRequest req) {
         List<Dtos.VoucherResponse> data = voucherService.issueBulk(tenantContext.requireTenantId(), req);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -405,9 +407,10 @@ public class VoucherController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.RedemptionResponse>> redeem(@Valid @RequestBody Dtos.RedeemVoucherRequest req) {
-        Dtos.RedemptionResponse data = voucherService.redeem(tenantContext.requireTenantId(), CallerDetails.currentMerchantId(), req);
+        Dtos.RedemptionResponse data = voucherService.redeem(tenantContext.requireTenantId(),
+                CallerDetails.resolveMerchantId(req.merchantId()), req);
         return ResponseEntity.ok(ApiResult.ok("Voucher redeemed successfully", data));
     }
 
@@ -463,7 +466,7 @@ public class VoucherController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Void>> revoke(@PathVariable UUID id) {
         voucherService.revoke(tenantContext.requireTenantId(), id);
         return ResponseEntity.ok(ApiResult.ok("Voucher revoked successfully", null));
@@ -506,7 +509,7 @@ public class VoucherController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Void>> markViewed(@PathVariable String code) {
         voucherService.markViewed(code);
         return ResponseEntity.ok(ApiResult.ok("Voucher view recorded", null));
@@ -553,7 +556,7 @@ public class VoucherController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Dtos.VoucherResponse>>> activeForUser(@PathVariable UUID userId,
                                                                                        @ParameterObject Pageable pageable) {
         PageResponse<Dtos.VoucherResponse> data = PageResponse.from(voucherService.activeForUser(userId, pageable));
@@ -627,7 +630,7 @@ public class VoucherController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Dtos.VoucherResponse>>> findByStatus(@RequestParam("status") Voucher.Status status,
                                                                                       @ParameterObject Pageable pageable) {
         PageResponse<Dtos.VoucherResponse> data = PageResponse.from(

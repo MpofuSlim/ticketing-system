@@ -99,9 +99,11 @@ public class RuleController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<LoyaltyRule>> create(@Valid @RequestBody Dtos.RuleRequest req) {
-        UUID merchantId = CallerDetails.currentMerchantId();
+        // Rule creation accepts a null merchantId (= tenant-wide global rule), so we
+        // use the non-throwing helper instead of resolveMerchantId.
+        UUID merchantId = CallerDetails.merchantIdOrBody(req.merchantId());
         LoyaltyRule data = rules.createRule(tenantContext.requireTenantId(), merchantId, req);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Rule created successfully", data));
@@ -165,7 +167,7 @@ public class RuleController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<LoyaltyRule>>> list(@ParameterObject Pageable pageable) {
         PageResponse<LoyaltyRule> data = PageResponse.from(
                 rules.listRules(tenantContext.requireTenantId(), pageable));
@@ -224,8 +226,11 @@ public class RuleController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<LoyaltyRule>> deactivate(@PathVariable UUID id) {
+        // Use currentMerchantId rather than resolveMerchantId here: TENANT_ADMINs
+        // legitimately deactivate global rules with no merchant scope, and we have
+        // no body to read from on this endpoint.
         LoyaltyRule data = rules.deactivateRule(
                 tenantContext.requireTenantId(), id, CallerDetails.currentMerchantId());
         return ResponseEntity.ok(ApiResult.ok("Rule deactivated successfully", data));
@@ -280,9 +285,11 @@ public class RuleController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Campaign>> createCampaign(@Valid @RequestBody Dtos.CampaignRequest req) {
-        Campaign data = rules.createCampaign(tenantContext.requireTenantId(), CallerDetails.currentMerchantId(), req);
+        // Campaigns, like rules, may be tenant-wide when no merchant scope is supplied.
+        Campaign data = rules.createCampaign(tenantContext.requireTenantId(),
+                CallerDetails.merchantIdOrBody(req.merchantId()), req);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Campaign created successfully", data));
     }
@@ -330,7 +337,7 @@ public class RuleController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Campaign>>> listCampaigns(@ParameterObject Pageable pageable) {
         PageResponse<Campaign> data = PageResponse.from(
                 rules.listCampaigns(tenantContext.requireTenantId(), pageable));

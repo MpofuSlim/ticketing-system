@@ -85,7 +85,7 @@ public class MiniAppController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SHOP_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Dtos.MiniAppManifest>>> manifest(
             @RequestParam(required = false) UUID merchantId,
             @ParameterObject Pageable pageable) {
