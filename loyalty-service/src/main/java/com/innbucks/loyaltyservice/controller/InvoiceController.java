@@ -121,7 +121,7 @@ public class InvoiceController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Dtos.InvoiceResponse>>> listForMerchant(@PathVariable UUID merchantId,
                                                                                           @ParameterObject Pageable pageable) {
         PageResponse<Dtos.InvoiceResponse> data = PageResponse.from(
@@ -196,7 +196,7 @@ public class InvoiceController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.InvoiceResponse>> generate(@RequestBody Map<String, String> body) {
         UUID merchantId = UUID.fromString(body.get("merchantId"));
         LocalDate periodStart = LocalDate.parse(body.get("periodStart"));
@@ -274,7 +274,7 @@ public class InvoiceController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.InvoiceResponse>> pay(@PathVariable UUID id) {
         Dtos.InvoiceResponse data = InvoicingService.toResponse(
                 invoicing.markPaid(tenantContext.requireTenantId(), id));

@@ -130,7 +130,7 @@ public class TenantController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Dtos.TenantResponse>>> list(@ParameterObject Pageable pageable) {
         log.info("GET /loyalty/tenants (listing all tenants)");
         PageResponse<Dtos.TenantResponse> data = PageResponse.from(tenantService.list(pageable));
@@ -167,7 +167,7 @@ public class TenantController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<java.util.List<Dtos.TenantResponse>>> mine(
             org.springframework.security.core.Authentication authentication) {
         String ownerEmail = authentication.getName();
@@ -316,7 +316,7 @@ public class TenantController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.TenantMemberResponse>> join(
             @PathVariable UUID id,
             org.springframework.security.core.Authentication authentication) {
@@ -377,7 +377,7 @@ public class TenantController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<java.util.List<Dtos.TenantMemberResponse>>> members(
             @PathVariable UUID id) {
         log.info("GET /loyalty/tenants/{}/members", id);
@@ -421,7 +421,7 @@ public class TenantController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Void>> leave(
             @PathVariable UUID id,
             org.springframework.security.core.Authentication authentication) {

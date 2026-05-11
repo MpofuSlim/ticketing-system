@@ -94,7 +94,7 @@ public class ShopController {
                     description = "Merchant not found in this tenant"
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.ShopResponse>> create(@Valid @RequestBody Dtos.ShopRequest req) {
         Dtos.ShopResponse data = shops.create(tenantContext.requireTenantId(), req);
         return ResponseEntity.status(HttpStatus.CREATED)
@@ -151,7 +151,7 @@ public class ShopController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Dtos.ShopResponse>>> list(
             @Parameter(description = "Optional merchant filter — return only shops under this merchant.")
             @RequestParam(required = false) UUID merchantId,
@@ -163,7 +163,7 @@ public class ShopController {
 
     @GetMapping("/{id}")
     @Operation(summary = "Get a shop by id")
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.ShopResponse>> get(@PathVariable UUID id) {
         Dtos.ShopResponse data = shops.get(tenantContext.requireTenantId(), id);
         return ResponseEntity.ok(ApiResult.ok("Shop retrieved successfully", data));
@@ -172,7 +172,7 @@ public class ShopController {
     @PutMapping("/{id}")
     @Operation(summary = "Update a shop",
             description = "Updates display name, outlet code, or address.")
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.ShopResponse>> update(@PathVariable UUID id,
                                                                @Valid @RequestBody Dtos.ShopRequest req) {
         Dtos.ShopResponse data = shops.update(tenantContext.requireTenantId(), id, req);
@@ -182,7 +182,7 @@ public class ShopController {
     @PostMapping("/{id}/activate")
     @Operation(summary = "Activate a shop",
             description = "Sets status to ACTIVE. Idempotent.")
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.ShopResponse>> activate(@PathVariable UUID id) {
         Dtos.ShopResponse data = shops.setActive(tenantContext.requireTenantId(), id, true);
         return ResponseEntity.ok(ApiResult.ok("Shop activated successfully", data));
@@ -192,7 +192,7 @@ public class ShopController {
     @Operation(summary = "Deactivate a shop",
             description = "Sets status to INACTIVE. The parent merchant and any issued vouchers are " +
                           "unaffected; only the shop outlet is taken offline.")
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.ShopResponse>> deactivate(@PathVariable UUID id) {
         Dtos.ShopResponse data = shops.setActive(tenantContext.requireTenantId(), id, false);
         return ResponseEntity.ok(ApiResult.ok("Shop deactivated successfully", data));
@@ -202,7 +202,7 @@ public class ShopController {
     @Operation(summary = "List shops under a merchant",
             description = "Convenience endpoint for nested navigation — returns every shop belonging " +
                           "to the given merchant in the current tenant.")
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<List<Dtos.ShopResponse>>> listForMerchant(@PathVariable UUID merchantId) {
         List<Dtos.ShopResponse> data = shops.listForMerchant(tenantContext.requireTenantId(), merchantId);
         return ResponseEntity.ok(ApiResult.ok("Shops retrieved successfully", data));

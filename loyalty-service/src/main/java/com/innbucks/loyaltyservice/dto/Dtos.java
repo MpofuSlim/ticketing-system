@@ -106,10 +106,16 @@ public class Dtos {
             LocalDate lockedUntil
     ) {}
 
-    // merchantId is sourced from the authenticated caller's JWT — a MERCHANT_ADMIN's
-    // token carries the merchantId they manage, while SUPER_ADMIN tokens carry null
-    // (creates a tenant-wide rule).
+    // merchantId is taken from the JWT for SHOP_ADMIN (who carry the claim) and from
+    // the request body for MERCHANT_ADMIN (who do not). When both are absent the rule
+    // is created as a tenant-wide global baseline. CallerDetails.resolveMerchantId
+    // centralises the source-of-truth selection.
     public record RuleRequest(
+            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
+                    description = "Merchant the rule applies to. Required for MERCHANT_ADMIN callers; " +
+                                  "ignored when the JWT carries a merchantId (SHOP_ADMIN). Null/omitted " +
+                                  "by TENANT_ADMIN+ creates a tenant-wide global rule.")
+            UUID merchantId,
             @Schema(example = "PURCHASE")
             @NotNull TransactionType transactionType,
             @Schema(example = "1.000000", description = "Points awarded per 1 unit of currency spent.")
@@ -126,8 +132,11 @@ public class Dtos {
             Instant endsAt
     ) {}
 
-    // merchantId sourced from JWT claim, same as RuleRequest.
+    // merchantId follows the same rules as RuleRequest.
     public record CampaignRequest(
+            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
+                    description = "Merchant the campaign applies to. See RuleRequest.merchantId for source selection.")
+            UUID merchantId,
             @Schema(example = "Weekend 2x Points")
             @NotBlank String name,
             @Schema(example = "2.0000", description = "Points multiplier during the campaign window.")
@@ -140,8 +149,12 @@ public class Dtos {
             @NotNull Instant endsAt
     ) {}
 
-    // merchantId sourced from JWT claim.
+    // merchantId from JWT (SHOP_ADMIN) or request body (MERCHANT_ADMIN); see CallerDetails.resolveMerchantId.
     public record TransactionRequest(
+            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
+                    description = "Merchant the transaction posts against. Required when the caller's JWT " +
+                                  "carries no merchantId claim (MERCHANT_ADMIN). Ignored otherwise.")
+            UUID merchantId,
             @Schema(example = "11111111-2222-3333-4444-555555555555")
             @NotNull UUID userId,
             @Schema(example = "PURCHASE", allowableValues = {"PURCHASE", "QR_PAY", "REDEMPTION", "REFUND", "ADJUSTMENT", "TRANSFER_IN", "TRANSFER_OUT"})
@@ -170,8 +183,12 @@ public class Dtos {
             String reason
     ) {}
 
-    // merchantId sourced from JWT claim.
+    // merchantId from JWT (SHOP_ADMIN) or request body (MERCHANT_ADMIN); see CallerDetails.resolveMerchantId.
     public record RedemptionRequest(
+            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
+                    description = "Merchant performing the redemption. Required for MERCHANT_ADMIN; ignored " +
+                                  "when JWT carries merchantId.")
+            UUID merchantId,
             @Schema(example = "11111111-2222-3333-4444-555555555555")
             @NotNull UUID userId,
             @Schema(example = "500.0000", description = "Points to redeem.")
@@ -180,8 +197,12 @@ public class Dtos {
             String reason
     ) {}
 
-    // merchantId sourced from JWT claim.
+    // merchantId from JWT (SHOP_ADMIN) or request body (MERCHANT_ADMIN); null means tenant-wide template.
     public record VoucherTemplateRequest(
+            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
+                    description = "Merchant the template belongs to. Required for MERCHANT_ADMIN unless " +
+                                  "creating a tenant-wide template. Ignored when JWT carries merchantId.")
+            UUID merchantId,
             @Schema(example = "$5 Off Your Next Coffee")
             @NotBlank String name,
             @Schema(example = "SINGLE_USE", allowableValues = {"SINGLE_USE", "MULTI_USE", "FREE_ITEM"})
@@ -204,6 +225,9 @@ public class Dtos {
     ) {}
 
     public record IssueVoucherRequest(
+            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
+                    description = "Issuing merchant. Required for MERCHANT_ADMIN; ignored when JWT carries merchantId.")
+            UUID merchantId,
             @Schema(example = "d6e2f4a5-4567-8901-bcde-f01234567890", description = "Template to issue from.")
             @NotNull UUID templateId,
             @Schema(example = "+263771234567", nullable = true, description = "Recipient phone — used if assignedUserId is null.")
@@ -224,6 +248,9 @@ public class Dtos {
     ) {}
 
     public record BulkIssueRequest(
+            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
+                    description = "Issuing merchant. Required for MERCHANT_ADMIN; ignored when JWT carries merchantId.")
+            UUID merchantId,
             @Schema(example = "d6e2f4a5-4567-8901-bcde-f01234567890")
             @NotNull UUID templateId,
             @Schema(example = "100", description = "Number of vouchers to generate.")
@@ -239,8 +266,11 @@ public class Dtos {
                                   String assigneePhone, int usesRemaining,
                                   Instant issuedAt, Instant expiresAt) {}
 
-    // merchantId sourced from JWT claim.
+    // merchantId from JWT (SHOP_ADMIN) or request body (MERCHANT_ADMIN); see CallerDetails.resolveMerchantId.
     public record RedeemVoucherRequest(
+            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
+                    description = "Merchant performing the redemption. Required for MERCHANT_ADMIN.")
+            UUID merchantId,
             @Schema(example = "VCH-AB12CD34", description = "Voucher redemption code from the customer.")
             @NotBlank String code,
             @Schema(example = "11111111-2222-3333-4444-555555555555", nullable = true)
