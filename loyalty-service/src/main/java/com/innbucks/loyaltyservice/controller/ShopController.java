@@ -3,7 +3,6 @@ package com.innbucks.loyaltyservice.controller;
 import com.innbucks.loyaltyservice.dto.ApiResult;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.dto.PageResponse;
-import com.innbucks.loyaltyservice.security.CallerDetails;
 import com.innbucks.loyaltyservice.security.TenantContext;
 import com.innbucks.loyaltyservice.service.ShopService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -47,9 +46,9 @@ public class ShopController {
 
     @PostMapping
     @Operation(summary = "Onboard a shop under a merchant",
-            description = "Creates a new shop outlet under the caller's merchant. The merchant scope is " +
-                          "taken from the authenticated caller's JWT — only tokens that carry a " +
-                          "merchantId (i.e. MERCHANT_ADMIN) can create shops.")
+            description = "Creates a new shop outlet under the given merchant. `merchantId` is supplied " +
+                          "in the request body and must reference a merchant that exists in the current " +
+                          "tenant.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -77,24 +76,27 @@ public class ShopController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "Validation failure or caller has no merchant scope in JWT",
+                    description = "Validation failure (missing merchantId or name)",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Missing merchant scope", value = """
+                            examples = @ExampleObject(name = "Validation error", value = """
                                     {
                                       "code": "400 BAD_REQUEST",
-                                      "message": "caller has no merchant scope; only MERCHANT_ADMIN tokens can create shops",
+                                      "message": "merchantId: must not be null",
                                       "data": null
                                     }
                                     """)
                     )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "Merchant not found in this tenant"
             )
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.ShopResponse>> create(@Valid @RequestBody Dtos.ShopRequest req) {
-        Dtos.ShopResponse data = shops.create(
-                tenantContext.requireTenantId(), CallerDetails.currentMerchantId(), req);
+        Dtos.ShopResponse data = shops.create(tenantContext.requireTenantId(), req);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Shop created successfully", data));
     }
@@ -169,13 +171,11 @@ public class ShopController {
 
     @PutMapping("/{id}")
     @Operation(summary = "Update a shop",
-            description = "Updates display name, outlet code, or address. MERCHANT_ADMIN can only " +
-                          "update shops under their own merchant.")
+            description = "Updates display name, outlet code, or address.")
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.ShopResponse>> update(@PathVariable UUID id,
                                                                @Valid @RequestBody Dtos.ShopRequest req) {
-        Dtos.ShopResponse data = shops.update(
-                tenantContext.requireTenantId(), CallerDetails.currentMerchantId(), id, req);
+        Dtos.ShopResponse data = shops.update(tenantContext.requireTenantId(), id, req);
         return ResponseEntity.ok(ApiResult.ok("Shop updated successfully", data));
     }
 
@@ -184,8 +184,7 @@ public class ShopController {
             description = "Sets status to ACTIVE. Idempotent.")
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.ShopResponse>> activate(@PathVariable UUID id) {
-        Dtos.ShopResponse data = shops.setActive(
-                tenantContext.requireTenantId(), CallerDetails.currentMerchantId(), id, true);
+        Dtos.ShopResponse data = shops.setActive(tenantContext.requireTenantId(), id, true);
         return ResponseEntity.ok(ApiResult.ok("Shop activated successfully", data));
     }
 
@@ -195,8 +194,7 @@ public class ShopController {
                           "unaffected; only the shop outlet is taken offline.")
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.ShopResponse>> deactivate(@PathVariable UUID id) {
-        Dtos.ShopResponse data = shops.setActive(
-                tenantContext.requireTenantId(), CallerDetails.currentMerchantId(), id, false);
+        Dtos.ShopResponse data = shops.setActive(tenantContext.requireTenantId(), id, false);
         return ResponseEntity.ok(ApiResult.ok("Shop deactivated successfully", data));
     }
 
