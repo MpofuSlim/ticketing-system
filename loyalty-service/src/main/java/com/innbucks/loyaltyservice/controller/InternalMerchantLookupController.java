@@ -1,7 +1,9 @@
 package com.innbucks.loyaltyservice.controller;
 
 import com.innbucks.loyaltyservice.entity.Merchant;
+import com.innbucks.loyaltyservice.entity.Shop;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
+import com.innbucks.loyaltyservice.repository.ShopRepository;
 import io.swagger.v3.oas.annotations.Hidden;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -9,31 +11,36 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
 /**
  * Service-to-service endpoints consumed by other backends (today: user-service
- * at login). Gated by a shared-secret header rather than the user JWT — the
- * caller is another microservice, not a logged-in user. Hidden from Swagger.
+ * at login + shop-staff creation). Gated by a shared-secret header rather than
+ * the user JWT — the caller is another microservice, not a logged-in user.
+ * Hidden from Swagger.
  */
 @RestController
-@RequestMapping("/loyalty/internal/merchants")
+@RequestMapping("/loyalty/internal")
 @Slf4j
 @Hidden
 public class InternalMerchantLookupController {
 
     private final MerchantRepository merchants;
+    private final ShopRepository shops;
     private final String expectedToken;
 
     public InternalMerchantLookupController(MerchantRepository merchants,
+                                            ShopRepository shops,
                                             @Value("${innbucks.internal-api-token:}") String expectedToken) {
         this.merchants = merchants;
+        this.shops = shops;
         this.expectedToken = expectedToken;
     }
 
-    @GetMapping("/by-admin")
+    @GetMapping("/merchants/by-admin")
     public ResponseEntity<?> byAdminEmail(@RequestHeader(value = "X-Internal-Token", required = false) String token,
                                           @RequestParam("email") String email) {
         if (!authorized(token)) {
@@ -49,6 +56,25 @@ public class InternalMerchantLookupController {
         UUID merchantId = hit.get().getId();
         log.debug("Internal lookup resolved adminEmail={} -> merchantId={}", email, merchantId);
         return ResponseEntity.ok(Map.of("merchantId", merchantId));
+    }
+
+    @GetMapping("/shops/{id}")
+    public ResponseEntity<?> getShop(@RequestHeader(value = "X-Internal-Token", required = false) String token,
+                                     @PathVariable UUID id) {
+        if (!authorized(token)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        Optional<Shop> hit = shops.findById(id);
+        if (hit.isEmpty()) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).build();
+        }
+        Shop s = hit.get();
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("shopId", s.getId());
+        body.put("merchantId", s.getMerchantId());
+        body.put("tenantId", s.getTenantId());
+        body.put("status", s.getStatus().name());
+        return ResponseEntity.ok(body);
     }
 
     private boolean authorized(String presented) {

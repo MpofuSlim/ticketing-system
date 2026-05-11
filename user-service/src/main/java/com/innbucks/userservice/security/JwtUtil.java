@@ -31,7 +31,8 @@ public class JwtUtil {
     }
 
     public String generateToken(String email, Collection<String> roles, Collection<String> defaultServices,
-                                int tier, boolean verified, String phoneNumber, UUID merchantId) {
+                                int tier, boolean verified, String phoneNumber,
+                                UUID merchantId, UUID shopId) {
         List<String> roleList = roles == null ? List.of()
                 : roles.stream().filter(r -> r != null && !r.isBlank()).collect(Collectors.toList());
         List<String> serviceList = defaultServices == null ? List.of()
@@ -49,6 +50,9 @@ public class JwtUtil {
         if (merchantId != null) {
             builder.claim("merchantId", merchantId.toString());
         }
+        if (shopId != null) {
+            builder.claim("shopId", shopId.toString());
+        }
         return builder
                 .setIssuedAt(new Date())
                 .setExpiration(new Date(System.currentTimeMillis() + expiration))
@@ -57,8 +61,13 @@ public class JwtUtil {
     }
 
     public String generateToken(String email, Collection<String> roles, Collection<String> defaultServices,
+                                int tier, boolean verified, String phoneNumber, UUID merchantId) {
+        return generateToken(email, roles, defaultServices, tier, verified, phoneNumber, merchantId, null);
+    }
+
+    public String generateToken(String email, Collection<String> roles, Collection<String> defaultServices,
                                 int tier, boolean verified, String phoneNumber) {
-        return generateToken(email, roles, defaultServices, tier, verified, phoneNumber, null);
+        return generateToken(email, roles, defaultServices, tier, verified, phoneNumber, null, null);
     }
 
     // Convenience overload for single-role callers (kept for tests).
@@ -113,7 +122,15 @@ public class JwtUtil {
     }
 
     public UUID extractMerchantId(String token) {
-        String raw = getClaims(token).get("merchantId", String.class);
+        return extractUuidClaim(token, "merchantId");
+    }
+
+    public UUID extractShopId(String token) {
+        return extractUuidClaim(token, "shopId");
+    }
+
+    private UUID extractUuidClaim(String token, String name) {
+        String raw = getClaims(token).get(name, String.class);
         if (raw == null || raw.isBlank()) return null;
         try {
             return UUID.fromString(raw);

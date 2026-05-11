@@ -6,6 +6,7 @@ import java.time.LocalDateTime;
 import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.UUID;
 
 @Entity
 @Table(name = "users")
@@ -55,6 +56,15 @@ public class User {
     @Column(nullable = false)
     private boolean active = false;
 
+    // Loyalty scope for shop staff. SHOP_ADMIN and SHOP_USER tokens carry these
+    // as JWT claims so loyalty-service can scope shop-level operations without
+    // a per-request lookup. Null for non-shop users.
+    @Column(name = "loyalty_shop_id")
+    private UUID loyaltyShopId;
+
+    @Column(name = "loyalty_merchant_id")
+    private UUID loyaltyMerchantId;
+
     @Column(updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 
@@ -66,6 +76,11 @@ public class User {
         SUPER_ADMIN,
         EVENT_ORGANIZER,
         MERCHANT_ADMIN,
+        // Shop-level staff. SHOP_ADMINs are created by a MERCHANT_ADMIN and
+        // manage staff at a specific shop. SHOP_USERs are created by a
+        // SHOP_ADMIN and operate the POS at that shop.
+        SHOP_ADMIN,
+        SHOP_USER,
         CUSTOMER
     }
 }
