@@ -13,10 +13,8 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Thin client over loyalty-service's internal API. Used at login to resolve
- * the merchantId for a MERCHANT_ADMIN whose TenantProfile hasn't been bound
- * yet — the result is cached back to TenantProfile.loyaltyMerchantId so the
- * lookup happens at most once per user.
+ * Thin client over loyalty-service's internal API. Used by ShopStaffService to resolve
+ * a shop's merchantId/tenantId when onboarding a SHOP_ADMIN.
  */
 @Component
 @Slf4j
@@ -40,42 +38,10 @@ public class LoyaltyServiceClient {
     }
 
     /**
-     * Resolve the merchantId of the merchant whose admin_email matches {@code email}.
-     * Returns empty if no such merchant exists, or if the call fails for any reason
-     * — login must remain functional even when loyalty-service is down.
-     */
-    public Optional<UUID> findMerchantIdByAdminEmail(String email) {
-        if (email == null || email.isBlank()) return Optional.empty();
-        if (internalToken == null || internalToken.isBlank()) {
-            log.warn("Skipping loyalty merchant lookup; INTERNAL_API_TOKEN is not configured");
-            return Optional.empty();
-        }
-        try {
-            MerchantLookupResponse body = http.get()
-                    .uri(uri -> uri.path("/loyalty/internal/merchants/by-admin")
-                            .queryParam("email", email)
-                            .build())
-                    .header("X-Internal-Token", internalToken)
-                    .retrieve()
-                    .onStatus(HttpStatusCode::is4xxClientError, (req, res) -> {
-                        // Treat 4xx (including 404 "not bound") as "not found" — no exception.
-                    })
-                    .body(MerchantLookupResponse.class);
-            if (body == null || body.merchantId() == null) return Optional.empty();
-            return Optional.of(UUID.fromString(body.merchantId()));
-        } catch (HttpClientErrorException.NotFound nf) {
-            return Optional.empty();
-        } catch (Exception ex) {
-            log.warn("Loyalty merchant lookup failed email={} error={}", email, ex.getMessage());
-            return Optional.empty();
-        }
-    }
-
-    /**
-     * Resolve a shop by id. Used by ShopStaffService when MERCHANT_ADMIN creates
-     * a SHOP_ADMIN — we need to confirm the shop exists and belongs to the caller's
-     * merchant before stamping the new user's loyaltyShopId. Returns empty on any
-     * failure (including 404).
+     * Resolve a shop by id. Used by ShopStaffService when MERCHANT_ADMIN creates a
+     * SHOP_ADMIN — we need the shop's merchantId to stamp on the new user. Returns
+     * empty on any failure (including 404 and network errors) so callers can map to
+     * a clear 4xx without crashing on a downstream outage.
      */
     public Optional<ShopLookupResponse> findShop(UUID shopId) {
         if (shopId == null) return Optional.empty();
@@ -98,9 +64,6 @@ public class LoyaltyServiceClient {
             return Optional.empty();
         }
     }
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public record MerchantLookupResponse(String merchantId) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record ShopLookupResponse(String shopId, String merchantId, String tenantId, String status) {}
