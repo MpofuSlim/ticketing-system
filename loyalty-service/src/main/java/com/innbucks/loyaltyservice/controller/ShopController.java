@@ -47,10 +47,9 @@ public class ShopController {
 
     @PostMapping
     @Operation(summary = "Onboard a shop under a merchant",
-            description = "Creates a new shop outlet. MERCHANT_ADMIN tokens carry a merchantId and " +
-                          "can only create shops under their own merchant — any merchantId in the " +
-                          "request body is ignored. TENANT_ADMIN / PLATFORM_ADMIN / SUPER_ADMIN must " +
-                          "supply merchantId in the body.")
+            description = "Creates a new shop outlet under the caller's merchant. The merchant scope is " +
+                          "taken from the authenticated caller's JWT — only tokens that carry a " +
+                          "merchantId (i.e. MERCHANT_ADMIN) can create shops.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -78,29 +77,14 @@ public class ShopController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "Validation failure or merchant missing for non-merchant caller",
+                    description = "Validation failure or caller has no merchant scope in JWT",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Validation error", value = """
+                            examples = @ExampleObject(name = "Missing merchant scope", value = """
                                     {
                                       "code": "400 BAD_REQUEST",
-                                      "message": "merchantId is required when caller has no merchant scope",
-                                      "data": null
-                                    }
-                                    """)
-                    )
-            ),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "403",
-                    description = "MERCHANT_ADMIN attempted to create a shop under another merchant",
-                    content = @Content(
-                            mediaType = "application/json",
-                            schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Wrong merchant", value = """
-                                    {
-                                      "code": "403 FORBIDDEN",
-                                      "message": "shop must belong to your own merchant",
+                                      "message": "caller has no merchant scope; only MERCHANT_ADMIN tokens can create shops",
                                       "data": null
                                     }
                                     """)
