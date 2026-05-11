@@ -27,7 +27,8 @@ public class JwtFilter extends OncePerRequestFilter {
             "/v3/api-docs",
             "/error",
             "/h2-console",
-            "/actuator"
+            "/actuator",
+            "/loyalty/internal"
     );
 
     @Override

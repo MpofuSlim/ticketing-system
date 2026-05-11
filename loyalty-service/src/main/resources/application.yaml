@@ -63,6 +63,12 @@ loyalty:
     expiry-cron: ${LOYALTY_EXPIRY_CRON:0 5 * * * *}
     invoice-cron: ${LOYALTY_INVOICE_CRON:0 30 1 * * *}
 
+# Shared secret presented as the X-Internal-Token header by other backends
+# (today: user-service at login) when calling /loyalty/internal/**. Must match
+# the value configured on the caller side. Empty disables internal endpoints.
+innbucks:
+  internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
+
 springdoc:
   swagger-ui:
     path: /swagger-ui/index.html

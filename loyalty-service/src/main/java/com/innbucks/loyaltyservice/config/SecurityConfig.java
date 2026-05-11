@@ -55,6 +55,11 @@ public class SecurityConfig {
                                 "/swagger-ui.html",
                                 "/error"
                         ).permitAll()
+                        // Service-to-service endpoints under /loyalty/internal/**
+                        // are gated by a shared-secret header in their controllers
+                        // rather than the user JWT. The JwtFilter also skips this
+                        // path so no Authentication is required.
+                        .requestMatchers("/loyalty/internal/**").permitAll()
                         // Loyalty endpoints require authentication. Method-level
                         // @PreAuthorize on the controllers further restricts who
                         // can call what; TenantContext enforces tenant ownership

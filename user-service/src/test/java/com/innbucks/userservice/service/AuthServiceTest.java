@@ -4,6 +4,7 @@ import com.innbucks.userservice.dto.*;
 import com.innbucks.userservice.entity.CustomerProfile;
 import com.innbucks.userservice.entity.TenantProfile;
 import com.innbucks.userservice.entity.User;
+import com.innbucks.userservice.integration.LoyaltyServiceClient;
 import com.innbucks.userservice.repository.CustomerProfileRepository;
 import com.innbucks.userservice.repository.TenantProfileRepository;
 import com.innbucks.userservice.repository.UserRepository;
@@ -33,7 +34,8 @@ class AuthServiceTest {
                                    JwtUtil jwt) {
         return new AuthService(userRepo, tenantRepo,
                 mock(CustomerProfileRepository.class), encoder, jwt,
-                mock(TokenRevocationService.class));
+                mock(TokenRevocationService.class),
+                mock(LoyaltyServiceClient.class));
     }
 
     private AuthService newService(UserRepository userRepo,
@@ -42,7 +44,8 @@ class AuthServiceTest {
                                    PasswordEncoder encoder,
                                    JwtUtil jwt) {
         return new AuthService(userRepo, tenantRepo, customerRepo, encoder, jwt,
-                mock(TokenRevocationService.class));
+                mock(TokenRevocationService.class),
+                mock(LoyaltyServiceClient.class));
     }
 
     private RegisterRequestDTO baseRequest(String email, String phone, String... bundles) {
