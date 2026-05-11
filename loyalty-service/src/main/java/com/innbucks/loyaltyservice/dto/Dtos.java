@@ -51,6 +51,30 @@ public class Dtos {
                                    String currency, Merchant.BillingCycle billingCycle,
                                    Merchant.Status status) {}
 
+    // A Shop is a physical outlet under a Merchant. e.g. "Pizza Inn Avondale"
+    // and "Pizza Inn Westgate" are two shops under the "Pizza Inn" merchant.
+    // Shops inherit their merchant's rules; if the merchant has none, they
+    // fall back to global tenant-wide rules (handled transparently by
+    // RulesEngine when transactions reference the shop's merchantId).
+    public record ShopRequest(
+            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
+                    description = "Merchant this shop belongs to. Ignored when the caller is a " +
+                                  "MERCHANT_ADMIN — their JWT merchantId is used instead.")
+            UUID merchantId,
+            @Schema(example = "Pizza Inn Avondale", description = "Display name of the shop outlet.")
+            @NotBlank String name,
+            @Schema(example = "AVONDALE", nullable = true,
+                    description = "Short outlet code referenced by VoucherTemplate.applicableOutlets.")
+            String code,
+            @Schema(example = "123 King George Rd, Avondale, Harare", nullable = true)
+            String address
+    ) {}
+
+    public record ShopResponse(UUID id, UUID tenantId, UUID merchantId, String name,
+                               String code, String address,
+                               com.innbucks.loyaltyservice.entity.Shop.Status status,
+                               Instant createdAt) {}
+
     // Loyalty enrolment is by phone number only — name/email/nationalId belong
     // to user-service. Loyalty validates the phone exists there before
     // creating its local LoyaltyUser projection.
