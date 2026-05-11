@@ -37,7 +37,9 @@ public class Shop {
     @Column(nullable = false, length = 200)
     private String name;
 
-    // Short outlet code referenced by VoucherTemplate.applicableOutlets.
+    // Optional human-friendly outlet code (e.g. "AVONDALE") for receipts and
+    // back-office search. VoucherTemplate.applicableOutlets references shops
+    // by UUID, not by this code.
     @Column(length = 40)
     private String code;
 

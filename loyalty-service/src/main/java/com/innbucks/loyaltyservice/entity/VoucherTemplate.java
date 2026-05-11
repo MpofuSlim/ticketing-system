@@ -7,6 +7,7 @@ import lombok.Setter;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 @Entity
@@ -54,8 +55,12 @@ public class VoucherTemplate {
     @Column(name = "validity_days")
     private Integer validityDays;
 
+    // Stored as a comma-separated list of shop UUIDs in VARCHAR(1000) via
+    // UuidListConverter — kept that way so we don't need a schema migration.
+    // Null = redeemable at every shop under the merchant/tenant.
+    @Convert(converter = UuidListConverter.class)
     @Column(name = "applicable_outlets", length = 1000)
-    private String applicableOutlets;
+    private List<UUID> applicableOutlets;
 
     @Column(nullable = false)
     private boolean active = true;
