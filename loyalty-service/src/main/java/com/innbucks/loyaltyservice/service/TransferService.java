@@ -7,9 +7,6 @@ import com.innbucks.loyaltyservice.entity.Wallet;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.LoyaltyTransactionRepository;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
-import com.innbucks.loyaltyservice.security.CallerDetails;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -52,7 +49,7 @@ public class TransferService {
         // Caller must own the sender wallet. Admins (SUPER_ADMIN, MERCHANT_ADMIN,
         // SHOP_ADMIN) can transfer on behalf of a user — useful for ops and
         // customer-support reversals. CUSTOMER must be the wallet owner.
-        verifyCallerOwnsSender(sender);
+        users.requireCallerOwnsOrIsAdmin(sender);
 
         var recipient = hasToUserId
                 ? users.require(tenantId, req.toUserId())
@@ -102,27 +99,4 @@ public class TransferService {
         return walletService.totalBalance(sender.getId());
     }
 
-    /**
-     * Guards against a logged-in user spending someone else's balance. Admin
-     * roles bypass (they're explicitly allowed to act on behalf). Plain
-     * CUSTOMER must have a JWT phone claim matching the sender wallet's phone.
-     */
-    private void verifyCallerOwnsSender(com.innbucks.loyaltyservice.entity.LoyaltyUser sender) {
-        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth != null && auth.getAuthorities() != null) {
-            for (var ga : auth.getAuthorities()) {
-                String role = ga.getAuthority();
-                if ("ROLE_SUPER_ADMIN".equals(role)
-                        || "ROLE_MERCHANT_ADMIN".equals(role)
-                        || "ROLE_SHOP_ADMIN".equals(role)) {
-                    return; // admin acting on behalf is allowed
-                }
-            }
-        }
-        String callerPhone = CallerDetails.currentPhoneNumber();
-        if (callerPhone == null || !callerPhone.equals(sender.getPhoneNumber())) {
-            throw LoyaltyException.forbidden("NOT_WALLET_OWNER",
-                    "you can only transfer from your own wallet");
-        }
-    }
 }

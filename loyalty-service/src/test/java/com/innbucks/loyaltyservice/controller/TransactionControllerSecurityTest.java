@@ -1,13 +1,24 @@
 package com.innbucks.loyaltyservice.controller;
 
+import com.innbucks.loyaltyservice.entity.LoyaltyUser;
+import com.innbucks.loyaltyservice.repository.LoyaltyUserRepository;
 import com.innbucks.loyaltyservice.service.TransactionService;
 import com.innbucks.loyaltyservice.service.TransferService;
 import com.innbucks.loyaltyservice.testsupport.ControllerSecurityTestBase;
+import com.innbucks.loyaltyservice.testsupport.TestJwtFactory;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
+import java.util.List;
 import java.util.UUID;
+
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -22,6 +33,7 @@ class TransactionControllerSecurityTest extends ControllerSecurityTestBase {
 
     @MockitoBean TransactionService transactionService;
     @MockitoBean TransferService transferService;
+    @Autowired LoyaltyUserRepository loyaltyUsers;
 
     // Bodies satisfy @Valid so requests reach the @PreAuthorize gate.
     private static final String VALID_TXN_BODY = """
@@ -130,8 +142,7 @@ class TransactionControllerSecurityTest extends ControllerSecurityTestBase {
     @Test
     void admin_who_is_not_member_of_tenant_returns_403() throws Exception {
         // /transfer is one of the endpoints that goes through tenantContext.requireTenant(),
-        // which is where the membership check actually runs. /users/{id}/transactions
-        // doesn't take a tenant header — that's tracked as a separate audit finding.
+        // which is where the membership check actually runs.
         UUID otherTenant = newTenant("txn-cross");
         String stranger = jwt("stranger@test.local", "CUSTOMER");
         mockMvc.perform(post("/loyalty/transfer")
@@ -140,5 +151,100 @@ class TransactionControllerSecurityTest extends ControllerSecurityTestBase {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(VALID_TRANSFER_BODY))
                 .andExpect(status().isForbidden());
+    }
+
+    // ------------------------------------------------------------------
+    // GET /users/{id}/transactions — IDOR / cross-customer leak guards.
+    // Verifies the gates added when closing the audit's HIGH finding:
+    //   1. tenant header required
+    //   2. target user must belong to that tenant
+    //   3. caller must own the target unless they're an admin role
+    // ------------------------------------------------------------------
+
+    @Test
+    void recent_without_tenant_header_returns_400() throws Exception {
+        String customerToken = TestJwtFactory.builder("alice@test.local")
+                .role("CUSTOMER").phoneNumber("+263770070100").sign(jwtSecret);
+        mockMvc.perform(get("/loyalty/users/{id}/transactions", UUID.randomUUID())
+                        .header("Authorization", bearer(customerToken)))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void recent_customer_reading_someone_elses_history_returns_403() throws Exception {
+        // Tenant + two LoyaltyUsers (Alice + Bob). Alice's JWT tries to read
+        // Bob's transaction history — this is the actual IDOR attack the fix
+        // is preventing. Expected: 403 NOT_WALLET_OWNER.
+        UUID tenant = newTenant("txn-leak");
+        joinTenant(tenant, "alice@test.local");
+
+        LoyaltyUser alice = new LoyaltyUser();
+        alice.setTenantId(tenant);
+        alice.setPhoneNumber("+263770070100");
+        loyaltyUsers.save(alice);
+
+        LoyaltyUser bob = new LoyaltyUser();
+        bob.setTenantId(tenant);
+        bob.setPhoneNumber("+263770070200");
+        loyaltyUsers.save(bob);
+
+        String aliceToken = TestJwtFactory.builder("alice@test.local")
+                .role("CUSTOMER").phoneNumber(alice.getPhoneNumber()).sign(jwtSecret);
+
+        mockMvc.perform(get("/loyalty/users/{id}/transactions", bob.getId())
+                        .header("Authorization", bearer(aliceToken))
+                        .header("X-Tenant-Id", tenant.toString()))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void recent_customer_reading_own_history_returns_200() throws Exception {
+        // Control case: same caller, same target, must succeed.
+        UUID tenant = newTenant("txn-self");
+        joinTenant(tenant, "alice@test.local");
+
+        LoyaltyUser alice = new LoyaltyUser();
+        alice.setTenantId(tenant);
+        alice.setPhoneNumber("+263770070300");
+        loyaltyUsers.save(alice);
+
+        // The mocked TransactionService needs to return an empty Page so the
+        // controller's PageResponse.from call doesn't NPE.
+        Page<com.innbucks.loyaltyservice.dto.Dtos.TransactionResponse> empty =
+                new PageImpl<>(List.of(), Pageable.unpaged(), 0);
+        when(transactionService.recentForUser(any(UUID.class), any(Pageable.class))).thenReturn(empty);
+
+        String aliceToken = TestJwtFactory.builder("alice@test.local")
+                .role("CUSTOMER").phoneNumber(alice.getPhoneNumber()).sign(jwtSecret);
+
+        mockMvc.perform(get("/loyalty/users/{id}/transactions", alice.getId())
+                        .header("Authorization", bearer(aliceToken))
+                        .header("X-Tenant-Id", tenant.toString()))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void recent_merchant_admin_reading_any_user_in_tenant_returns_200() throws Exception {
+        // Admin bypass: MERCHANT_ADMIN can inspect any user's history for ops
+        // / customer-support. Bob's data is fair game for the merchant admin
+        // who oversees Bob's merchant.
+        UUID tenant = newTenant("txn-admin");
+        joinTenant(tenant, "ops@test.local");
+
+        LoyaltyUser bob = new LoyaltyUser();
+        bob.setTenantId(tenant);
+        bob.setPhoneNumber("+263770070400");
+        loyaltyUsers.save(bob);
+
+        Page<com.innbucks.loyaltyservice.dto.Dtos.TransactionResponse> empty =
+                new PageImpl<>(List.of(), Pageable.unpaged(), 0);
+        when(transactionService.recentForUser(any(UUID.class), any(Pageable.class))).thenReturn(empty);
+
+        String adminToken = jwt("ops@test.local", "MERCHANT_ADMIN");
+
+        mockMvc.perform(get("/loyalty/users/{id}/transactions", bob.getId())
+                        .header("Authorization", bearer(adminToken))
+                        .header("X-Tenant-Id", tenant.toString()))
+                .andExpect(status().isOk());
     }
 }

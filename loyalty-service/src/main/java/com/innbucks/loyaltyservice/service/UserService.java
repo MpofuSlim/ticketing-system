@@ -106,6 +106,37 @@ public class UserService {
         }
     }
 
+    /**
+     * Throws 403 NOT_WALLET_OWNER unless the caller is acting on their own
+     * LoyaltyUser, OR holds an admin role (SUPER_ADMIN / MERCHANT_ADMIN /
+     * SHOP_ADMIN) that's explicitly allowed to act on behalf of another user
+     * (customer-support reversals, merchant-ops actions, etc.).
+     *
+     * <p>Used by every endpoint that accepts a {@code userId} from the URL or
+     * body — without this check a logged-in CUSTOMER could drain or read any
+     * other user's data simply by guessing or harvesting their UUID.
+     */
+    public void requireCallerOwnsOrIsAdmin(LoyaltyUser target) {
+        org.springframework.security.core.Authentication auth =
+                org.springframework.security.core.context.SecurityContextHolder
+                        .getContext().getAuthentication();
+        if (auth != null && auth.getAuthorities() != null) {
+            for (var ga : auth.getAuthorities()) {
+                String role = ga.getAuthority();
+                if ("ROLE_SUPER_ADMIN".equals(role)
+                        || "ROLE_MERCHANT_ADMIN".equals(role)
+                        || "ROLE_SHOP_ADMIN".equals(role)) {
+                    return; // admin acting on behalf is allowed
+                }
+            }
+        }
+        String callerPhone = com.innbucks.loyaltyservice.security.CallerDetails.currentPhoneNumber();
+        if (callerPhone == null || !callerPhone.equals(target.getPhoneNumber())) {
+            throw LoyaltyException.forbidden("NOT_WALLET_OWNER",
+                    "you can only act on your own loyalty account");
+        }
+    }
+
     // Internal lifecycle hooks used by FraudService and admin flows. These
     // affect the LoyaltyUser's status within the loyalty program only — they
     // do NOT change the user's account state in user-service.
