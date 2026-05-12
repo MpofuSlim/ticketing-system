@@ -2,6 +2,7 @@ package com.innbucks.loyaltyservice.scheduler;
 
 import com.innbucks.loyaltyservice.entity.LoyaltyUser;
 import com.innbucks.loyaltyservice.repository.LoyaltyUserRepository;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -39,6 +40,7 @@ public class PendingUserExpirySweeper {
     }
 
     @Scheduled(cron = "${loyalty.scheduler.expiry-cron:0 5 * * * *}")
+    @SchedulerLock(name = "pendingUserExpirySweep", lockAtMostFor = "PT5M", lockAtLeastFor = "PT30S")
     @Transactional
     public void sweep() {
         Instant cutoff = Instant.now().minus(ttlDays, ChronoUnit.DAYS);
