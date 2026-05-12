@@ -151,13 +151,19 @@ public class Dtos {
     ) {}
 
     // merchantId from JWT (SHOP_ADMIN) or request body (MERCHANT_ADMIN); see CallerDetails.resolveMerchantId.
+    // Recipient is identified by EITHER userId (registered customer) or assigneePhone
+    // (unregistered — a PENDING LoyaltyUser is auto-created so points can accrue). Exactly one is required.
     public record TransactionRequest(
             @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
                     description = "Merchant the transaction posts against. Required when the caller's JWT " +
                                   "carries no merchantId claim (MERCHANT_ADMIN). Ignored otherwise.")
             UUID merchantId,
-            @Schema(example = "11111111-2222-3333-4444-555555555555")
-            @NotNull UUID userId,
+            @Schema(example = "11111111-2222-3333-4444-555555555555", nullable = true,
+                    description = "Loyalty user ID of the recipient. Mutually exclusive with assigneePhone; exactly one must be set.")
+            UUID userId,
+            @Schema(example = "+263771234567", nullable = true,
+                    description = "Phone number of the recipient. If no LoyaltyUser exists yet, one is auto-created in PENDING status so points accrue against the phone until the customer registers.")
+            String assigneePhone,
             @Schema(example = "PURCHASE", allowableValues = {"PURCHASE", "QR_PAY", "REDEMPTION", "REFUND", "ADJUSTMENT", "TRANSFER_IN", "TRANSFER_OUT"})
             @NotNull TransactionType type,
             @Schema(example = "100.00", nullable = true, description = "Transaction amount in the merchant's currency.")
@@ -173,11 +179,18 @@ public class Dtos {
                                       UUID ruleId, UUID campaignId, String reference,
                                       Instant createdAt) {}
 
+    // Sender (fromUserId) MUST be a registered LoyaltyUser — you can't spend a
+    // pending balance. Recipient may be either a registered user (toUserId) or
+    // an unregistered phone (toPhone); exactly one must be set.
     public record TransferRequest(
             @Schema(example = "11111111-2222-3333-4444-555555555555", description = "Sender's loyalty user ID.")
             @NotNull UUID fromUserId,
-            @Schema(example = "66666666-7777-8888-9999-000000000000", description = "Recipient's loyalty user ID.")
-            @NotNull UUID toUserId,
+            @Schema(example = "66666666-7777-8888-9999-000000000000", nullable = true,
+                    description = "Recipient's loyalty user ID. Mutually exclusive with toPhone.")
+            UUID toUserId,
+            @Schema(example = "+263771234567", nullable = true,
+                    description = "Recipient's phone number. If no LoyaltyUser exists, a PENDING one is created — the gift becomes spendable once they register.")
+            String toPhone,
             @Schema(example = "250.0000", description = "Points to transfer.")
             @Positive BigDecimal points,
             @Schema(example = "Birthday gift", nullable = true)

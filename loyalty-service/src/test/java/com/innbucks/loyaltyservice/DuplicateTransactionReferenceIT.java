@@ -98,7 +98,7 @@ class DuplicateTransactionReferenceIT extends PostgresIntegrationTestBase {
                 try {
                     start.await();
                     transactionService.post(tenantId, merchantId,
-                            new Dtos.TransactionRequest(null, userId, TransactionType.PURCHASE,
+                            new Dtos.TransactionRequest(null, userId, null, TransactionType.PURCHASE,
                                     new BigDecimal("100"), "USD", REFERENCE));
                     successes.incrementAndGet();
                 } catch (LoyaltyException ex) {

@@ -10,4 +10,9 @@ import java.util.UUID;
 public interface LoyaltyUserRepository extends JpaRepository<LoyaltyUser, UUID> {
     Optional<LoyaltyUser> findByTenantIdAndPhoneNumber(UUID tenantId, String phoneNumber);
     List<LoyaltyUser> findByTenantId(UUID tenantId);
+
+    // Cross-tenant lookup used by the promote-on-registration webhook: a phone
+    // may have pending balances under multiple tenants, all of which flip to
+    // ACTIVE together when user-service confirms the signup.
+    List<LoyaltyUser> findByPhoneNumber(String phoneNumber);
 }

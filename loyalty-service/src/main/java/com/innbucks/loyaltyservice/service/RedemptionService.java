@@ -38,6 +38,8 @@ public class RedemptionService {
             throw LoyaltyException.badRequest("BAD_AMOUNT", "points must be positive");
         }
         var u = users.require(tenantId, req.userId());
+        // PENDING (not yet registered) users may accrue but not spend.
+        users.requireSpendable(u);
         var m = merchants.requireMerchant(tenantId, merchantId);
 
         LoyaltyTransaction t = new LoyaltyTransaction();

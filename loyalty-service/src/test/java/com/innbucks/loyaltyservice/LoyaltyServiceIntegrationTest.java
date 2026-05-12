@@ -84,7 +84,7 @@ class LoyaltyServiceIntegrationTest {
         LoyaltyUser u = userService.findOrEnrol(t.getId(), "+263770000001", mr.id());
 
         var txn = transactionService.post(t.getId(), mr.id(),
-                new Dtos.TransactionRequest(null, u.getId(), TransactionType.PURCHASE,
+                new Dtos.TransactionRequest(null, u.getId(), null, TransactionType.PURCHASE,
                         new BigDecimal("100"), "USD", "ref-1"));
         assertThat(txn.pointsDelta()).isEqualByComparingTo("100");
         assertThat(txn.balanceAfter()).isEqualByComparingTo("100");
@@ -129,11 +129,11 @@ class LoyaltyServiceIntegrationTest {
         LoyaltyUser bob = userService.findOrEnrol(t.getId(), "+263770000011", mr.id());
 
         transactionService.post(t.getId(), mr.id(),
-                new Dtos.TransactionRequest(null, alice.getId(), TransactionType.PURCHASE,
+                new Dtos.TransactionRequest(null, alice.getId(), null, TransactionType.PURCHASE,
                         new BigDecimal("50"), "USD", "ref-trans-1"));
 
         transferService.transfer(t.getId(),
-                new Dtos.TransferRequest(alice.getId(), bob.getId(), new BigDecimal("20"), "gift"));
+                new Dtos.TransferRequest(alice.getId(), bob.getId(), null, new BigDecimal("20"), "gift"));
 
         assertThat(walletService.totalBalance(alice.getId())).isEqualByComparingTo("30");
         assertThat(walletService.totalBalance(bob.getId())).isEqualByComparingTo("20");
@@ -182,7 +182,7 @@ class LoyaltyServiceIntegrationTest {
         LoyaltyUser u = userService.findOrEnrol(t.getId(), "+263770000030", mr.id());
 
         transactionService.post(t.getId(), mr.id(),
-                new Dtos.TransactionRequest(null, u.getId(), TransactionType.PURCHASE,
+                new Dtos.TransactionRequest(null, u.getId(), null, TransactionType.PURCHASE,
                         new BigDecimal("100"), "USD", "ref-inv-1"));
 
         var merchant = merchantService.requireMerchant(t.getId(), mr.id());

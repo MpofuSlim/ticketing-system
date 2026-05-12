@@ -38,7 +38,8 @@ public class UserService {
 
     // Idempotent enrolment: returns the existing LoyaltyUser for the
     // (tenant, phone) pair, or creates one after validating the phone
-    // number resolves to a real customer in user-service.
+    // number resolves to a real customer in user-service. Use this when the
+    // recipient is known to be registered (e.g. explicit enrolment flow).
     public LoyaltyUser findOrEnrol(UUID tenantId, String phoneNumber, UUID merchantId) {
         Optional<LoyaltyUser> existing = users.findByTenantIdAndPhoneNumber(tenantId, phoneNumber);
         if (existing.isPresent()) {
@@ -49,10 +50,34 @@ public class UserService {
             throw LoyaltyException.notFound(
                     "user-service has no customer with phone " + phoneNumber);
         }
+        return createWithWallet(tenantId, phoneNumber, merchantId, LoyaltyUser.Status.ACTIVE);
+    }
+
+    /**
+     * Phone-keyed wallet entry-point: returns the existing LoyaltyUser, or
+     * creates a {@link LoyaltyUser.Status#PENDING} row when the recipient hasn't
+     * registered yet. Used by issuance / transfer flows that want to credit a
+     * phone whether or not user-service has heard of it.
+     *
+     * <p>Accrual works against a PENDING user (transactions, vouchers, P2P
+     * receives); redemption does not — that gate lives in the downstream
+     * services so the policy is enforced at the spend path, not at lookup.
+     */
+    public LoyaltyUser findOrCreatePending(UUID tenantId, String phoneNumber, UUID merchantId) {
+        Optional<LoyaltyUser> existing = users.findByTenantIdAndPhoneNumber(tenantId, phoneNumber);
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+        return createWithWallet(tenantId, phoneNumber, merchantId, LoyaltyUser.Status.PENDING);
+    }
+
+    private LoyaltyUser createWithWallet(UUID tenantId, String phoneNumber, UUID merchantId,
+                                         LoyaltyUser.Status status) {
         LoyaltyUser u = new LoyaltyUser();
         u.setTenantId(tenantId);
         u.setMerchantId(merchantId);
         u.setPhoneNumber(phoneNumber);
+        u.setStatus(status);
         users.save(u);
 
         Wallet main = new Wallet();
@@ -63,6 +88,21 @@ public class UserService {
         wallets.save(main);
 
         return u;
+    }
+
+    /**
+     * Throws if the user can't perform a *spending* action right now. Use this
+     * on every redemption / outgoing-transfer path so PENDING (not yet
+     * registered) and BLOCKED (fraud) accounts can accrue but not spend.
+     */
+    public void requireSpendable(LoyaltyUser u) {
+        switch (u.getStatus()) {
+            case ACTIVE -> { /* ok */ }
+            case PENDING -> throw LoyaltyException.forbidden("USER_PENDING",
+                    "user has not completed registration; balance can be received but not spent");
+            case BLOCKED -> throw LoyaltyException.forbidden("USER_BLOCKED", "user is blocked");
+            case INACTIVE -> throw LoyaltyException.forbidden("USER_INACTIVE", "user is inactive");
+        }
     }
 
     // Internal lifecycle hooks used by FraudService and admin flows. These

@@ -54,5 +54,11 @@ public class LoyaltyUser {
     // Loyalty-program-specific status. BLOCKED here means "blocked from the
     // loyalty program" (e.g. by FraudService); it is independent of the
     // user's account status in user-service.
-    public enum Status { ACTIVE, BLOCKED, INACTIVE }
+    //
+    // PENDING is the "phone-keyed wallet" state: a sender (merchant, friend)
+    // issued points/voucher to a phone that has not yet registered in
+    // user-service. Accrual works; redemption is blocked until user-service
+    // confirms the phone has signed up — at which point the row is flipped to
+    // ACTIVE by POST /loyalty/internal/users/promote.
+    public enum Status { ACTIVE, BLOCKED, INACTIVE, PENDING }
 }

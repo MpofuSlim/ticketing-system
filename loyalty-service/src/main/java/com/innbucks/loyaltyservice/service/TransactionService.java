@@ -49,7 +49,19 @@ public class TransactionService {
         if (m.getStatus() != Merchant.Status.ACTIVE) {
             throw LoyaltyException.badRequest("MERCHANT_INACTIVE", "merchant is not active; no points will be awarded");
         }
-        LoyaltyUser u = users.require(tenantId, req.userId());
+        // Recipient is either an existing LoyaltyUser (userId) or a phone we
+        // lazily enrol as PENDING. Exactly one input is required.
+        boolean hasUserId = req.userId() != null;
+        boolean hasPhone = req.assigneePhone() != null && !req.assigneePhone().isBlank();
+        if (hasUserId == hasPhone) {
+            throw LoyaltyException.badRequest("RECIPIENT_REQUIRED",
+                    "supply exactly one of userId or assigneePhone");
+        }
+        LoyaltyUser u = hasUserId
+                ? users.require(tenantId, req.userId())
+                : users.findOrCreatePending(tenantId, req.assigneePhone(), merchantId);
+        // Accrual is allowed for PENDING (the whole point of the feature);
+        // BLOCKED still rejects so fraud holds stick.
         if (u.getStatus() == LoyaltyUser.Status.BLOCKED) {
             throw LoyaltyException.forbidden("USER_BLOCKED", "user is blocked");
         }
