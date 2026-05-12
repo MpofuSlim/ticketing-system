@@ -81,6 +81,15 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- Boot 4 moved MockMvc auto-config into a separate module
+             (org.springframework.boot.webmvc.test.autoconfigure). Without this
+             dep @AutoConfigureMockMvc and the @Autowired MockMvc bean don't exist. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
             <artifactId>jjwt-api</artifactId>

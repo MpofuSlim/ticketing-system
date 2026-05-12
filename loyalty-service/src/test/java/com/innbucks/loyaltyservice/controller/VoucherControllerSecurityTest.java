@@ -1,0 +1,170 @@
+package com.innbucks.loyaltyservice.controller;
+
+import com.innbucks.loyaltyservice.service.VoucherService;
+import com.innbucks.loyaltyservice.service.VoucherTemplateService;
+import com.innbucks.loyaltyservice.testsupport.ControllerSecurityTestBase;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.MediaType;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+
+import java.util.UUID;
+
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+/**
+ * Security surface tests for VoucherController. Money handling endpoints — the
+ * role boundaries here are non-negotiable, so we assert them directly rather
+ * than trusting the @PreAuthorize annotations to be right.
+ */
+class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
+
+    // Mock the services so we never exercise their logic — these tests are
+    // about the security filter chain + @PreAuthorize, not about voucher math.
+    @MockitoBean VoucherService voucherService;
+    @MockitoBean VoucherTemplateService voucherTemplateService;
+
+    private static final String EMPTY_JSON = "{}";
+
+    // ------------------------------------------------------------------
+    // 401: no Authorization header on a protected endpoint
+    // ------------------------------------------------------------------
+
+    @Test
+    void post_template_without_token_returns_401() throws Exception {
+        mockMvc.perform(post("/loyalty/vouchers/templates")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(EMPTY_JSON))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void post_redeem_without_token_returns_401() throws Exception {
+        mockMvc.perform(post("/loyalty/vouchers/redeem")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(EMPTY_JSON))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void get_active_for_user_without_token_returns_401() throws Exception {
+        mockMvc.perform(get("/loyalty/vouchers/users/{userId}/active", UUID.randomUUID()))
+                .andExpect(status().isUnauthorized());
+    }
+
+    // ------------------------------------------------------------------
+    // 401: present-but-invalid token (covers the JwtFilter fix landed earlier)
+    // ------------------------------------------------------------------
+
+    @Test
+    void post_template_with_malformed_token_returns_401() throws Exception {
+        mockMvc.perform(post("/loyalty/vouchers/templates")
+                        .header("Authorization", "Bearer not-a-real-jwt")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(EMPTY_JSON))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void post_template_with_expired_token_returns_401() throws Exception {
+        String expired = com.innbucks.loyaltyservice.testsupport.TestJwtFactory.builder("admin@test.local")
+                .role("MERCHANT_ADMIN").expired().sign(jwtSecret);
+        mockMvc.perform(post("/loyalty/vouchers/templates")
+                        .header("Authorization", bearer(expired))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(EMPTY_JSON))
+                .andExpect(status().isUnauthorized());
+    }
+
+    // ------------------------------------------------------------------
+    // 403: valid token but the wrong role for the endpoint
+    // ------------------------------------------------------------------
+
+    // Bodies below pass @Valid so the request reaches the @PreAuthorize gate
+    // (which is what we're actually asserting). The mocked services would
+    // never be invoked because the role check rejects first.
+    private static final String VALID_TEMPLATE_BODY = """
+            {"name":"x","type":"SINGLE_USE","valueType":"AMOUNT","usageLimit":1}
+            """;
+    private static final String VALID_ISSUE_BODY = """
+            {"templateId":"d6e2f4a5-4567-8901-bcde-f01234567890"}
+            """;
+    private static final String VALID_BULK_BODY = """
+            {"templateId":"d6e2f4a5-4567-8901-bcde-f01234567890","quantity":1}
+            """;
+
+    @Test
+    void customer_cannot_create_template() throws Exception {
+        String customerToken = jwt("customer@test.local", "CUSTOMER");
+        mockMvc.perform(post("/loyalty/vouchers/templates")
+                        .header("Authorization", bearer(customerToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_TEMPLATE_BODY))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void customer_cannot_issue_voucher() throws Exception {
+        String customerToken = jwt("customer@test.local", "CUSTOMER");
+        mockMvc.perform(post("/loyalty/vouchers/issue")
+                        .header("Authorization", bearer(customerToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_ISSUE_BODY))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void customer_cannot_revoke_voucher() throws Exception {
+        String customerToken = jwt("customer@test.local", "CUSTOMER");
+        mockMvc.perform(post("/loyalty/vouchers/{id}/revoke", UUID.randomUUID())
+                        .header("Authorization", bearer(customerToken)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void customer_cannot_bulk_issue() throws Exception {
+        String customerToken = jwt("customer@test.local", "CUSTOMER");
+        mockMvc.perform(post("/loyalty/vouchers/issue-bulk")
+                        .header("Authorization", bearer(customerToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_BULK_BODY))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void customer_cannot_list_templates() throws Exception {
+        String customerToken = jwt("customer@test.local", "CUSTOMER");
+        mockMvc.perform(get("/loyalty/vouchers/templates")
+                        .header("Authorization", bearer(customerToken))
+                        .header("X-Tenant-Id", UUID.randomUUID().toString()))
+                .andExpect(status().isForbidden());
+    }
+
+    // ------------------------------------------------------------------
+    // 400: right role but missing X-Tenant-Id on a tenant-scoped endpoint
+    // ------------------------------------------------------------------
+
+    @Test
+    void admin_without_tenant_header_returns_400() throws Exception {
+        String admin = jwt("admin@test.local", "MERCHANT_ADMIN");
+        mockMvc.perform(get("/loyalty/vouchers/templates")
+                        .header("Authorization", bearer(admin)))
+                .andExpect(status().isBadRequest());
+    }
+
+    // ------------------------------------------------------------------
+    // 403: cross-tenant — admin valid + tenant exists, but they're not a member
+    // ------------------------------------------------------------------
+
+    @Test
+    void admin_who_is_not_a_member_of_tenant_returns_403() throws Exception {
+        UUID otherTenant = newTenant("voucher-cross");
+        // Caller email NOT added to tenant_members.
+        String stranger = jwt("stranger@test.local", "MERCHANT_ADMIN");
+        mockMvc.perform(get("/loyalty/vouchers/templates")
+                        .header("Authorization", bearer(stranger))
+                        .header("X-Tenant-Id", otherTenant.toString()))
+                .andExpect(status().isForbidden());
+    }
+}

@@ -9,12 +9,11 @@ import com.innbucks.loyaltyservice.repository.TenantRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-import org.springframework.web.context.WebApplicationContext;
 
 import java.util.Optional;
 import java.util.UUID;
@@ -39,10 +38,11 @@ import static org.mockito.Mockito.when;
  * header / cross-tenant) without boilerplate.
  */
 @SpringBootTest
+@AutoConfigureMockMvc
 @ActiveProfiles("test")
 public abstract class ControllerSecurityTestBase {
 
-    @Autowired protected WebApplicationContext webContext;
+    @Autowired protected MockMvc mockMvc;
     @Autowired protected TenantRepository tenantRepository;
     @Autowired protected TenantMemberRepository tenantMemberRepository;
 
@@ -51,11 +51,8 @@ public abstract class ControllerSecurityTestBase {
     /** Stubbed so we don't need a running user-service. Subclasses can override behaviour as needed. */
     @MockitoBean protected UserServiceClient userServiceClient;
 
-    protected MockMvc mockMvc;
-
     @BeforeEach
-    void setUpMockMvc() {
-        mockMvc = MockMvcBuilders.webAppContextSetup(webContext).build();
+    void seedDefaults() {
         // Default stub — most tests don't enrol users, but the bean has to be wired.
         when(userServiceClient.getCustomerTier(anyString())).thenReturn(Optional.of(
                 new CustomerTierResponseDTO("+263770000000", 1, 2)));
