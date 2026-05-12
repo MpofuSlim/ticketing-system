@@ -24,4 +24,11 @@ public interface WalletRepository extends JpaRepository<Wallet, UUID> {
 
     @Query("SELECT COALESCE(SUM(w.balance), 0) FROM Wallet w WHERE w.tenantId = :tenantId")
     BigDecimal sumBalanceByTenant(@Param("tenantId") UUID tenantId);
+
+    // One-query balance aggregation across multiple users. Used by
+    // /loyalty/users/me/wallet to avoid N round trips when a customer has
+    // LoyaltyUser projections in many tenants.
+    @Query("SELECT w.userId, COALESCE(SUM(w.balance), 0) FROM Wallet w " +
+            "WHERE w.userId IN :userIds GROUP BY w.userId")
+    List<Object[]> sumBalanceGroupedByUserId(@Param("userIds") List<UUID> userIds);
 }

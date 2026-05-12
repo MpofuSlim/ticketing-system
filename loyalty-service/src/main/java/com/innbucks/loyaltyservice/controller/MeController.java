@@ -2,12 +2,11 @@ package com.innbucks.loyaltyservice.controller;
 
 import com.innbucks.loyaltyservice.dto.ApiResult;
 import com.innbucks.loyaltyservice.entity.LoyaltyUser;
-import com.innbucks.loyaltyservice.entity.Voucher;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.LoyaltyUserRepository;
 import com.innbucks.loyaltyservice.repository.VoucherRepository;
+import com.innbucks.loyaltyservice.repository.WalletRepository;
 import com.innbucks.loyaltyservice.security.CallerDetails;
-import com.innbucks.loyaltyservice.service.WalletService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
@@ -23,7 +22,9 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -48,14 +49,14 @@ public class MeController {
 
     private final LoyaltyUserRepository users;
     private final VoucherRepository vouchers;
-    private final WalletService walletService;
+    private final WalletRepository wallets;
 
     public MeController(LoyaltyUserRepository users,
                         VoucherRepository vouchers,
-                        WalletService walletService) {
+                        WalletRepository wallets) {
         this.users = users;
         this.vouchers = vouchers;
-        this.walletService = walletService;
+        this.wallets = wallets;
     }
 
     @GetMapping("/wallet")
@@ -116,12 +117,26 @@ public class MeController {
                     "/me endpoints require a JWT with a phoneNumber claim");
         }
         List<LoyaltyUser> projections = users.findByPhoneNumber(phone);
+        if (projections.isEmpty()) {
+            return ResponseEntity.ok(ApiResult.ok("Wallet retrieved",
+                    new MeWalletResponse(phone, List.of())));
+        }
+        // Two aggregate queries instead of 2N round trips. For a customer with
+        // projections in N tenants we used to do N balance lookups + N voucher
+        // lookups; now it's a single SUM-by-userId and a single COUNT-by-userId.
+        List<UUID> userIds = projections.stream().map(LoyaltyUser::getId).toList();
+        Map<UUID, BigDecimal> balances = new HashMap<>();
+        for (Object[] row : wallets.sumBalanceGroupedByUserId(userIds)) {
+            balances.put((UUID) row[0], (BigDecimal) row[1]);
+        }
+        Map<UUID, Long> activeVoucherCounts = new HashMap<>();
+        for (Object[] row : vouchers.countActiveGroupedByUserId(userIds)) {
+            activeVoucherCounts.put((UUID) row[0], (Long) row[1]);
+        }
         List<TenantWalletEntry> entries = new ArrayList<>(projections.size());
         for (LoyaltyUser u : projections) {
-            BigDecimal balance = walletService.totalBalance(u.getId());
-            int activeVouchers = vouchers.findByAssignedUserIdAndStatusIn(u.getId(), List.of(
-                    Voucher.Status.ISSUED, Voucher.Status.DELIVERED, Voucher.Status.VIEWED,
-                    Voucher.Status.PARTIALLY_USED)).size();
+            BigDecimal balance = balances.getOrDefault(u.getId(), BigDecimal.ZERO);
+            int activeVouchers = activeVoucherCounts.getOrDefault(u.getId(), 0L).intValue();
             entries.add(new TenantWalletEntry(u.getTenantId(), u.getId(), u.getStatus().name(),
                     balance, activeVouchers));
         }

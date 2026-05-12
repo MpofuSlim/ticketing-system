@@ -2,6 +2,7 @@ package com.innbucks.loyaltyservice.scheduler;
 
 import com.innbucks.loyaltyservice.entity.Voucher;
 import com.innbucks.loyaltyservice.repository.VoucherRepository;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -22,6 +23,7 @@ public class VoucherExpirySweeper {
     }
 
     @Scheduled(cron = "${loyalty.scheduler.expiry-cron:0 5 * * * *}")
+    @SchedulerLock(name = "voucherExpirySweep", lockAtMostFor = "PT5M", lockAtLeastFor = "PT30S")
     @Transactional
     public void sweep() {
         List<Voucher> expired = vouchers.findExpired(Instant.now());

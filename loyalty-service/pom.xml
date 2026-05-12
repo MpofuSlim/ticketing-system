@@ -107,6 +107,23 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- ShedLock: leader-elects @Scheduled jobs via a DB row lock so we
+             can horizontally scale loyalty-service without every replica
+             firing the expiry / invoice / pending-sweep crons in parallel.
+             jdbc-template provider talks to the existing Hikari pool — no
+             extra connection. The shedlock table is provisioned by the V6
+             Flyway migration. -->
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-spring</artifactId>
+            <version>5.16.0</version>
+        </dependency>
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-provider-jdbc-template</artifactId>
+            <version>5.16.0</version>
+        </dependency>
+
         <!-- Testcontainers: spins up a real Postgres in Docker for integration
              tests that exercise Postgres-specific behaviour the H2 in-memory
              tests can't fake (partial unique indexes, row locks under load,

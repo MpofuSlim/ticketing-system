@@ -41,4 +41,16 @@ public interface VoucherRepository extends JpaRepository<Voucher, UUID> {
     long countByMerchantIdAndRedeemedAtBetween(UUID merchantId, Instant from, Instant to);
 
     long countByTenantIdAndStatus(UUID tenantId, Voucher.Status status);
+
+    // One-query active-voucher count grouped by user. Powers /me/wallet so we
+    // don't issue N separate findByAssignedUserIdAndStatusIn calls for a
+    // customer who's enrolled in N tenants.
+    @Query("SELECT v.assignedUserId, COUNT(v) FROM Voucher v " +
+            "WHERE v.assignedUserId IN :userIds " +
+            "AND v.status IN (com.innbucks.loyaltyservice.entity.Voucher.Status.ISSUED, " +
+            "                 com.innbucks.loyaltyservice.entity.Voucher.Status.DELIVERED, " +
+            "                 com.innbucks.loyaltyservice.entity.Voucher.Status.VIEWED, " +
+            "                 com.innbucks.loyaltyservice.entity.Voucher.Status.PARTIALLY_USED) " +
+            "GROUP BY v.assignedUserId")
+    List<Object[]> countActiveGroupedByUserId(@Param("userIds") List<UUID> userIds);
 }
