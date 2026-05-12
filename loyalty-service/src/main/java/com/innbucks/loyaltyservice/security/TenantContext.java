@@ -2,8 +2,8 @@ package com.innbucks.loyaltyservice.security;
 
 import com.innbucks.loyaltyservice.entity.Tenant;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
-import com.innbucks.loyaltyservice.repository.TenantMemberRepository;
 import com.innbucks.loyaltyservice.repository.TenantRepository;
+import com.innbucks.loyaltyservice.service.TenantCachedLookup;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.access.AccessDeniedException;
@@ -34,13 +34,13 @@ import java.util.UUID;
 public class TenantContext {
 
     private final TenantRepository tenants;
-    private final TenantMemberRepository members;
+    private final TenantCachedLookup lookup;
     private final HttpServletRequest request;
     private Tenant cached;
 
-    public TenantContext(TenantRepository tenants, TenantMemberRepository members, HttpServletRequest request) {
+    public TenantContext(TenantRepository tenants, TenantCachedLookup lookup, HttpServletRequest request) {
         this.tenants = tenants;
-        this.members = members;
+        this.lookup = lookup;
         this.request = request;
     }
 
@@ -60,7 +60,8 @@ public class TenantContext {
         String idHeader = request.getHeader("X-Tenant-Id");
         if (idHeader != null && !idHeader.isBlank()) {
             try {
-                return tenants.findById(UUID.fromString(idHeader.trim()))
+                // Cached lookup — backed by Caffeine via TenantCachedLookup.
+                return lookup.findById(UUID.fromString(idHeader.trim()))
                         .orElseThrow(() -> LoyaltyException.notFound("tenant"));
             } catch (IllegalArgumentException ex) {
                 throw LoyaltyException.badRequest("BAD_TENANT", "X-Tenant-Id is not a valid UUID");
@@ -97,7 +98,7 @@ public class TenantContext {
             return;
         }
         String caller = authentication.getName();
-        if (!members.existsByTenantIdAndEmail(tenant.getId(), caller)) {
+        if (!lookup.isMember(tenant.getId(), caller)) {
             log.warn("Tenant membership check failed tenantId={} caller={}",
                     tenant.getId(), caller);
             throw new AccessDeniedException(

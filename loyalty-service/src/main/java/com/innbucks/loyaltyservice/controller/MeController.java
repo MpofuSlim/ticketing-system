@@ -13,7 +13,11 @@ import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.CacheControl;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -21,6 +25,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -110,7 +115,7 @@ public class MeController {
                                     }
                                     """)))
     })
-    public ResponseEntity<ApiResult<MeWalletResponse>> wallet() {
+    public ResponseEntity<ApiResult<MeWalletResponse>> wallet(HttpServletRequest request) {
         String phone = CallerDetails.currentPhoneNumber();
         if (phone == null || phone.isBlank()) {
             throw LoyaltyException.badRequest("NO_PHONE_CLAIM",
@@ -140,8 +145,27 @@ public class MeController {
             entries.add(new TenantWalletEntry(u.getTenantId(), u.getId(), u.getStatus().name(),
                     balance, activeVouchers));
         }
-        return ResponseEntity.ok(ApiResult.ok("Wallet retrieved",
-                new MeWalletResponse(phone, entries)));
+        MeWalletResponse body = new MeWalletResponse(phone, entries);
+
+        // ETag = stable hash of the response payload. The mini-app polls this
+        // every few seconds while in foreground; with a matching If-None-Match
+        // we short-circuit to 304 (no body, no work) — saves bandwidth and
+        // gives a free "did anything change?" signal.
+        String etag = "\"" + Integer.toHexString(body.hashCode()) + "\"";
+        String ifNoneMatch = request.getHeader(HttpHeaders.IF_NONE_MATCH);
+        if (etag.equals(ifNoneMatch)) {
+            return ResponseEntity.status(HttpStatus.NOT_MODIFIED)
+                    .eTag(etag)
+                    .cacheControl(CacheControl.maxAge(Duration.ofSeconds(30)).cachePrivate())
+                    .build();
+        }
+        // 30s private cache: short enough that "I just got points" feels live,
+        // long enough to absorb a poll loop. private = browsers/clients only,
+        // never a shared cache.
+        return ResponseEntity.ok()
+                .eTag(etag)
+                .cacheControl(CacheControl.maxAge(Duration.ofSeconds(30)).cachePrivate())
+                .body(ApiResult.ok("Wallet retrieved", body));
     }
 
     public record MeWalletResponse(String phoneNumber, List<TenantWalletEntry> entries) {}

@@ -107,6 +107,20 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- Caffeine: in-memory cache for the hot-path tenant + tenant-membership
+             lookups in TenantContext. Every authenticated request hits these
+             twice today; with Caffeine they're amortised to one DB lookup per
+             tenant per TTL window. spring-boot-starter-cache wires up the
+             @Cacheable / @CacheEvict annotations. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-cache</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
+
         <!-- ShedLock: leader-elects @Scheduled jobs via a DB row lock so we
              can horizontally scale loyalty-service without every replica
              firing the expiry / invoice / pending-sweep crons in parallel.
