@@ -71,7 +71,12 @@ public class CustomerService {
     public CustomerRegistrationResponseDTO registerTier2(String phoneNumber, CustomerTier2RegisterDTO request) {
         CustomerProfile profile = loadProfile(phoneNumber, 1);
 
-        profile.setFullName(request.getFullName());
+        // Compose a canonical fullName from the three structured fields. The
+        // profile still keeps it as a denormalised column so ID-matching and
+        // downstream KYC checks have one human-readable string to work against.
+        String fullName = composeFullName(request.getFirstName(),
+                request.getMiddleName(), request.getLastName());
+        profile.setFullName(fullName);
         profile.setIdNumber(request.getIdNumber());
         profile.setPassportNumber(request.getPassportNumber());
         profile.setAddress(request.getAddress());
@@ -80,13 +85,13 @@ public class CustomerService {
         profile.setRegistrationTier(2);
         customerProfileRepository.save(profile);
 
-        // Keep the User first/last name consistent with the submitted full name
-        String[] parts = request.getFullName().trim().split("\\s+", 2);
+        // Mirror the structured fields onto the User row so the JWT issuer can
+        // pick them up at next login (see AuthService.issueToken — tier>=2
+        // CUSTOMERS get firstName/middleName/lastName claims).
         User user = profile.getUser();
-        user.setFirstName(parts[0]);
-        if (parts.length > 1) {
-            user.setLastName(parts[1]);
-        }
+        user.setFirstName(request.getFirstName());
+        user.setMiddleName(request.getMiddleName());
+        user.setLastName(request.getLastName());
         userRepository.save(user);
 
         return CustomerRegistrationResponseDTO.builder()
@@ -165,6 +170,21 @@ public class CustomerService {
                 .currentTier(currentTier)
                 .nextTier(nextTier)
                 .build();
+    }
+
+    /** Joins first / middle / last into a single string, skipping any blanks. */
+    private static String composeFullName(String first, String middle, String last) {
+        StringBuilder sb = new StringBuilder();
+        if (first != null && !first.isBlank()) sb.append(first.trim());
+        if (middle != null && !middle.isBlank()) {
+            if (sb.length() > 0) sb.append(' ');
+            sb.append(middle.trim());
+        }
+        if (last != null && !last.isBlank()) {
+            if (sb.length() > 0) sb.append(' ');
+            sb.append(last.trim());
+        }
+        return sb.toString();
     }
 
     private CustomerProfile loadProfile(String phoneNumber, int requiredCurrentTier) {

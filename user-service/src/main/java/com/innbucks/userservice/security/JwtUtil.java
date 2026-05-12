@@ -33,7 +33,8 @@ public class JwtUtil {
 
     public String generateToken(String email, Collection<String> roles, Collection<String> defaultServices,
                                 int tier, boolean verified, String phoneNumber,
-                                UUID merchantId, UUID shopId) {
+                                UUID merchantId, UUID shopId,
+                                String firstName, String middleName, String lastName) {
         List<String> roleList = roles == null ? List.of()
                 : roles.stream().filter(r -> r != null && !r.isBlank()).collect(Collectors.toList());
         List<String> serviceList = defaultServices == null ? List.of()
@@ -54,11 +55,34 @@ public class JwtUtil {
         if (shopId != null) {
             builder.claim("shopId", shopId.toString());
         }
+        // Display-name claims are emitted only for CUSTOMER tokens — staff
+        // roles (MERCHANT_ADMIN, SHOP_ADMIN, etc.) don't need their personal
+        // names in every JWT and we'd rather keep their tokens slim + less
+        // PII-exposed. AuthService further gates this to tier >= 2 (tier 1
+        // names are placeholders like "Customer Pending"); JwtUtil enforces
+        // the role check independently as a backstop.
+        boolean customerToken = roleList.contains("CUSTOMER");
+        if (customerToken && firstName != null && !firstName.isBlank()) {
+            builder.claim("firstName", firstName);
+        }
+        if (customerToken && middleName != null && !middleName.isBlank()) {
+            builder.claim("middleName", middleName);
+        }
+        if (customerToken && lastName != null && !lastName.isBlank()) {
+            builder.claim("lastName", lastName);
+        }
         return builder
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + expiration))
                 .signWith(getSigningKey(), Jwts.SIG.HS256)
                 .compact();
+    }
+
+    public String generateToken(String email, Collection<String> roles, Collection<String> defaultServices,
+                                int tier, boolean verified, String phoneNumber,
+                                UUID merchantId, UUID shopId) {
+        return generateToken(email, roles, defaultServices, tier, verified, phoneNumber,
+                merchantId, shopId, null, null, null);
     }
 
     public String generateToken(String email, Collection<String> roles, Collection<String> defaultServices,
@@ -112,6 +136,19 @@ public class JwtUtil {
 
     public Integer extractTier(String token) {
         return getClaims(token).get("tier", Integer.class);
+    }
+
+    /** Optional CUSTOMER display name claim. {@code null} for staff tokens or tier-1 customers. */
+    public String extractFirstName(String token) {
+        return getClaims(token).get("firstName", String.class);
+    }
+
+    public String extractMiddleName(String token) {
+        return getClaims(token).get("middleName", String.class);
+    }
+
+    public String extractLastName(String token) {
+        return getClaims(token).get("lastName", String.class);
     }
 
     public Boolean extractVerified(String token) {

@@ -12,9 +12,16 @@ import lombok.Data;
         description = "Identity details to upgrade an existing Tier-1 account to Tier 2.")
 public class CustomerTier2RegisterDTO {
 
-    @Schema(example = "Alice Jane Moyo", description = "Full legal name as it appears on the national ID.")
-    @NotBlank(message = "Full name is required")
-    private String fullName;
+    @Schema(example = "Sedrick", description = "First (given) name as it appears on the national ID.")
+    @NotBlank(message = "First name is required")
+    private String firstName;
+
+    @Schema(example = "Takunda", nullable = true, description = "Middle name(s) — optional.")
+    private String middleName;
+
+    @Schema(example = "Elvis", description = "Last (family) name as it appears on the national ID.")
+    @NotBlank(message = "Last name is required")
+    private String lastName;
 
     @Schema(example = "63-123456A78", description = "National ID number.")
     @NotBlank(message = "ID number is required")
