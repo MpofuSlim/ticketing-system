@@ -36,6 +36,7 @@ public class VoucherService {
     private final VoucherTemplateService templateService;
     private final MerchantService merchants;
     private final LoyaltyUserRepository users;
+    private final UserService userService;
     private final NotificationGateway notifications;
     private final FraudService fraud;
     private final CryptoSigner signer;
@@ -46,6 +47,7 @@ public class VoucherService {
                           VoucherTemplateService templateService,
                           MerchantService merchants,
                           LoyaltyUserRepository users,
+                          UserService userService,
                           NotificationGateway notifications,
                           FraudService fraud,
                           LoyaltyProperties props) {
@@ -55,6 +57,7 @@ public class VoucherService {
         this.templateService = templateService;
         this.merchants = merchants;
         this.users = users;
+        this.userService = userService;
         this.notifications = notifications;
         this.fraud = fraud;
         this.signer = new CryptoSigner(props.voucher().secret());
@@ -108,6 +111,13 @@ public class VoucherService {
             if (assigneePhone == null) assigneePhone = u.getPhoneNumber();
             // assigneeName is supplied by caller — loyalty-service does not
             // duplicate identity from user-service.
+        } else if (assigneePhone != null && !assigneePhone.isBlank()) {
+            // Phone-only path: auto-enrol a PENDING LoyaltyUser so the voucher
+            // is linked to a real row from issue time. The promote-on-registration
+            // webhook can then flip the user to ACTIVE without scanning vouchers
+            // for unmatched phones.
+            LoyaltyUser pending = userService.findOrCreatePending(tenantId, assigneePhone, tpl.getMerchantId());
+            assignedUserId = pending.getId();
         }
 
         String code = uniqueCode();
@@ -212,6 +222,14 @@ public class VoucherService {
                         FraudAttempt.Reason.BLOCKED_USER, "blocked user attempted redemption",
                         req.deviceFingerprint(), req.ipAddress());
                 throw LoyaltyException.forbidden("USER_BLOCKED", "user is blocked");
+            }
+            // PENDING means the recipient hasn't registered yet — they can hold
+            // the voucher but not redeem it. The "promote" webhook flips them
+            // to ACTIVE the moment user-service confirms signup.
+            if (u != null && u.getStatus() == LoyaltyUser.Status.PENDING) {
+                recordRedemption(v, merchantId, req, VoucherRedemption.Result.REJECTED, "user pending registration");
+                throw LoyaltyException.forbidden("USER_PENDING",
+                        "voucher belongs to an unregistered phone; recipient must register before redeeming");
             }
         }
 

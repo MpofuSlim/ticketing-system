@@ -32,14 +32,28 @@ public class TransferService {
     }
 
     public BigDecimal transfer(UUID tenantId, Dtos.TransferRequest req) {
-        if (req.fromUserId().equals(req.toUserId())) {
-            throw LoyaltyException.badRequest("SELF_TRANSFER", "cannot transfer to yourself");
-        }
         if (req.points() == null || req.points().signum() <= 0) {
             throw LoyaltyException.badRequest("BAD_AMOUNT", "points must be positive");
         }
+        // Recipient may be a UUID (registered) or a phone (auto-enrol as PENDING).
+        boolean hasToUserId = req.toUserId() != null;
+        boolean hasToPhone = req.toPhone() != null && !req.toPhone().isBlank();
+        if (hasToUserId == hasToPhone) {
+            throw LoyaltyException.badRequest("RECIPIENT_REQUIRED",
+                    "supply exactly one of toUserId or toPhone");
+        }
+
         var sender = users.require(tenantId, req.fromUserId());
-        var recipient = users.require(tenantId, req.toUserId());
+        // Senders cannot be PENDING — you must be registered to spend.
+        users.requireSpendable(sender);
+
+        var recipient = hasToUserId
+                ? users.require(tenantId, req.toUserId())
+                : users.findOrCreatePending(tenantId, req.toPhone(), sender.getMerchantId());
+
+        if (sender.getId().equals(recipient.getId())) {
+            throw LoyaltyException.badRequest("SELF_TRANSFER", "cannot transfer to yourself");
+        }
 
         UUID merchantContext = sender.getMerchantId() != null
                 ? sender.getMerchantId()

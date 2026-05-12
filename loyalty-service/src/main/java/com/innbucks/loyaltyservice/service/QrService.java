@@ -94,14 +94,14 @@ public class QrService {
         if (q.getSourceType() == QrToken.SourceType.MERCHANT) {
             // Merchant-issued QR awards points to the scanning user.
             return transactionService.post(tenantId, q.getSourceId(), new Dtos.TransactionRequest(
-                    null, req.userId(), q.getTransactionType(),
+                    null, req.userId(), null, q.getTransactionType(),
                     q.getAmount() == null ? BigDecimal.ZERO : q.getAmount(),
                     q.getCurrency(), req.reference()));
         } else {
             // User-issued QR initiates a P2P transfer; sourceId is the sender.
             BigDecimal points = q.getAmount() == null ? BigDecimal.ZERO : q.getAmount();
             transferService.transfer(tenantId, new Dtos.TransferRequest(
-                    q.getSourceId(), req.userId(), points, "qr-transfer"));
+                    q.getSourceId(), req.userId(), null, points, "qr-transfer"));
             return new Dtos.TransactionResponse(null, TransactionType.TRANSFER, points,
                     points, null, null, null, req.reference(), Instant.now());
         }
