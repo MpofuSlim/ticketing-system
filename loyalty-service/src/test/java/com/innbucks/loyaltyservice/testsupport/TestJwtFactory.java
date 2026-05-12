@@ -1,10 +1,11 @@
 package com.innbucks.loyaltyservice.testsupport;
 
 import io.jsonwebtoken.Jwts;
-import io.jsonwebtoken.SignatureAlgorithm;
+
 import io.jsonwebtoken.security.Keys;
 
-import java.security.Key;
+import javax.crypto.SecretKey;
+import java.nio.charset.StandardCharsets;
 import java.util.Date;
 import java.util.List;
 import java.util.UUID;
@@ -123,9 +124,9 @@ public final class TestJwtFactory {
         }
 
         public String sign(String secret) {
-            Key key = Keys.hmacShaKeyFor(secret.getBytes());
+            SecretKey key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
             var builder = Jwts.builder()
-                    .setSubject(email)
+                    .subject(email)
                     .claim("roles", roles)
                     .claim("services", services)
                     .claim("tier", tier)
@@ -141,9 +142,9 @@ public final class TestJwtFactory {
             }
             long now = System.currentTimeMillis();
             return builder
-                    .setIssuedAt(new Date(now - 1_000L))
-                    .setExpiration(new Date(now + ttlMillis))
-                    .signWith(key, SignatureAlgorithm.HS256)
+                    .issuedAt(new Date(now - 1_000L))
+                    .expiration(new Date(now + ttlMillis))
+                    .signWith(key, Jwts.SIG.HS256)
                     .compact();
         }
     }
