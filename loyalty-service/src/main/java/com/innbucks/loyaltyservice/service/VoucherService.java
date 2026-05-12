@@ -309,6 +309,26 @@ public class VoucherService {
                 .map(VoucherService::toResponse);
     }
 
+    /**
+     * Aggregate every active voucher for a phone — across every tenant the
+     * phone has a LoyaltyUser projection in. Returns an empty page when the
+     * phone has no projections at all (rather than 404) so the customer-app
+     * UI can render "no vouchers yet" cleanly.
+     */
+    @Transactional(readOnly = true)
+    public Page<Dtos.VoucherResponse> activeForPhone(String phoneNumber, Pageable pageable) {
+        java.util.List<UUID> userIds = users.findByPhoneNumber(phoneNumber).stream()
+                .map(com.innbucks.loyaltyservice.entity.LoyaltyUser::getId)
+                .toList();
+        if (userIds.isEmpty()) {
+            return org.springframework.data.domain.Page.empty(pageable);
+        }
+        return vouchers.findByAssignedUserIdInAndStatusIn(userIds, List.of(
+                Voucher.Status.ISSUED, Voucher.Status.DELIVERED, Voucher.Status.VIEWED,
+                Voucher.Status.PARTIALLY_USED), pageable)
+                .map(VoucherService::toResponse);
+    }
+
     @Transactional(readOnly = true)
     public List<Dtos.VoucherResponse> findByStatus(UUID tenantId, Voucher.Status status) {
         return vouchers.findByTenantIdAndStatus(tenantId, status).stream()

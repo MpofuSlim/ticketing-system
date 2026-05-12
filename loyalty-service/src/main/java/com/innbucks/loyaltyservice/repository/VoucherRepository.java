@@ -26,6 +26,13 @@ public interface VoucherRepository extends JpaRepository<Voucher, UUID> {
 
     Page<Voucher> findByAssignedUserIdAndStatusIn(UUID userId, List<Voucher.Status> statuses, Pageable pageable);
 
+    // Multi-user variant — used by /loyalty/vouchers/users/by-phone/{phone}/active
+    // to aggregate every voucher for a phone across every tenant projection in
+    // one query (a phone can have N LoyaltyUsers, one per tenant).
+    Page<Voucher> findByAssignedUserIdInAndStatusIn(List<UUID> userIds,
+                                                   List<Voucher.Status> statuses,
+                                                   Pageable pageable);
+
     List<Voucher> findByTenantIdAndStatus(UUID tenantId, Voucher.Status status);
 
     Page<Voucher> findByTenantIdAndStatus(UUID tenantId, Voucher.Status status, Pageable pageable);

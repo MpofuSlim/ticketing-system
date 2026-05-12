@@ -48,9 +48,39 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
     }
 
     @Test
-    void get_active_for_user_without_token_returns_401() throws Exception {
-        mockMvc.perform(get("/loyalty/vouchers/users/{userId}/active", UUID.randomUUID()))
+    void get_active_for_phone_without_token_returns_401() throws Exception {
+        mockMvc.perform(get("/loyalty/vouchers/users/by-phone/{phone}/active", "+263770000001"))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void customer_cannot_view_someone_elses_phone_vouchers() throws Exception {
+        // CUSTOMER token bound to one phone trying to read another phone's
+        // vouchers must 403 NOT_PHONE_OWNER (the IDOR gate).
+        String aliceToken = com.innbucks.loyaltyservice.testsupport.TestJwtFactory
+                .builder("alice@test.local").role("CUSTOMER")
+                .phoneNumber("+263770000111").sign(jwtSecret);
+        mockMvc.perform(get("/loyalty/vouchers/users/by-phone/{phone}/active", "+263770000222")
+                        .header("Authorization", bearer(aliceToken)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void customer_can_view_their_own_phone_vouchers() throws Exception {
+        // The mocked VoucherService needs an empty Page or PageResponse.from
+        // NPEs trying to map a null result.
+        org.mockito.Mockito.when(voucherService.activeForPhone(
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(org.springframework.data.domain.Pageable.class)))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(
+                        java.util.List.of(), org.springframework.data.domain.Pageable.unpaged(), 0));
+
+        String aliceToken = com.innbucks.loyaltyservice.testsupport.TestJwtFactory
+                .builder("alice@test.local").role("CUSTOMER")
+                .phoneNumber("+263770000111").sign(jwtSecret);
+        mockMvc.perform(get("/loyalty/vouchers/users/by-phone/{phone}/active", "+263770000111")
+                        .header("Authorization", bearer(aliceToken)))
+                .andExpect(status().isOk());
     }
 
     // ------------------------------------------------------------------
