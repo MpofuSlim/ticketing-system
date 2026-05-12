@@ -92,9 +92,10 @@ public class JwtFilter extends OncePerRequestFilter {
             }
 
             UUID merchantId = jwtUtil.extractMerchantId(token);
+            String phoneNumber = jwtUtil.extractPhoneNumber(token);
 
             var auth = new UsernamePasswordAuthenticationToken(email, null, authorities);
-            auth.setDetails(new CallerDetails(merchantId));
+            auth.setDetails(new CallerDetails(merchantId, phoneNumber));
             SecurityContextHolder.getContext().setAuthentication(auth);
             log.debug("JWT authenticated subject={} roles={} merchantId={} path={}",
                     email, roles, merchantId, request.getRequestURI());

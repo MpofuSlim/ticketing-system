@@ -132,8 +132,14 @@ class LoyaltyServiceIntegrationTest {
                 new Dtos.TransactionRequest(null, alice.getId(), null, TransactionType.PURCHASE,
                         new BigDecimal("50"), "USD", "ref-trans-1"));
 
-        transferService.transfer(t.getId(),
-                new Dtos.TransferRequest(alice.getId(), bob.getId(), null, new BigDecimal("20"), "gift"));
+        // TransferService verifies the caller owns the sender wallet (Phase 5
+        // P2P authz fix). When invoked directly from this test there is no
+        // HTTP security context, so we install one matching what JwtFilter
+        // would set on a real CUSTOMER request from Alice.
+        withCaller(alice.getPhoneNumber(), "CUSTOMER", () ->
+                transferService.transfer(t.getId(),
+                        new Dtos.TransferRequest(alice.getId(), bob.getId(), null,
+                                new BigDecimal("20"), "gift")));
 
         assertThat(walletService.totalBalance(alice.getId())).isEqualByComparingTo("30");
         assertThat(walletService.totalBalance(bob.getId())).isEqualByComparingTo("20");
@@ -199,5 +205,29 @@ class LoyaltyServiceIntegrationTest {
         t.setName("Acme");
         t.setCreatedAt(Instant.now());
         return tenantRepository.save(t);
+    }
+
+    /**
+     * Installs a SecurityContext carrying the given phone + role for the
+     * duration of the lambda — emulating what JwtFilter would set on a real
+     * authenticated HTTP request. Used by tests that drive services directly
+     * (no MockMvc) but still need to satisfy auth checks like the P2P transfer
+     * ownership guard.
+     */
+    private void withCaller(String phoneNumber, String role, Runnable body) {
+        var authorities = java.util.List.of(
+                new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_" + role));
+        var auth = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                phoneNumber, null, authorities);
+        auth.setDetails(new com.innbucks.loyaltyservice.security.CallerDetails(null, phoneNumber));
+        var ctx = org.springframework.security.core.context.SecurityContextHolder.createEmptyContext();
+        ctx.setAuthentication(auth);
+        var previous = org.springframework.security.core.context.SecurityContextHolder.getContext();
+        org.springframework.security.core.context.SecurityContextHolder.setContext(ctx);
+        try {
+            body.run();
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.setContext(previous);
+        }
     }
 }
