@@ -111,6 +111,21 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
+            # Block /loyalty/internal/** at the edge. These are service-to-service
+            # endpoints (user-service -> loyalty-service) gated by the
+            # X-Internal-Token shared secret. They have no business being
+            # reachable from the public internet, even though the secret check
+            # would reject the call — defence in depth, and it also keeps the
+            # paths off attacker recon scans (they get a plain 404 instead of
+            # a 401 that gives away the endpoint exists). Real service-to-
+            # service traffic goes directly between pods inside the cluster
+            # network and never touches the gateway. MUST be declared before
+            # the catch-all loyalty-service-route so SCG matches it first.
+            - id: loyalty-internal-deny
+              uri: forward:/__edge_deny__
+              predicates:
+                - Path=/loyalty/internal/**
+
             - id: loyalty-service-route
               uri: ${LOYALTY_SERVICE_URI:http://localhost:8086}
               predicates:
