@@ -74,6 +74,13 @@ public class TenantContext {
                     "Multiple tenants share code '" + codeHeader.trim() + "'. Use X-Tenant-Id instead.");
             return matches.get(0);
         }
+        // Log the method + URI + caller so a "MISSING_TENANT" in prod tells you
+        // exactly which frontend call dropped the header instead of leaving you
+        // to guess from the error message alone.
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        String caller = (auth != null && auth.getName() != null) ? auth.getName() : "anonymous";
+        log.warn("MISSING_TENANT method={} uri={} caller={} origin={}",
+                request.getMethod(), request.getRequestURI(), caller, request.getHeader("Origin"));
         throw LoyaltyException.badRequest("MISSING_TENANT", "X-Tenant-Id or X-Tenant-Code header is required");
     }
 
