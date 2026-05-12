@@ -91,4 +91,38 @@ class InternalMerchantLookupControllerSecurityTest extends ControllerSecurityTes
                         .header("Authorization", bearer(adminJwt)))
                 .andExpect(status().isUnauthorized());
     }
+
+    // ------------------------------------------------------------------
+    // Promote endpoint: same shared-secret gate as the lookup endpoints.
+    // ------------------------------------------------------------------
+
+    @Test
+    void promote_without_internal_token_returns_401() throws Exception {
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/loyalty/internal/users/promote")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"phoneNumber\":\"+263770000001\"}"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void promote_with_correct_token_and_blank_phone_returns_400() throws Exception {
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/loyalty/internal/users/promote")
+                        .header("X-Internal-Token", internalToken)
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"phoneNumber\":\"\"}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void promote_with_correct_token_and_unknown_phone_returns_200_with_zero_count() throws Exception {
+        // Replays / unknown phones are idempotent no-ops, not errors.
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/loyalty/internal/users/promote")
+                        .header("X-Internal-Token", internalToken)
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"phoneNumber\":\"+263777777777\"}"))
+                .andExpect(status().isOk());
+    }
 }
