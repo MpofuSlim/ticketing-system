@@ -1,9 +1,12 @@
 package com.innbucks.loyaltyservice.testsupport;
 
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
@@ -27,7 +30,8 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  */
 @SpringBootTest
 @ActiveProfiles("it")
-@Testcontainers
+@Testcontainers(disabledWithoutDocker = true)
+@EnabledIf("com.innbucks.loyaltyservice.testsupport.PostgresIntegrationTestBase#isDockerAvailable")
 public abstract class PostgresIntegrationTestBase {
 
     // Static + reused across test classes. Testcontainers tears it down on JVM
@@ -39,8 +43,25 @@ public abstract class PostgresIntegrationTestBase {
             .withPassword("loyalty")
             .withReuse(true);
 
-    static {
-        POSTGRES.start();
+    @BeforeAll
+    static void startContainer() {
+        if (!POSTGRES.isRunning()) {
+            POSTGRES.start();
+        }
+    }
+
+    /**
+     * Junit's @EnabledIf entrypoint — short-circuits the whole IT class when
+     * Docker isn't reachable so devs without Docker (or constrained CI runners)
+     * don't see red builds. Returns true only when Testcontainers can actually
+     * talk to a Docker daemon.
+     */
+    public static boolean isDockerAvailable() {
+        try {
+            return DockerClientFactory.instance().isDockerAvailable();
+        } catch (Throwable t) {
+            return false;
+        }
     }
 
     @DynamicPropertySource
