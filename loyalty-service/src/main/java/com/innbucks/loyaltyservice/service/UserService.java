@@ -11,6 +11,7 @@ import com.innbucks.loyaltyservice.repository.WalletRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -127,6 +128,33 @@ public class UserService {
             throw LoyaltyException.forbidden("CROSS_TENANT", "user belongs to a different tenant");
         }
         return u;
+    }
+
+    /**
+     * Called by user-service via the {@code /loyalty/internal/users/promote}
+     * webhook the moment a phone completes registration. Flips every
+     * {@link LoyaltyUser.Status#PENDING} row matching that phone — across all
+     * tenants — to {@link LoyaltyUser.Status#ACTIVE} so the receiver can now
+     * spend whatever accrued while they were unregistered.
+     *
+     * <p>Idempotent. Already-ACTIVE rows are left alone; BLOCKED/INACTIVE rows
+     * stay where they are (registration doesn't unblock fraud holds).
+     *
+     * @return count of rows promoted in this call.
+     */
+    public int promoteByPhone(String phoneNumber) {
+        if (phoneNumber == null || phoneNumber.isBlank()) {
+            throw LoyaltyException.badRequest("BAD_PHONE", "phoneNumber required");
+        }
+        List<LoyaltyUser> matches = users.findByPhoneNumber(phoneNumber);
+        int promoted = 0;
+        for (LoyaltyUser u : matches) {
+            if (u.getStatus() == LoyaltyUser.Status.PENDING) {
+                u.setStatus(LoyaltyUser.Status.ACTIVE);
+                promoted++;
+            }
+        }
+        return promoted;
     }
 
     public static Dtos.UserResponse toResponse(LoyaltyUser u) {

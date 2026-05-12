@@ -4,6 +4,7 @@ import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.Shop;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
 import com.innbucks.loyaltyservice.repository.ShopRepository;
+import com.innbucks.loyaltyservice.service.UserService;
 import io.swagger.v3.oas.annotations.Hidden;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -30,13 +31,16 @@ public class InternalMerchantLookupController {
 
     private final MerchantRepository merchants;
     private final ShopRepository shops;
+    private final UserService userService;
     private final String expectedToken;
 
     public InternalMerchantLookupController(MerchantRepository merchants,
                                             ShopRepository shops,
+                                            UserService userService,
                                             @Value("${innbucks.internal-api-token:}") String expectedToken) {
         this.merchants = merchants;
         this.shops = shops;
+        this.userService = userService;
         this.expectedToken = expectedToken;
     }
 
@@ -75,6 +79,29 @@ public class InternalMerchantLookupController {
         body.put("tenantId", s.getTenantId());
         body.put("status", s.getStatus().name());
         return ResponseEntity.ok(body);
+    }
+
+    /**
+     * Promote-on-registration webhook. Called by user-service the moment a
+     * phone completes signup so every PENDING LoyaltyUser matching that phone
+     * — across all tenants — flips to ACTIVE. Idempotent: replays are safe and
+     * report how many rows actually changed.
+     *
+     * <p>Body: {@code {"phoneNumber": "+263771234567"}}.
+     */
+    @org.springframework.web.bind.annotation.PostMapping("/users/promote")
+    public ResponseEntity<?> promote(@RequestHeader(value = "X-Internal-Token", required = false) String token,
+                                     @org.springframework.web.bind.annotation.RequestBody Map<String, String> body) {
+        if (!authorized(token)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        String phone = body == null ? null : body.get("phoneNumber");
+        if (phone == null || phone.isBlank()) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", "phoneNumber is required"));
+        }
+        int promoted = userService.promoteByPhone(phone);
+        log.info("Promoted {} PENDING LoyaltyUser(s) for phone={}", promoted, phone);
+        return ResponseEntity.ok(Map.of("phoneNumber", phone, "promoted", promoted));
     }
 
     private boolean authorized(String presented) {
