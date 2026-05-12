@@ -98,6 +98,27 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- Testcontainers: spins up a real Postgres in Docker for integration
+             tests that exercise Postgres-specific behaviour the H2 in-memory
+             tests can't fake (partial unique indexes, row locks under load,
+             native enum columns, etc.). Test-scoped only — never ships in
+             the runtime JAR. Versions are managed by spring-boot-dependencies. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+
     </dependencies>
 
     <build>
