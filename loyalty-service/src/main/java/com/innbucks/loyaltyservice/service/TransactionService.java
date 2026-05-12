@@ -9,6 +9,7 @@ import com.innbucks.loyaltyservice.entity.Wallet;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.LoyaltyTransactionRepository;
 import com.innbucks.loyaltyservice.repository.WalletRepository;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -74,7 +75,16 @@ public class TransactionService {
         t.setRuleId(eval.ruleId());
         t.setCampaignId(eval.campaignId());
         t.setReference(req.reference());
-        transactions.save(t);
+        // saveAndFlush so a unique-constraint violation on (merchant_id, reference)
+        // surfaces here as DataIntegrityViolationException rather than at txn
+        // commit (where it would bubble up as a 500). The Java pre-check above
+        // narrows the window; the DB constraint closes it.
+        try {
+            transactions.saveAndFlush(t);
+        } catch (DataIntegrityViolationException dup) {
+            throw LoyaltyException.conflict("DUPLICATE_REFERENCE",
+                    "transaction with this merchant reference already exists");
+        }
 
         BigDecimal balance = BigDecimal.ZERO;
         if (eval.points().signum() > 0) {
