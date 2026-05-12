@@ -544,10 +544,15 @@ public class VoucherController {
         return ResponseEntity.ok(ApiResult.ok("Voucher view recorded", null));
     }
 
-    @GetMapping("/users/{userId}/active")
-    @Operation(summary = "List a user's active vouchers",
-            description = "Returns all ISSUED / PARTIALLY_USED vouchers belonging to the loyalty user. " +
-                          "Powers the SuperApp \"my vouchers\" wallet view.")
+    @GetMapping("/users/by-phone/{phoneNumber}/active")
+    @Operation(summary = "List a phone's active vouchers across every tenant",
+            description = "Returns every voucher in an active state (ISSUED, DELIVERED, VIEWED, " +
+                          "PARTIALLY_USED) attached to any LoyaltyUser projection for the given phone " +
+                          "— aggregated across all tenants the phone exists in. Powers the SuperApp " +
+                          "\"my vouchers\" wallet view. " +
+                          "CUSTOMER callers can only request their own phone (JWT phoneNumber claim must " +
+                          "match the path); MERCHANT_ADMIN / SHOP_ADMIN / SUPER_ADMIN can look up any phone " +
+                          "for support.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -567,7 +572,7 @@ public class VoucherController {
                                             "status": "ISSUED",
                                             "templateId": "a9b5c7d8-7890-1234-ef01-234567890123",
                                             "assignedUserId": "d2c8f0a1-0123-4567-1234-567890123456",
-                                            "assigneePhone": "+254700000000",
+                                            "assigneePhone": "+263771234567",
                                             "usesRemaining": 1,
                                             "issuedAt": "2026-05-04T10:30:00Z",
                                             "expiresAt": "2026-06-03T10:30:00Z"
@@ -583,13 +588,57 @@ public class VoucherController {
                                     }
                                     """)
                     )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "CUSTOMER tried to read another customer's vouchers",
+                    content = @Content(
+                            mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "NOT_PHONE_OWNER",
+                                      "message": "you can only view vouchers for your own phone",
+                                      "data": null
+                                    }
+                                    """)
+                    )
             )
     })
     @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
-    public ResponseEntity<ApiResult<PageResponse<Dtos.VoucherResponse>>> activeForUser(@PathVariable UUID userId,
+    public ResponseEntity<ApiResult<PageResponse<Dtos.VoucherResponse>>> activeForPhone(@PathVariable String phoneNumber,
                                                                                        @ParameterObject Pageable pageable) {
-        PageResponse<Dtos.VoucherResponse> data = PageResponse.from(voucherService.activeForUser(userId, pageable));
+        // CUSTOMER may only ask for their own phone (matches the wallet-owner
+        // pattern in /users/{id}/transactions and TransferService). Admin
+        // roles bypass for support / ops use cases.
+        requireCallerOwnsPhoneOrIsAdmin(phoneNumber);
+        PageResponse<Dtos.VoucherResponse> data = PageResponse.from(
+                voucherService.activeForPhone(phoneNumber, pageable));
         return ResponseEntity.ok(ApiResult.ok("Active vouchers retrieved successfully", data));
+    }
+
+    /**
+     * Authz gate for phone-keyed reads. Mirrors UserService.requireCallerOwnsOrIsAdmin
+     * but works directly off a phone string (the phone-keyed wallet endpoints don't
+     * have a LoyaltyUser handy at the call site).
+     */
+    private void requireCallerOwnsPhoneOrIsAdmin(String phoneNumber) {
+        var auth = org.springframework.security.core.context.SecurityContextHolder
+                .getContext().getAuthentication();
+        if (auth != null && auth.getAuthorities() != null) {
+            for (var ga : auth.getAuthorities()) {
+                String role = ga.getAuthority();
+                if ("ROLE_SUPER_ADMIN".equals(role)
+                        || "ROLE_MERCHANT_ADMIN".equals(role)
+                        || "ROLE_SHOP_ADMIN".equals(role)) {
+                    return;
+                }
+            }
+        }
+        String callerPhone = com.innbucks.loyaltyservice.security.CallerDetails.currentPhoneNumber();
+        if (callerPhone == null || !callerPhone.equals(phoneNumber)) {
+            throw com.innbucks.loyaltyservice.exception.LoyaltyException.forbidden(
+                    "NOT_PHONE_OWNER", "you can only view vouchers for your own phone");
+        }
     }
 
     @GetMapping
