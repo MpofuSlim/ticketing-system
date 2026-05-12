@@ -154,6 +154,10 @@ public class OtpService {
         var pendingOpt = pendingRegistrationRepository.findByPhoneNumber(phoneNumber);
         if (pendingOpt.isPresent()) {
             PendingRegistration pending = pendingOpt.get();
+            // CUSTOMERS are auto-active once they've proven phone ownership via
+            // OTP — there's no human approver in the customer onboarding flow,
+            // unlike business roles (EVENT_ORGANIZER / MERCHANT_ADMIN) which
+            // stay inactive until a SUPER_ADMIN approves them via /admin/users.
             User user = User.builder()
                     .firstName("Customer")
                     .lastName("Pending")
@@ -161,6 +165,7 @@ public class OtpService {
                     .password(pending.getPasswordHash())
                     .roles(EnumSet.of(User.Role.CUSTOMER))
                     .mfaEnabled(false)
+                    .active(true)
                     .build();
             userRepository.save(user);
             CustomerProfile profile = CustomerProfile.builder()
