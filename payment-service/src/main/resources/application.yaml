@@ -17,9 +17,11 @@ spring:
 
   jpa:
     hibernate:
-      # No JPA entities yet — leave on update so the service can boot against
-      # an empty database without complaining about missing tables.
-      ddl-auto: ${JPA_DDL_AUTO:update}
+      # Matches the other services: schema lives outside Hibernate (Flyway when
+      # entities are added; today, an empty schema is fine). 'validate' is a no-op
+      # when there are no entities and prevents silent schema drift the moment
+      # JPA models start landing here.
+      ddl-auto: ${JPA_DDL_AUTO:validate}
     properties:
       hibernate:
         dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
