@@ -14,14 +14,29 @@ import java.util.UUID;
  * today that's SHOP_ADMIN and SHOP_USER. MERCHANT_ADMIN tokens do NOT carry a
  * merchantId; those callers supply it in the request body, and write endpoints
  * use {@link #resolveMerchantId(UUID)} to pick the right source.
+ *
+ * <p>{@code phoneNumber} is set for CUSTOMER tokens (and any other role that
+ * carries the claim). It's the authoritative identifier for "the caller's
+ * wallet" — used by P2P transfer to verify the request's {@code fromUserId}
+ * actually belongs to the authenticated principal, so a logged-in user can't
+ * drain someone else's balance.
  */
-public record CallerDetails(UUID merchantId) {
+public record CallerDetails(UUID merchantId, String phoneNumber) {
 
     public static UUID currentMerchantId() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth == null) return null;
         Object details = auth.getDetails();
         if (details instanceof CallerDetails cd) return cd.merchantId();
+        return null;
+    }
+
+    /** JWT phone claim, or {@code null} when the token doesn't carry one. */
+    public static String currentPhoneNumber() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null) return null;
+        Object details = auth.getDetails();
+        if (details instanceof CallerDetails cd) return cd.phoneNumber();
         return null;
     }
 

@@ -12,10 +12,12 @@ import com.innbucks.loyaltyservice.entity.VoucherTemplate;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.LoyaltyUserRepository;
 import com.innbucks.loyaltyservice.repository.TenantRepository;
+import com.innbucks.loyaltyservice.security.CallerDetails;
 import com.innbucks.loyaltyservice.service.MerchantService;
 import com.innbucks.loyaltyservice.service.RedemptionService;
 import com.innbucks.loyaltyservice.service.RuleAdminService;
 import com.innbucks.loyaltyservice.service.TransactionService;
+import com.innbucks.loyaltyservice.service.TransferService;
 import com.innbucks.loyaltyservice.service.UserService;
 import com.innbucks.loyaltyservice.service.VoucherService;
 import com.innbucks.loyaltyservice.service.VoucherTemplateService;
@@ -58,6 +60,7 @@ class PhoneKeyedWalletTest {
     @Autowired VoucherService voucherService;
     @Autowired WalletService walletService;
     @Autowired LoyaltyUserRepository users;
+    @Autowired TransferService transferService;
 
     @MockitoBean UserServiceClient userServiceClient;
 
@@ -139,5 +142,62 @@ class PhoneKeyedWalletTest {
 
         // Replays of the promote webhook are no-ops (idempotency).
         assertThat(userService.promoteByPhone(phone)).isZero();
+    }
+
+    @Test
+    @Transactional
+    void transfer_rejectsCustomerSpendingSomeoneElsesWallet() {
+        Tenant draft = new Tenant();
+        draft.setCode("pkw-authz-" + System.nanoTime());
+        draft.setName("P2P authz");
+        final Tenant t = tenantRepository.save(draft);
+
+        Dtos.MerchantResponse mr = merchantService.create(t.getId(),
+                new Dtos.MerchantRequest("AuthzCafe", "F&B", "USD",
+                        Merchant.BillingCycle.MONTHLY,
+                        BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
+        ruleAdminService.createRule(t.getId(), mr.id(),
+                new Dtos.RuleRequest(null, TransactionType.PURCHASE,
+                        BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
+
+        LoyaltyUser alice = userService.findOrEnrol(t.getId(), "+263770070001", mr.id());
+        LoyaltyUser bob = userService.findOrEnrol(t.getId(), "+263770070002", mr.id());
+        // Seed Alice with some balance so the would-be transfer has something to steal.
+        transactionService.post(t.getId(), mr.id(),
+                new Dtos.TransactionRequest(null, alice.getId(), null, TransactionType.PURCHASE,
+                        new BigDecimal("100"), "USD", "pkw-authz-seed"));
+
+        // Bob (CUSTOMER) tries to transfer FROM Alice's wallet. Must be rejected.
+        assertThatThrownBy(() ->
+                withSecurityContext(bob.getPhoneNumber(), "CUSTOMER", () ->
+                        transferService.transfer(t.getId(),
+                                new Dtos.TransferRequest(alice.getId(), bob.getId(), null,
+                                        new BigDecimal("10"), "theft"))))
+                .isInstanceOf(LoyaltyException.class)
+                .hasMessageContaining("own wallet");
+
+        // Alice herself can still transfer (control case).
+        withSecurityContext(alice.getPhoneNumber(), "CUSTOMER", () ->
+                transferService.transfer(t.getId(),
+                        new Dtos.TransferRequest(alice.getId(), bob.getId(), null,
+                                new BigDecimal("10"), "legit")));
+        assertThat(walletService.totalBalance(bob.getId())).isEqualByComparingTo("10");
+    }
+
+    private void withSecurityContext(String phoneNumber, String role, Runnable body) {
+        var authorities = java.util.List.of(
+                new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_" + role));
+        var auth = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                phoneNumber, null, authorities);
+        auth.setDetails(new CallerDetails(null, phoneNumber));
+        var ctx = org.springframework.security.core.context.SecurityContextHolder.createEmptyContext();
+        ctx.setAuthentication(auth);
+        var previous = org.springframework.security.core.context.SecurityContextHolder.getContext();
+        org.springframework.security.core.context.SecurityContextHolder.setContext(ctx);
+        try {
+            body.run();
+        } finally {
+            org.springframework.security.core.context.SecurityContextHolder.setContext(previous);
+        }
     }
 }
