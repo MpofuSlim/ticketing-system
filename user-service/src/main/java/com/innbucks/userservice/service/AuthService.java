@@ -162,11 +162,22 @@ public class AuthService {
 
         int tier;
         boolean verified;
+        // Display names ride in the JWT only for tier-2+ CUSTOMERS (tier-1 names
+        // are placeholders like "Customer Pending" set by OtpService at signup).
+        // Staff roles never carry names — JwtUtil enforces this independently.
+        String firstName = null;
+        String middleName = null;
+        String lastName = null;
         if (user.hasRole(User.Role.CUSTOMER)) {
             CustomerProfile profile = customerProfileRepository.findByUserId(user.getId())
                     .orElseThrow(() -> new RuntimeException("Customer profile missing"));
             tier = profile.getRegistrationTier();
             verified = profile.isVerified();
+            if (tier >= 2) {
+                firstName = user.getFirstName();
+                middleName = user.getMiddleName();
+                lastName = user.getLastName();
+            }
         } else {
             tier = 4;
             verified = true;
@@ -195,7 +206,8 @@ public class AuthService {
         }
 
         String newToken = jwtUtil.generateToken(subject, roleNames, new ArrayList<>(microservices),
-                tier, verified, user.getPhoneNumber(), loyaltyMerchantId, loyaltyShopId);
+                tier, verified, user.getPhoneNumber(), loyaltyMerchantId, loyaltyShopId,
+                firstName, middleName, lastName);
 
         return AuthResponseDTO.builder()
                 .token(newToken)
