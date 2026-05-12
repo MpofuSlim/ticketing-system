@@ -1,5 +1,6 @@
 package com.innbucks.loyaltyservice.exception;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
@@ -13,6 +14,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 @RestControllerAdvice
+@Slf4j
 public class GlobalExceptionHandler {
 
     // Method-level @PreAuthorize throws AuthorizationDeniedException (a subclass
@@ -76,6 +78,11 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> handle(Exception ex) {
+        // Don't swallow the cause: a 500 with an opaque body is hard enough to
+        // diagnose in prod without the stack trace also being missing from the
+        // logs. The response stays generic so we don't leak internals; the log
+        // is where on-call goes to find the real problem.
+        log.error("Unhandled exception bubbled to GlobalExceptionHandler", ex);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
                 "timestamp", Instant.now().toString(),
                 "status", 500,
