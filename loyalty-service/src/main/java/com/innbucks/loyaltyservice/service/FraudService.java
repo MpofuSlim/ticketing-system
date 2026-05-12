@@ -21,13 +21,16 @@ public class FraudService {
     private final FraudAttemptRepository fraud;
     private final LoyaltyUserRepository users;
     private final LoyaltyProperties props;
+    private final com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics;
 
     public FraudService(FraudAttemptRepository fraud,
                         LoyaltyUserRepository users,
-                        LoyaltyProperties props) {
+                        LoyaltyProperties props,
+                        com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics) {
         this.fraud = fraud;
         this.users = users;
         this.props = props;
+        this.metrics = metrics;
     }
 
     @Transactional
@@ -44,6 +47,7 @@ public class FraudService {
         fa.setDeviceFingerprint(deviceFingerprint);
         fa.setIpAddress(ipAddress);
         fraud.save(fa);
+        metrics.incFraudRejected(reason.name());
 
         if (deviceFingerprint != null && userId != null) {
             Instant since = Instant.now().minusSeconds(props.voucher().fraudWindowSeconds());
