@@ -29,19 +29,22 @@ public class TransactionService {
     private final MerchantService merchants;
     private final WalletService walletService;
     private final RulesEngine rulesEngine;
+    private final com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics;
 
     public TransactionService(LoyaltyTransactionRepository transactions,
                               WalletRepository wallets,
                               UserService users,
                               MerchantService merchants,
                               WalletService walletService,
-                              RulesEngine rulesEngine) {
+                              RulesEngine rulesEngine,
+                              com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics) {
         this.transactions = transactions;
         this.wallets = wallets;
         this.users = users;
         this.merchants = merchants;
         this.walletService = walletService;
         this.rulesEngine = rulesEngine;
+        this.metrics = metrics;
     }
 
     public Dtos.TransactionResponse post(UUID tenantId, UUID merchantId, Dtos.TransactionRequest req) {
@@ -105,6 +108,7 @@ public class TransactionService {
                     "earn:" + req.type().name());
         }
 
+        metrics.incTransactionPosted(t.getType().name());
         return new Dtos.TransactionResponse(t.getId(), t.getType(), t.getAmount(),
                 t.getPointsDelta(), balance, t.getRuleId(), t.getCampaignId(),
                 t.getReference(), t.getCreatedAt());
@@ -148,6 +152,7 @@ public class TransactionService {
                     "reverse:" + (reason == null ? "n/a" : reason));
         }
 
+        metrics.incTransactionPosted("REVERSAL");
         return new Dtos.TransactionResponse(rev.getId(), rev.getType(), rev.getAmount(),
                 rev.getPointsDelta(), balance, rev.getRuleId(), rev.getCampaignId(),
                 rev.getReference(), rev.getCreatedAt());
@@ -169,6 +174,7 @@ public class TransactionService {
         Wallet w = walletService.mainWallet(u.getId());
         BigDecimal balance = walletService.apply(w.getId(), points, t.getId(),
                 "adjust:" + (reason == null ? "n/a" : reason));
+        metrics.incTransactionPosted("ADJUSTMENT");
         return new Dtos.TransactionResponse(t.getId(), t.getType(), t.getAmount(),
                 t.getPointsDelta(), balance, null, null, t.getReference(), t.getCreatedAt());
     }

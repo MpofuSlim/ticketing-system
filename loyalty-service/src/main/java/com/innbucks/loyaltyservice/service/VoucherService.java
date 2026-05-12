@@ -39,6 +39,7 @@ public class VoucherService {
     private final UserService userService;
     private final NotificationGateway notifications;
     private final FraudService fraud;
+    private final com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics;
     private final CryptoSigner signer;
 
     public VoucherService(VoucherRepository vouchers,
@@ -50,6 +51,7 @@ public class VoucherService {
                           UserService userService,
                           NotificationGateway notifications,
                           FraudService fraud,
+                          com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics,
                           LoyaltyProperties props) {
         this.vouchers = vouchers;
         this.batches = batches;
@@ -60,6 +62,7 @@ public class VoucherService {
         this.userService = userService;
         this.notifications = notifications;
         this.fraud = fraud;
+        this.metrics = metrics;
         this.signer = new CryptoSigner(props.voucher().secret());
     }
 
@@ -75,6 +78,7 @@ public class VoucherService {
             v.setStatus(Voucher.Status.DELIVERED);
             v.setDeliveredAt(Instant.now());
         }
+        metrics.incVouchersIssued();
         return toResponse(v);
     }
 
@@ -95,6 +99,7 @@ public class VoucherService {
             vouchers.save(v);
             result.add(toResponse(v));
         }
+        metrics.incVouchersIssued(req.quantity());
         return result;
     }
 
@@ -169,6 +174,19 @@ public class VoucherService {
     }
 
     public Dtos.RedemptionResponse redeem(UUID tenantId, UUID merchantId, Dtos.RedeemVoucherRequest req) {
+        // Timer captures end-to-end latency for the hottest read+write path in
+        // the service. Exception paths are timed too (Timer.record records the
+        // duration regardless), which is intentional — slow rejections matter.
+        io.micrometer.core.instrument.Timer.Sample sample =
+                io.micrometer.core.instrument.Timer.start();
+        try {
+            return doRedeem(tenantId, merchantId, req);
+        } finally {
+            sample.stop(metrics.redemptionLatency());
+        }
+    }
+
+    private Dtos.RedemptionResponse doRedeem(UUID tenantId, UUID merchantId, Dtos.RedeemVoucherRequest req) {
         Voucher v = vouchers.lockByCode(req.code()).orElse(null);
         if (v == null || !v.getTenantId().equals(tenantId)) {
             fraud.record(tenantId, req.userId(), merchantId, req.code(),
@@ -246,6 +264,7 @@ public class VoucherService {
 
         VoucherRedemption r = recordRedemption(v, merchantId, req, VoucherRedemption.Result.SUCCESS, null);
         VoucherTemplate tpl = templateService.require(tenantId, v.getTemplateId());
+        metrics.incVouchersRedeemed();
         return new Dtos.RedemptionResponse(r.getId(), v.getId(), v.getStatus().name(),
                 v.getUsesRemaining(), tpl.getValue(), tpl.getValueType().name(), r.getRedeemedAt());
     }

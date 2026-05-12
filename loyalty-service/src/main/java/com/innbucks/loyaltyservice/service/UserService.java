@@ -28,13 +28,16 @@ public class UserService {
     private final LoyaltyUserRepository users;
     private final WalletRepository wallets;
     private final UserServiceClient userServiceClient;
+    private final com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics;
 
     public UserService(LoyaltyUserRepository users,
                        WalletRepository wallets,
-                       UserServiceClient userServiceClient) {
+                       UserServiceClient userServiceClient,
+                       com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics) {
         this.users = users;
         this.wallets = wallets;
         this.userServiceClient = userServiceClient;
+        this.metrics = metrics;
     }
 
     // Idempotent enrolment: returns the existing LoyaltyUser for the
@@ -185,6 +188,7 @@ public class UserService {
                 promoted++;
             }
         }
+        metrics.incPendingPromoted(promoted);
         return promoted;
     }
 
