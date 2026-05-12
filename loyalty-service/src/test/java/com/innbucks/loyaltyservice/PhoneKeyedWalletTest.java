@@ -174,7 +174,7 @@ class PhoneKeyedWalletTest {
                                 new Dtos.TransferRequest(alice.getId(), bob.getId(), null,
                                         new BigDecimal("10"), "theft"))))
                 .isInstanceOf(LoyaltyException.class)
-                .hasMessageContaining("own wallet");
+                .hasMessageContaining("own loyalty account");
 
         // Alice herself can still transfer (control case).
         withSecurityContext(alice.getPhoneNumber(), "CUSTOMER", () ->

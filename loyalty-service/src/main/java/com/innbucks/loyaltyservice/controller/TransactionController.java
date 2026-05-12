@@ -40,13 +40,16 @@ public class TransactionController {
     private final TransferService transferService;
     private final RedemptionService redemptionService;
     private final TenantContext tenantContext;
+    private final com.innbucks.loyaltyservice.service.UserService users;
 
     public TransactionController(TransactionService transactions, TransferService transferService,
-                                 RedemptionService redemptionService, TenantContext tenantContext) {
+                                 RedemptionService redemptionService, TenantContext tenantContext,
+                                 com.innbucks.loyaltyservice.service.UserService users) {
         this.transactions = transactions;
         this.transferService = transferService;
         this.redemptionService = redemptionService;
         this.tenantContext = tenantContext;
+        this.users = users;
     }
 
     @PostMapping("/transactions")
@@ -320,6 +323,18 @@ public class TransactionController {
     @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Dtos.TransactionResponse>>> recent(@PathVariable UUID id,
                                                                                     @ParameterObject Pageable pageable) {
+        // Gate 1 — tenant scope. Every other tenant-scoped endpoint requires
+        // this header; this one used to be the exception and returned data
+        // across tenants. Closes that gap.
+        UUID tenantId = tenantContext.requireTenantId();
+        // Gate 2 — cross-tenant guard. users.require throws CROSS_TENANT if
+        // the target user belongs to a different tenant than the header. After
+        // this line we know the LoyaltyUser is genuinely in this tenant.
+        var target = users.require(tenantId, id);
+        // Gate 3 — identity. A plain CUSTOMER can only read their own ledger.
+        // Admin roles (SUPER_ADMIN, MERCHANT_ADMIN, SHOP_ADMIN) bypass — they're
+        // explicitly allowed to inspect any user in their tenant for support/ops.
+        users.requireCallerOwnsOrIsAdmin(target);
         PageResponse<Dtos.TransactionResponse> data = PageResponse.from(transactions.recentForUser(id, pageable));
         return ResponseEntity.ok(ApiResult.ok("Transactions retrieved successfully", data));
     }
