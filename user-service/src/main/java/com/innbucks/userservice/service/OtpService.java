@@ -39,6 +39,7 @@ public class OtpService {
     private final UserRepository userRepository;
     private final CustomerProfileRepository customerProfileRepository;
     private final PendingRegistrationRepository pendingRegistrationRepository;
+    private final com.innbucks.userservice.integration.LoyaltyServiceClient loyaltyServiceClient;
 
     /**
      * Send an OTP with rate-limit enforcement. Used by the public /auth/otp/request endpoint
@@ -178,6 +179,12 @@ public class OtpService {
             pendingRegistrationRepository.delete(pending);
             log.info("Customer account materialised from pending registration phone={} userId={}",
                     phoneNumber, user.getId());
+            // Tell loyalty-service this phone has now registered so every
+            // PENDING LoyaltyUser row matching it (created by prior voucher
+            // issues, transactions, P2P transfers) flips ACTIVE and the
+            // customer can finally spend whatever was accrued for them.
+            // Best-effort: webhook failure does NOT roll back registration.
+            loyaltyServiceClient.promoteUserByPhone(phoneNumber);
             return;
         }
         userRepository.findByPhoneNumber(phoneNumber)
@@ -187,6 +194,9 @@ public class OtpService {
                     if (!profile.isPhoneVerified()) {
                         profile.setPhoneVerified(true);
                         customerProfileRepository.save(profile);
+                        // First time this phone has been verified — same
+                        // signal to loyalty as the pending-registration path.
+                        loyaltyServiceClient.promoteUserByPhone(phoneNumber);
                     }
                 });
     }

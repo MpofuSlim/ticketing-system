@@ -5,6 +5,7 @@ import com.innbucks.userservice.entity.Otp;
 import com.innbucks.userservice.entity.OtpRetryAttempt;
 import com.innbucks.userservice.entity.PendingRegistration;
 import com.innbucks.userservice.entity.User;
+import com.innbucks.userservice.integration.LoyaltyServiceClient;
 import com.innbucks.userservice.repository.CustomerProfileRepository;
 import com.innbucks.userservice.repository.OtpRepository;
 import com.innbucks.userservice.repository.OtpRetryAttemptRepository;
@@ -29,7 +30,11 @@ class OtpServiceTest {
                                   UserRepository userRepo,
                                   CustomerProfileRepository profileRepo,
                                   PendingRegistrationRepository pendingRepo) {
-        return new OtpService(otpRepo, retryRepo, userRepo, profileRepo, pendingRepo);
+        // LoyaltyServiceClient.promoteUserByPhone is fired post-OTP-verify but
+        // the call is best-effort and never affects assertions in these tests,
+        // so a noop mock is fine.
+        return new OtpService(otpRepo, retryRepo, userRepo, profileRepo, pendingRepo,
+                mock(LoyaltyServiceClient.class));
     }
 
     @Test

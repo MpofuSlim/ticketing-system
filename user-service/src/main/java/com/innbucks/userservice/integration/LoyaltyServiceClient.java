@@ -65,6 +65,45 @@ public class LoyaltyServiceClient {
         }
     }
 
+    /**
+     * Fire-and-log promote webhook: tells loyalty-service that a phone has
+     * completed registration so every PENDING LoyaltyUser row matching that
+     * phone — across every tenant — flips to ACTIVE. Idempotent on the
+     * loyalty side; replays return promoted=0.
+     *
+     * <p>Best-effort: a network blip or a missing token here MUST NOT fail
+     * the calling OTP / registration flow. The customer is registered
+     * regardless; if the webhook didn't go through, an operator can replay it
+     * (or the next scheduled reconciliation job will pick it up).
+     *
+     * @return true if loyalty-service confirmed the call, false on any failure.
+     */
+    public boolean promoteUserByPhone(String phoneNumber) {
+        if (phoneNumber == null || phoneNumber.isBlank()) {
+            log.warn("promoteUserByPhone called with blank phone — skipping");
+            return false;
+        }
+        if (internalToken == null || internalToken.isBlank()) {
+            log.warn("Skipping loyalty promote webhook; INTERNAL_API_TOKEN is not configured");
+            return false;
+        }
+        try {
+            http.post()
+                    .uri("/loyalty/internal/users/promote")
+                    .header("X-Internal-Token", internalToken)
+                    .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                    .body(java.util.Map.of("phoneNumber", phoneNumber))
+                    .retrieve()
+                    .toBodilessEntity();
+            log.info("Loyalty promote webhook OK phone={}", phoneNumber);
+            return true;
+        } catch (Exception ex) {
+            // Don't rethrow — registration succeeds even if loyalty is down.
+            log.warn("Loyalty promote webhook failed phone={} error={}", phoneNumber, ex.getMessage());
+            return false;
+        }
+    }
+
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record ShopLookupResponse(String shopId, String merchantId, String tenantId, String status) {}
 }
