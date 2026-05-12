@@ -41,6 +41,7 @@ class MeControllerSecurityTest extends ControllerSecurityTestBase {
                         .header("Authorization", bearer(token)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.phoneNumber").value("+263770000099"))
-                .andExpect(jsonPath("$.data.entries").isArray());
+                .andExpect(jsonPath("$.data.totalPoints").exists())
+                .andExpect(jsonPath("$.data.totalVouchers").exists());
     }
 }

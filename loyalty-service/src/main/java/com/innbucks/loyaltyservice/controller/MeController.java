@@ -26,10 +26,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -38,10 +35,10 @@ import java.util.UUID;
  * the typical "logged-in user" use case the mini-app needs.
  *
  * <p>The wallet endpoint is the answer to "I just opened the app, what do I have?".
- * It aggregates every LoyaltyUser projection matching the caller's phone across
- * every tenant, so a customer who's accrued balances at multiple merchants
- * (potentially while still unregistered) sees them all in one place the moment
- * the promote-on-registration webhook fires.
+ * It collapses every LoyaltyUser projection matching the caller's phone — across
+ * every tenant — into a single aggregate response: total points, total active
+ * vouchers. From the customer's perspective there's one wallet, not a per-tenant
+ * breakdown.
  */
 @RestController
 @RequestMapping("/loyalty/users/me")
@@ -67,17 +64,16 @@ public class MeController {
     @GetMapping("/wallet")
     @PreAuthorize("isAuthenticated()")
     @Operation(
-            summary = "List the caller's wallets across every tenant",
-            description = "Returns one entry per tenant the caller's phone has a LoyaltyUser projection in. " +
-                          "Each entry shows status, points balance, and active voucher count. " +
-                          "PENDING entries are visible too — they're the balances waiting for the customer " +
-                          "to complete registration. Once user-service fires the promote webhook those " +
-                          "flip to ACTIVE and become spendable. " +
+            summary = "Get the caller's total balance + voucher count across every tenant",
+            description = "Aggregates every LoyaltyUser projection matching the caller's phone into a single " +
+                          "wallet view — totalPoints is the sum of all points balances (including PENDING / " +
+                          "INACTIVE accruals); totalVouchers is the count of voucher rows currently in any of " +
+                          "ISSUED / DELIVERED / VIEWED / PARTIALLY_USED states. " +
                           "Requires a JWT carrying a phoneNumber claim (CUSTOMER tokens always do)."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "200", description = "Wallet entries retrieved",
+                    responseCode = "200", description = "Wallet retrieved",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     {
@@ -85,22 +81,8 @@ public class MeController {
                                       "message": "Wallet retrieved",
                                       "data": {
                                         "phoneNumber": "+263771234567",
-                                        "entries": [
-                                          {
-                                            "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-                                            "loyaltyUserId": "11111111-2222-3333-4444-555555555555",
-                                            "status": "ACTIVE",
-                                            "pointsBalance": 175.00,
-                                            "activeVoucherCount": 2
-                                          },
-                                          {
-                                            "tenantId": "c8d8fc3b-9869-4fd3-9dee-377cd74c0b22",
-                                            "loyaltyUserId": "99999999-1111-2222-3333-444444444444",
-                                            "status": "PENDING",
-                                            "pointsBalance": 50.00,
-                                            "activeVoucherCount": 1
-                                          }
-                                        ]
+                                        "totalPoints": 225.00,
+                                        "totalVouchers": 3
                                       }
                                     }
                                     """))),
@@ -122,30 +104,22 @@ public class MeController {
                     "/me endpoints require a JWT with a phoneNumber claim");
         }
         List<LoyaltyUser> projections = users.findByPhoneNumber(phone);
-        if (projections.isEmpty()) {
-            return ResponseEntity.ok(ApiResult.ok("Wallet retrieved",
-                    new MeWalletResponse(phone, List.of())));
+        BigDecimal totalPoints = BigDecimal.ZERO;
+        long totalVouchers = 0L;
+        if (!projections.isEmpty()) {
+            // Two aggregate queries instead of 2N round trips, then collapse
+            // the per-user rows into a single platform-wide total. For a
+            // customer with projections in N tenants the call cost is the
+            // same as for a single tenant.
+            List<UUID> userIds = projections.stream().map(LoyaltyUser::getId).toList();
+            for (Object[] row : wallets.sumBalanceGroupedByUserId(userIds)) {
+                totalPoints = totalPoints.add((BigDecimal) row[1]);
+            }
+            for (Object[] row : vouchers.countActiveGroupedByUserId(userIds)) {
+                totalVouchers += (Long) row[1];
+            }
         }
-        // Two aggregate queries instead of 2N round trips. For a customer with
-        // projections in N tenants we used to do N balance lookups + N voucher
-        // lookups; now it's a single SUM-by-userId and a single COUNT-by-userId.
-        List<UUID> userIds = projections.stream().map(LoyaltyUser::getId).toList();
-        Map<UUID, BigDecimal> balances = new HashMap<>();
-        for (Object[] row : wallets.sumBalanceGroupedByUserId(userIds)) {
-            balances.put((UUID) row[0], (BigDecimal) row[1]);
-        }
-        Map<UUID, Long> activeVoucherCounts = new HashMap<>();
-        for (Object[] row : vouchers.countActiveGroupedByUserId(userIds)) {
-            activeVoucherCounts.put((UUID) row[0], (Long) row[1]);
-        }
-        List<TenantWalletEntry> entries = new ArrayList<>(projections.size());
-        for (LoyaltyUser u : projections) {
-            BigDecimal balance = balances.getOrDefault(u.getId(), BigDecimal.ZERO);
-            int activeVouchers = activeVoucherCounts.getOrDefault(u.getId(), 0L).intValue();
-            entries.add(new TenantWalletEntry(u.getTenantId(), u.getId(), u.getStatus().name(),
-                    balance, activeVouchers));
-        }
-        MeWalletResponse body = new MeWalletResponse(phone, entries);
+        MeWalletResponse body = new MeWalletResponse(phone, totalPoints, totalVouchers);
 
         // ETag = stable hash of the response payload. The mini-app polls this
         // every few seconds while in foreground; with a matching If-None-Match
@@ -168,8 +142,5 @@ public class MeController {
                 .body(ApiResult.ok("Wallet retrieved", body));
     }
 
-    public record MeWalletResponse(String phoneNumber, List<TenantWalletEntry> entries) {}
-
-    public record TenantWalletEntry(UUID tenantId, UUID loyaltyUserId, String status,
-                                    BigDecimal pointsBalance, int activeVoucherCount) {}
+    public record MeWalletResponse(String phoneNumber, BigDecimal totalPoints, long totalVouchers) {}
 }
