@@ -1,11 +1,13 @@
 package com.innbucks.loyaltyservice.service;
 
+import com.innbucks.loyaltyservice.config.CacheConfig;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.Tenant;
 import com.innbucks.loyaltyservice.entity.TenantMember;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.TenantMemberRepository;
 import com.innbucks.loyaltyservice.repository.TenantRepository;
+import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -71,12 +73,14 @@ public class TenantService {
                 .toList();
     }
 
+    @CacheEvict(value = CacheConfig.CACHE_TENANTS, key = "#id")
     public Dtos.TenantResponse suspend(UUID id) {
         Tenant t = tenants.findById(id).orElseThrow(() -> LoyaltyException.notFound("tenant"));
         t.setStatus(Tenant.Status.SUSPENDED);
         return toResponse(t);
     }
 
+    @CacheEvict(value = CacheConfig.CACHE_TENANTS, key = "#id")
     public Dtos.TenantResponse activate(UUID id) {
         Tenant t = tenants.findById(id).orElseThrow(() -> LoyaltyException.notFound("tenant"));
         t.setStatus(Tenant.Status.ACTIVE);
@@ -87,6 +91,7 @@ public class TenantService {
      * Adds the caller as a member of the tenant. Idempotent — joining an
      * already-joined tenant returns the existing membership without error.
      */
+    @CacheEvict(value = CacheConfig.CACHE_TENANT_MEMBERSHIP, key = "#tenantId + ':' + #email")
     public Dtos.TenantMemberResponse addMember(UUID tenantId, String email) {
         Tenant t = tenants.findById(tenantId).orElseThrow(() -> LoyaltyException.notFound("tenant"));
         return members.findByTenantIdAndEmail(t.getId(), email)
@@ -108,6 +113,7 @@ public class TenantService {
                 .toList();
     }
 
+    @CacheEvict(value = CacheConfig.CACHE_TENANT_MEMBERSHIP, key = "#tenantId + ':' + #email")
     public void removeMember(UUID tenantId, String email) {
         if (!tenants.existsById(tenantId)) throw LoyaltyException.notFound("tenant");
         members.deleteByTenantIdAndEmail(tenantId, email);

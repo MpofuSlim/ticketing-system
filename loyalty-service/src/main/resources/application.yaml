@@ -8,8 +8,12 @@ spring:
     password: ${DB_PASSWORD}
     hikari:
       pool-name: loyalty-service-pool
-      maximum-pool-size: ${DB_POOL_MAX:20}
-      minimum-idle: ${DB_POOL_MIN:5}
+      # Sized for ~250 RPS sustained per instance: a typical write does ~10 DB
+      # round trips so 50 connections * (1000ms / 5ms-per-query) = 10k query-
+      # slots/sec gives ~5x headroom over the per-instance steady-state. Bump
+      # via DB_POOL_MAX when scaling instance count + sizing PgBouncer ahead.
+      maximum-pool-size: ${DB_POOL_MAX:50}
+      minimum-idle: ${DB_POOL_MIN:10}
       connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:5000}
       idle-timeout: ${DB_IDLE_TIMEOUT_MS:600000}
       max-lifetime: ${DB_MAX_LIFETIME_MS:1800000}
