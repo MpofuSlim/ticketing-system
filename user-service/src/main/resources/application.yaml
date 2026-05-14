@@ -35,6 +35,9 @@ spring:
 jwt:
   secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
   expiration: ${JWT_EXPIRATION_MS:86400000}
+  # Refresh tokens are long-lived, claim-light JWTs (subject + type=refresh only).
+  # Default 7 days; clients exchange them at /auth/refresh for a fresh access token.
+  refresh-expiration: ${JWT_REFRESH_EXPIRATION_MS:604800000}
 
 # Cross-service lookup used at login: when a MERCHANT_ADMIN has no loyaltyMerchantId
 # on their TenantProfile, AuthService calls loyalty-service to resolve it from the
