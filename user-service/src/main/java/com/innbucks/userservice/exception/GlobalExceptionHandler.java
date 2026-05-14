@@ -1,5 +1,6 @@
 package com.innbucks.userservice.exception;
 
+import com.innbucks.userservice.client.OradianClientException;
 import com.innbucks.userservice.dto.ApiResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -22,6 +23,15 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AccessDeniedException.class)
     public void handleAccessDenied(AccessDeniedException ex) throws AccessDeniedException {
         throw ex;
+    }
+
+    // Surface Oradian middleware failures as 502 Bad Gateway so the client knows
+    // the local state was rolled back — distinct from a 400 caused by user input.
+    @ExceptionHandler(OradianClientException.class)
+    public ResponseEntity<ApiResult<Void>> handleOradian(OradianClientException ex) {
+        log.warn("Oradian middleware call failed: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                .body(ApiResult.error(HttpStatus.BAD_GATEWAY, ex.getMessage()));
     }
 
     @ExceptionHandler(RuntimeException.class)
