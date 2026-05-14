@@ -3,7 +3,7 @@ package innbucks.paymentservice.dto;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.PositiveOrZero;
 import lombok.Data;
 
 import java.math.BigDecimal;
@@ -30,14 +30,18 @@ public class ShopCheckoutRequest {
     @NotNull(message = "paymentMethod is required")
     private PaymentMethod paymentMethod;
 
+    // 0 is allowed (and meaningful — it's how a CASH-only payment encodes the
+    // unused points leg). The "must be > 0 for this paymentMethod" rule is
+    // enforced cross-field by PaymentController#validateAmounts so the error
+    // message can name the offending combination.
     @Schema(example = "10.00", nullable = true,
-            description = "Cash amount in the merchant's currency. Required when paymentMethod is CASH or CASH_AND_POINTS; must be null/zero for POINTS.")
-    @Positive(message = "cashAmount must be > 0 when provided")
+            description = "Cash amount in the merchant's currency. Required (> 0) when paymentMethod is CASH or CASH_AND_POINTS; must be omitted or 0 for POINTS.")
+    @PositiveOrZero(message = "cashAmount must be >= 0")
     private BigDecimal cashAmount;
 
     @Schema(example = "200.0000", nullable = true,
-            description = "Points to spend from the wallet. Required when paymentMethod is POINTS or CASH_AND_POINTS; must be null/zero for CASH.")
-    @Positive(message = "pointsAmount must be > 0 when provided")
+            description = "Points to spend from the wallet. Required (> 0) when paymentMethod is POINTS or CASH_AND_POINTS; must be omitted or 0 for CASH.")
+    @PositiveOrZero(message = "pointsAmount must be >= 0")
     private BigDecimal pointsAmount;
 
     @Schema(example = "POS-20260514-0007", nullable = true,
