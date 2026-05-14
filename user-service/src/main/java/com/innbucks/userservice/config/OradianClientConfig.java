@@ -20,6 +20,7 @@ public class OradianClientConfig {
         return RestClient.builder()
                 .baseUrl(properties.getBaseUrl())
                 .requestFactory(factory)
+                .requestInterceptor(new CorrelationIdPropagatingInterceptor())
                 .build();
     }
 }

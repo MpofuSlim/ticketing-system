@@ -16,6 +16,8 @@ public class HttpClientConfig {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(connectTimeoutMs);
         factory.setReadTimeout(readTimeoutMs);
-        return new RestTemplate(factory);
+        RestTemplate template = new RestTemplate(factory);
+        template.getInterceptors().add(new CorrelationIdPropagatingInterceptor());
+        return template;
     }
 }
