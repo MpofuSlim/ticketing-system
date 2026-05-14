@@ -1,5 +1,6 @@
 package com.innbucks.loyaltyservice.service;
 
+import com.innbucks.loyaltyservice.config.LoyaltyMetrics;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.LoyaltyTransaction;
 import com.innbucks.loyaltyservice.entity.TransactionType;
@@ -20,14 +21,17 @@ public class RedemptionService {
     private final MerchantService merchants;
     private final WalletService walletService;
     private final LoyaltyTransactionRepository transactions;
+    private final LoyaltyMetrics metrics;
 
     public RedemptionService(UserService users, MerchantService merchants,
                              WalletService walletService,
-                             LoyaltyTransactionRepository transactions) {
+                             LoyaltyTransactionRepository transactions,
+                             LoyaltyMetrics metrics) {
         this.users = users;
         this.merchants = merchants;
         this.walletService = walletService;
         this.transactions = transactions;
+        this.metrics = metrics;
     }
 
     /**
@@ -52,7 +56,9 @@ public class RedemptionService {
         transactions.save(t);
 
         Wallet w = walletService.mainWallet(u.getId());
-        return walletService.apply(w.getId(), req.points().negate(), t.getId(),
+        BigDecimal balance = walletService.apply(w.getId(), req.points().negate(), t.getId(),
                 "redeem:" + (req.reason() == null ? "n/a" : req.reason()));
+        metrics.addPointsRedeemed(req.points());
+        return balance;
     }
 }

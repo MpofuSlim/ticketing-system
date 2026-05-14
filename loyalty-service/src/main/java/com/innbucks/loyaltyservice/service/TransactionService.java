@@ -109,6 +109,7 @@ public class TransactionService {
         }
 
         metrics.incTransactionPosted(t.getType().name());
+        metrics.addPointsEarned(eval.points());
         return new Dtos.TransactionResponse(t.getId(), t.getType(), t.getAmount(),
                 t.getPointsDelta(), balance, t.getRuleId(), t.getCampaignId(),
                 t.getReference(), t.getCreatedAt());

@@ -4,7 +4,9 @@ import innbucks.paymentservice.client.BookingServiceClient;
 import innbucks.paymentservice.client.BookingServiceClient.BookingConfirmationException;
 import innbucks.paymentservice.client.LoyaltyServiceClient;
 import innbucks.paymentservice.client.LoyaltyServiceClient.LoyaltyCheckoutException;
+import innbucks.paymentservice.config.PaymentMetrics;
 import innbucks.paymentservice.dto.ApiResult;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import innbucks.paymentservice.dto.PaymentMethod;
 import innbucks.paymentservice.dto.PaymentRequest;
 import innbucks.paymentservice.dto.PaymentResponse;
@@ -25,6 +27,12 @@ import static org.mockito.Mockito.*;
 
 class PaymentControllerTest {
 
+    // Fresh registry per controller so tests can assert counters without
+    // bleeding state across @Test methods.
+    private static PaymentMetrics newMetrics() {
+        return new PaymentMetrics(new SimpleMeterRegistry());
+    }
+
     private PaymentRequest paymentFor(UUID bookingId) {
         PaymentRequest r = new PaymentRequest();
         r.setBookingId(bookingId);
@@ -44,7 +52,7 @@ class PaymentControllerTest {
                 "confirmationNumber", "INN-20260502-AB12CD"
         ));
 
-        ResponseEntity<ApiResult<PaymentResponse>> resp = new PaymentController(client, mock(innbucks.paymentservice.client.LoyaltyServiceClient.class))
+        ResponseEntity<ApiResult<PaymentResponse>> resp = new PaymentController(client, mock(innbucks.paymentservice.client.LoyaltyServiceClient.class), newMetrics())
                 .processPayment(paymentFor(bookingId));
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
@@ -72,7 +80,7 @@ class PaymentControllerTest {
         PaymentRequest req = new PaymentRequest();
         req.setBookingId(bookingId);
 
-        ResponseEntity<ApiResult<PaymentResponse>> resp = new PaymentController(client, mock(innbucks.paymentservice.client.LoyaltyServiceClient.class))
+        ResponseEntity<ApiResult<PaymentResponse>> resp = new PaymentController(client, mock(innbucks.paymentservice.client.LoyaltyServiceClient.class), newMetrics())
                 .processPayment(req);
 
         assertEquals("USD", resp.getBody().getData().getCurrency());
@@ -87,7 +95,7 @@ class PaymentControllerTest {
                 "confirmationNumber", "INN-X"
         ));
 
-        ResponseEntity<ApiResult<PaymentResponse>> resp = new PaymentController(client, mock(innbucks.paymentservice.client.LoyaltyServiceClient.class))
+        ResponseEntity<ApiResult<PaymentResponse>> resp = new PaymentController(client, mock(innbucks.paymentservice.client.LoyaltyServiceClient.class), newMetrics())
                 .processPayment(paymentFor(bookingId));
 
         assertEquals(0, new BigDecimal("75.5").compareTo(resp.getBody().getData().getAmountPaid()));
@@ -100,7 +108,7 @@ class PaymentControllerTest {
         when(client.confirmBooking(eq(bookingId)))
                 .thenThrow(new BookingConfirmationException("Seat hold expired", 400));
 
-        ResponseEntity<ApiResult<PaymentResponse>> resp = new PaymentController(client, mock(innbucks.paymentservice.client.LoyaltyServiceClient.class))
+        ResponseEntity<ApiResult<PaymentResponse>> resp = new PaymentController(client, mock(innbucks.paymentservice.client.LoyaltyServiceClient.class), newMetrics())
                 .processPayment(paymentFor(bookingId));
 
         assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
@@ -138,7 +146,7 @@ class PaymentControllerTest {
         req.setCashAmount(new BigDecimal("10.00"));
 
         ResponseEntity<ApiResult<ShopCheckoutResponse>> resp = new PaymentController(
-                mock(BookingServiceClient.class), loyalty).shopCheckout(req);
+                mock(BookingServiceClient.class), loyalty, newMetrics()).shopCheckout(req);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         ShopCheckoutResponse data = resp.getBody().getData();
@@ -161,7 +169,7 @@ class PaymentControllerTest {
                         UUID.randomUUID(), UUID.randomUUID()));
 
         ResponseEntity<ApiResult<ShopCheckoutResponse>> resp = new PaymentController(
-                mock(BookingServiceClient.class), loyalty).shopCheckout(cashAndPoints(shopId));
+                mock(BookingServiceClient.class), loyalty, newMetrics()).shopCheckout(cashAndPoints(shopId));
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         ShopCheckoutResponse data = resp.getBody().getData();
@@ -180,7 +188,7 @@ class PaymentControllerTest {
         req.setPointsAmount(new BigDecimal("200")); // illegal mix
 
         ResponseEntity<ApiResult<ShopCheckoutResponse>> resp = new PaymentController(
-                mock(BookingServiceClient.class), mock(LoyaltyServiceClient.class)).shopCheckout(req);
+                mock(BookingServiceClient.class), mock(LoyaltyServiceClient.class), newMetrics()).shopCheckout(req);
 
         assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
         assertTrue(resp.getBody().getMessage().contains("CASH"));
@@ -195,7 +203,7 @@ class PaymentControllerTest {
         // no pointsAmount → invalid
 
         ResponseEntity<ApiResult<ShopCheckoutResponse>> resp = new PaymentController(
-                mock(BookingServiceClient.class), mock(LoyaltyServiceClient.class)).shopCheckout(req);
+                mock(BookingServiceClient.class), mock(LoyaltyServiceClient.class), newMetrics()).shopCheckout(req);
 
         assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
     }
@@ -207,10 +215,65 @@ class PaymentControllerTest {
                 .thenThrow(new LoyaltyCheckoutException("merchant is not active; no loyalty operations will run", 400));
 
         ResponseEntity<ApiResult<ShopCheckoutResponse>> resp = new PaymentController(
-                mock(BookingServiceClient.class), loyalty).shopCheckout(cashAndPoints(UUID.randomUUID()));
+                mock(BookingServiceClient.class), loyalty, newMetrics()).shopCheckout(cashAndPoints(UUID.randomUUID()));
 
         assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
         assertTrue(resp.getBody().getMessage().contains("merchant is not active"));
+    }
+
+    @Test
+    void shopCheckout_successIncrementsSuccessOutcomeCounter() {
+        LoyaltyServiceClient loyalty = mock(LoyaltyServiceClient.class);
+        UUID shopId = UUID.randomUUID();
+        when(loyalty.shopCheckout(any(), any(), any(), any(), any()))
+                .thenReturn(new LoyaltyServiceClient.CheckoutResult(
+                        shopId, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
+                        new BigDecimal("10"), new BigDecimal("200"),
+                        new BigDecimal("12.5"), new BigDecimal("1612.5"),
+                        UUID.randomUUID(), UUID.randomUUID()));
+        PaymentMetrics m = newMetrics();
+        new PaymentController(mock(BookingServiceClient.class), loyalty, m)
+                .shopCheckout(cashAndPoints(shopId));
+
+        double success = m.shopCheckoutDuration().count() > 0
+                ? counter(m, "outcome", "success", "mode", "mixed") : 0;
+        assertEquals(1.0, success);
+        assertEquals(1L, m.shopCheckoutDuration().count());
+    }
+
+    @Test
+    void shopCheckout_loyaltyDownIncrementsUnavailableCounter() {
+        LoyaltyServiceClient loyalty = mock(LoyaltyServiceClient.class);
+        when(loyalty.shopCheckout(any(), any(), any(), any(), any()))
+                .thenThrow(new LoyaltyCheckoutException("Unable to reach loyalty-service for checkout", 503));
+        PaymentMetrics m = newMetrics();
+        new PaymentController(mock(BookingServiceClient.class), loyalty, m)
+                .shopCheckout(cashAndPoints(UUID.randomUUID()));
+
+        assertEquals(1.0, counter(m, "outcome", "loyalty_unavailable", "mode", "mixed"));
+    }
+
+    @Test
+    void shopCheckout_validationFailureIncrementsValidationFailedCounter() {
+        ShopCheckoutRequest req = new ShopCheckoutRequest();
+        req.setShopId(UUID.randomUUID());
+        req.setMsisdn("0712345678");
+        req.setPaymentMethod(PaymentMethod.CASH);
+        req.setCashAmount(new BigDecimal("10"));
+        req.setPointsAmount(new BigDecimal("200"));
+        PaymentMetrics m = newMetrics();
+        new PaymentController(mock(BookingServiceClient.class), mock(LoyaltyServiceClient.class), m)
+                .shopCheckout(req);
+
+        assertEquals(1.0, counter(m, "outcome", "validation_failed", "mode", "cash"));
+    }
+
+    private static double counter(PaymentMetrics m, String... tags) {
+        // Drill into the SimpleMeterRegistry behind the PaymentMetrics to read
+        // payment.shop_checkout{tags...} without going through Prometheus serialization.
+        var registry = (io.micrometer.core.instrument.MeterRegistry)
+                org.springframework.test.util.ReflectionTestUtils.getField(m, "registry");
+        return registry.find("payment.shop_checkout").tags(tags).counter().count();
     }
 
     @Test
@@ -221,7 +284,7 @@ class PaymentControllerTest {
                 .thenThrow(new BookingConfirmationException(
                         "Unable to reach booking-service to confirm the booking", 503));
 
-        ResponseEntity<ApiResult<PaymentResponse>> resp = new PaymentController(client, mock(innbucks.paymentservice.client.LoyaltyServiceClient.class))
+        ResponseEntity<ApiResult<PaymentResponse>> resp = new PaymentController(client, mock(innbucks.paymentservice.client.LoyaltyServiceClient.class), newMetrics())
                 .processPayment(paymentFor(bookingId));
 
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, resp.getStatusCode());
