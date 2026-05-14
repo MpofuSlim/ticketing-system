@@ -13,7 +13,7 @@
 
     <appender name="PLAIN_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %5p [${appName},%X{traceId:-}] %-40.40logger{39} : %m%n%rEx</pattern>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %5p [${appName},%X{traceId:-},%X{spanId:-},%X{correlationId:-}] %-40.40logger{39} : %m%n%rEx</pattern>
         </encoder>
     </appender>
 
@@ -21,6 +21,8 @@
         <encoder class="net.logstash.logback.encoder.LogstashEncoder">
             <customFields>{"service":"${appName}"}</customFields>
             <includeMdcKeyName>traceId</includeMdcKeyName>
+            <includeMdcKeyName>spanId</includeMdcKeyName>
+            <includeMdcKeyName>correlationId</includeMdcKeyName>
             <includeContext>false</includeContext>
             <fieldNames>
                 <version>[ignore]</version>
