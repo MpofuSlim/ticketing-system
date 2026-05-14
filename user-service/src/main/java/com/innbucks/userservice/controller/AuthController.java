@@ -102,7 +102,11 @@ public class AuthController {
                                               "code": "200 OK",
                                               "message": "Login successful",
                                               "data": {
+                                                "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIrMjYzNzcxMjM0NTY3Iiwicm9sZXMiOlsiQ1VTVE9NRVIiXSwic2VydmljZXMiOltdLCJ0aWVyIjoyLCJ2ZXJpZmllZCI6ZmFsc2UsInBob25lTnVtYmVyIjoiKzI2Mzc3MTIzNDU2NyIsImZpcnN0TmFtZSI6IkphbmUiLCJsYXN0TmFtZSI6IkRvZSIsImlhdCI6MTcxNTY2NTYwMCwiZXhwIjoxNzE1NzUyMDAwfQ.access-signature",
+                                                "refreshToken": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIrMjYzNzcxMjM0NTY3IiwidHlwZSI6InJlZnJlc2giLCJpYXQiOjE3MTU2NjU2MDAsImV4cCI6MTcxNjI3MDQwMH0.refresh-signature",
                                                 "roles": ["CUSTOMER"],
+                                                "defaultServices": [],
+                                                "mfaRequired": false,
                                                 "tier": 2,
                                                 "verified": false
                                               }
@@ -113,7 +117,13 @@ public class AuthController {
                                               "code": "200 OK",
                                               "message": "Login successful",
                                               "data": {
+                                                "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhbGljZUBpbm5idWNrcy5jby56dyIsInJvbGVzIjpbIkVWRU5UX09SR0FOSVpFUiJdLCJzZXJ2aWNlcyI6WyJldmVudC1zZXJ2aWNlIiwiYm9va2luZy1zZXJ2aWNlIiwic2VhdC1zZXJ2aWNlIiwicGF5bWVudC1zZXJ2aWNlIl0sInRpZXIiOjQsInZlcmlmaWVkIjp0cnVlLCJpYXQiOjE3MTU2NjU2MDAsImV4cCI6MTcxNTc1MjAwMH0.access-signature",
+                                                "refreshToken": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhbGljZUBpbm5idWNrcy5jby56dyIsInR5cGUiOiJyZWZyZXNoIiwiaWF0IjoxNzE1NjY1NjAwLCJleHAiOjE3MTYyNzA0MDB9.refresh-signature",
+                                                "email": "alice@innbucks.co.zw",
                                                 "roles": ["EVENT_ORGANIZER"],
+                                                "defaultServices": ["ticketing"],
+                                                "mfaRequired": false,
+                                                "tier": 4,
                                                 "verified": true
                                               }
                                             }
@@ -132,10 +142,14 @@ public class AuthController {
     @SecurityRequirement(name = "bearerAuth")
     @Operation(summary = "Refresh JWT (pick up updated tier/verified)",
             description = """
-                    Mints a new JWT for the currently authenticated user, reading the latest
-                    `tier` and `verified` values from the database. Useful right after a tier
-                    upgrade (e.g. tier 1 → tier 2) so the client can pick up the new claims
-                    without a full re-login.
+                    Mints a new access token (and a fresh refresh token) for the user identified
+                    by the bearer token. Reads the latest `tier`, `verified`, roles and bundles
+                    from the database, so this is the way to pick up a tier upgrade (e.g.
+                    tier 1 → tier 2) without a full re-login.
+
+                    **Token type accepted:** the bearer may be either the long-lived
+                    `refreshToken` returned by `/auth/login` (recommended) or an
+                    unexpired access `token`. The endpoint only reads the subject claim.
 
                     The old token is **not** revoked here — it keeps working until it expires
                     or `/auth/logout` is called. Other services already accept tokens until
@@ -150,15 +164,26 @@ public class AuthController {
                                       "code": "200 OK",
                                       "message": "Token refreshed",
                                       "data": {
-                                        "token": "<new-jwt>",
+                                        "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIrMjYzNzcxMjM0NTY3Iiwicm9sZXMiOlsiQ1VTVE9NRVIiXSwic2VydmljZXMiOltdLCJ0aWVyIjoyLCJ2ZXJpZmllZCI6ZmFsc2UsInBob25lTnVtYmVyIjoiKzI2Mzc3MTIzNDU2NyIsImZpcnN0TmFtZSI6IkphbmUiLCJsYXN0TmFtZSI6IkRvZSIsImlhdCI6MTcxNTY2OTIwMCwiZXhwIjoxNzE1NzU1NjAwfQ.access-signature",
+                                        "refreshToken": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIrMjYzNzcxMjM0NTY3IiwidHlwZSI6InJlZnJlc2giLCJpYXQiOjE3MTU2NjkyMDAsImV4cCI6MTcxNjI3NDAwMH0.refresh-signature",
                                         "roles": ["CUSTOMER"],
+                                        "defaultServices": [],
+                                        "mfaRequired": false,
                                         "tier": 2,
                                         "verified": false
                                       }
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
-                    description = "Missing or invalid bearer token")
+                    description = "Missing or invalid bearer token",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "401 UNAUTHORIZED",
+                                      "message": "Missing Bearer token",
+                                      "data": null
+                                    }
+                                    """)))
     })
     public ResponseEntity<ApiResult<AuthResponseDTO>> refresh(HttpServletRequest request) {
         String authHeader = request.getHeader("Authorization");

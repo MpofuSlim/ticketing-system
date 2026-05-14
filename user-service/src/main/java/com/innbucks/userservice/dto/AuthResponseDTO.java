@@ -23,6 +23,12 @@ public class AuthResponseDTO {
             nullable = true)
     private String token;
 
+    @Schema(description = "Long-lived JWT refresh token. Returned on a successful login (and on /auth/refresh). " +
+            "Use it ONLY at `POST /auth/refresh` to obtain a fresh access token — it is not accepted on " +
+            "any other endpoint. Null on registration responses and when `mfaRequired=true`.",
+            nullable = true)
+    private String refreshToken;
+
     @Schema(description = "Principal's roles. A user may hold any combination of SUPER_ADMIN, EVENT_ORGANIZER, MERCHANT_ADMIN. CUSTOMER accounts always have exactly one role: CUSTOMER.",
             example = "[\"EVENT_ORGANIZER\"]")
     private List<String> roles;

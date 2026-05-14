@@ -15,6 +15,7 @@ class JwtUtilTest {
         jwtUtil = new JwtUtil();
         ReflectionTestUtils.setField(jwtUtil, "secret", "test-test-test-test-test-test-test-test");
         ReflectionTestUtils.setField(jwtUtil, "expiration", 3_600_000L);
+        ReflectionTestUtils.setField(jwtUtil, "refreshExpiration", 86_400_000L);
     }
 
     @Test
@@ -63,5 +64,25 @@ class JwtUtilTest {
         String expired = jwtUtil.generateToken("user@example.com", "EVENT_ORGANIZER", 4, true);
 
         assertFalse(jwtUtil.isTokenValid(expired));
+    }
+
+    @Test
+    void generateRefreshToken_marksTypeAndExposesSubject() {
+        String refresh = jwtUtil.generateRefreshToken("user@example.com");
+
+        assertNotNull(refresh);
+        assertTrue(jwtUtil.isTokenValid(refresh));
+        assertTrue(jwtUtil.isRefreshToken(refresh));
+        assertEquals(JwtUtil.TOKEN_TYPE_REFRESH, jwtUtil.extractType(refresh));
+        assertEquals("user@example.com", jwtUtil.extractEmail(refresh));
+        // Refresh tokens are claim-light — roles are not embedded.
+        assertTrue(jwtUtil.extractRoles(refresh).isEmpty());
+    }
+
+    @Test
+    void accessToken_isNotMarkedAsRefresh() {
+        String access = jwtUtil.generateToken("user@example.com", "CUSTOMER", 2, false);
+        assertFalse(jwtUtil.isRefreshToken(access));
+        assertNull(jwtUtil.extractType(access));
     }
 }
