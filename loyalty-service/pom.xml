@@ -156,6 +156,15 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- Sentry: ERROR logs become real-time alerts. Logback appender
+             owns the SDK lifecycle so we skip the Spring autoconfig (Sentry
+             8.x references Boot 3 classes that Boot 4 renamed); no-op when
+             SENTRY_DSN env var is blank, so dev/CI pay nothing. -->
+        <dependency>
+            <groupId>io.sentry</groupId>
+            <artifactId>sentry-logback</artifactId>
+        </dependency>
+
     </dependencies>
 
     <build>

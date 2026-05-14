@@ -30,15 +30,35 @@
         </encoder>
     </appender>
 
+    <!-- Sentry: ERROR-level events ship as Sentry issues; INFO/WARN log
+         lines are kept as breadcrumb trail and attached to the next issue.
+         DSN comes from the SENTRY_DSN env var the SDK auto-reads; if blank
+         the appender silently no-ops, so dev / CI pay nothing. MDC
+         (traceId/spanId/correlationId) is captured into every event so an
+         issue links back to the matching log line and OTel trace. -->
+    <appender name="SENTRY" class="io.sentry.logback.SentryAppender">
+        <options>
+            <dsn>${SENTRY_DSN:-}</dsn>
+            <environment>${SENTRY_ENV:-development}</environment>
+            <release>${SENTRY_RELEASE:-}</release>
+            <sendDefaultPii>false</sendDefaultPii>
+            <tracesSampleRate>${SENTRY_TRACES_SAMPLE:-0.1}</tracesSampleRate>
+        </options>
+        <minimumEventLevel>ERROR</minimumEventLevel>
+        <minimumBreadcrumbLevel>INFO</minimumBreadcrumbLevel>
+    </appender>
+
     <springProfile name="json">
         <root level="INFO">
             <appender-ref ref="JSON_CONSOLE"/>
+            <appender-ref ref="SENTRY"/>
         </root>
     </springProfile>
 
     <springProfile name="!json">
         <root level="INFO">
             <appender-ref ref="PLAIN_CONSOLE"/>
+            <appender-ref ref="SENTRY"/>
         </root>
     </springProfile>
 </configuration>
