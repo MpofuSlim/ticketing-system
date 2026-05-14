@@ -18,7 +18,7 @@ import java.util.UUID;
 public class CorrelationIdFilter {
 
     public static final String HEADER = "X-Correlation-Id";
-    public static final String MDC_KEY = "traceId";
+    public static final String MDC_KEY = "correlationId";
 
     @Bean
     public FilterRegistrationBean<OncePerRequestFilter> correlationIdFilterRegistration() {

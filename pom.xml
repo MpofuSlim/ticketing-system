@@ -125,6 +125,19 @@
             <groupId>net.logstash.logback</groupId>
             <artifactId>logstash-logback-encoder</artifactId>
         </dependency>
+        <!-- Distributed tracing. The OTel bridge wires Micrometer Observation
+             API onto an OpenTelemetry SDK; the OTLP exporter ships spans to
+             whatever collector OTLP_ENDPOINT points at (Tempo, Jaeger, the
+             OTel-Collector, etc.). Boot 4 auto-configures both. Sampling
+             defaults to 10% — tune via TRACE_SAMPLE env var. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-otel</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-otlp</artifactId>
+        </dependency>
         <!-- Boot 4 ships Jackson 3 (tools.jackson) by default; this module
              also registers the legacy com.fasterxml.jackson.databind.ObjectMapper
              bean expected by jjwt-jackson and existing test code. -->

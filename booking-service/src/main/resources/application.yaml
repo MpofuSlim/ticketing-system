@@ -201,10 +201,22 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+  # Distributed tracing via OTel. Sampling defaults to 10% — flip to 1.0 for
+  # debug sessions, leave low in prod for cost. OTLP_ENDPOINT points at the
+  # OTel collector / Tempo / Jaeger; default localhost is fine for laptop
+  # docker-compose, override in k8s. Set TRACING_ENABLED=false to disable
+  # entirely (no spans recorded, no exporter calls).
+  tracing:
+    enabled: ${TRACING_ENABLED:true}
+    sampling:
+      probability: ${TRACE_SAMPLE:0.1}
+  otlp:
+    tracing:
+      endpoint: ${OTLP_ENDPOINT:http://localhost:4318/v1/traces}
 
 logging:
   pattern:
-    level: "%5p [${spring.application.name:-},%X{traceId:-}]"
+    level: "%5p [${spring.application.name:-},%X{traceId:-},%X{spanId:-},%X{correlationId:-}]"
 cors:
   # Comma-separated list of allowed origin patterns. Default whitelists the
   # production frontend (innvents.vercel.app), Vercel preview deploys, and
