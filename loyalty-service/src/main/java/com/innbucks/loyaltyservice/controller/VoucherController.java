@@ -233,6 +233,9 @@ public class VoucherController {
                                         "assignedUserId": "d2c8f0a1-0123-4567-1234-567890123456",
                                         "assigneePhone": "+254700000000",
                                         "usesRemaining": 1,
+                                        "valueType": "AMOUNT",
+                                        "value": 5.0000,
+                                        "currency": "USD",
                                         "issuedAt": "2026-05-04T10:30:00Z",
                                         "expiresAt": "2026-06-03T10:30:00Z"
                                       }
@@ -303,6 +306,9 @@ public class VoucherController {
                                           "assignedUserId": null,
                                           "assigneePhone": null,
                                           "usesRemaining": 1,
+                                          "valueType": "AMOUNT",
+                                          "value": 5.0000,
+                                          "currency": "USD",
                                           "issuedAt": "2026-05-04T10:30:00Z",
                                           "expiresAt": "2026-06-03T10:30:00Z"
                                         },
@@ -314,6 +320,9 @@ public class VoucherController {
                                           "assignedUserId": null,
                                           "assigneePhone": null,
                                           "usesRemaining": 1,
+                                          "valueType": "AMOUNT",
+                                          "value": 5.0000,
+                                          "currency": "USD",
                                           "issuedAt": "2026-05-04T10:30:00Z",
                                           "expiresAt": "2026-06-03T10:30:00Z"
                                         }
@@ -382,6 +391,9 @@ public class VoucherController {
                                         "voucherId": "c1b7e9f0-9012-3456-0123-456789012345",
                                         "status": "REDEEMED",
                                         "usesRemaining": 0,
+                                        "valueType": "AMOUNT",
+                                        "value": 5.0000,
+                                        "currency": "USD",
                                         "value": 5.0000,
                                         "valueType": "AMOUNT",
                                         "redeemedAt": "2026-05-04T14:00:00Z"
@@ -574,6 +586,9 @@ public class VoucherController {
                                             "assignedUserId": "d2c8f0a1-0123-4567-1234-567890123456",
                                             "assigneePhone": "+263771234567",
                                             "usesRemaining": 1,
+                                            "valueType": "AMOUNT",
+                                            "value": 5.0000,
+                                            "currency": "USD",
                                             "issuedAt": "2026-05-04T10:30:00Z",
                                             "expiresAt": "2026-06-03T10:30:00Z"
                                           }
@@ -666,6 +681,9 @@ public class VoucherController {
                                             "assignedUserId": "d2c8f0a1-0123-4567-1234-567890123456",
                                             "assigneePhone": "+254700000000",
                                             "usesRemaining": 1,
+                                            "valueType": "AMOUNT",
+                                            "value": 5.0000,
+                                            "currency": "USD",
                                             "issuedAt": "2026-05-04T10:30:00Z",
                                             "expiresAt": "2026-06-03T10:30:00Z"
                                           },
@@ -677,6 +695,9 @@ public class VoucherController {
                                             "assignedUserId": null,
                                             "assigneePhone": "+254711111111",
                                             "usesRemaining": 1,
+                                            "valueType": "AMOUNT",
+                                            "value": 5.0000,
+                                            "currency": "USD",
                                             "issuedAt": "2026-05-03T14:00:00Z",
                                             "expiresAt": "2026-06-02T14:00:00Z"
                                           }

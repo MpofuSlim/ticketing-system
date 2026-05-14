@@ -113,6 +113,12 @@ class PhoneKeyedWalletTest {
                 new Dtos.IssueVoucherRequest(null, tpl.getId(), phone, "Pending Pat", null,
                         Voucher.DeliveryChannel.NONE, null, null, null));
         assertThat(voucher.code()).isNotBlank();
+        // The voucher response snapshots its template's value (V7 migration).
+        // Editing the template later must NOT change what's already issued, so
+        // these three fields are stored on the Voucher row, not looked up live.
+        assertThat(voucher.valueType()).isEqualTo("PERCENT");
+        assertThat(voucher.value()).isEqualByComparingTo("10");
+        assertThat(voucher.currency()).isEqualTo("USD");
 
         // 3) PENDING user cannot redeem the voucher yet.
         assertThatThrownBy(() ->

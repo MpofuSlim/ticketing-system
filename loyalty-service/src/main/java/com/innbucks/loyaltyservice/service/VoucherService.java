@@ -138,6 +138,10 @@ public class VoucherService {
         v.setAssigneeName(assigneeName);
         v.setDeliveryChannel(channel);
         v.setCampaignSource(campaign);
+        // Snapshot the template's value into the voucher (see V7 migration).
+        v.setValueType(tpl.getValueType());
+        v.setValue(tpl.getValue());
+        v.setCurrency(tpl.getCurrency());
         int uses = usesOverride != null ? usesOverride : tpl.getUsageLimit();
         v.setUsesRemaining(Math.max(1, uses));
         Integer validity = validityOverride != null ? validityOverride : tpl.getValidityDays();
@@ -344,6 +348,9 @@ public class VoucherService {
     public static Dtos.VoucherResponse toResponse(Voucher v) {
         return new Dtos.VoucherResponse(v.getId(), v.getCode(), v.getStatus().name(),
                 v.getTemplateId(), v.getAssignedUserId(), v.getAssigneePhone(),
-                v.getUsesRemaining(), v.getIssuedAt(), v.getExpiresAt());
+                v.getUsesRemaining(),
+                v.getValueType() == null ? null : v.getValueType().name(),
+                v.getValue(), v.getCurrency(),
+                v.getIssuedAt(), v.getExpiresAt());
     }
 }

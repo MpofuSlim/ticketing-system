@@ -284,6 +284,10 @@ public class Dtos {
     public record VoucherResponse(UUID id, String code, String status,
                                   UUID templateId, UUID assignedUserId,
                                   String assigneePhone, int usesRemaining,
+                                  // value snapshot — copied from the template at issuance time and frozen.
+                                  // valueType={AMOUNT, PERCENT, FREE_ITEM, COMBO} tells the client how to
+                                  // render `value` (currency-formatted amount, percent off, etc.).
+                                  String valueType, BigDecimal value, String currency,
                                   Instant issuedAt, Instant expiresAt) {}
 
     // merchantId from JWT (SHOP_ADMIN) or request body (MERCHANT_ADMIN); see CallerDetails.resolveMerchantId.
