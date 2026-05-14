@@ -140,20 +140,27 @@ public class AuthController {
 
     @PostMapping("/refresh")
     @SecurityRequirement(name = "bearerAuth")
-    @Operation(summary = "Refresh JWT (pick up updated tier/verified)",
+    @Operation(summary = "Rotate refresh token (and pick up updated tier/verified)",
             description = """
-                    Mints a new access token (and a fresh refresh token) for the user identified
-                    by the bearer token. Reads the latest `tier`, `verified`, roles and bundles
-                    from the database, so this is the way to pick up a tier upgrade (e.g.
-                    tier 1 → tier 2) without a full re-login.
+                    Exchanges a refresh token for a brand-new access token + refresh token pair.
+                    Reads the latest `tier`, `verified`, roles and bundles from the database,
+                    so this is the way to pick up a tier upgrade (e.g. tier 1 → tier 2)
+                    without a full re-login.
 
-                    **Token type accepted:** the bearer may be either the long-lived
-                    `refreshToken` returned by `/auth/login` (recommended) or an
-                    unexpired access `token`. The endpoint only reads the subject claim.
+                    **Required bearer token type:** must be the `refreshToken` returned by
+                    `/auth/login` (or by a previous call to `/auth/refresh`). Access tokens
+                    are rejected with HTTP 400 — they cannot be used for refresh.
 
-                    The old token is **not** revoked here — it keeps working until it expires
-                    or `/auth/logout` is called. Other services already accept tokens until
-                    expiry, so a brief overlap is harmless.
+                    **Strict rotation with reuse detection:** every call consumes the supplied
+                    refresh token (it is marked revoked and CANNOT be used again) and mints a
+                    fresh one linked to the same family. If a refresh token that has already
+                    been rotated is presented again, the entire token family is revoked
+                    immediately — this catches credential theft. After family revocation, the
+                    user must log in again to get a new family.
+
+                    Clients should treat the response as a complete replacement: discard the
+                    old refresh token the moment the new one is received and store the new
+                    `refreshToken` atomically alongside the new access `token`.
                     """)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
@@ -174,8 +181,35 @@ public class AuthController {
                                       }
                                     }
                                     """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "Refresh token is invalid, expired, not of type=refresh, or has already been rotated " +
+                            "(reuse — the entire family is revoked).",
+                    content = @Content(mediaType = "application/json",
+                            examples = {
+                                    @ExampleObject(name = "Already rotated (reuse)", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Refresh token reuse detected; family revoked",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Wrong token type", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Not a refresh token",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Expired or unknown", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Refresh token not recognised",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
-                    description = "Missing or invalid bearer token",
+                    description = "Missing or malformed bearer header",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     {

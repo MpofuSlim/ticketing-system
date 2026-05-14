@@ -15,6 +15,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -106,6 +107,49 @@ class AuthControllerIT {
                         .content(objectMapper.writeValueAsString(login)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message", containsString("Invalid credentials")));
+    }
+
+    @Test
+    void refresh_rotatesAndDetectsReuse() throws Exception {
+        RegisterPayload register = baseSystemPayload("user3@example.com", "0777000003", "loyalty");
+        mockMvc.perform(post("/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(register)))
+                .andExpect(status().isCreated());
+        activate("user3@example.com");
+
+        LoginPayload login = new LoginPayload();
+        login.identifier = "user3@example.com";
+        login.password = "password123";
+        String loginBody = mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(login)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String originalRefresh = objectMapper.readTree(loginBody).at("/data/refreshToken").asText();
+        assertThat(originalRefresh).isNotBlank();
+
+        // First rotation succeeds and yields a brand-new refresh token.
+        String rotatedBody = mockMvc.perform(post("/auth/refresh")
+                        .header("Authorization", "Bearer " + originalRefresh))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.refreshToken", not(blankOrNullString())))
+                .andExpect(jsonPath("$.data.token", not(blankOrNullString())))
+                .andReturn().getResponse().getContentAsString();
+        String newRefresh = objectMapper.readTree(rotatedBody).at("/data/refreshToken").asText();
+        assertThat(newRefresh).isNotEqualTo(originalRefresh);
+
+        // Replaying the rotated-out token must fail and revoke the family.
+        mockMvc.perform(post("/auth/refresh")
+                        .header("Authorization", "Bearer " + originalRefresh))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message", containsString("reuse detected")));
+
+        // The (previously valid) successor is also now revoked — family kill.
+        mockMvc.perform(post("/auth/refresh")
+                        .header("Authorization", "Bearer " + newRefresh))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message", containsString("reuse detected")));
     }
 
     @Test

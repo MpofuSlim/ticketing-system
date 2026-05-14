@@ -28,6 +28,7 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
     private final TokenRevocationService tokenRevocationService;
+    private final RefreshTokenService refreshTokenService;
 
     @Transactional
     public AuthResponseDTO register(RegisterRequestDTO request) {
@@ -135,29 +136,27 @@ public class AuthService {
         log.info("Password changed userId={} subject={}", user.getId(), subject);
     }
 
-    public AuthResponseDTO refresh(String token) {
-        if (token == null || token.isBlank() || !jwtUtil.isTokenValid(token)) {
-            throw new RuntimeException("Invalid or expired token");
-        }
-        if (tokenRevocationService.isRevoked(token)) {
-            throw new RuntimeException("Token revoked");
-        }
-        String subject = jwtUtil.extractEmail(token);
-        if (subject == null || subject.isBlank()) {
-            throw new RuntimeException("Token has no subject");
-        }
-        User user = (subject.contains("@")
-                ? userRepository.findByEmail(subject)
-                : userRepository.findByPhoneNumber(subject))
-                .orElseThrow(() -> new RuntimeException("User not found"));
-
-        AuthResponseDTO response = issueToken(user);
+    /**
+     * Rotates the supplied refresh token: consumes it, mints a brand-new
+     * refresh token in the same family, and returns a fresh access token
+     * with the latest user claims. Replay of an already-rotated refresh
+     * token is treated as theft and revokes the entire family.
+     */
+    public AuthResponseDTO refresh(String refreshToken) {
+        RefreshTokenService.Rotation rotation = refreshTokenService.rotate(refreshToken);
+        AuthResponseDTO response = buildResponse(rotation.user(), rotation.refreshToken());
         log.info("Token refreshed subject={} roles={} tier={} verified={}",
-                subject, response.getRoles(), response.getTier(), response.getVerified());
+                rotation.user().getEmail() != null ? rotation.user().getEmail() : rotation.user().getPhoneNumber(),
+                response.getRoles(), response.getTier(), response.getVerified());
         return response;
     }
 
     private AuthResponseDTO issueToken(User user) {
+        String refreshToken = refreshTokenService.issueNewFamily(user);
+        return buildResponse(user, refreshToken);
+    }
+
+    private AuthResponseDTO buildResponse(User user, String refreshToken) {
         String subject = user.getEmail() != null ? user.getEmail() : user.getPhoneNumber();
 
         int tier;
@@ -208,7 +207,6 @@ public class AuthService {
         String newToken = jwtUtil.generateToken(subject, roleNames, new ArrayList<>(microservices),
                 tier, verified, user.getPhoneNumber(), loyaltyMerchantId, loyaltyShopId,
                 firstName, middleName, lastName);
-        String refreshToken = jwtUtil.generateRefreshToken(subject);
 
         return AuthResponseDTO.builder()
                 .token(newToken)
