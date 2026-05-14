@@ -36,6 +36,7 @@ public class ShopCheckoutService {
     private final TransactionService transactionService;
     private final RedemptionService redemptionService;
     private final com.innbucks.loyaltyservice.repository.WalletRepository wallets;
+    private final com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics;
 
     public record Result(UUID shopId,
                          UUID merchantId,
@@ -54,14 +55,29 @@ public class ShopCheckoutService {
                            BigDecimal cashAmount,
                            BigDecimal pointsAmount,
                            String reference) {
+        boolean hasCash = cashAmount != null && cashAmount.signum() > 0;
+        boolean hasPoints = pointsAmount != null && pointsAmount.signum() > 0;
+        String mode = hasCash && hasPoints ? "mixed" : hasCash ? "cash" : "points";
+        try {
+            Result r = doCheckout(shopId, phoneNumber, cashAmount, pointsAmount, reference, hasCash, hasPoints);
+            metrics.incShopCheckout("success", mode);
+            return r;
+        } catch (LoyaltyException e) {
+            metrics.incShopCheckout("rejected", mode);
+            metrics.incShopCheckoutRejected(e.getCode());
+            throw e;
+        }
+    }
+
+    private Result doCheckout(UUID shopId, String phoneNumber, BigDecimal cashAmount,
+                              BigDecimal pointsAmount, String reference,
+                              boolean hasCash, boolean hasPoints) {
         if (shopId == null) {
             throw LoyaltyException.badRequest("SHOP_REQUIRED", "shopId is required");
         }
         if (phoneNumber == null || phoneNumber.isBlank()) {
             throw LoyaltyException.badRequest("PHONE_REQUIRED", "phoneNumber is required");
         }
-        boolean hasCash = cashAmount != null && cashAmount.signum() > 0;
-        boolean hasPoints = pointsAmount != null && pointsAmount.signum() > 0;
         if (!hasCash && !hasPoints) {
             throw LoyaltyException.badRequest("AMOUNT_REQUIRED",
                     "at least one of cashAmount or pointsAmount must be positive");

@@ -4,6 +4,7 @@ import innbucks.paymentservice.client.BookingServiceClient;
 import innbucks.paymentservice.client.BookingServiceClient.BookingConfirmationException;
 import innbucks.paymentservice.client.LoyaltyServiceClient;
 import innbucks.paymentservice.client.LoyaltyServiceClient.LoyaltyCheckoutException;
+import innbucks.paymentservice.config.PaymentMetrics;
 import innbucks.paymentservice.dto.ApiResult;
 import innbucks.paymentservice.dto.PaymentMethod;
 import innbucks.paymentservice.dto.PaymentRequest;
@@ -46,6 +47,7 @@ public class PaymentController {
 
     private final BookingServiceClient bookingServiceClient;
     private final LoyaltyServiceClient loyaltyServiceClient;
+    private final PaymentMetrics metrics;
 
     @PostMapping
     @Operation(
@@ -193,9 +195,14 @@ public class PaymentController {
                 request.getShopId(), request.getMsisdn(), request.getPaymentMethod(),
                 request.getCashAmount(), request.getPointsAmount());
 
+        String mode = paymentModeTag(request.getPaymentMethod());
+        long startNanos = System.nanoTime();
+
         try {
             validateAmounts(request);
         } catch (IllegalArgumentException e) {
+            metrics.incShopCheckout("validation_failed", mode);
+            metrics.shopCheckoutDuration().record(System.nanoTime() - startNanos, java.util.concurrent.TimeUnit.NANOSECONDS);
             return ResponseEntity.badRequest().body(
                     ApiResult.<ShopCheckoutResponse>builder()
                             .code("400 BAD_REQUEST")
@@ -213,6 +220,11 @@ public class PaymentController {
         } catch (LoyaltyCheckoutException e) {
             HttpStatus status = HttpStatus.resolve(e.getStatusCode());
             if (status == null) status = HttpStatus.BAD_GATEWAY;
+            // 503 = loyalty unreachable (network); anything else = loyalty
+            // refused the call (bad shop, inactive merchant, insufficient balance).
+            String outcome = status == HttpStatus.SERVICE_UNAVAILABLE ? "loyalty_unavailable" : "loyalty_rejected";
+            metrics.incShopCheckout(outcome, mode);
+            metrics.shopCheckoutDuration().record(System.nanoTime() - startNanos, java.util.concurrent.TimeUnit.NANOSECONDS);
             log.warn("Shop checkout failed shopId={} status={} reason={}",
                     request.getShopId(), status.value(), e.getMessage());
             return ResponseEntity.status(status).body(
@@ -236,11 +248,22 @@ public class PaymentController {
                 .processedAt(LocalDateTime.now())
                 .build();
 
+        metrics.incShopCheckout("success", mode);
+        metrics.shopCheckoutDuration().record(System.nanoTime() - startNanos, java.util.concurrent.TimeUnit.NANOSECONDS);
         log.info("Shop checkout processed transactionId={} shopId={} pointsEarned={} pointsRedeemed={} balance={}",
                 response.getTransactionId(), response.getShopId(),
                 response.getPointsEarned(), response.getPointsRedeemed(),
                 response.getWalletBalanceAfter());
         return ResponseEntity.ok(ApiResult.ok("Shop checkout processed successfully", response));
+    }
+
+    private static String paymentModeTag(PaymentMethod method) {
+        if (method == null) return "unknown";
+        return switch (method) {
+            case CASH -> "cash";
+            case POINTS -> "points";
+            case CASH_AND_POINTS -> "mixed";
+        };
     }
 
     /**

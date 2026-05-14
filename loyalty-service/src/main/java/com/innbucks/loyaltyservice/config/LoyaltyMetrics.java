@@ -5,6 +5,8 @@ import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.springframework.stereotype.Component;
 
+import java.math.BigDecimal;
+
 /**
  * Business-level metrics for the loyalty domain. Spring Boot Actuator already
  * surfaces infrastructure metrics (HTTP latency per endpoint, JVM, Hikari,
@@ -28,6 +30,8 @@ public class LoyaltyMetrics {
     private final Counter vouchersIssued;
     private final Counter vouchersRedeemed;
     private final Counter pendingPromoted;
+    private final Counter pointsEarned;
+    private final Counter pointsRedeemed;
     private final Timer redemptionLatency;
 
     public LoyaltyMetrics(MeterRegistry registry) {
@@ -40,6 +44,19 @@ public class LoyaltyMetrics {
                 .register(registry);
         this.pendingPromoted = Counter.builder("loyalty.user.promoted")
                 .description("Total PENDING LoyaltyUsers flipped to ACTIVE by the registration webhook")
+                .register(registry);
+        // Volume counters — increment by the points amount, not 1. Pairs with
+        // loyalty.transaction.posted (which counts events). rate() over points
+        // earned answers "are we awarding points faster than usual?" — a sudden
+        // 10x spike on points.earned with flat .posted means the rules engine
+        // is mis-evaluating multipliers.
+        this.pointsEarned = Counter.builder("loyalty.points.earned")
+                .description("Sum of points credited to customer wallets (PURCHASE/QR_PAY rules)")
+                .baseUnit("points")
+                .register(registry);
+        this.pointsRedeemed = Counter.builder("loyalty.points.redeemed")
+                .description("Sum of points debited from customer wallets (REDEMPTION)")
+                .baseUnit("points")
                 .register(registry);
         // Percentile histogram lets dashboards graph p50/p95/p99 for the
         // single most performance-sensitive call in the service.
@@ -94,5 +111,38 @@ public class LoyaltyMetrics {
     /** Wraps a redemption call so the latency series captures real end-to-end. */
     public Timer redemptionLatency() {
         return redemptionLatency;
+    }
+
+    public void addPointsEarned(BigDecimal amount) {
+        if (amount != null && amount.signum() > 0) pointsEarned.increment(amount.doubleValue());
+    }
+
+    public void addPointsRedeemed(BigDecimal amount) {
+        if (amount != null && amount.signum() > 0) pointsRedeemed.increment(amount.doubleValue());
+    }
+
+    /**
+     * Counter for shop checkouts (the payment-service entrypoint that wires
+     * loyalty into a real POS payment). Tags so dashboards can split by:
+     *   - outcome={success, rejected}
+     *   - mode={cash, points, mixed}
+     * Rejected checkouts also call {@link #incShopCheckoutRejected(String)} so
+     * the failure reason gets its own series.
+     */
+    public void incShopCheckout(String outcome, String mode) {
+        Counter.builder("loyalty.shop_checkout")
+                .description("Shop checkouts handled by loyalty-service, by outcome and payment mode")
+                .tag("outcome", outcome)
+                .tag("mode", mode)
+                .register(registry)
+                .increment();
+    }
+
+    public void incShopCheckoutRejected(String reason) {
+        Counter.builder("loyalty.shop_checkout.rejected")
+                .description("Shop checkouts rejected by loyalty-service, grouped by reason code")
+                .tag("reason", reason)
+                .register(registry)
+                .increment();
     }
 }

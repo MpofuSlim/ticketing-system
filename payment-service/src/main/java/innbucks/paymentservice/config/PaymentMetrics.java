@@ -1,0 +1,53 @@
+package innbucks.paymentservice.config;
+
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
+import org.springframework.stereotype.Component;
+
+/**
+ * Business-level metrics for the payment domain. Spring Boot Actuator already
+ * surfaces HTTP latency per endpoint at the controller level; these add the
+ * payment-flow-specific signals so dashboards split shop-checkout failures by
+ * cause and graph end-to-end duration with percentiles.
+ *
+ * <p>All names use the {@code payment.} prefix so they're isolated from the
+ * loyalty.* series in /actuator/prometheus.
+ */
+@Component
+public class PaymentMetrics {
+
+    private final MeterRegistry registry;
+    private final Timer shopCheckoutDuration;
+
+    public PaymentMetrics(MeterRegistry registry) {
+        this.registry = registry;
+        // Percentiles for the single most user-visible call in payment-service:
+        // p95 spikes here mean loyalty-service is degraded, since payment-service
+        // is otherwise just orchestration.
+        this.shopCheckoutDuration = Timer.builder("payment.shop_checkout.duration")
+                .description("End-to-end /payments/shop-checkout latency including the loyalty round-trip")
+                .publishPercentiles(0.5, 0.95, 0.99)
+                .register(registry);
+    }
+
+    public Timer shopCheckoutDuration() {
+        return shopCheckoutDuration;
+    }
+
+    /**
+     * Counter for shop-checkout outcomes. Tags so dashboards split:
+     *   - outcome={success, validation_failed, loyalty_rejected, loyalty_unavailable}
+     *   - mode={cash, points, mixed, unknown}
+     * A spike on outcome=loyalty_unavailable is a direct page-able event:
+     * loyalty-service is down and customers can't pay.
+     */
+    public void incShopCheckout(String outcome, String mode) {
+        Counter.builder("payment.shop_checkout")
+                .description("Shop checkouts handled by payment-service, by outcome and payment mode")
+                .tag("outcome", outcome)
+                .tag("mode", mode)
+                .register(registry)
+                .increment();
+    }
+}
