@@ -107,7 +107,6 @@ public class TenantContext {
     }
 
     private static boolean hasRole(Authentication authentication, String role) {
-        if (authentication.getAuthorities() == null) return false;
         return authentication.getAuthorities().stream()
                 .anyMatch(a -> role.equals(a.getAuthority()));
     }
