@@ -1,5 +1,9 @@
 package com.innbucks.userservice.service;
 
+import com.innbucks.userservice.client.OradianClient;
+import com.innbucks.userservice.client.OradianClientException;
+import com.innbucks.userservice.client.OradianCustomerRequest;
+import com.innbucks.userservice.client.OradianCustomerResponse;
 import com.innbucks.userservice.dto.*;
 import com.innbucks.userservice.entity.CustomerProfile;
 import com.innbucks.userservice.entity.Device;
@@ -31,6 +35,7 @@ public class CustomerService {
     private final PendingRegistrationRepository pendingRegistrationRepository;
     private final PasswordEncoder passwordEncoder;
     private final OtpService otpService;
+    private final OradianClient oradianClient;
 
     /**
      * Tier 1 no longer creates a User or CustomerProfile. It stashes the phone + hashed password
@@ -104,6 +109,16 @@ public class CustomerService {
         user.setLastName(request.getLastName());
         user.setEmail(request.getEmail());
         userRepository.save(user);
+
+        // Mirror the registration into Oradian middleware via the S2S endpoint.
+        // Failure throws OradianClientException, which rolls back the @Transactional
+        // saves above so local state can't advance to tier 2 without an Oradian
+        // Person+Client. GlobalExceptionHandler maps the exception to HTTP 502.
+        OradianCustomerResponse oradian = oradianClient.createCustomer(toOradianRequest(request));
+        log.info("Tier-2 mirrored to Oradian phone={} oradianClientId={} externalId={}",
+                user.getPhoneNumber(),
+                oradian == null ? null : oradian.getOradianClientId(),
+                oradian == null ? null : oradian.getOradianExternalId());
 
         return CustomerRegistrationResponseDTO.builder()
                 .userId(user.getId())
@@ -196,6 +211,34 @@ public class CustomerService {
             sb.append(last.trim());
         }
         return sb.toString();
+    }
+
+    private static OradianCustomerRequest toOradianRequest(CustomerTier2RegisterDTO request) {
+        // Oradian middleware's Gender enum only knows MALE / FEMALE; OTHER would be
+        // rejected at JSON deserialisation. Fail fast here with a readable message
+        // instead of relaying Oradian's 400.
+        if (request.getGender() == CustomerProfile.Gender.OTHER) {
+            throw new OradianClientException(
+                    "Oradian middleware does not yet support gender=OTHER. Use MALE or FEMALE.");
+        }
+        CustomerTier2RegisterDTO.Address addr = request.getAddress();
+        return OradianCustomerRequest.builder()
+                .firstName(request.getFirstName())
+                .middleName(request.getMiddleName())
+                .lastName(request.getLastName())
+                .dateOfBirth(request.getDateOfBirth())
+                .gender(request.getGender().name())
+                .msisdn(request.getMsisdn())
+                .nationalId(request.getNationalId())
+                .email(request.getEmail())
+                .address(OradianCustomerRequest.Address.builder()
+                        .street1(addr.getStreet1())
+                        .city(addr.getCity())
+                        .postCode(addr.getPostCode())
+                        .country(addr.getCountry())
+                        .build())
+                .clientCustomFields(request.getClientCustomFields())
+                .build();
     }
 
     private CustomerProfile loadProfile(String phoneNumber, int requiredCurrentTier) {

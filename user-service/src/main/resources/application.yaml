@@ -48,6 +48,15 @@ loyalty-service:
   connect-timeout-ms: ${LOYALTY_SERVICE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${LOYALTY_SERVICE_READ_TIMEOUT_MS:3000}
 
+# Oradian middleware (S2S customer create). After a tier-2 registration the
+# user-service mirrors the customer into Oradian via POST /internal/customers.
+# `internal-token` must match Oradian middleware's `innbucks.internal-api.token`.
+oradian:
+  base-url: ${ORADIAN_BASE_URL:http://localhost:8090}
+  internal-token: ${ORADIAN_INTERNAL_TOKEN:change-me-internal-token-change-me-internal-token}
+  connect-timeout-ms: ${ORADIAN_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${ORADIAN_READ_TIMEOUT_MS:10000}
+
 innbucks:
   internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
 
