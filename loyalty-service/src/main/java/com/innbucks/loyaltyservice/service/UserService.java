@@ -59,43 +59,20 @@ public class UserService {
 
     /**
      * Phone-keyed wallet entry-point: returns the existing LoyaltyUser, or
-     * creates a fresh projection when the recipient hasn't been seen here
-     * before. Used by issuance / transfer / shop-checkout flows that want to
-     * credit a phone whether or not user-service has heard of it.
+     * creates a {@link LoyaltyUser.Status#PENDING} row when the recipient hasn't
+     * registered yet. Used by issuance / transfer flows that want to credit a
+     * phone whether or not user-service has heard of it.
      *
-     * <p>Status of a newly-created row depends on what user-service knows:
-     * <ul>
-     *   <li><b>ACTIVE</b> — user-service confirms the phone resolves to a
-     *       registered customer. Skips the PENDING→ACTIVE webhook handoff
-     *       entirely, so the customer can both accrue and spend on first
-     *       contact with loyalty (the bug that motivated this change: a
-     *       customer registered before their first loyalty interaction was
-     *       getting stuck PENDING because the promotion webhook fires at
-     *       registration time, and there was no registration left to trigger
-     *       it).</li>
-     *   <li><b>PENDING</b> — user-service has no customer for this phone, OR
-     *       the lookup failed (degraded mode: we still create the projection
-     *       so accrual can land; the customer just can't spend until they
-     *       register and the promote webhook flips them).</li>
-     * </ul>
-     *
-     * <p>Spend-side gates (redemption, outgoing transfer) consult
-     * {@link #requireSpendable(LoyaltyUser)} downstream, so a PENDING user
-     * still receives points but can't spend them — unchanged.
+     * <p>Accrual works against a PENDING user (transactions, vouchers, P2P
+     * receives); redemption does not — that gate lives in the downstream
+     * services so the policy is enforced at the spend path, not at lookup.
      */
     public LoyaltyUser findOrCreatePending(UUID tenantId, String phoneNumber, UUID merchantId) {
         Optional<LoyaltyUser> existing = users.findByTenantIdAndPhoneNumber(tenantId, phoneNumber);
         if (existing.isPresent()) {
             return existing.get();
         }
-        // Probe user-service. A registered phone means the customer can spend
-        // immediately — there's no PENDING state to recover from. An empty
-        // response (unknown phone) or a lookup failure both fall through to
-        // PENDING so accrual still works even if user-service is degraded.
-        LoyaltyUser.Status status = userServiceClient.getCustomerTier(phoneNumber).isPresent()
-                ? LoyaltyUser.Status.ACTIVE
-                : LoyaltyUser.Status.PENDING;
-        return createWithWallet(tenantId, phoneNumber, merchantId, status);
+        return createWithWallet(tenantId, phoneNumber, merchantId, LoyaltyUser.Status.PENDING);
     }
 
     private LoyaltyUser createWithWallet(UUID tenantId, String phoneNumber, UUID merchantId,
