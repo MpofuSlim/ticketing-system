@@ -46,7 +46,11 @@ public class JwtUtil {
      * fresh access token.
      */
     public String generateRefreshToken(String subject) {
+        // A random jti guarantees the JWT (and therefore its SHA-256 hash) is
+        // unique even for two refresh tokens minted in the same second for
+        // the same subject — critical for the unique index on token_hash.
         return Jwts.builder()
+                .id(UUID.randomUUID().toString())
                 .subject(subject)
                 .claim("type", TOKEN_TYPE_REFRESH)
                 .issuedAt(new Date())
