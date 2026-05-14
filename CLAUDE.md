@@ -59,5 +59,16 @@ Concretely:
   Hibernate `ddl-auto=update` manages the schema. Migration files committed
   here are dormant; safe to keep in sync with the Postgres branch.
 
-When changes apply to both branches, develop on `claude/add-loyalty-service`
-first, then cherry-pick onto `claude/add-loyalty-service-h2`.
+**ALL changes MUST be pushed to BOTH `claude/add-loyalty-service` AND
+`claude/add-loyalty-service-h2`.** This is unconditional — no change is
+"Postgres-only" or "H2-only". Workflow:
+
+1. Develop and commit on `claude/add-loyalty-service` first.
+2. Push `claude/add-loyalty-service` to `origin`.
+3. Cherry-pick the commit(s) onto `claude/add-loyalty-service-h2`.
+4. Push `claude/add-loyalty-service-h2` to `origin`.
+5. Confirm both branches were pushed before reporting the task complete.
+
+If a cherry-pick conflicts (e.g. Flyway migration files vs. H2's dormant
+copies), resolve the conflict so the H2 branch keeps its `ddl-auto=update`
+behavior — do NOT skip the cherry-pick.
