@@ -32,6 +32,12 @@
              validation, and replaces the deprecated builder API used in
              0.11.x. Token wire format is unchanged — rolling deploys are safe. -->
         <jjwt.version>0.12.6</jjwt.version>
+        <!-- Logstash encoder for structured JSON logs. 8.x targets Logback 1.5
+             (shipped with Spring Boot 3.4+/4.x). When the active profile is
+             json/docker/prod, every service emits one JSON object per log line
+             with traceId pulled out of MDC as a typed field; locally the
+             default Boot pattern is kept so console output stays readable. -->
+        <logstash.encoder.version>8.0</logstash.encoder.version>
     </properties>
 
     <dependencyManagement>
@@ -89,6 +95,12 @@
                 <scope>import</scope>
             </dependency>
 
+            <dependency>
+                <groupId>net.logstash.logback</groupId>
+                <artifactId>logstash-logback-encoder</artifactId>
+                <version>${logstash.encoder.version}</version>
+            </dependency>
+
         </dependencies>
     </dependencyManagement>
 
@@ -105,6 +117,13 @@
         <dependency>
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+        <!-- Pulled in by every service so logback-spring.xml's JSON appender
+             resolves at runtime. Encoder is a no-op until a profile that uses
+             it (json/docker/prod) is active, so local dev pays no cost. -->
+        <dependency>
+            <groupId>net.logstash.logback</groupId>
+            <artifactId>logstash-logback-encoder</artifactId>
         </dependency>
         <!-- Boot 4 ships Jackson 3 (tools.jackson) by default; this module
              also registers the legacy com.fasterxml.jackson.databind.ObjectMapper
