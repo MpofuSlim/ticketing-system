@@ -2,6 +2,7 @@ package com.innbucks.seatservice.client;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.innbucks.seatservice.config.CorrelationIdPropagatingInterceptor;
 import com.innbucks.seatservice.dto.ApiResult;
 import com.innbucks.seatservice.dto.EventLookupDTO;
 import lombok.extern.slf4j.Slf4j;
@@ -36,6 +37,7 @@ public class EventServiceClient {
         this.restClient = RestClient.builder()
                 .baseUrl(baseUrl)
                 .requestFactory(buildRequestFactory(connectTimeoutMs, readTimeoutMs))
+                .requestInterceptor(new CorrelationIdPropagatingInterceptor())
                 .build();
         this.objectMapper = objectMapper;
     }

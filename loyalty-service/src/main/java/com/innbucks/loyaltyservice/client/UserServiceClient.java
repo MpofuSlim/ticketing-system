@@ -2,6 +2,7 @@ package com.innbucks.loyaltyservice.client;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.innbucks.loyaltyservice.config.CorrelationIdPropagatingInterceptor;
 import com.innbucks.loyaltyservice.dto.CustomerTierResponseDTO;
 import com.innbucks.loyaltyservice.dto.UserServiceApiResult;
 import lombok.extern.slf4j.Slf4j;
@@ -34,6 +35,7 @@ public class UserServiceClient {
         this.restClient = RestClient.builder()
                 .baseUrl(baseUrl)
                 .requestFactory(factory)
+                .requestInterceptor(new CorrelationIdPropagatingInterceptor())
                 .build();
         this.objectMapper = objectMapper;
     }

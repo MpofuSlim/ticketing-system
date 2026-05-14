@@ -1,6 +1,7 @@
 package com.innbucks.userservice.integration;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.innbucks.userservice.config.CorrelationIdPropagatingInterceptor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatusCode;
@@ -33,6 +34,7 @@ public class LoyaltyServiceClient {
         this.http = RestClient.builder()
                 .baseUrl(baseUrl)
                 .requestFactory(requestFactory)
+                .requestInterceptor(new CorrelationIdPropagatingInterceptor())
                 .build();
         this.internalToken = internalToken;
     }

@@ -2,6 +2,7 @@ package innbucks.paymentservice.client;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import innbucks.paymentservice.config.CorrelationIdPropagatingInterceptor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
@@ -42,7 +43,11 @@ public class LoyaltyServiceClient {
                 .build();
         JdkClientHttpRequestFactory rf = new JdkClientHttpRequestFactory(httpClient);
         rf.setReadTimeout(Duration.ofMillis(readMs));
-        this.restClient = RestClient.builder().baseUrl(baseUrl).requestFactory(rf).build();
+        this.restClient = RestClient.builder()
+                .baseUrl(baseUrl)
+                .requestFactory(rf)
+                .requestInterceptor(new CorrelationIdPropagatingInterceptor())
+                .build();
         this.objectMapper = objectMapper;
         this.internalToken = internalToken;
     }
