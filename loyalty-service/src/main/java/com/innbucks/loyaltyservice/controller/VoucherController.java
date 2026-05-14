@@ -624,7 +624,7 @@ public class VoucherController {
     private void requireCallerOwnsPhoneOrIsAdmin(String phoneNumber) {
         var auth = org.springframework.security.core.context.SecurityContextHolder
                 .getContext().getAuthentication();
-        if (auth != null && auth.getAuthorities() != null) {
+        if (auth != null) {
             for (var ga : auth.getAuthorities()) {
                 String role = ga.getAuthority();
                 if ("ROLE_SUPER_ADMIN".equals(role)
