@@ -345,28 +345,40 @@ public class AuthController {
     @PostMapping("/customer/register/tier2")
     @SecurityRequirements()
     @Operation(summary = "Customer registration - Tier 2",
-            description = "Tier 2: Captures fullName, idNumber, passport number, address, gender, and a base64-encoded selfie picture " +
-                    "(raw base64 or a data URL such as `data:image/png;base64,...`).")
-    @ApiResponses(@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
-            description = "Tier 2 complete.",
-            content = @Content(mediaType = "application/json",
-                    examples = @ExampleObject(value = """
-                            {
-                              "code": "200 OK",
-                              "message": "Customer tier 2 registration successful",
-                              "data": {
-                                "userId": 42,
-                                "phoneNumber": "+263771234567",
-                                "tier": 2,
-                                "verified": false,
-                                "nextStep": "Submit biometrics and device registration at /auth/customer/register/tier3"
-                              }
-                            }
-                            """))))
+            description = "Tier 2: Captures full name, date of birth, gender, national ID, email, structured " +
+                    "postal address, and an open `clientCustomFields` map. The `msisdn` field identifies the " +
+                    "Tier-1 customer to upgrade (phone supplied at /auth/customer/register).")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "Tier 2 complete.",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Customer tier 2 registration successful",
+                                      "data": {
+                                        "userId": 42,
+                                        "phoneNumber": "0712345678",
+                                        "tier": 2,
+                                        "verified": false,
+                                        "nextStep": "Submit biometrics and device registration at /auth/customer/register/tier3"
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "Validation failure or no Tier-1 customer matches the supplied `msisdn`.",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "Customer not found for the supplied phone number",
+                                      "data": null
+                                    }
+                                    """)))
+    })
     public ResponseEntity<ApiResult<CustomerRegistrationResponseDTO>> customerTier2(
-            @RequestParam("phoneNumber") String phoneNumber,
             @Valid @RequestBody CustomerTier2RegisterDTO request) {
-        CustomerRegistrationResponseDTO response = customerService.registerTier2(phoneNumber, request);
+        CustomerRegistrationResponseDTO response = customerService.registerTier2(request);
         return ResponseEntity.ok(ApiResult.ok("Customer tier 2 registration successful", response));
     }
 

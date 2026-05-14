@@ -68,8 +68,8 @@ public class CustomerService {
     }
 
     @Transactional
-    public CustomerRegistrationResponseDTO registerTier2(String phoneNumber, CustomerTier2RegisterDTO request) {
-        CustomerProfile profile = loadProfile(phoneNumber, 1);
+    public CustomerRegistrationResponseDTO registerTier2(CustomerTier2RegisterDTO request) {
+        CustomerProfile profile = loadProfile(request.getMsisdn(), 1);
 
         // Compose a canonical fullName from the three structured fields. The
         // profile still keeps it as a denormalised column so ID-matching and
@@ -77,11 +77,21 @@ public class CustomerService {
         String fullName = composeFullName(request.getFirstName(),
                 request.getMiddleName(), request.getLastName());
         profile.setFullName(fullName);
-        profile.setIdNumber(request.getIdNumber());
-        profile.setPassportNumber(request.getPassportNumber());
-        profile.setAddress(request.getAddress());
+        profile.setNationalId(request.getNationalId());
+        profile.setDateOfBirth(request.getDateOfBirth());
         profile.setGender(request.getGender());
-        profile.setSelfiePicture(request.getSelfiePicture());
+
+        CustomerTier2RegisterDTO.Address addr = request.getAddress();
+        profile.setAddress(com.innbucks.userservice.entity.CustomerProfileAddress.builder()
+                .street1(addr.getStreet1())
+                .city(addr.getCity())
+                .postCode(addr.getPostCode())
+                .country(addr.getCountry())
+                .build());
+
+        profile.setClientCustomFields(request.getClientCustomFields() == null
+                ? new java.util.LinkedHashMap<>()
+                : new java.util.LinkedHashMap<>(request.getClientCustomFields()));
         profile.setRegistrationTier(2);
         customerProfileRepository.save(profile);
 
@@ -92,6 +102,7 @@ public class CustomerService {
         user.setFirstName(request.getFirstName());
         user.setMiddleName(request.getMiddleName());
         user.setLastName(request.getLastName());
+        user.setEmail(request.getEmail());
         userRepository.save(user);
 
         return CustomerRegistrationResponseDTO.builder()

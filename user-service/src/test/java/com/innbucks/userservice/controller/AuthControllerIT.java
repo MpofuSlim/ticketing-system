@@ -167,6 +167,82 @@ class AuthControllerIT {
                 .andExpect(jsonPath("$.data.verified").value(false));
     }
 
+    @Test
+    void customerTier2_upgradesUsingMsisdnAndStructuredAddress() throws Exception {
+        String phone = "0712345678";
+
+        // Tier 1: stash pending registration + dispatch OTP.
+        Map<String, Object> tier1 = new HashMap<>();
+        tier1.put("phoneNumber", phone);
+        tier1.put("password", "password123");
+        mockMvc.perform(post("/auth/customer/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(tier1)))
+                .andExpect(status().isCreated());
+
+        // Verify OTP (dev fixed code = 000000) — materialises the User + Tier-1 profile.
+        Map<String, String> verify = Map.of("phoneNumber", phone, "code", "000000");
+        mockMvc.perform(post("/auth/otp/verify")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(verify)))
+                .andExpect(status().isOk());
+
+        // Tier 2: send the exact shape the frontend asked for.
+        String tier2Body = """
+                {
+                  "firstName": "Sarah",
+                  "middleName": "Tiffany",
+                  "lastName": "Moyo",
+                  "dateOfBirth": "2001-01-01",
+                  "gender": "FEMALE",
+                  "msisdn": "%s",
+                  "nationalId": "5337888V72",
+                  "email": "sarah@example.com",
+                  "address": {
+                    "street1": "P.O. Box 12345",
+                    "city": "Nairobi",
+                    "postCode": "00100",
+                    "country": "Kenya"
+                  },
+                  "clientCustomFields": {
+                    "referralCode": "FRIEND-42",
+                    "campaign": "spring-2026"
+                  }
+                }
+                """.formatted(phone);
+
+        mockMvc.perform(post("/auth/customer/register/tier2")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(tier2Body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value("200 OK"))
+                .andExpect(jsonPath("$.data.tier").value(2))
+                .andExpect(jsonPath("$.data.phoneNumber").value(phone))
+                .andExpect(jsonPath("$.data.verified").value(false));
+    }
+
+    @Test
+    void customerTier2_returns400WhenMsisdnDoesNotMatchAnyTier1() throws Exception {
+        String tier2Body = """
+                {
+                  "firstName": "Sarah",
+                  "lastName": "Moyo",
+                  "dateOfBirth": "2001-01-01",
+                  "gender": "FEMALE",
+                  "msisdn": "0700000000",
+                  "nationalId": "X",
+                  "email": "x@example.com",
+                  "address": {
+                    "street1": "a", "city": "b", "postCode": "c", "country": "d"
+                  }
+                }
+                """;
+        mockMvc.perform(post("/auth/customer/register/tier2")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(tier2Body))
+                .andExpect(status().isBadRequest());
+    }
+
     static class RegisterPayload {
         public String firstName;
         public String middleName;
