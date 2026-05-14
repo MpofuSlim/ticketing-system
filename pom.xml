@@ -38,6 +38,11 @@
              with traceId pulled out of MDC as a typed field; locally the
              default Boot pattern is kept so console output stays readable. -->
         <logstash.encoder.version>8.0</logstash.encoder.version>
+        <!-- Sentry SDK 8.x supports Spring Boot 3+ / Jakarta. Wires into the
+             OTel tracer so issues deep-link to Tempo/Jaeger traces, and the
+             logback appender auto-promotes ERROR-level log events to Sentry
+             with the active MDC (traceId/spanId/correlationId) attached. -->
+        <sentry.version>8.41.0</sentry.version>
     </properties>
 
     <dependencyManagement>
@@ -101,6 +106,14 @@
                 <version>${logstash.encoder.version}</version>
             </dependency>
 
+            <dependency>
+                <groupId>io.sentry</groupId>
+                <artifactId>sentry-bom</artifactId>
+                <version>${sentry.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
         </dependencies>
     </dependencyManagement>
 
@@ -138,6 +151,12 @@
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-exporter-otlp</artifactId>
         </dependency>
+        <!-- Sentry: lives in dependencyManagement only (parent imports the
+             sentry-bom). Each servlet service opts in by declaring the two
+             artifacts in its own pom; api-gateway (reactive / WebFlux) skips
+             them — Sentry 8.x's SentryPerformanceWebClientConfiguration
+             references Boot 3's WebClientAutoConfiguration which was renamed
+             in Boot 4, so wiring it into the gateway crashes the context. -->
         <!-- Boot 4 ships Jackson 3 (tools.jackson) by default; this module
              also registers the legacy com.fasterxml.jackson.databind.ObjectMapper
              bean expected by jjwt-jackson and existing test code. -->

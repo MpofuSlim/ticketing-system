@@ -137,6 +137,7 @@ management:
     tracing:
       endpoint: ${OTLP_ENDPOINT:http://localhost:4318/v1/traces}
 
+
 cors:
   # Comma-separated list of allowed origin patterns. Default is permissive ('*')
   # so dev/Swagger/ngrok/any FE origin works out of the box (matches the gateway
