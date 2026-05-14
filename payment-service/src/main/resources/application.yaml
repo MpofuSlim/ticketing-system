@@ -12,6 +12,18 @@ booking-service:
   connect-timeout-ms: ${BOOKING_SERVICE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${BOOKING_SERVICE_READ_TIMEOUT_MS:5000}
 
+# loyalty-service is called by POST /payments/shop-checkout to run the earn
+# (cash → PURCHASE) and/or burn (points → REDEMPTION) legs of a shop payment.
+# Direct pod-to-pod (gateway blocks /loyalty/internal/**); the shared secret
+# below must match loyalty-service's innbucks.internal-api-token.
+loyalty-service:
+  base-url: ${LOYALTY_SERVICE_URL:http://localhost:8086}
+  connect-timeout-ms: ${LOYALTY_SERVICE_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${LOYALTY_SERVICE_READ_TIMEOUT_MS:5000}
+
+innbucks:
+  internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
+
 springdoc:
   swagger-ui:
     path: /swagger-ui/index.html

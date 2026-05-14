@@ -2,9 +2,14 @@ package innbucks.paymentservice.controller;
 
 import innbucks.paymentservice.client.BookingServiceClient;
 import innbucks.paymentservice.client.BookingServiceClient.BookingConfirmationException;
+import innbucks.paymentservice.client.LoyaltyServiceClient;
+import innbucks.paymentservice.client.LoyaltyServiceClient.LoyaltyCheckoutException;
 import innbucks.paymentservice.dto.ApiResult;
+import innbucks.paymentservice.dto.PaymentMethod;
 import innbucks.paymentservice.dto.PaymentRequest;
 import innbucks.paymentservice.dto.PaymentResponse;
+import innbucks.paymentservice.dto.ShopCheckoutRequest;
+import innbucks.paymentservice.dto.ShopCheckoutResponse;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
@@ -40,6 +45,7 @@ import java.util.UUID;
 public class PaymentController {
 
     private final BookingServiceClient bookingServiceClient;
+    private final LoyaltyServiceClient loyaltyServiceClient;
 
     @PostMapping
     @Operation(
@@ -118,6 +124,152 @@ public class PaymentController {
                 response.getTransactionId(), response.getBookingId(),
                 response.getConfirmationNumber(), response.getAmountPaid());
         return ResponseEntity.ok(ApiResult.ok("Payment processed successfully", response));
+    }
+
+    @PostMapping("/shop-checkout")
+    @Operation(
+            summary = "Pay at a shop (cash / points / mixed) — dummy",
+            description = "Public endpoint. No real money changes hands; the call delegates straight to " +
+                    "loyalty-service's internal shop-checkout. " +
+                    "The cash portion earns points per the merchant's loyalty rules (the existing earn rule " +
+                    "+ any active campaign multiplier). The points portion is burned from the customer's " +
+                    "main wallet. Both legs commit atomically inside loyalty-service. " +
+                    "Set the amounts according to `paymentMethod`: CASH → only `cashAmount`; POINTS → only " +
+                    "`pointsAmount`; CASH_AND_POINTS → both."
+    )
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Checkout complete",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ShopCheckoutResponse.class),
+                            examples = @ExampleObject(name = "Cash + points", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Shop checkout processed successfully",
+                                      "data": {
+                                        "transactionId": "f0e1d2c3-4567-890a-bcde-f01234567890",
+                                        "shopId": "5b1c2d3e-4567-890a-bcde-f01234567890",
+                                        "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                        "msisdn": "0712345678",
+                                        "paymentMethod": "CASH_AND_POINTS",
+                                        "cashAmount": 10.00,
+                                        "pointsRedeemed": 200.0000,
+                                        "pointsEarned": 12.5000,
+                                        "walletBalanceAfter": 1812.5000,
+                                        "processedAt": "2026-05-14T10:30:00"
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "Validation failure, amounts inconsistent with paymentMethod, or " +
+                            "loyalty-service rejected the call (inactive shop/merchant, insufficient balance, etc.)",
+                    content = @Content(mediaType = "application/json",
+                            examples = {
+                                    @ExampleObject(name = "Amounts inconsistent", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "paymentMethod=CASH requires cashAmount > 0 and pointsAmount must be null/zero",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Loyalty rejection", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "merchant is not active; no loyalty operations will run",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "Shop not found in loyalty-service"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503",
+                    description = "loyalty-service unreachable")
+    })
+    public ResponseEntity<ApiResult<ShopCheckoutResponse>> shopCheckout(
+            @Valid @RequestBody ShopCheckoutRequest request
+    ) {
+        log.info("POST /payments/shop-checkout shopId={} msisdn={} method={} cash={} points={}",
+                request.getShopId(), request.getMsisdn(), request.getPaymentMethod(),
+                request.getCashAmount(), request.getPointsAmount());
+
+        try {
+            validateAmounts(request);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(
+                    ApiResult.<ShopCheckoutResponse>builder()
+                            .code("400 BAD_REQUEST")
+                            .message(e.getMessage())
+                            .data(null)
+                            .build());
+        }
+
+        LoyaltyServiceClient.CheckoutResult result;
+        try {
+            result = loyaltyServiceClient.shopCheckout(
+                    request.getShopId(), request.getMsisdn(),
+                    request.getCashAmount(), request.getPointsAmount(),
+                    request.getReference());
+        } catch (LoyaltyCheckoutException e) {
+            HttpStatus status = HttpStatus.resolve(e.getStatusCode());
+            if (status == null) status = HttpStatus.BAD_GATEWAY;
+            log.warn("Shop checkout failed shopId={} status={} reason={}",
+                    request.getShopId(), status.value(), e.getMessage());
+            return ResponseEntity.status(status).body(
+                    ApiResult.<ShopCheckoutResponse>builder()
+                            .code(status.value() + " " + status.name())
+                            .message(e.getMessage())
+                            .data(null)
+                            .build());
+        }
+
+        ShopCheckoutResponse response = ShopCheckoutResponse.builder()
+                .transactionId(UUID.randomUUID())
+                .shopId(result.shopId())
+                .merchantId(result.merchantId())
+                .msisdn(request.getMsisdn())
+                .paymentMethod(request.getPaymentMethod())
+                .cashAmount(result.cashAmount())
+                .pointsRedeemed(result.pointsRedeemed())
+                .pointsEarned(result.pointsEarned())
+                .walletBalanceAfter(result.walletBalanceAfter())
+                .processedAt(LocalDateTime.now())
+                .build();
+
+        log.info("Shop checkout processed transactionId={} shopId={} pointsEarned={} pointsRedeemed={} balance={}",
+                response.getTransactionId(), response.getShopId(),
+                response.getPointsEarned(), response.getPointsRedeemed(),
+                response.getWalletBalanceAfter());
+        return ResponseEntity.ok(ApiResult.ok("Shop checkout processed successfully", response));
+    }
+
+    /**
+     * Cross-field validation between {@code paymentMethod} and the two amount
+     * fields — bean validation can't express this on its own.
+     */
+    private static void validateAmounts(ShopCheckoutRequest r) {
+        boolean cash = r.getCashAmount() != null && r.getCashAmount().signum() > 0;
+        boolean points = r.getPointsAmount() != null && r.getPointsAmount().signum() > 0;
+        switch (r.getPaymentMethod()) {
+            case CASH -> {
+                if (!cash || points) {
+                    throw new IllegalArgumentException(
+                            "paymentMethod=CASH requires cashAmount > 0 and pointsAmount must be null/zero");
+                }
+            }
+            case POINTS -> {
+                if (!points || cash) {
+                    throw new IllegalArgumentException(
+                            "paymentMethod=POINTS requires pointsAmount > 0 and cashAmount must be null/zero");
+                }
+            }
+            case CASH_AND_POINTS -> {
+                if (!cash || !points) {
+                    throw new IllegalArgumentException(
+                            "paymentMethod=CASH_AND_POINTS requires both cashAmount > 0 and pointsAmount > 0");
+                }
+            }
+        }
     }
 
     private static BigDecimal asBigDecimal(Object value) {

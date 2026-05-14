@@ -125,4 +125,37 @@ class InternalMerchantLookupControllerSecurityTest extends ControllerSecurityTes
                         .content("{\"phoneNumber\":\"+263777777777\"}"))
                 .andExpect(status().isOk());
     }
+
+    // ------------------------------------------------------------------
+    // shop-checkout: same shared-secret gate; unknown shop returns 404.
+    // ------------------------------------------------------------------
+
+    @Test
+    void shop_checkout_without_internal_token_returns_401() throws Exception {
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/loyalty/internal/shop-checkout")
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"shopId\":\"" + UUID.randomUUID() + "\",\"phoneNumber\":\"0712345678\",\"cashAmount\":10.00}"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void shop_checkout_with_correct_token_and_unknown_shop_returns_404() throws Exception {
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/loyalty/internal/shop-checkout")
+                        .header("X-Internal-Token", internalToken)
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"shopId\":\"" + UUID.randomUUID() + "\",\"phoneNumber\":\"0712345678\",\"cashAmount\":10.00}"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void shop_checkout_with_no_amounts_returns_400() throws Exception {
+        mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders
+                        .post("/loyalty/internal/shop-checkout")
+                        .header("X-Internal-Token", internalToken)
+                        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+                        .content("{\"shopId\":\"" + UUID.randomUUID() + "\",\"phoneNumber\":\"0712345678\"}"))
+                .andExpect(status().isBadRequest());
+    }
 }
