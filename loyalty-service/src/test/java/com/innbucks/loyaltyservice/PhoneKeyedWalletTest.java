@@ -66,13 +66,6 @@ class PhoneKeyedWalletTest {
 
     @BeforeEach
     void stubUserServiceLookup() {
-        // Default: every phone resolves to a registered customer. findOrEnrol
-        // needs this (it 404s if user-service has no record) and findOrCreatePending
-        // now uses it too — a registered phone seeds the LoyaltyUser as ACTIVE
-        // so the customer can spend on first contact instead of waiting for a
-        // promotion webhook that won't fire.
-        // Specific tests that need to exercise the PENDING branch stub their
-        // own phone to Optional.empty() inside the test body.
         when(userServiceClient.getCustomerTier(anyString()))
                 .thenAnswer(inv -> Optional.of(
                         new CustomerTierResponseDTO(inv.getArgument(0), 1, 2)));
@@ -96,10 +89,6 @@ class PhoneKeyedWalletTest {
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
 
         String phone = "+263770099900";
-        // This test exercises the PENDING flow: the customer's first contact
-        // with loyalty happens BEFORE they register with user-service. Override
-        // the default stub so user-service reports the phone as unknown.
-        when(userServiceClient.getCustomerTier(phone)).thenReturn(Optional.empty());
 
         // 1) Sender posts a $100 PURCHASE to a phone that's never been seen.
         var txn = transactionService.post(t.getId(), mr.id(),
