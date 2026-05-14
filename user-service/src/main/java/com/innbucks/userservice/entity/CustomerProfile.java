@@ -1,9 +1,13 @@
 package com.innbucks.userservice.entity;
 
+import com.innbucks.userservice.entity.converter.JsonStringMapConverter;
 import jakarta.persistence.*;
 import lombok.*;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 @Entity
 @Table(name = "customer_profiles")
@@ -26,16 +30,23 @@ public class CustomerProfile {
     private int registrationTier = 1;
 
     private String fullName;
-    private String idNumber;
-    private String passportNumber;
-    private String address;
+
+    @Column(name = "national_id")
+    private String nationalId;
+
+    @Embedded
+    private CustomerProfileAddress address;
+
+    @Column(name = "date_of_birth")
+    private LocalDate dateOfBirth;
 
     @Enumerated(EnumType.STRING)
     private Gender gender;
 
-    @Lob
-    @Column(columnDefinition = "TEXT")
-    private String selfiePicture;
+    @Convert(converter = JsonStringMapConverter.class)
+    @Column(name = "client_custom_fields", columnDefinition = "TEXT")
+    @Builder.Default
+    private Map<String, String> clientCustomFields = new LinkedHashMap<>();
 
     private String biometricsReference;
 

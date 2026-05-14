@@ -2,49 +2,82 @@ package com.innbucks.userservice.dto;
 
 import com.innbucks.userservice.entity.CustomerProfile;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Past;
 import lombok.Data;
+
+import java.time.LocalDate;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 @Data
 @Schema(name = "CustomerTier2RegisterRequest",
-        description = "Identity details to upgrade an existing Tier-1 account to Tier 2.")
+        description = "Identity details to upgrade an existing Tier-1 account to Tier 2. " +
+                "The `msisdn` field identifies the Tier-1 record to upgrade.")
 public class CustomerTier2RegisterDTO {
 
-    @Schema(example = "Sedrick", description = "First (given) name as it appears on the national ID.")
+    @Schema(example = "Sarah")
     @NotBlank(message = "First name is required")
     private String firstName;
 
-    @Schema(example = "Takunda", nullable = true, description = "Middle name(s) — optional.")
+    @Schema(example = "Tiffany", nullable = true)
     private String middleName;
 
-    @Schema(example = "Elvis", description = "Last (family) name as it appears on the national ID.")
+    @Schema(example = "Moyo")
     @NotBlank(message = "Last name is required")
     private String lastName;
 
-    @Schema(example = "63-123456A78", description = "National ID number.")
-    @NotBlank(message = "ID number is required")
-    private String idNumber;
-
-    @Schema(example = "ZW1234567", nullable = true, description = "Passport number — required if no national ID.")
-    private String passportNumber;
-
-    @Schema(example = "12 Samora Machel Ave, Harare")
-    @NotBlank(message = "Address is required")
-    private String address;
+    @Schema(example = "2001-01-01", description = "Date of birth (ISO-8601, must be in the past).")
+    @NotNull(message = "Date of birth is required")
+    @Past(message = "Date of birth must be in the past")
+    private LocalDate dateOfBirth;
 
     @Schema(example = "FEMALE", allowableValues = {"MALE", "FEMALE", "OTHER"})
     @NotNull(message = "Gender is required")
     private CustomerProfile.Gender gender;
 
-    @Schema(example = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAA...",
-            description = "Base64-encoded selfie image (JPEG or PNG). " +
-                    "May include a data-URL prefix (e.g. `data:image/jpeg;base64,`).")
-    @NotBlank(message = "Selfie picture is required")
-    @Pattern(
-            regexp = "^(data:image/[a-zA-Z+.-]+;base64,)?[A-Za-z0-9+/]+={0,2}$",
-            message = "Selfie picture must be a base64-encoded image (optionally prefixed with a data URL)"
-    )
-    private String selfiePicture;
+    @Schema(example = "0712345678", description = "Phone number used at Tier-1 registration; identifies the customer to upgrade.")
+    @NotBlank(message = "msisdn is required")
+    private String msisdn;
+
+    @Schema(example = "5337888V72", description = "National ID number.")
+    @NotBlank(message = "National ID is required")
+    private String nationalId;
+
+    @Schema(example = "sarah@example.com")
+    @NotBlank(message = "Email is required")
+    @Email(message = "Email must be a valid email address")
+    private String email;
+
+    @Valid
+    @NotNull(message = "Address is required")
+    private Address address;
+
+    @Schema(description = "Open key/value bag for caller-supplied extras. Persisted as JSON on the customer profile.",
+            nullable = true)
+    private Map<String, String> clientCustomFields = new LinkedHashMap<>();
+
+    @Data
+    @Schema(name = "CustomerAddress",
+            description = "Postal/street address. All fields required.")
+    public static class Address {
+        @Schema(example = "P.O. Box 12345")
+        @NotBlank(message = "Street is required")
+        private String street1;
+
+        @Schema(example = "Nairobi")
+        @NotBlank(message = "City is required")
+        private String city;
+
+        @Schema(example = "00100")
+        @NotBlank(message = "Post code is required")
+        private String postCode;
+
+        @Schema(example = "Kenya")
+        @NotBlank(message = "Country is required")
+        private String country;
+    }
 }
