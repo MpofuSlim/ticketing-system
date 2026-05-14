@@ -5,6 +5,7 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -60,6 +61,20 @@ public class Voucher {
     @Enumerated(EnumType.STRING)
     @Column(name = "delivery_channel", length = 20)
     private DeliveryChannel deliveryChannel;
+
+    // Snapshot of the template's value at issuance time. Frozen here so a
+    // merchant editing the template later (e.g. $5 → $10 discount) can't
+    // retroactively change the worth of already-issued vouchers — like an
+    // invoice line that captures the price at the moment of sale.
+    @Enumerated(EnumType.STRING)
+    @Column(name = "value_type", length = 20)
+    private VoucherTemplate.ValueType valueType;
+
+    @Column(name = "face_value", precision = 19, scale = 4)
+    private BigDecimal value;
+
+    @Column(name = "currency", length = 8)
+    private String currency;
 
     @Column(name = "uses_remaining", nullable = false)
     private int usesRemaining = 1;
