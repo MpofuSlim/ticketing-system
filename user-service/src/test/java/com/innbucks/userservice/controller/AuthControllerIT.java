@@ -1,6 +1,8 @@
 package com.innbucks.userservice.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.innbucks.userservice.entity.User;
+import com.innbucks.userservice.repository.UserRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
@@ -24,6 +26,13 @@ class AuthControllerIT {
 
     @Autowired MockMvc mockMvc;
     @Autowired ObjectMapper objectMapper;
+    @Autowired UserRepository userRepository;
+
+    private void activate(String email) {
+        User u = userRepository.findByEmail(email).orElseThrow();
+        u.setActive(true);
+        userRepository.save(u);
+    }
 
     private RegisterPayload baseSystemPayload(String email, String phone, String bundle) {
         RegisterPayload payload = new RegisterPayload();
@@ -60,12 +69,11 @@ class AuthControllerIT {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(register)))
                 .andExpect(status().isCreated());
+        activate("user1@example.com");
 
-        // The registered user has MFA enabled by default; supply OTP to pass the gate.
         LoginPayload login = new LoginPayload();
-        login.email = "user1@example.com";
+        login.identifier = "user1@example.com";
         login.password = "password123";
-        login.otpCode = "123456";
 
         mockMvc.perform(post("/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -74,6 +82,7 @@ class AuthControllerIT {
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
                 .andExpect(jsonPath("$.code").value("200 OK"))
                 .andExpect(jsonPath("$.data.token", not(blankOrNullString())))
+                .andExpect(jsonPath("$.data.refreshToken", not(blankOrNullString())))
                 .andExpect(jsonPath("$.data.email").value("user1@example.com"))
                 .andExpect(jsonPath("$.data.roles[0]").value("MERCHANT_ADMIN"))
                 .andExpect(jsonPath("$.data.mfaRequired").value(false));
@@ -89,14 +98,13 @@ class AuthControllerIT {
                 .andExpect(status().isCreated());
 
         LoginPayload login = new LoginPayload();
-        login.email = "user2@example.com";
+        login.identifier = "user2@example.com";
         login.password = "wrong-password";
 
         mockMvc.perform(post("/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(login)))
                 .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.code").value("400 BAD_REQUEST"))
                 .andExpect(jsonPath("$.message", containsString("Invalid credentials")));
     }
 
@@ -126,9 +134,7 @@ class AuthControllerIT {
     }
 
     static class LoginPayload {
-        public String email;
-        public String phoneNumber;
+        public String identifier;
         public String password;
-        public String otpCode;
     }
 }

@@ -27,8 +27,40 @@ public class JwtUtil {
     @Value("${jwt.expiration}")
     private long expiration;
 
+    @Value("${jwt.refresh-expiration}")
+    private long refreshExpiration;
+
+    /** Token type marker. Access tokens omit the claim (treated as access);
+     *  refresh tokens carry {@code type=refresh} and are accepted only by
+     *  {@code /auth/refresh}. */
+    public static final String TOKEN_TYPE_REFRESH = "refresh";
+
     private SecretKey getSigningKey() {
         return Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * Mints a refresh token. Carries only the subject (email or phone) and a
+     * {@code type=refresh} claim — no roles/tier/etc., because those are
+     * re-read from the database when the refresh token is exchanged for a
+     * fresh access token.
+     */
+    public String generateRefreshToken(String subject) {
+        return Jwts.builder()
+                .subject(subject)
+                .claim("type", TOKEN_TYPE_REFRESH)
+                .issuedAt(new Date())
+                .expiration(new Date(System.currentTimeMillis() + refreshExpiration))
+                .signWith(getSigningKey(), Jwts.SIG.HS256)
+                .compact();
+    }
+
+    public String extractType(String token) {
+        return getClaims(token).get("type", String.class);
+    }
+
+    public boolean isRefreshToken(String token) {
+        return TOKEN_TYPE_REFRESH.equals(extractType(token));
     }
 
     public String generateToken(String email, Collection<String> roles, Collection<String> defaultServices,

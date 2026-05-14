@@ -208,9 +208,11 @@ public class AuthService {
         String newToken = jwtUtil.generateToken(subject, roleNames, new ArrayList<>(microservices),
                 tier, verified, user.getPhoneNumber(), loyaltyMerchantId, loyaltyShopId,
                 firstName, middleName, lastName);
+        String refreshToken = jwtUtil.generateRefreshToken(subject);
 
         return AuthResponseDTO.builder()
                 .token(newToken)
+                .refreshToken(refreshToken)
                 .email(user.getEmail())
                 .roles(roleNames)
                 .defaultServices(bundles)
