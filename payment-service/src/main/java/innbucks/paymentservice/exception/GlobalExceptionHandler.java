@@ -1,0 +1,81 @@
+package innbucks.paymentservice.exception;
+
+import innbucks.paymentservice.dto.ApiResult;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+/**
+ * Funnels every exception escaping a controller into the project's standard
+ * {@link ApiResult} envelope so clients see one consistent shape across the
+ * whole service. Without this, Spring Boot's fallback {@code /error} handler
+ * answers with its own JSON ({@code timestamp/status/error/trace/message})
+ * AND — when devtools is on the classpath — ships the full stack trace to the
+ * client. That's both an inconsistent contract and a security leak in prod.
+ *
+ * <p>Stack traces are logged here at the right severity; never returned in
+ * the response body. {@code server.error.include-stacktrace=never} (set in
+ * application.yaml) is the defence-in-depth backstop.
+ */
+@RestControllerAdvice
+@Slf4j
+public class GlobalExceptionHandler {
+
+    /**
+     * @Valid binding failures on @RequestBody. Surfaces field-level messages
+     * in {@code data.fields} so clients can highlight the specific bad input
+     * without parsing a free-form string.
+     */
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<ApiResult<Map<String, String>>> handle(MethodArgumentNotValidException ex) {
+        Map<String, String> fields = new LinkedHashMap<>();
+        for (var f : ex.getBindingResult().getFieldErrors()) {
+            // Keep the first message per field — bean validation can stack
+            // multiple violations per field (e.g. @NotNull + @PositiveOrZero)
+            // and showing all of them tends to confuse rather than help.
+            fields.putIfAbsent(f.getField(),
+                    f.getDefaultMessage() == null ? "invalid" : f.getDefaultMessage());
+        }
+        return ResponseEntity.badRequest().body(ApiResult.<Map<String, String>>builder()
+                .code("400 BAD_REQUEST")
+                .message("validation failed")
+                .data(fields)
+                .build());
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ApiResult<Void>> handle(IllegalArgumentException ex) {
+        return ResponseEntity.badRequest().body(ApiResult.<Void>builder()
+                .code("400 BAD_REQUEST")
+                .message(ex.getMessage() == null ? "bad request" : ex.getMessage())
+                .data(null)
+                .build());
+    }
+
+    // No AccessDenied / Authentication handlers here: payment-service runs
+    // unauthenticated (open dummy endpoints), so spring-security isn't on
+    // the classpath and those exceptions can never be thrown. If auth lands
+    // here later, add them at that point — copy the shape from
+    // loyalty-service's GlobalExceptionHandler.
+
+    /**
+     * Last-resort catch-all. Logs the full exception so on-call has the trace
+     * + correlationId in MDC, but returns a generic body — clients don't get
+     * to see our internal package names, frame addresses, or library versions.
+     */
+    @ExceptionHandler(Exception.class)
+    public ResponseEntity<ApiResult<Void>> handle(Exception ex) {
+        log.error("Unhandled exception bubbled to GlobalExceptionHandler", ex);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(ApiResult.<Void>builder()
+                .code("500 INTERNAL_SERVER_ERROR")
+                .message("internal error")
+                .data(null)
+                .build());
+    }
+}
