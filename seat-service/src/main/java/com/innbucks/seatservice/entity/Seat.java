@@ -38,6 +38,12 @@ public class Seat {
     @Column(nullable = false)
     private SeatStatus status;
 
+    // When the current LOCKED hold expires. Set whenever status transitions
+    // to LOCKED; cleared on confirm/release. Authoritative — SeatLockReaper
+    // sweeps rows where this is in the past without trusting Redis.
+    @Column(name = "lock_expires_at")
+    private LocalDateTime lockExpiresAt;
+
     @Version
     private Long version;
 
@@ -53,7 +59,7 @@ public class Seat {
 
     public enum SeatStatus {
         AVAILABLE,   // free to book
-        LOCKED,      // temporarily held — in-memory TTL controls this
+        LOCKED,      // temporarily held — lockExpiresAt is the TTL
         BOOKED       // permanently reserved after payment
     }
 }

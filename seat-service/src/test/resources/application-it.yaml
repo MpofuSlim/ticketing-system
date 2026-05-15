@@ -26,6 +26,8 @@ spring:
 app:
   lock:
     store: memory
+  seat-lock-reaper:
+    enabled: false
 
 jwt:
   secret: it-jwt-secret-it-jwt-secret-it-jwt-secret-it-jwt-secret
