@@ -542,6 +542,62 @@ public class AuthController {
         return ResponseEntity.ok(ApiResult.ok("Deposits retrieved", deposits));
     }
 
+    @GetMapping("/customer/send-money/details/{customerPhoneNumber}")
+    @SecurityRequirements()
+    @Operation(summary = "Get a customer's send-money details by phone",
+            description = """
+                    Returns the recipient customer's deposit-account identifiers
+                    (account ID, product, currency, status, joint/main flags) so
+                    a sender can pick which account to send money to.
+
+                    Uses the same upstream as /auth/customer/deposits (Oradian
+                    middleware's /internal/customers/{msisdn}/deposits, backed by
+                    instafin.LookupClient). The response strips balance,
+                    subscribed, and lifecycle-date fields so a sender doesn't
+                    see the recipient's private balance or account history.
+
+                    Phone comes from the path — the caller is expected to have
+                    already verified the recipient's identity (e.g. via the
+                    SuperApp's contact picker).
+                    """)
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "Customer details retrieved (empty array if Oradian has none)",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Send-money details", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Customer Details retrieved",
+                                      "data": [
+                                        {
+                                          "internalID": "",
+                                          "ID": "A8347323",
+                                          "externalAccountNumber": "",
+                                          "clientInternalID": "",
+                                          "productID": "fixed_deposit_12",
+                                          "productName": "Fixed Deposit 12 Months",
+                                          "currencyCode": "",
+                                          "status": "Active",
+                                          "isMainAccount": "true",
+                                          "isMessagingFeeAccount": "",
+                                          "isJointAccount": ""
+                                        }
+                                      ]
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "Phone doesn't resolve to a customer"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502",
+                    description = "Oradian middleware unreachable or upstream Oradian failed")
+    })
+    public ResponseEntity<ApiResult<List<CustomerSendMoneyDetail>>> getCustomerSendMoneyDetails(
+            @PathVariable String customerPhoneNumber) {
+        log.info("GET /auth/customer/send-money/details phoneNumber={}", customerPhoneNumber);
+        List<CustomerSendMoneyDetail> details =
+                customerService.getSendMoneyDetailsForCustomer(customerPhoneNumber);
+        return ResponseEntity.ok(ApiResult.ok("Customer Details retrieved", details));
+    }
+
     @PostMapping("/otp/request")
     @SecurityRequirements()
     @Operation(summary = "Request (or re-send) an OTP",

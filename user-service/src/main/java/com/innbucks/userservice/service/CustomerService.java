@@ -234,6 +234,41 @@ public class CustomerService {
         return oradianClient.getDeposits(phoneNumber);
     }
 
+    /**
+     * Send-money projection: same upstream Oradian call as the deposits
+     * lookup, but each row is reduced to identifying fields only — balance,
+     * subscribed, and lifecycle dates are dropped. Use case: a sender
+     * looking up a recipient by phone needs to pick the right account, not
+     * see the recipient's private balance or account history.
+     */
+    @Transactional(readOnly = true)
+    public List<CustomerSendMoneyDetail> getSendMoneyDetailsForCustomer(String phoneNumber) {
+        User user = userRepository.findByPhoneNumber(phoneNumber)
+                .orElseThrow(() -> new RuntimeException("Customer not found for phone " + phoneNumber));
+        if (!user.hasRole(User.Role.CUSTOMER)) {
+            throw new RuntimeException("User is not a customer");
+        }
+        return oradianClient.getDeposits(phoneNumber).stream()
+                .map(CustomerService::toSendMoneyDetail)
+                .toList();
+    }
+
+    private static CustomerSendMoneyDetail toSendMoneyDetail(DepositAccount d) {
+        return CustomerSendMoneyDetail.builder()
+                .internalID(d.getInternalID())
+                .ID(d.getID())
+                .externalAccountNumber(d.getExternalAccountNumber())
+                .clientInternalID(d.getClientInternalID())
+                .productID(d.getProductID())
+                .productName(d.getProductName())
+                .currencyCode(d.getCurrencyCode())
+                .status(d.getStatus())
+                .isMainAccount(d.getIsMainAccount())
+                .isMessagingFeeAccount(d.getIsMessagingFeeAccount())
+                .isJointAccount(d.getIsJointAccount())
+                .build();
+    }
+
     /** Joins first / middle / last into a single string, skipping any blanks. */
     private static String composeFullName(String first, String middle, String last) {
         StringBuilder sb = new StringBuilder();
