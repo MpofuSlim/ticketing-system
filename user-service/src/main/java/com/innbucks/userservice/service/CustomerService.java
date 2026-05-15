@@ -115,10 +115,27 @@ public class CustomerService {
         // saves above so local state can't advance to tier 2 without an Oradian
         // Person+Client. GlobalExceptionHandler maps the exception to HTTP 502.
         OradianCustomerResponse oradian = oradianClient.createCustomer(toOradianRequest(request));
-        log.info("Tier-2 mirrored to Oradian phone={} oradianClientId={} externalId={}",
+        if (oradian == null) {
+            // Defensive: RestClient.body() can return null on an empty 200. We treat
+            // that as a contract violation — the same as Oradian rejecting us — so
+            // the @Transactional rolls back and the caller gets 502 from
+            // GlobalExceptionHandler.
+            throw new OradianClientException("Oradian middleware returned an empty response body");
+        }
+
+        // Stamp the Oradian linkage on the local profile so subsequent reads
+        // (balance enquiries, account-status lookups, reconciliation jobs) can
+        // hit Oradian by the stored externalID / clientID instead of querying
+        // by msisdn each time.
+        profile.setOradianExternalId(oradian.getOradianExternalId());
+        profile.setOradianClientId(oradian.getOradianClientId());
+        customerProfileRepository.save(profile);
+
+        log.info("Tier-2 mirrored to Oradian phone={} userId={} oradianClientId={} externalId={}",
                 user.getPhoneNumber(),
-                oradian == null ? null : oradian.getOradianClientId(),
-                oradian == null ? null : oradian.getOradianExternalId());
+                user.getId(),
+                oradian.getOradianClientId(),
+                oradian.getOradianExternalId());
 
         return CustomerRegistrationResponseDTO.builder()
                 .userId(user.getId())

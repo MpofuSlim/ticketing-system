@@ -54,6 +54,19 @@ public class CustomerProfile {
     private String proofOfResidencePath;
     private String passportDocumentPath;
 
+    // Oradian linkage stamped at tier-2 by CustomerService.registerTier2 after
+    // POST /internal/customers on the Oradian middleware succeeds. Lets us
+    // reconcile the local customer with Oradian's Person+Client without
+    // re-querying Oradian on every read. Both nullable: tier-1 customers and
+    // legacy rows have no Oradian record yet. Uniqueness is enforced by
+    // partial unique indexes (V10 migration) rather than @Column(unique=true)
+    // so multiple NULLs are allowed for tier-1 customers.
+    @Column(name = "oradian_external_id", length = 64)
+    private String oradianExternalId;
+
+    @Column(name = "oradian_client_id")
+    private Long oradianClientId;
+
     @Column(nullable = false)
     @Builder.Default
     private boolean verified = false;
