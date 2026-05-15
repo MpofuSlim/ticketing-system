@@ -33,6 +33,15 @@ springdoc:
 server:
   port: 8085
   shutdown: graceful
+  # Defence-in-depth: never serialize stack traces / binding errors / spring
+  # framework messages into the /error response body. GlobalExceptionHandler
+  # handles every controller exception explicitly; these settings make sure
+  # anything that slips past it (e.g. errors thrown by a Filter before the
+  # advice runs) still doesn't leak internals to the client.
+  error:
+    include-stacktrace: never
+    include-message: never
+    include-binding-errors: never
 
 management:
   endpoints:
