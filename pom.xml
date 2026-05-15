@@ -189,6 +189,28 @@
                 </plugin>
             </plugins>
         </pluginManagement>
+
+        <!-- Failsafe runs *IT.java / IT*.java / *ITCase.java during `verify`.
+             Without an explicit binding, integration tests sit on the
+             classpath but never execute — discovered when adding
+             Testcontainers ITs and noticing `mvn verify` total matched
+             `mvn test` exactly. Declared at the parent so every module
+             inherits the binding; modules without any *IT.java are a
+             no-op since the includes won't match. -->
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
     </build>
 
 </project>

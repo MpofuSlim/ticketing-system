@@ -1,14 +1,18 @@
 package com.innbucks.userservice.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.innbucks.userservice.client.OradianClient;
+import com.innbucks.userservice.client.OradianCustomerResponse;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.repository.UserRepository;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.util.HashMap;
@@ -17,6 +21,8 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.hamcrest.Matchers.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
@@ -28,6 +34,23 @@ class AuthControllerIT {
     @Autowired MockMvc mockMvc;
     @Autowired ObjectMapper objectMapper;
     @Autowired UserRepository userRepository;
+
+    // Tier-2 registration mirrors the customer into Oradian via this client;
+    // hitting a real Oradian instance from a test is neither possible nor
+    // desirable, so the test stubs it to return a synthetic success.
+    // Without this stub the @Transactional save rolls back and the endpoint
+    // 502s — which is what was masking this test as "passing" until Failsafe
+    // started actually running it.
+    @MockitoBean OradianClient oradianClient;
+
+    @BeforeEach
+    void stubOradianSuccess() {
+        OradianCustomerResponse fake = new OradianCustomerResponse();
+        fake.setCustomerId(java.util.UUID.randomUUID().toString());
+        fake.setOradianClientId(1001L);
+        fake.setOradianExternalId("stub-oradian-external");
+        when(oradianClient.createCustomer(any())).thenReturn(fake);
+    }
 
     private void activate(String email) {
         User u = userRepository.findByEmail(email).orElseThrow();
