@@ -2,11 +2,9 @@ package com.innbucks.userservice.service;
 
 import com.innbucks.userservice.dto.*;
 import com.innbucks.userservice.entity.CustomerProfile;
-import com.innbucks.userservice.entity.Device;
 import com.innbucks.userservice.entity.TenantProfile;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.repository.CustomerProfileRepository;
-import com.innbucks.userservice.repository.DeviceRepository;
 import com.innbucks.userservice.repository.TenantProfileRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.security.JwtUtil;
@@ -14,12 +12,16 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
+import java.util.EnumSet;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -27,23 +29,25 @@ class AuthServiceTest {
 
     private AuthService newService(UserRepository userRepo,
                                    TenantProfileRepository tenantRepo,
-                                   DeviceRepository deviceRepo,
                                    PasswordEncoder encoder,
                                    JwtUtil jwt) {
         return new AuthService(userRepo, tenantRepo,
-                mock(CustomerProfileRepository.class), deviceRepo, encoder, jwt);
+                mock(CustomerProfileRepository.class), encoder, jwt,
+                mock(TokenRevocationService.class),
+                mock(RefreshTokenService.class));
     }
 
     private AuthService newService(UserRepository userRepo,
                                    TenantProfileRepository tenantRepo,
                                    CustomerProfileRepository customerRepo,
-                                   DeviceRepository deviceRepo,
                                    PasswordEncoder encoder,
                                    JwtUtil jwt) {
-        return new AuthService(userRepo, tenantRepo, customerRepo, deviceRepo, encoder, jwt);
+        return new AuthService(userRepo, tenantRepo, customerRepo, encoder, jwt,
+                mock(TokenRevocationService.class),
+                mock(RefreshTokenService.class));
     }
 
-    private RegisterRequestDTO baseRequest(String email, String phone, String role) {
+    private RegisterRequestDTO baseRequest(String email, String phone, String... bundles) {
         RegisterRequestDTO req = new RegisterRequestDTO();
         req.setFirstName("Jane");
         req.setMiddleName("M");
@@ -51,80 +55,96 @@ class AuthServiceTest {
         req.setPhoneNumber(phone);
         req.setEmail(email);
         req.setPassword("password123");
-        req.setRole(role);
-
-        DeviceRegistrationDTO device = new DeviceRegistrationDTO();
-        device.setDeviceId("device-123");
-        device.setDeviceName("iPhone 15");
-        device.setPlatform("iOS");
-        device.setPushToken("token");
-        req.setDevice(device);
-
-        MfaRegistrationDTO mfa = new MfaRegistrationDTO();
-        mfa.setMethod("TOTP");
-        mfa.setSecret("SECRET");
-        req.setMfa(mfa);
-
+        req.setDefaultServices(List.of(bundles));
         return req;
     }
 
     @Test
-    void register_systemUser_savesUserAndDevice_noTenantProfile() {
+    void register_loyaltyBundle_assignsMerchantAdminRole_createsTenantProfile() {
         UserRepository userRepo = mock(UserRepository.class);
         TenantProfileRepository tenantRepo = mock(TenantProfileRepository.class);
-        DeviceRepository deviceRepo = mock(DeviceRepository.class);
         PasswordEncoder encoder = mock(PasswordEncoder.class);
         JwtUtil jwt = mock(JwtUtil.class);
         when(userRepo.existsByEmail(any())).thenReturn(false);
         when(userRepo.existsByPhoneNumber(any())).thenReturn(false);
         when(encoder.encode("password123")).thenReturn("hashed");
 
-        RegisterRequestDTO req = baseRequest("sm@example.com", "0777000001", "SYSTEM_MANAGER");
+        RegisterRequestDTO req = baseRequest("ma@example.com", "0777000001", "loyalty");
 
-        AuthResponseDTO response = newService(userRepo, tenantRepo, deviceRepo, encoder, jwt).register(req);
+        AuthResponseDTO response = newService(userRepo, tenantRepo, encoder, jwt).register(req);
 
         ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
         verify(userRepo).save(saved.capture());
         assertEquals("hashed", saved.getValue().getPassword());
-        assertEquals(User.Role.SYSTEM_MANAGER, saved.getValue().getRole());
-        assertTrue(saved.getValue().isMfaEnabled());
-        assertEquals("SECRET", saved.getValue().getMfaSecret());
-        verify(tenantRepo, never()).save(any());
-        verify(deviceRepo).save(any(Device.class));
-        assertFalse(response.isMfaRequired());
-        assertEquals("SYSTEM_MANAGER", response.getRole());
+        assertTrue(saved.getValue().getRoles().contains(User.Role.MERCHANT_ADMIN));
+        // Bundle list (not the expanded microservices) is what we store and surface
+        assertEquals(new LinkedHashSet<>(List.of("loyalty")), saved.getValue().getDefaultServices());
+        // MERCHANT_ADMIN now gets a tenant profile (for business info)
+        verify(tenantRepo).save(any());
+        assertEquals(List.of("MERCHANT_ADMIN"), response.getRoles());
+        assertEquals(List.of("loyalty"), response.getDefaultServices());
     }
 
     @Test
-    void register_tenant_alsoCreatesTenantProfile() {
+    void register_ticketingBundle_assignsEventOrganizerRole_andTenantProfile() {
         UserRepository userRepo = mock(UserRepository.class);
         TenantProfileRepository tenantRepo = mock(TenantProfileRepository.class);
-        DeviceRepository deviceRepo = mock(DeviceRepository.class);
         PasswordEncoder encoder = mock(PasswordEncoder.class);
         JwtUtil jwt = mock(JwtUtil.class);
         when(userRepo.existsByEmail(any())).thenReturn(false);
         when(userRepo.existsByPhoneNumber(any())).thenReturn(false);
         when(encoder.encode(any())).thenReturn("hashed");
 
-        RegisterRequestDTO req = baseRequest("tenant@example.com", "0777111111", "TENANT");
+        RegisterRequestDTO req = baseRequest("eo@example.com", "0777111122", "ticketing");
 
-        newService(userRepo, tenantRepo, deviceRepo, encoder, jwt).register(req);
+        AuthResponseDTO response = newService(userRepo, tenantRepo, encoder, jwt).register(req);
 
-        ArgumentCaptor<TenantProfile> savedProfile = ArgumentCaptor.forClass(TenantProfile.class);
-        verify(tenantRepo).save(savedProfile.capture());
-        assertSame(req.getEmail(), savedProfile.getValue().getUser().getEmail());
+        ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
+        verify(userRepo).save(saved.capture());
+        assertTrue(saved.getValue().getRoles().contains(User.Role.EVENT_ORGANIZER));
+        assertEquals(List.of("ticketing"), response.getDefaultServices());
+        // Tenant profile created because the ticketing bundle implies EVENT_ORGANIZER
+        verify(tenantRepo).save(any());
     }
 
     @Test
-    void register_rejectsCustomerRoleOnSystemEndpoint() {
+    void register_bothBundles_grantsBothRoles() {
+        UserRepository userRepo = mock(UserRepository.class);
+        TenantProfileRepository tenantRepo = mock(TenantProfileRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(userRepo.existsByEmail(any())).thenReturn(false);
+        when(userRepo.existsByPhoneNumber(any())).thenReturn(false);
+        when(encoder.encode(any())).thenReturn("hashed");
+
+        RegisterRequestDTO req = baseRequest("multi@example.com", "0777999999", "ticketing", "loyalty");
+
+        AuthResponseDTO response = newService(userRepo, tenantRepo, encoder, jwt).register(req);
+
+        ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
+        verify(userRepo).save(saved.capture());
+        assertTrue(saved.getValue().getRoles().contains(User.Role.EVENT_ORGANIZER));
+        assertTrue(saved.getValue().getRoles().contains(User.Role.MERCHANT_ADMIN));
+        // Stored bundles, not the expanded set
+        assertEquals(new LinkedHashSet<>(List.of("ticketing", "loyalty")),
+                saved.getValue().getDefaultServices());
+        verify(tenantRepo).save(any());
+        assertTrue(response.getRoles().contains("EVENT_ORGANIZER"));
+        assertTrue(response.getRoles().contains("MERCHANT_ADMIN"));
+        assertTrue(response.getDefaultServices().contains("ticketing"));
+        assertTrue(response.getDefaultServices().contains("loyalty"));
+    }
+
+    @Test
+    void register_rejectsUnknownBundle() {
         UserRepository userRepo = mock(UserRepository.class);
         AuthService service = newService(userRepo, mock(TenantProfileRepository.class),
-                mock(DeviceRepository.class), mock(PasswordEncoder.class), mock(JwtUtil.class));
+                mock(PasswordEncoder.class), mock(JwtUtil.class));
 
-        RegisterRequestDTO req = baseRequest("c@example.com", "0777222222", "CUSTOMER");
+        RegisterRequestDTO req = baseRequest("c@example.com", "0777222222", "not-a-bundle");
 
         RuntimeException ex = assertThrows(RuntimeException.class, () -> service.register(req));
-        assertTrue(ex.getMessage().toLowerCase().contains("customer"));
+        assertTrue(ex.getMessage().toLowerCase().contains("unknown service bundle"));
         verify(userRepo, never()).save(any());
     }
 
@@ -133,9 +153,9 @@ class AuthServiceTest {
         UserRepository userRepo = mock(UserRepository.class);
         when(userRepo.existsByEmail("dup@example.com")).thenReturn(true);
         AuthService service = newService(userRepo, mock(TenantProfileRepository.class),
-                mock(DeviceRepository.class), mock(PasswordEncoder.class), mock(JwtUtil.class));
+                mock(PasswordEncoder.class), mock(JwtUtil.class));
 
-        RegisterRequestDTO req = baseRequest("dup@example.com", "0777000002", "SHOP_USER");
+        RegisterRequestDTO req = baseRequest("dup@example.com", "0777000002", "loyalty");
 
         RuntimeException ex = assertThrows(RuntimeException.class, () -> service.register(req));
         assertEquals("Email already registered", ex.getMessage());
@@ -143,29 +163,71 @@ class AuthServiceTest {
     }
 
     @Test
-    void login_withValidEmail_issuesToken() {
+    void login_withValidEmail_issuesToken_andExpandsServicesInJwt() {
         UserRepository userRepo = mock(UserRepository.class);
         PasswordEncoder encoder = mock(PasswordEncoder.class);
         JwtUtil jwt = mock(JwtUtil.class);
         User user = User.builder()
                 .id(1L)
-                .email("u@example.com").password("hashed").role(User.Role.SHOP_USER)
-                .mfaEnabled(false).build();
+                .email("u@example.com").password("hashed")
+                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .defaultServices(new LinkedHashSet<>(List.of("loyalty")))
+                .active(true).mfaEnabled(false).build();
         when(userRepo.findByEmail("u@example.com")).thenReturn(Optional.of(user));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
-        when(jwt.generateToken("u@example.com", "SHOP_USER", 4, true)).thenReturn("tok");
+        // The JWT services claim should be the expanded microservices for the loyalty bundle.
+        // MERCHANT_ADMIN — JwtUtil emits no name claims for staff roles.
+        when(jwt.generateToken(eq("u@example.com"), eq(List.of("MERCHANT_ADMIN")),
+                eq(List.of("loyalty", "payments")), eq(4), eq(true), isNull(), isNull(), isNull(),
+                isNull(), isNull(), isNull())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("u@example.com"); req.setPassword("pw");
 
         AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),
-                mock(DeviceRepository.class), encoder, jwt).login(req);
+                encoder, jwt).login(req);
 
         assertEquals("tok", resp.getToken());
-        assertEquals("SHOP_USER", resp.getRole());
-        assertFalse(resp.isMfaRequired());
-        assertEquals(4, resp.getTier());
-        assertEquals(Boolean.TRUE, resp.getVerified());
+        assertEquals(List.of("MERCHANT_ADMIN"), resp.getRoles());
+        // Response surfaces the bundle, not the expanded services
+        assertEquals(List.of("loyalty"), resp.getDefaultServices());
+    }
+
+    @Test
+    void login_superAdmin_jwtCarriesAllMicroservices() {
+        UserRepository userRepo = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        User user = User.builder()
+                .id(1L)
+                .email("admin@innbucks.co.zw").password("hashed")
+                .roles(EnumSet.of(User.Role.SUPER_ADMIN))
+                .defaultServices(new LinkedHashSet<>(List.of("ticketing", "loyalty")))
+                .active(true).build();
+        when(userRepo.findByEmail("admin@innbucks.co.zw")).thenReturn(Optional.of(user));
+        when(encoder.matches("pw", "hashed")).thenReturn(true);
+        when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), isNull(), isNull(), isNull(),
+                any(), any(), any())).thenReturn("tok");
+
+        LoginRequestDTO req = new LoginRequestDTO();
+        req.setIdentifier("admin@innbucks.co.zw"); req.setPassword("pw");
+
+        AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),
+                encoder, jwt).login(req);
+
+        assertEquals(List.of("SUPER_ADMIN"), resp.getRoles());
+        assertEquals(List.of("ticketing", "loyalty"), resp.getDefaultServices());
+
+        // Verify the JWT was issued with the expanded set covering every microservice.
+        ArgumentCaptor<List<String>> servicesCaptor = ArgumentCaptor.forClass(List.class);
+        verify(jwt).generateToken(any(), any(), servicesCaptor.capture(), anyInt(), anyBoolean(), isNull(), isNull(), isNull(),
+                any(), any(), any());
+        List<String> services = servicesCaptor.getValue();
+        assertTrue(services.contains("events"));
+        assertTrue(services.contains("seats"));
+        assertTrue(services.contains("bookings"));
+        assertTrue(services.contains("payments"));
+        assertTrue(services.contains("loyalty"));
     }
 
     @Test
@@ -176,23 +238,26 @@ class AuthServiceTest {
         JwtUtil jwt = mock(JwtUtil.class);
         User user = User.builder()
                 .id(7L)
-                .phoneNumber("0777000099").password("hashed").role(User.Role.CUSTOMER)
-                .mfaEnabled(false).build();
+                .phoneNumber("0777000099").password("hashed")
+                .roles(EnumSet.of(User.Role.CUSTOMER))
+                .active(true).mfaEnabled(false).build();
         CustomerProfile profile = CustomerProfile.builder()
                 .user(user).registrationTier(2).verified(false).build();
         when(userRepo.findByPhoneNumber("0777000099")).thenReturn(Optional.of(user));
         when(customerRepo.findByUserId(7L)).thenReturn(Optional.of(profile));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
-        when(jwt.generateToken("0777000099", "CUSTOMER", 2, false)).thenReturn("tok");
+        when(jwt.generateToken(eq("0777000099"), eq(List.of("CUSTOMER")),
+                any(), eq(2), eq(false), eq("0777000099"), isNull(), isNull(),
+                any(), any(), any())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("0777000099"); req.setPassword("pw");
 
         AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),
-                customerRepo, mock(DeviceRepository.class), encoder, jwt).login(req);
+                customerRepo, encoder, jwt).login(req);
 
         assertEquals("tok", resp.getToken());
-        assertEquals("CUSTOMER", resp.getRole());
+        assertEquals(List.of("CUSTOMER"), resp.getRoles());
         assertEquals(2, resp.getTier());
         assertEquals(Boolean.FALSE, resp.getVerified());
     }
@@ -202,7 +267,7 @@ class AuthServiceTest {
         UserRepository userRepo = mock(UserRepository.class);
         PasswordEncoder encoder = mock(PasswordEncoder.class);
         User user = User.builder().email("u@example.com").password("hashed")
-                .role(User.Role.CUSTOMER).build();
+                .roles(EnumSet.of(User.Role.CUSTOMER)).build();
         when(userRepo.findByEmail("u@example.com")).thenReturn(Optional.of(user));
         when(encoder.matches(any(), any())).thenReturn(false);
 
@@ -210,9 +275,28 @@ class AuthServiceTest {
         req.setIdentifier("u@example.com"); req.setPassword("wrong");
 
         AuthService service = newService(userRepo, mock(TenantProfileRepository.class),
-                mock(DeviceRepository.class), encoder, mock(JwtUtil.class));
+                encoder, mock(JwtUtil.class));
         RuntimeException ex = assertThrows(RuntimeException.class, () -> service.login(req));
         assertEquals("Invalid credentials", ex.getMessage());
+    }
+
+    @Test
+    void login_withInactiveAccount_throws() {
+        UserRepository userRepo = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        User user = User.builder().email("u@example.com").password("hashed")
+                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .active(false).build();
+        when(userRepo.findByEmail("u@example.com")).thenReturn(Optional.of(user));
+        when(encoder.matches(any(), any())).thenReturn(true);
+
+        LoginRequestDTO req = new LoginRequestDTO();
+        req.setIdentifier("u@example.com"); req.setPassword("pw");
+
+        AuthService service = newService(userRepo, mock(TenantProfileRepository.class),
+                encoder, mock(JwtUtil.class));
+        RuntimeException ex = assertThrows(RuntimeException.class, () -> service.login(req));
+        assertTrue(ex.getMessage().toLowerCase().contains("not active"));
     }
 
     @Test
@@ -224,7 +308,7 @@ class AuthServiceTest {
         req.setIdentifier("missing@example.com"); req.setPassword("pw");
 
         AuthService service = newService(userRepo, mock(TenantProfileRepository.class),
-                mock(DeviceRepository.class), mock(PasswordEncoder.class), mock(JwtUtil.class));
+                mock(PasswordEncoder.class), mock(JwtUtil.class));
         assertThrows(RuntimeException.class, () -> service.login(req));
     }
 
@@ -236,19 +320,21 @@ class AuthServiceTest {
         PasswordEncoder encoder = mock(PasswordEncoder.class);
         JwtUtil jwt = mock(JwtUtil.class);
         User user = User.builder().id(1L).email("u@example.com").password("hashed")
-                .role(User.Role.CUSTOMER).mfaEnabled(true).build();
+                .roles(EnumSet.of(User.Role.CUSTOMER)).active(true).mfaEnabled(true).build();
         CustomerProfile profile = CustomerProfile.builder()
                 .user(user).registrationTier(1).verified(false).build();
         when(userRepo.findByEmail(any())).thenReturn(Optional.of(user));
         when(customerRepo.findByUserId(1L)).thenReturn(Optional.of(profile));
         when(encoder.matches(any(), any())).thenReturn(true);
-        when(jwt.generateToken(eq("u@example.com"), eq("CUSTOMER"), eq(1), eq(false))).thenReturn("tok");
+        when(jwt.generateToken(eq("u@example.com"), eq(List.of("CUSTOMER")),
+                any(), anyInt(), anyBoolean(), isNull(), isNull(), isNull(),
+                any(), any(), any())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("u@example.com"); req.setPassword("pw");
 
         AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),
-                customerRepo, mock(DeviceRepository.class), encoder, jwt).login(req);
+                customerRepo, encoder, jwt).login(req);
 
         assertEquals("tok", resp.getToken());
         assertFalse(resp.isMfaRequired());

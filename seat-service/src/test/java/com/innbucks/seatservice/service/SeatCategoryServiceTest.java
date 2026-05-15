@@ -41,7 +41,7 @@ class SeatCategoryServiceTest {
     void createCategory_autoGeneratesSeatsPerSection_andInitializesAvailability() {
         SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
         SeatRepository seatRepo = mock(SeatRepository.class);
-        SeatCategoryService service = new SeatCategoryService(catRepo, seatRepo);
+        SeatCategoryService service = new SeatCategoryService(catRepo, seatRepo, org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class));
         UUID eventId = UUID.randomUUID();
 
         CreateCategoryResponseDTO resp = service.createCategory(
@@ -69,7 +69,7 @@ class SeatCategoryServiceTest {
     void createCategory_rejectsDuplicateCategoryNameForSameEvent() {
         SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
         SeatRepository seatRepo = mock(SeatRepository.class);
-        SeatCategoryService service = new SeatCategoryService(catRepo, seatRepo);
+        SeatCategoryService service = new SeatCategoryService(catRepo, seatRepo, org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class));
         UUID eventId = UUID.randomUUID();
         when(catRepo.existsByEventIdAndNameAndDeletedFalse(eventId, "VIP")).thenReturn(true);
 
@@ -83,7 +83,8 @@ class SeatCategoryServiceTest {
     @Test
     void createCategory_rejectsDuplicateSectionsCaseInsensitively() {
         SeatCategoryService service = new SeatCategoryService(
-                mock(SeatCategoryRepository.class), mock(SeatRepository.class));
+                mock(SeatCategoryRepository.class), mock(SeatRepository.class),
+                org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
                 () -> service.createCategory(request(UUID.randomUUID(), "VIP",
@@ -95,7 +96,7 @@ class SeatCategoryServiceTest {
     void createCategory_normalizesSectionLabelToUppercase() {
         SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
         SeatRepository seatRepo = mock(SeatRepository.class);
-        SeatCategoryService service = new SeatCategoryService(catRepo, seatRepo);
+        SeatCategoryService service = new SeatCategoryService(catRepo, seatRepo, org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class));
 
         service.createCategory(request(UUID.randomUUID(), "VIP",
                 List.of(section(" a ", 2))));
@@ -110,7 +111,7 @@ class SeatCategoryServiceTest {
     @Test
     void deleteCategory_softDeletes() {
         SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
-        SeatCategoryService service = new SeatCategoryService(catRepo, mock(SeatRepository.class));
+        SeatCategoryService service = new SeatCategoryService(catRepo, mock(SeatRepository.class), org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class));
 
         UUID id = UUID.randomUUID();
         SeatCategory category = SeatCategory.builder().id(id).name("VIP").deleted(false).build();

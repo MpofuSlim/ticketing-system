@@ -10,40 +10,35 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.EnumSet;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Locale;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class AuthService {
 
-    private static final Set<User.Role> SYSTEM_USER_ROLES = EnumSet.of(
-            User.Role.SYSTEM_MANAGER,
-            User.Role.TENANT,
-            User.Role.MERCHANT_ADMIN,
-            User.Role.SHOP_ADMIN,
-            User.Role.SHOP_USER,
-            User.Role.ADMIN
-    );
-
     private final UserRepository userRepository;
     private final TenantProfileRepository tenantProfileRepository;
     private final CustomerProfileRepository customerProfileRepository;
-    private final DeviceRepository deviceRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtUtil jwtUtil;
+    private final TokenRevocationService tokenRevocationService;
+    private final RefreshTokenService refreshTokenService;
 
     @Transactional
     public AuthResponseDTO register(RegisterRequestDTO request) {
-        log.info("Starting system user registration email={} role={}", request.getEmail(), request.getRole());
+        log.info("Starting system user registration email={} defaultServices={}",
+                request.getEmail(), request.getDefaultServices());
 
-        User.Role role = parseRole(request.getRole());
-        if (role == User.Role.CUSTOMER) {
-            throw new RuntimeException("Customers must register via the /auth/customer/register (tiered) flow");
-        }
-        if (!SYSTEM_USER_ROLES.contains(role)) {
-            throw new RuntimeException("Unsupported role for system registration: " + role);
+        Set<String> bundles = parseBundles(request.getDefaultServices());
+        Set<User.Role> roles = Services.rolesFor(bundles);
+        if (roles.isEmpty()) {
+            throw new RuntimeException("Could not derive any role from the supplied defaultServices");
         }
 
         if (userRepository.existsByEmail(request.getEmail())) {
@@ -62,37 +57,32 @@ public class AuthService {
                 .phoneNumber(request.getPhoneNumber())
                 .email(request.getEmail())
                 .password(passwordEncoder.encode(request.getPassword()))
-                .role(role)
-                .mfaEnabled(true)
-                .mfaSecret(request.getMfa().getSecret())
+                .roles(roles)
+                .defaultServices(bundles)
+                .mfaEnabled(false)
                 .build();
 
         userRepository.save(user);
-        log.info("User entity saved email={} userId={} role={}", user.getEmail(), user.getId(), role);
+        log.info("User entity saved email={} userId={} roles={} bundles={}",
+                user.getEmail(), user.getId(), roles, bundles);
 
-        Device device = Device.builder()
-                .user(user)
-                .deviceId(request.getDevice().getDeviceId())
-                .deviceName(request.getDevice().getDeviceName())
-                .platform(request.getDevice().getPlatform())
-                .pushToken(request.getDevice().getPushToken())
-                .build();
-        deviceRepository.save(device);
-        log.info("Device registered userId={} deviceId={}", user.getId(), device.getDeviceId());
-
-        if (role == User.Role.TENANT) {
-            log.info("Role=TENANT, creating tenant profile userId={}", user.getId());
+        if (roles.contains(User.Role.EVENT_ORGANIZER) || roles.contains(User.Role.MERCHANT_ADMIN)) {
+            log.info("Roles include business role, creating tenant profile userId={}", user.getId());
             TenantProfile profile = TenantProfile.builder()
                     .user(user)
+                    .businessName(request.getBusinessName())
+                    .businessAddress(request.getBusinessAddress())
+                    .businessPhoneNumber(request.getBusinessContactNumber())
                     .build();
             tenantProfileRepository.save(profile);
             log.info("Tenant profile saved userId={}", user.getId());
         }
 
-        log.info("Registration complete email={} role={}", user.getEmail(), role);
+        log.info("Registration complete email={} roles={} bundles={}", user.getEmail(), roles, bundles);
         return AuthResponseDTO.builder()
                 .email(user.getEmail())
-                .role(user.getRole().name())
+                .roles(roleNames(user.getRoles()))
+                .defaultServices(new ArrayList<>(bundles))
                 .mfaRequired(false)
                 .build();
     }
@@ -104,27 +94,126 @@ public class AuthService {
         if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
             throw new RuntimeException("Invalid credentials");
         }
+        if (!user.isActive()) {
+            throw new RuntimeException("Account is not active. Please contact a SUPER_ADMIN for approval.");
+        }
 
+        return issueToken(user);
+    }
+
+    /**
+     * Rotates the caller's password. Requires the existing (current) password as a
+     * re-authentication step. The bearer token stays valid until its natural expiry —
+     * other services already accept tokens until then, so forcing immediate revocation
+     * here would just create UX friction without a meaningful security gain.
+     */
+    @Transactional
+    public void changePassword(String token, ChangePasswordRequestDTO request) {
+        if (token == null || token.isBlank() || !jwtUtil.isTokenValid(token)) {
+            throw new RuntimeException("Invalid or expired token");
+        }
+        if (tokenRevocationService.isRevoked(token)) {
+            throw new RuntimeException("Token revoked");
+        }
+        String subject = jwtUtil.extractEmail(token);
+        if (subject == null || subject.isBlank()) {
+            throw new RuntimeException("Token has no subject");
+        }
+        User user = (subject.contains("@")
+                ? userRepository.findByEmail(subject)
+                : userRepository.findByPhoneNumber(subject))
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        if (!passwordEncoder.matches(request.getCurrentPassword(), user.getPassword())) {
+            throw new RuntimeException("Current password does not match");
+        }
+        if (passwordEncoder.matches(request.getNewPassword(), user.getPassword())) {
+            throw new RuntimeException("New password must differ from current password");
+        }
+
+        user.setPassword(passwordEncoder.encode(request.getNewPassword()));
+        userRepository.save(user);
+        log.info("Password changed userId={} subject={}", user.getId(), subject);
+    }
+
+    /**
+     * Rotates the supplied refresh token: consumes it, mints a brand-new
+     * refresh token in the same family, and returns a fresh access token
+     * with the latest user claims. Replay of an already-rotated refresh
+     * token is treated as theft and revokes the entire family.
+     */
+    public AuthResponseDTO refresh(String refreshToken) {
+        RefreshTokenService.Rotation rotation = refreshTokenService.rotate(refreshToken);
+        AuthResponseDTO response = buildResponse(rotation.user(), rotation.refreshToken());
+        log.info("Token refreshed subject={} roles={} tier={} verified={}",
+                rotation.user().getEmail() != null ? rotation.user().getEmail() : rotation.user().getPhoneNumber(),
+                response.getRoles(), response.getTier(), response.getVerified());
+        return response;
+    }
+
+    private AuthResponseDTO issueToken(User user) {
+        String refreshToken = refreshTokenService.issueNewFamily(user);
+        return buildResponse(user, refreshToken);
+    }
+
+    private AuthResponseDTO buildResponse(User user, String refreshToken) {
         String subject = user.getEmail() != null ? user.getEmail() : user.getPhoneNumber();
 
         int tier;
         boolean verified;
-        if (user.getRole() == User.Role.CUSTOMER) {
+        // Display names ride in the JWT only for tier-2+ CUSTOMERS (tier-1 names
+        // are placeholders like "Customer Pending" set by OtpService at signup).
+        // Staff roles never carry names — JwtUtil enforces this independently.
+        String firstName = null;
+        String middleName = null;
+        String lastName = null;
+        if (user.hasRole(User.Role.CUSTOMER)) {
             CustomerProfile profile = customerProfileRepository.findByUserId(user.getId())
                     .orElseThrow(() -> new RuntimeException("Customer profile missing"));
             tier = profile.getRegistrationTier();
             verified = profile.isVerified();
+            if (tier >= 2) {
+                firstName = user.getFirstName();
+                middleName = user.getMiddleName();
+                lastName = user.getLastName();
+            }
         } else {
-            // System users (TENANT/ADMIN/etc.) are implicitly fully trusted
             tier = 4;
             verified = true;
         }
 
-        String token = jwtUtil.generateToken(subject, user.getRole().name(), tier, verified);
+        List<String> roleNames = roleNames(user.getRoles());
+        List<String> bundles = user.getDefaultServices() == null
+                ? List.of() : new ArrayList<>(user.getDefaultServices());
+
+        // SUPER_ADMIN is granted access to every microservice across every bundle, even if their
+        // stored bundle list happens to be empty. Otherwise, expand the picked bundles to their
+        // backing microservices for the JWT services claim.
+        Set<String> microservices = user.hasRole(User.Role.SUPER_ADMIN)
+                ? Services.expandToMicroservices(Services.ALL_BUNDLES)
+                : Services.expandToMicroservices(bundles);
+
+        // Shop staff carry both shopId and merchantId stamped on their User row by
+        // ShopStaffService at creation time — no lookup required. MERCHANT_ADMIN tokens
+        // intentionally do NOT carry a merchantId claim; endpoints that need a merchant
+        // scope read it from the request body (e.g. ShopRequest.merchantId).
+        java.util.UUID loyaltyMerchantId = null;
+        java.util.UUID loyaltyShopId = null;
+        if (user.hasRole(User.Role.SHOP_ADMIN) || user.hasRole(User.Role.SHOP_USER)) {
+            loyaltyShopId = user.getLoyaltyShopId();
+            loyaltyMerchantId = user.getLoyaltyMerchantId();
+        }
+
+        String newToken = jwtUtil.generateToken(subject, roleNames, new ArrayList<>(microservices),
+                tier, verified, user.getPhoneNumber(), loyaltyMerchantId, loyaltyShopId,
+                firstName, middleName, lastName);
+
         return AuthResponseDTO.builder()
-                .token(token)
+                .token(newToken)
+                .refreshToken(refreshToken)
                 .email(user.getEmail())
-                .role(user.getRole().name())
+                .roles(roleNames)
+                .defaultServices(bundles)
                 .mfaRequired(false)
                 .tier(tier)
                 .verified(verified)
@@ -142,14 +231,27 @@ public class AuthService {
                 : userRepository.findByPhoneNumber(trimmed);
     }
 
-    private User.Role parseRole(String raw) {
-        if (raw == null || raw.isBlank()) {
-            throw new RuntimeException("Role is required");
+    private Set<String> parseBundles(List<String> raw) {
+        if (raw == null || raw.isEmpty()) {
+            throw new RuntimeException("At least one default service is required");
         }
-        try {
-            return User.Role.valueOf(raw.trim().toUpperCase());
-        } catch (IllegalArgumentException ex) {
-            throw new RuntimeException("Unknown role: " + raw);
+        Set<String> parsed = new LinkedHashSet<>();
+        for (String b : raw) {
+            if (b == null || b.isBlank()) {
+                throw new RuntimeException("defaultServices values must be non-blank");
+            }
+            String normalised = b.trim().toLowerCase(Locale.ROOT);
+            if (!Services.isKnownBundle(normalised)) {
+                throw new RuntimeException("Unknown service bundle: " + b
+                        + ". Allowed values: " + Services.ALL_BUNDLES);
+            }
+            parsed.add(normalised);
         }
+        return parsed;
+    }
+
+    private List<String> roleNames(Set<User.Role> roles) {
+        if (roles == null) return List.of();
+        return roles.stream().map(Enum::name).collect(Collectors.toList());
     }
 }

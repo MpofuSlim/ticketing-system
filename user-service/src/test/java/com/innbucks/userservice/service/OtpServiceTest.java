@@ -5,6 +5,7 @@ import com.innbucks.userservice.entity.Otp;
 import com.innbucks.userservice.entity.OtpRetryAttempt;
 import com.innbucks.userservice.entity.PendingRegistration;
 import com.innbucks.userservice.entity.User;
+import com.innbucks.userservice.integration.LoyaltyServiceClient;
 import com.innbucks.userservice.repository.CustomerProfileRepository;
 import com.innbucks.userservice.repository.OtpRepository;
 import com.innbucks.userservice.repository.OtpRetryAttemptRepository;
@@ -29,7 +30,11 @@ class OtpServiceTest {
                                   UserRepository userRepo,
                                   CustomerProfileRepository profileRepo,
                                   PendingRegistrationRepository pendingRepo) {
-        return new OtpService(otpRepo, retryRepo, userRepo, profileRepo, pendingRepo);
+        // LoyaltyServiceClient.promoteUserByPhone is fired post-OTP-verify but
+        // the call is best-effort and never affects assertions in these tests,
+        // so a noop mock is fine.
+        return new OtpService(otpRepo, retryRepo, userRepo, profileRepo, pendingRepo,
+                mock(LoyaltyServiceClient.class));
     }
 
     @Test
@@ -131,7 +136,7 @@ class OtpServiceTest {
         verify(userRepo).save(userCaptor.capture());
         assertEquals("+263771234567", userCaptor.getValue().getPhoneNumber());
         assertEquals("hashed-pw", userCaptor.getValue().getPassword());
-        assertEquals(User.Role.CUSTOMER, userCaptor.getValue().getRole());
+        assertTrue(userCaptor.getValue().getRoles().contains(User.Role.CUSTOMER));
 
         ArgumentCaptor<CustomerProfile> profileCaptor = ArgumentCaptor.forClass(CustomerProfile.class);
         verify(profileRepo).save(profileCaptor.capture());
@@ -151,7 +156,8 @@ class OtpServiceTest {
 
         when(otpRepo.consume(eq("+263771234567"), eq("000000"), any())).thenReturn(1);
         when(pendingRepo.findByPhoneNumber("+263771234567")).thenReturn(Optional.empty());
-        User user = User.builder().id(7L).phoneNumber("+263771234567").role(User.Role.CUSTOMER).build();
+        User user = User.builder().id(7L).phoneNumber("+263771234567")
+                .roles(java.util.EnumSet.of(User.Role.CUSTOMER)).build();
         CustomerProfile profile = CustomerProfile.builder().user(user).registrationTier(1).phoneVerified(false).build();
         when(userRepo.findByPhoneNumber("+263771234567")).thenReturn(Optional.of(user));
         when(profileRepo.findByUserId(7L)).thenReturn(Optional.of(profile));

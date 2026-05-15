@@ -17,6 +17,7 @@
         <module>seat-service</module>
         <module>booking-service</module>
         <module>payment-service</module>
+        <module>loyalty-service</module>
 
     </modules>
 
@@ -25,6 +26,23 @@
         <spring.boot.version>4.0.5</spring.boot.version>
         <spring.cloud.version>2025.1.1</spring.cloud.version>
         <springdoc.version>3.0.3</springdoc.version>
+        <testcontainers.version>1.21.3</testcontainers.version>
+        <!-- jjwt centralized here so all five JWT-using services stay aligned.
+             0.12.x cleans up Java 17/21 compatibility, tightens algorithm
+             validation, and replaces the deprecated builder API used in
+             0.11.x. Token wire format is unchanged — rolling deploys are safe. -->
+        <jjwt.version>0.12.6</jjwt.version>
+        <!-- Logstash encoder for structured JSON logs. 8.x targets Logback 1.5
+             (shipped with Spring Boot 3.4+/4.x). When the active profile is
+             json/docker/prod, every service emits one JSON object per log line
+             with traceId pulled out of MDC as a typed field; locally the
+             default Boot pattern is kept so console output stays readable. -->
+        <logstash.encoder.version>8.0</logstash.encoder.version>
+        <!-- Sentry SDK 8.x supports Spring Boot 3+ / Jakarta. Wires into the
+             OTel tracer so issues deep-link to Tempo/Jaeger traces, and the
+             logback appender auto-promotes ERROR-level log events to Sentry
+             with the active MDC (traceId/spanId/correlationId) attached. -->
+        <sentry.version>8.41.0</sentry.version>
     </properties>
 
     <dependencyManagement>
@@ -52,6 +70,50 @@
                 <version>${springdoc.version}</version>
             </dependency>
 
+            <!-- jjwt — managed centrally so every JWT-using service is on the
+                 same version. Each service declares the three artifacts without
+                 a version (or with version override only if pinning intentionally). -->
+            <dependency>
+                <groupId>io.jsonwebtoken</groupId>
+                <artifactId>jjwt-api</artifactId>
+                <version>${jjwt.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.jsonwebtoken</groupId>
+                <artifactId>jjwt-impl</artifactId>
+                <version>${jjwt.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.jsonwebtoken</groupId>
+                <artifactId>jjwt-jackson</artifactId>
+                <version>${jjwt.version}</version>
+            </dependency>
+
+            <!-- Testcontainers BOM keeps testcontainers-core, junit-jupiter, and
+                 postgresql modules on the same version across the repo. Spring
+                 Boot 4 doesn't manage these so we import the BOM ourselves. -->
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers-bom</artifactId>
+                <version>${testcontainers.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
+            <dependency>
+                <groupId>net.logstash.logback</groupId>
+                <artifactId>logstash-logback-encoder</artifactId>
+                <version>${logstash.encoder.version}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>io.sentry</groupId>
+                <artifactId>sentry-bom</artifactId>
+                <version>${sentry.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
         </dependencies>
     </dependencyManagement>
 
@@ -69,6 +131,32 @@
             <groupId>io.micrometer</groupId>
             <artifactId>micrometer-registry-prometheus</artifactId>
         </dependency>
+        <!-- Pulled in by every service so logback-spring.xml's JSON appender
+             resolves at runtime. Encoder is a no-op until a profile that uses
+             it (json/docker/prod) is active, so local dev pays no cost. -->
+        <dependency>
+            <groupId>net.logstash.logback</groupId>
+            <artifactId>logstash-logback-encoder</artifactId>
+        </dependency>
+        <!-- Distributed tracing. The OTel bridge wires Micrometer Observation
+             API onto an OpenTelemetry SDK; the OTLP exporter ships spans to
+             whatever collector OTLP_ENDPOINT points at (Tempo, Jaeger, the
+             OTel-Collector, etc.). Boot 4 auto-configures both. Sampling
+             defaults to 10% — tune via TRACE_SAMPLE env var. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-otel</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-otlp</artifactId>
+        </dependency>
+        <!-- Sentry: lives in dependencyManagement only (parent imports the
+             sentry-bom). Each servlet service opts in by declaring the two
+             artifacts in its own pom; api-gateway (reactive / WebFlux) skips
+             them — Sentry 8.x's SentryPerformanceWebClientConfiguration
+             references Boot 3's WebClientAutoConfiguration which was renamed
+             in Boot 4, so wiring it into the gateway crashes the context. -->
         <!-- Boot 4 ships Jackson 3 (tools.jackson) by default; this module
              also registers the legacy com.fasterxml.jackson.databind.ObjectMapper
              bean expected by jjwt-jackson and existing test code. -->
@@ -101,6 +189,28 @@
                 </plugin>
             </plugins>
         </pluginManagement>
+
+        <!-- Failsafe runs *IT.java / IT*.java / *ITCase.java during `verify`.
+             Without an explicit binding, integration tests sit on the
+             classpath but never execute — discovered when adding
+             Testcontainers ITs and noticing `mvn verify` total matched
+             `mvn test` exactly. Declared at the parent so every module
+             inherits the binding; modules without any *IT.java are a
+             no-op since the includes won't match. -->
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
     </build>
 
 </project>

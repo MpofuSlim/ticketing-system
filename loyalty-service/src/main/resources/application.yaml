@@ -1,0 +1,121 @@
+spring:
+  application:
+    name: loyalty-service
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/loyalty_service}
+    driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD}
+    hikari:
+      pool-name: loyalty-service-pool
+      # Sized for ~250 RPS sustained per instance: a typical write does ~10 DB
+      # round trips so 50 connections * (1000ms / 5ms-per-query) = 10k query-
+      # slots/sec gives ~5x headroom over the per-instance steady-state. Bump
+      # via DB_POOL_MAX when scaling instance count + sizing PgBouncer ahead.
+      maximum-pool-size: ${DB_POOL_MAX:50}
+      minimum-idle: ${DB_POOL_MIN:10}
+      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:5000}
+      idle-timeout: ${DB_IDLE_TIMEOUT_MS:600000}
+      max-lifetime: ${DB_MAX_LIFETIME_MS:1800000}
+  jpa:
+    hibernate:
+      # Schema is owned by Flyway migrations; Hibernate only validates that
+      # the JPA model matches the actual columns at boot.
+      ddl-auto: ${JPA_DDL_AUTO:validate}
+    show-sql: ${JPA_SHOW_SQL:false}
+    properties:
+      hibernate:
+        dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
+
+  flyway:
+    enabled: ${FLYWAY_ENABLED:true}
+    baseline-on-migrate: true
+    baseline-version: 0
+    locations: classpath:db/migration
+
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+# user-service is the system of record for customer identity. loyalty-service
+# calls GET /auth/customer/tier to validate a phone number before lazily
+# creating its local LoyaltyUser projection — see UserService#findOrEnrol.
+user-service:
+  base-url: ${USER_SERVICE_URL:http://localhost:8081}
+  connect-timeout-ms: ${USER_SERVICE_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${USER_SERVICE_READ_TIMEOUT_MS:5000}
+
+loyalty:
+  voucher:
+    secret: ${LOYALTY_VOUCHER_SECRET:change-me-voucher-secret-change-me-voucher-secret}
+    default-validity-days: ${LOYALTY_VOUCHER_DEFAULT_VALIDITY_DAYS:365}
+    fraud-velocity-threshold: ${LOYALTY_FRAUD_VELOCITY_THRESHOLD:5}
+    fraud-window-seconds: ${LOYALTY_FRAUD_WINDOW_SECONDS:60}
+  qr:
+    secret: ${LOYALTY_QR_SECRET:change-me-qr-secret-change-me-qr-secret-change-me}
+    ttl-seconds: ${LOYALTY_QR_TTL_SECONDS:300}
+  integration:
+    mpesa-enabled: ${LOYALTY_MPESA_ENABLED:false}
+  invoice:
+    prefix: ${LOYALTY_INVOICE_PREFIX:INV}
+  scheduler:
+    expiry-cron: ${LOYALTY_EXPIRY_CRON:0 5 * * * *}
+    invoice-cron: ${LOYALTY_INVOICE_CRON:0 30 1 * * *}
+
+# Shared secret presented as the X-Internal-Token header by other backends
+# (today: user-service at login) when calling /loyalty/internal/**. Must match
+# the value configured on the caller side. Empty disables internal endpoints.
+innbucks:
+  internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui/index.html
+  api-docs:
+    path: /v3/api-docs
+
+server:
+  port: ${SERVER_PORT:8086}
+  shutdown: graceful
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when-authorized
+  metrics:
+    tags:
+      application: ${spring.application.name}
+  # Distributed tracing via OTel. Sampling defaults to 10% — flip to 1.0 for
+  # debug sessions, leave low in prod for cost. OTLP_ENDPOINT points at the
+  # OTel collector / Tempo / Jaeger; default localhost is fine for laptop
+  # docker-compose, override in k8s. Set TRACING_ENABLED=false to disable
+  # entirely (no spans recorded, no exporter calls).
+  tracing:
+    enabled: ${TRACING_ENABLED:true}
+    sampling:
+      probability: ${TRACE_SAMPLE:0.1}
+  otlp:
+    tracing:
+      endpoint: ${OTLP_ENDPOINT:http://localhost:4318/v1/traces}
+
+
+logging:
+  pattern:
+    level: "%5p [${spring.application.name:-},%X{traceId:-},%X{spanId:-},%X{correlationId:-}]"
+
+cors:
+  # Comma-separated list of allowed origin patterns. Default whitelists the
+  # production frontend (innvents.vercel.app), Vercel preview deploys, and
+  # any localhost port for dev. Override in prod via CORS_ALLOWED_ORIGINS.
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:https://innvents.vercel.app,https://innbucks-ticketing.vercel.app,https://*.vercel.app,http://localhost:[*]}
+
+# Match the JWT secret used by user-service (and the other microservices) so
+# loyalty-service can verify tokens minted at /auth/login.
+jwt:
+  secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
+  expiration: ${JWT_EXPIRATION_MS:86400000}

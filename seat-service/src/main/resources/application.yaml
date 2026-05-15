@@ -2,19 +2,10 @@ spring:
   application:
     name: seat-service
 
-  # Local dev: run `docker compose up -d postgres redis` first; the seed
-  # in docker/postgres/init-databases.sql creates seat_service with the
-  # default credentials below. Tests override these to in-memory H2 via
-  # src/test/resources/application-test.yaml + @ActiveProfiles("test").
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/seat_service}
     driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
     username: ${DB_USERNAME:postgres}
-    # No empty default: an unset DB_PASSWORD must fail at startup with an
-    # unresolved-placeholder error rather than silently sending no password
-    # and producing the cryptic "SCRAM-based authentication, but no password
-    # was provided" deep inside Hibernate bootstrap. Source scripts/dev-env.sh
-    # before `mvn spring-boot:run`, or rely on docker-compose to inject it.
     password: ${DB_PASSWORD}
     hikari:
       pool-name: seat-service-pool
@@ -26,7 +17,8 @@ spring:
 
   jpa:
     hibernate:
-      # Flyway owns the schema; Hibernate validates entities against it.
+      # Schema is owned by Flyway migrations; Hibernate only validates that
+      # the JPA model matches the actual columns at boot.
       ddl-auto: ${JPA_DDL_AUTO:validate}
     show-sql: ${JPA_SHOW_SQL:false}
     properties:
@@ -43,6 +35,12 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+      # Redis is used for distributed seat-locks only; we don't have any
+      # @RedisHash-annotated entities. Without this flag Spring Data Redis
+      # tries to classify every Repository<> bean (SeatRepository, etc.) as
+      # a potential Redis repository and logs a noisy INFO warning on each.
+      repositories:
+        enabled: false
 
   lifecycle:
     timeout-per-shutdown-phase: 30s
@@ -52,6 +50,24 @@ app:
     # Set to "redis" for shared, cross-replica locks. Defaults to in-memory so
     # local dev and tests work without a running Redis.
     store: ${LOCK_STORE:memory}
+
+# booking-service is queried by the analytics endpoint
+# (GET /seat-categories/{id}/analytics) to enrich the response with who-bought-
+# what data. Configured as an explicit URL because we don't run service
+# discovery. Failures are tolerated — analytics still returns category + seat
+# stats, with bookingServiceReachable=false in the payload.
+booking-service:
+  base-url: ${BOOKING_SERVICE_URL:http://localhost:8084}
+  connect-timeout-ms: ${BOOKING_SERVICE_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${BOOKING_SERVICE_READ_TIMEOUT_MS:5000}
+
+# user-service is queried by the @MinTier interceptor so the registration tier
+# always matches the system of record (instead of trusting the JWT's possibly
+# stale tier claim).
+user-service:
+  base-url: ${USER_SERVICE_URL:http://localhost:8081}
+  connect-timeout-ms: ${USER_SERVICE_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${USER_SERVICE_READ_TIMEOUT_MS:5000}
 
 jwt:
   secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
@@ -82,7 +98,25 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+  # Distributed tracing via OTel. Sampling defaults to 10% — flip to 1.0 for
+  # debug sessions, leave low in prod for cost. OTLP_ENDPOINT points at the
+  # OTel collector / Tempo / Jaeger; default localhost is fine for laptop
+  # docker-compose, override in k8s. Set TRACING_ENABLED=false to disable
+  # entirely (no spans recorded, no exporter calls).
+  tracing:
+    enabled: ${TRACING_ENABLED:true}
+    sampling:
+      probability: ${TRACE_SAMPLE:0.1}
+  otlp:
+    tracing:
+      endpoint: ${OTLP_ENDPOINT:http://localhost:4318/v1/traces}
+
 
 logging:
   pattern:
-    level: "%5p [${spring.application.name:-},%X{traceId:-}]"
+    level: "%5p [${spring.application.name:-},%X{traceId:-},%X{spanId:-},%X{correlationId:-}]"
+cors:
+  # Comma-separated list of allowed origin patterns. Default whitelists the
+  # production frontend (innvents.vercel.app), Vercel preview deploys, and
+  # any localhost port for dev. Override in prod via CORS_ALLOWED_ORIGINS.
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:https://innvents.vercel.app,https://innbucks-ticketing.vercel.app,https://*.vercel.app,http://localhost:[*]}

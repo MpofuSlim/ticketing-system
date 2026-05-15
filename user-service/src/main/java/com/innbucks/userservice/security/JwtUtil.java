@@ -1,11 +1,22 @@
 package com.innbucks.userservice.security;
 
-import io.jsonwebtoken.*;
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.JwtBuilder;
+import io.jsonwebtoken.JwtException;
+import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
-import java.security.Key;
+
+import javax.crypto.SecretKey;
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.Date;
+import java.util.List;
+import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Component
 public class JwtUtil {
@@ -16,36 +27,190 @@ public class JwtUtil {
     @Value("${jwt.expiration}")
     private long expiration;
 
-    private Key getSigningKey() {
-        return Keys.hmacShaKeyFor(secret.getBytes());
+    @Value("${jwt.refresh-expiration}")
+    private long refreshExpiration;
+
+    /** Token type marker. Access tokens omit the claim (treated as access);
+     *  refresh tokens carry {@code type=refresh} and are accepted only by
+     *  {@code /auth/refresh}. */
+    public static final String TOKEN_TYPE_REFRESH = "refresh";
+
+    private SecretKey getSigningKey() {
+        return Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * Mints a refresh token. Carries only the subject (email or phone) and a
+     * {@code type=refresh} claim — no roles/tier/etc., because those are
+     * re-read from the database when the refresh token is exchanged for a
+     * fresh access token.
+     */
+    public String generateRefreshToken(String subject) {
+        // A random jti guarantees the JWT (and therefore its SHA-256 hash) is
+        // unique even for two refresh tokens minted in the same second for
+        // the same subject — critical for the unique index on token_hash.
+        return Jwts.builder()
+                .id(UUID.randomUUID().toString())
+                .subject(subject)
+                .claim("type", TOKEN_TYPE_REFRESH)
+                .issuedAt(new Date())
+                .expiration(new Date(System.currentTimeMillis() + refreshExpiration))
+                .signWith(getSigningKey(), Jwts.SIG.HS256)
+                .compact();
+    }
+
+    public String extractType(String token) {
+        return getClaims(token).get("type", String.class);
+    }
+
+    public boolean isRefreshToken(String token) {
+        return TOKEN_TYPE_REFRESH.equals(extractType(token));
+    }
+
+    public String generateToken(String email, Collection<String> roles, Collection<String> defaultServices,
+                                int tier, boolean verified, String phoneNumber,
+                                UUID merchantId, UUID shopId,
+                                String firstName, String middleName, String lastName) {
+        List<String> roleList = roles == null ? List.of()
+                : roles.stream().filter(r -> r != null && !r.isBlank()).collect(Collectors.toList());
+        List<String> serviceList = defaultServices == null ? List.of()
+                : defaultServices.stream().filter(s -> s != null && !s.isBlank()).collect(Collectors.toList());
+
+        JwtBuilder builder = Jwts.builder()
+                .subject(email)
+                .claim("roles", roleList)
+                .claim("services", serviceList)
+                .claim("tier", tier)
+                .claim("verified", verified);
+        if (phoneNumber != null && !phoneNumber.isBlank()) {
+            builder.claim("phoneNumber", phoneNumber);
+        }
+        if (merchantId != null) {
+            builder.claim("merchantId", merchantId.toString());
+        }
+        if (shopId != null) {
+            builder.claim("shopId", shopId.toString());
+        }
+        // Display-name claims are emitted only for CUSTOMER tokens — staff
+        // roles (MERCHANT_ADMIN, SHOP_ADMIN, etc.) don't need their personal
+        // names in every JWT and we'd rather keep their tokens slim + less
+        // PII-exposed. AuthService further gates this to tier >= 2 (tier 1
+        // names are placeholders like "Customer Pending"); JwtUtil enforces
+        // the role check independently as a backstop.
+        boolean customerToken = roleList.contains("CUSTOMER");
+        if (customerToken && firstName != null && !firstName.isBlank()) {
+            builder.claim("firstName", firstName);
+        }
+        if (customerToken && middleName != null && !middleName.isBlank()) {
+            builder.claim("middleName", middleName);
+        }
+        if (customerToken && lastName != null && !lastName.isBlank()) {
+            builder.claim("lastName", lastName);
+        }
+        return builder
+                .issuedAt(new Date())
+                .expiration(new Date(System.currentTimeMillis() + expiration))
+                .signWith(getSigningKey(), Jwts.SIG.HS256)
+                .compact();
+    }
+
+    public String generateToken(String email, Collection<String> roles, Collection<String> defaultServices,
+                                int tier, boolean verified, String phoneNumber,
+                                UUID merchantId, UUID shopId) {
+        return generateToken(email, roles, defaultServices, tier, verified, phoneNumber,
+                merchantId, shopId, null, null, null);
+    }
+
+    public String generateToken(String email, Collection<String> roles, Collection<String> defaultServices,
+                                int tier, boolean verified, String phoneNumber, UUID merchantId) {
+        return generateToken(email, roles, defaultServices, tier, verified, phoneNumber, merchantId, null);
+    }
+
+    public String generateToken(String email, Collection<String> roles, Collection<String> defaultServices,
+                                int tier, boolean verified, String phoneNumber) {
+        return generateToken(email, roles, defaultServices, tier, verified, phoneNumber, null, null);
+    }
+
+    // Convenience overload for single-role callers (kept for tests).
+    public String generateToken(String email, String role, int tier, boolean verified, String phoneNumber) {
+        return generateToken(email, role == null ? List.of() : List.of(role), List.of(), tier, verified, phoneNumber, null);
     }
 
     public String generateToken(String email, String role, int tier, boolean verified) {
-        return Jwts.builder()
-                .setSubject(email)
-                .claim("role", role)
-                .claim("tier", tier)
-                .claim("verified", verified)
-                .setIssuedAt(new Date())
-                .setExpiration(new Date(System.currentTimeMillis() + expiration))
-                .signWith(getSigningKey(), SignatureAlgorithm.HS256)
-                .compact();
+        return generateToken(email, role, tier, verified, null);
     }
 
     public String extractEmail(String token) {
         return getClaims(token).getSubject();
     }
 
-    public String extractRole(String token) {
-        return getClaims(token).get("role", String.class);
+    @SuppressWarnings("unchecked")
+    public List<String> extractRoles(String token) {
+        Object raw = getClaims(token).get("roles");
+        if (raw instanceof Collection<?> c) {
+            List<String> out = new ArrayList<>();
+            for (Object o : c) {
+                if (o != null) out.add(o.toString());
+            }
+            return out;
+        }
+        return Collections.emptyList();
+    }
+
+    @SuppressWarnings("unchecked")
+    public List<String> extractServices(String token) {
+        Object raw = getClaims(token).get("services");
+        if (raw instanceof Collection<?> c) {
+            List<String> out = new ArrayList<>();
+            for (Object o : c) {
+                if (o != null) out.add(o.toString());
+            }
+            return out;
+        }
+        return Collections.emptyList();
     }
 
     public Integer extractTier(String token) {
         return getClaims(token).get("tier", Integer.class);
     }
 
+    /** Optional CUSTOMER display name claim. {@code null} for staff tokens or tier-1 customers. */
+    public String extractFirstName(String token) {
+        return getClaims(token).get("firstName", String.class);
+    }
+
+    public String extractMiddleName(String token) {
+        return getClaims(token).get("middleName", String.class);
+    }
+
+    public String extractLastName(String token) {
+        return getClaims(token).get("lastName", String.class);
+    }
+
     public Boolean extractVerified(String token) {
         return getClaims(token).get("verified", Boolean.class);
+    }
+
+    public String extractPhoneNumber(String token) {
+        return getClaims(token).get("phoneNumber", String.class);
+    }
+
+    public UUID extractMerchantId(String token) {
+        return extractUuidClaim(token, "merchantId");
+    }
+
+    public UUID extractShopId(String token) {
+        return extractUuidClaim(token, "shopId");
+    }
+
+    private UUID extractUuidClaim(String token, String name) {
+        String raw = getClaims(token).get(name, String.class);
+        if (raw == null || raw.isBlank()) return null;
+        try {
+            return UUID.fromString(raw);
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
     }
 
     public Date extractExpiration(String token) {
@@ -62,10 +227,10 @@ public class JwtUtil {
     }
 
     private Claims getClaims(String token) {
-        return Jwts.parserBuilder()
-                .setSigningKey(getSigningKey())
+        return Jwts.parser()
+                .verifyWith(getSigningKey())
                 .build()
-                .parseClaimsJws(token)
-                .getBody();
+                .parseSignedClaims(token)
+                .getPayload();
     }
 }

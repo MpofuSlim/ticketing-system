@@ -1,18 +1,9 @@
 spring:
   application:
     name: user-service
-  # Local dev: run `docker compose up -d postgres` first; the seed in
-  # docker/postgres/init-databases.sql creates user_service with the
-  # default credentials below. Tests override these to in-memory H2 via
-  # src/test/resources/application-test.yaml + @ActiveProfiles("test").
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/user_service}
     username: ${DB_USERNAME:postgres}
-    # No empty default: an unset DB_PASSWORD must fail at startup with an
-    # unresolved-placeholder error rather than silently sending no password
-    # and producing the cryptic "SCRAM-based authentication, but no password
-    # was provided" deep inside Hibernate bootstrap. Source scripts/dev-env.sh
-    # before `mvn spring-boot:run`, or rely on docker-compose to inject it.
     password: ${DB_PASSWORD}
     driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
     hikari:
@@ -24,7 +15,8 @@ spring:
       max-lifetime: ${DB_MAX_LIFETIME_MS:1800000}
   jpa:
     hibernate:
-      # Flyway owns the schema; Hibernate validates entities against it.
+      # Schema is owned by Flyway migrations; Hibernate only validates that
+      # the JPA model matches the actual columns at boot.
       ddl-auto: ${JPA_DDL_AUTO:validate}
     show-sql: ${JPA_SHOW_SQL:false}
     properties:
@@ -43,6 +35,30 @@ spring:
 jwt:
   secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
   expiration: ${JWT_EXPIRATION_MS:86400000}
+  # Refresh tokens are long-lived, claim-light JWTs (subject + type=refresh only).
+  # Default 7 days; clients exchange them at /auth/refresh for a fresh access token.
+  refresh-expiration: ${JWT_REFRESH_EXPIRATION_MS:604800000}
+
+# Cross-service lookup used at login: when a MERCHANT_ADMIN has no loyaltyMerchantId
+# on their TenantProfile, AuthService calls loyalty-service to resolve it from the
+# user's email (Merchant.admin_email), caches the result, and emits the merchantId
+# JWT claim. The shared secret must match loyalty-service's innbucks.internal-api-token.
+loyalty-service:
+  base-url: ${LOYALTY_SERVICE_URL:http://localhost:8086}
+  connect-timeout-ms: ${LOYALTY_SERVICE_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${LOYALTY_SERVICE_READ_TIMEOUT_MS:3000}
+
+# Oradian middleware (S2S customer create). After a tier-2 registration the
+# user-service mirrors the customer into Oradian via POST /internal/customers.
+# `internal-token` must match Oradian middleware's `innbucks.internal-api.token`.
+oradian:
+  base-url: ${ORADIAN_BASE_URL:http://localhost:8090}
+  internal-token: ${ORADIAN_INTERNAL_TOKEN:change-me-internal-token-change-me-internal-token}
+  connect-timeout-ms: ${ORADIAN_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${ORADIAN_READ_TIMEOUT_MS:10000}
+
+innbucks:
+  internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
 
 springdoc:
   swagger-ui:
@@ -69,7 +85,25 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+  # Distributed tracing via OTel. Sampling defaults to 10% — flip to 1.0 for
+  # debug sessions, leave low in prod for cost. OTLP_ENDPOINT points at the
+  # OTel collector / Tempo / Jaeger; default localhost is fine for laptop
+  # docker-compose, override in k8s. Set TRACING_ENABLED=false to disable
+  # entirely (no spans recorded, no exporter calls).
+  tracing:
+    enabled: ${TRACING_ENABLED:true}
+    sampling:
+      probability: ${TRACE_SAMPLE:0.1}
+  otlp:
+    tracing:
+      endpoint: ${OTLP_ENDPOINT:http://localhost:4318/v1/traces}
+
 
 logging:
   pattern:
-    level: "%5p [${spring.application.name:-},%X{traceId:-}]"
+    level: "%5p [${spring.application.name:-},%X{traceId:-},%X{spanId:-},%X{correlationId:-}]"
+cors:
+  # Comma-separated list of allowed origin patterns. Default whitelists the
+  # production frontend (innvents.vercel.app), Vercel preview deploys, and
+  # any localhost port for dev. Override in prod via CORS_ALLOWED_ORIGINS.
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:https://innvents.vercel.app,https://innbucks-ticketing.vercel.app,https://*.vercel.app,http://localhost:[*]}

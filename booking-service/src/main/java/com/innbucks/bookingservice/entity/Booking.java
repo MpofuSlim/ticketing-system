@@ -19,8 +19,15 @@ public class Booking {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    @Column(nullable = false)
+    @Column
     private String userEmail;
+
+    // Captured from the JWT's phoneNumber claim at booking time. Optional —
+    // some JWTs (system users, older tokens) don't carry the claim, so the
+    // booking is still valid without one. Indexed so `findByPhoneNumber*`
+    // lookups don't full-scan.
+    @Column
+    private String phoneNumber;
 
     @Column(nullable = false)
     private UUID eventId;
@@ -35,11 +42,33 @@ public class Booking {
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal totalAmount;
 
+    // tenantId of the event being booked. Captured at booking creation by
+    // calling event-service. Null when event-service was unreachable at the
+    // time, in which case loyalty earn/redeem will be skipped at confirm.
+    @Column
+    private String tenantId;
+
+    // Filled in at /confirm when the customer redeems points. Null on
+    // pending or pure-cash confirmations.
+    @Column(precision = 18, scale = 4)
+    private BigDecimal pointsUsed;
+
+    // The cash portion paid at /confirm. Defaults to totalAmount on a
+    // pure-cash confirmation; reduced when points were used.
+    @Column(precision = 10, scale = 2)
+    private BigDecimal cashAmount;
+
     @OneToMany(mappedBy = "booking", cascade = CascadeType.ALL, fetch = FetchType.EAGER)
     private List<BookingItem> items;
 
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+
+    // When a PENDING booking's seat-hold runs out. The expiration scheduler
+    // flips such bookings to CANCELLED and releases the seats. Null for
+    // CONFIRMED (paid — no hold) and for legacy bookings created before the
+    // hold model existed.
+    private LocalDateTime expiresAt;
 
     @PrePersist
     public void onCreate() {

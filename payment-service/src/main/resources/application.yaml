@@ -1,12 +1,72 @@
 spring:
   application:
     name: payment-service
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/payment_service}
+    driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD}
+    hikari:
+      pool-name: payment-service-pool
+      maximum-pool-size: ${DB_POOL_MAX:10}
+      minimum-idle: ${DB_POOL_MIN:2}
+      connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:5000}
+      idle-timeout: ${DB_IDLE_TIMEOUT_MS:600000}
+      max-lifetime: ${DB_MAX_LIFETIME_MS:1800000}
+
+  jpa:
+    hibernate:
+      # Matches the other services: schema lives outside Hibernate (Flyway when
+      # entities are added; today, an empty schema is fine). 'validate' is a no-op
+      # when there are no entities and prevents silent schema drift the moment
+      # JPA models start landing here.
+      ddl-auto: ${JPA_DDL_AUTO:validate}
+    properties:
+      hibernate:
+        dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
+
   lifecycle:
     timeout-per-shutdown-phase: 30s
+
+# booking-service is called by POST /payments to flip the matching booking
+# from PENDING to CONFIRMED. Default targets host:8084 for local dev; docker-
+# compose overrides to http://booking-service:8084 inside the network.
+booking-service:
+  base-url: ${BOOKING_SERVICE_URL:http://localhost:8084}
+  connect-timeout-ms: ${BOOKING_SERVICE_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${BOOKING_SERVICE_READ_TIMEOUT_MS:5000}
+
+# loyalty-service is called by POST /payments/shop-checkout to run the earn
+# (cash → PURCHASE) and/or burn (points → REDEMPTION) legs of a shop payment.
+# Direct pod-to-pod (gateway blocks /loyalty/internal/**); the shared secret
+# below must match loyalty-service's innbucks.internal-api-token.
+loyalty-service:
+  base-url: ${LOYALTY_SERVICE_URL:http://localhost:8086}
+  connect-timeout-ms: ${LOYALTY_SERVICE_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${LOYALTY_SERVICE_READ_TIMEOUT_MS:5000}
+
+innbucks:
+  internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui/index.html
+  api-docs:
+    path: /v3/api-docs
 
 server:
   port: 8085
   shutdown: graceful
+  # Defence-in-depth: never serialize stack traces / binding errors / spring
+  # framework messages into the /error response body. GlobalExceptionHandler
+  # handles every controller exception explicitly; these settings make sure
+  # anything that slips past it (e.g. errors thrown by a Filter before the
+  # advice runs) still doesn't leak internals to the client.
+  error:
+    include-stacktrace: never
+    include-message: never
+    include-binding-errors: never
 
 management:
   endpoints:
@@ -23,7 +83,26 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+  # Distributed tracing via OTel. Sampling defaults to 10% — flip to 1.0 for
+  # debug sessions, leave low in prod for cost. OTLP_ENDPOINT points at the
+  # OTel collector / Tempo / Jaeger; default localhost is fine for laptop
+  # docker-compose, override in k8s. Set TRACING_ENABLED=false to disable
+  # entirely (no spans recorded, no exporter calls).
+  tracing:
+    enabled: ${TRACING_ENABLED:true}
+    sampling:
+      probability: ${TRACE_SAMPLE:0.1}
+  otlp:
+    tracing:
+      endpoint: ${OTLP_ENDPOINT:http://localhost:4318/v1/traces}
+
 
 logging:
   pattern:
-    level: "%5p [${spring.application.name:-},%X{traceId:-}]"
+    level: "%5p [${spring.application.name:-},%X{traceId:-},%X{spanId:-},%X{correlationId:-}]"
+
+cors:
+  # Comma-separated list of allowed origin patterns. Default whitelists the
+  # production frontend (innvents.vercel.app), Vercel preview deploys, and
+  # any localhost port for dev. Override in prod via CORS_ALLOWED_ORIGINS.
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:https://innvents.vercel.app,https://innbucks-ticketing.vercel.app,https://*.vercel.app,http://localhost:[*]}

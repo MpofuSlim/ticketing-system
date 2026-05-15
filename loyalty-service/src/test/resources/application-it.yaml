@@ -1,0 +1,52 @@
+spring:
+  # datasource.url/username/password are injected by
+  # PostgresIntegrationTestBase via @DynamicPropertySource — the values here
+  # are placeholders so Boot's binding succeeds before Testcontainers starts.
+  datasource:
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      # Matches production: Flyway owns the schema, Hibernate only validates.
+      # Catches drift between entities and the V*.sql migrations.
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 0
+    locations: classpath:db/migration
+
+loyalty:
+  voucher:
+    secret: it-voucher-secret-it-voucher-secret-it-voucher-secret
+    default-validity-days: 30
+    fraud-velocity-threshold: 3
+    fraud-window-seconds: 60
+  qr:
+    secret: it-qr-secret-it-qr-secret-it-qr-secret-it-qr-secret-it-qr
+    ttl-seconds: 60
+  integration:
+    mpesa-enabled: false
+  invoice:
+    prefix: INV
+
+innbucks:
+  internal-api-token: it-internal-token-it-internal-token
+
+jwt:
+  secret: it-jwt-secret-it-jwt-secret-it-jwt-secret-it-jwt-secret
+  expiration: 86400000
+
+logging:
+  level:
+    # Flyway logs migrations applied at INFO; Hibernate's schema validator
+    # logs each table+column lookup at DEBUG. Bumped above the WARN root so
+    # CI surfaces *which* migrations ran and *which* tables the validator
+    # missed — the difference between "Flyway never ran" and "Flyway ran
+    # but the entity expects a column the migration didn't create".
+    org.flywaydb: INFO
+    org.hibernate.tool.schema: DEBUG
+    root: WARN
+    com.innbucks.loyaltyservice: INFO

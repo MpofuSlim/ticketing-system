@@ -1,5 +1,7 @@
 package com.innbucks.bookingservice.service;
 
+import com.innbucks.bookingservice.client.EventServiceClient;
+import com.innbucks.bookingservice.client.LoyaltyServiceClient;
 import com.innbucks.bookingservice.client.SeatServiceClient;
 import com.innbucks.bookingservice.dto.*;
 import com.innbucks.bookingservice.entity.*;
@@ -8,14 +10,17 @@ import com.innbucks.bookingservice.exception.TierRequirementException;
 import com.innbucks.bookingservice.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 
 @Service
@@ -27,15 +32,33 @@ public class BookingService {
     private final BookingItemRepository bookingItemRepository;
     private final SeatServiceClient seatServiceClient;
     private final ApplicationEventPublisher eventPublisher;
+    private final QrCodeGenerator qrCodeGenerator;
+    // ObjectProvider so unit tests that build the service with `new` and pass
+    // null for the loyalty/event clients still work — the loyalty integration
+    // is only exercised by tests that opt in.
+    private final ObjectProvider<LoyaltyServiceClient> loyaltyClientProvider;
+    private final ObjectProvider<EventServiceClient> eventClientProvider;
+
+    // Fuzz tolerance for split-payment math: pointsToUse / redeemRate +
+    // cashAmount must equal totalAmount within $0.01.
+    private static final BigDecimal SPLIT_TOLERANCE = new BigDecimal("0.01");
 
     private static final int TIER_2_MAX_SEATS = 2;
     private static final int TIER_3_MAX_SEATS = 6;
     private static final int TIER_4_MAX_SEATS = 10;
 
+    // How long a PENDING booking holds its seats before the expiration
+    // scheduler auto-cancels it. Java-side default of 5 means unit tests that
+    // construct BookingService with `new` (no Spring) get a sensible value;
+    // Spring overrides via @Value at runtime.
+    @org.springframework.beans.factory.annotation.Value("${app.booking.hold-ttl-minutes:5}")
+    private long holdTtlMinutes = 5;
+
     @Transactional
     public BookingResponseDTO createBooking(
             String userEmail,
             int tier,
+            String phoneNumber,
             CreateBookingRequestDTO request
     ) {
         log.info("Creating booking userEmail={} tier={} eventId={} seats={}",
@@ -51,39 +74,54 @@ public class BookingService {
                     "Tier " + tier + " customers may book at most " + maxSeats + " seats per booking");
         }
 
-        List<UUID> requestedSeatIds = request.getSeats().stream()
-                .map(CreateBookingRequestDTO.SeatItemRequest::getSeatId)
-                .toList();
+        // For each requested category, pick a random AVAILABLE seat from
+        // seat-service. Cache the available pool per category so multiple
+        // seats in the same category share one upstream call, and track
+        // already-picked seats so the same seat isn't assigned twice in
+        // one request.
+        Map<UUID, List<UUID>> availablePoolByCategory = new HashMap<>();
+        Set<UUID> pickedInThisRequest = new HashSet<>();
+        List<UUID> assignedSeatIds = new ArrayList<>(request.getSeats().size());
+        for (CreateBookingRequestDTO.SeatItemRequest item : request.getSeats()) {
+            UUID categoryId = item.getCategoryId();
+            List<UUID> pool = availablePoolByCategory.computeIfAbsent(
+                    categoryId, this::fetchAvailableSeatIds);
+
+            UUID picked = pickRandomAvailable(pool, pickedInThisRequest);
+            if (picked == null) {
+                log.warn("Booking rejected, no available seats userEmail={} categoryId={}", userEmail, categoryId);
+                throw new RuntimeException("No available seats in category " + categoryId);
+            }
+            pickedInThisRequest.add(picked);
+            assignedSeatIds.add(picked);
+        }
+
+        // Cross-check against our own DB. Catches the race where a seat that
+        // looked AVAILABLE in seat-service is already part of an active
+        // booking on our side (e.g. concurrent request just before
+        // seat-service was updated).
         List<BookingItem> existingActive = bookingItemRepository.findActiveBySeatIds(
-                requestedSeatIds, Booking.BookingStatus.CANCELLED);
+                assignedSeatIds, Booking.BookingStatus.CANCELLED);
         if (!existingActive.isEmpty()) {
             List<UUID> clashingSeats = existingActive.stream()
                     .map(BookingItem::getSeatId)
                     .distinct()
                     .toList();
-            log.warn("Booking create rejected, seats already booked userEmail={} seatIds={}",
+            log.warn("Booking create rejected, picked seats already booked userEmail={} seatIds={}",
                     userEmail, clashingSeats);
             throw new RuntimeException("One or more seats are already booked: " + clashingSeats);
         }
 
-        // Resolve every seat against seat-service so price, category, and event
-        // are derived from the source of truth rather than client input.
-        // The eventId and categoryId on the request are kept as defensive
-        // cross-checks — they must match what the seat actually belongs to.
-        List<SeatLookupResponseDTO> resolved = new ArrayList<>(requestedSeatIds.size());
-        for (CreateBookingRequestDTO.SeatItemRequest item : request.getSeats()) {
-            SeatLookupResponseDTO seat = lookupSeat(item.getSeatId());
+        // Resolve full details (price, eventId, sectionLabel) from seat-service.
+        // The available-seats endpoint omits these fields by design.
+        List<SeatLookupResponseDTO> resolved = new ArrayList<>(assignedSeatIds.size());
+        for (UUID seatId : assignedSeatIds) {
+            SeatLookupResponseDTO seat = lookupSeat(seatId);
             if (!request.getEventId().equals(seat.getEventId())) {
-                log.warn("Booking rejected, seat does not belong to event userEmail={} seatId={} requestEventId={} actualEventId={}",
-                        userEmail, item.getSeatId(), request.getEventId(), seat.getEventId());
+                log.warn("Booking rejected, category does not belong to event userEmail={} seatId={} requestEventId={} actualEventId={}",
+                        userEmail, seatId, request.getEventId(), seat.getEventId());
                 throw new RuntimeException(
-                        "Seat " + item.getSeatId() + " does not belong to event " + request.getEventId());
-            }
-            if (!item.getCategoryId().equals(seat.getCategoryId())) {
-                log.warn("Booking rejected, seat does not belong to category userEmail={} seatId={} requestCategoryId={} actualCategoryId={}",
-                        userEmail, item.getSeatId(), item.getCategoryId(), seat.getCategoryId());
-                throw new RuntimeException(
-                        "Seat " + item.getSeatId() + " does not belong to category " + item.getCategoryId());
+                        "Category " + seat.getCategoryId() + " does not belong to event " + request.getEventId());
             }
             resolved.add(seat);
         }
@@ -94,12 +132,27 @@ public class BookingService {
 
         String confirmationNumber = generateConfirmationNumber();
 
+        // Seats are held for holdTtlMinutes; if no /confirm (= payment) lands
+        // by then, the expiration scheduler flips the booking to CANCELLED
+        // so the seats are usable by other customers again.
+        LocalDateTime expiresAt = LocalDateTime.now().plusMinutes(holdTtlMinutes);
+
+        // Resolve the owning tenant once at booking creation so the loyalty
+        // service can attribute earn/redeem at confirm time without another
+        // event-service round trip. Best-effort: an event-service outage
+        // doesn't block bookings — the booking just won't earn loyalty
+        // points until tenant is known.
+        String tenantId = lookupTenantId(request.getEventId());
+
         Booking booking = Booking.builder()
                 .userEmail(userEmail)
+                .phoneNumber(phoneNumber)
                 .eventId(request.getEventId())
+                .tenantId(tenantId)
                 .confirmationNumber(confirmationNumber)
                 .status(Booking.BookingStatus.PENDING)
                 .totalAmount(total)
+                .expiresAt(expiresAt)
                 .build();
 
         bookingRepository.save(booking);
@@ -122,12 +175,133 @@ public class BookingService {
         booking.setItems(items);
         bookingRepository.save(booking);
 
-        eventPublisher.publishEvent(BookingDomainEvent.BookingCreated.of(booking, requestedSeatIds));
+        eventPublisher.publishEvent(BookingDomainEvent.BookingCreated.of(booking, assignedSeatIds));
 
         log.info("Booking created bookingId={} confirmation={} userEmail={} eventId={} total={} items={}",
                 booking.getId(), confirmationNumber, userEmail, request.getEventId(),
                 total, items.size());
         return toDTO(booking);
+    }
+
+    // Returns one DTO per booked seat in the category, regardless of booking
+    // status. Consumers (e.g. seat-service analytics) decide whether to
+    // exclude CANCELLED themselves.
+    //
+    // Ownership: callers other than SUPER_ADMIN must own the event the category
+    // belongs to. We resolve ownership from the first booking's eventId — every
+    // BookingItem in the same category points at the same event, so this is
+    // safe. If there are no bookings yet we still verify the category's event
+    // by going to event-service via the category's eventId on the booking item
+    // (best-effort). When no bookings exist we just return an empty list (no
+    // data to leak).
+    public List<CategoryBookingDTO> getBookingsByCategory(UUID categoryId,
+                                                          String requesterEmail,
+                                                          boolean isAdmin) {
+        log.debug("Fetching bookings by category categoryId={} requesterEmail={} isAdmin={}",
+                categoryId, requesterEmail, isAdmin);
+        var items = bookingItemRepository.findByCategoryIdWithBooking(categoryId);
+        if (items.isEmpty()) {
+            return List.of();
+        }
+        if (!isAdmin) {
+            UUID eventId = items.get(0).getBooking().getEventId();
+            requireEventOwnership(eventId, requesterEmail);
+        }
+        return items.stream()
+                .map(this::toCategoryBookingDTO)
+                .collect(Collectors.toList());
+    }
+
+    // Returns the count of active (PENDING + CONFIRMED) booking items per
+    // eventId. event-service uses this to compute availableTickets on read so
+    // its responses tally with reality, without maintaining a stored counter.
+    public List<EventActiveCountDTO> getActiveItemCountsByEvents(Collection<UUID> eventIds) {
+        if (eventIds == null || eventIds.isEmpty()) {
+            return List.of();
+        }
+        return bookingItemRepository
+                .countActiveItemsByEventIds(eventIds, Booking.BookingStatus.CONFIRMED)
+                .stream()
+                .map(p -> EventActiveCountDTO.builder()
+                        .eventId(p.getEventId())
+                        .count(p.getCount() == null ? 0L : p.getCount())
+                        .build())
+                .collect(Collectors.toList());
+    }
+
+    // Same shape as getBookingsByCategory but scoped to a whole event. Lets
+    // seat-service build event-level analytics in one round trip instead of
+    // calling per-category.
+    //
+    // Ownership: callers other than SUPER_ADMIN must own the event.
+    public List<CategoryBookingDTO> getBookingsByEvent(UUID eventId,
+                                                       String requesterEmail,
+                                                       boolean isAdmin) {
+        log.debug("Fetching bookings by event eventId={} requesterEmail={} isAdmin={}",
+                eventId, requesterEmail, isAdmin);
+        if (!isAdmin) {
+            requireEventOwnership(eventId, requesterEmail);
+        }
+        return bookingItemRepository.findByEventIdWithBooking(eventId)
+                .stream()
+                .map(this::toCategoryBookingDTO)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Looks up the event in event-service and throws AccessDeniedException if
+     * its tenantId doesn't match the requester. SUPER_ADMIN callers bypass
+     * this check at the controller layer and never reach here.
+     */
+    private void requireEventOwnership(UUID eventId, String requesterEmail) {
+        EventServiceClient client = eventClientProvider == null
+                ? null : eventClientProvider.getIfAvailable();
+        if (client == null) {
+            log.warn("event-service client unavailable; refusing analytics for eventId={} to non-admin",
+                    eventId);
+            throw new org.springframework.security.access.AccessDeniedException(
+                    "Cannot verify event ownership");
+        }
+        try {
+            var lookup = client.getEvent(eventId);
+            if (lookup == null || lookup.getData() == null) {
+                throw new org.springframework.security.access.AccessDeniedException("Event not found");
+            }
+            String ownerTenantId = lookup.getData().getTenantId();
+            if (ownerTenantId == null || !ownerTenantId.equals(requesterEmail)) {
+                log.warn("Event ownership check failed eventId={} requesterEmail={} ownerTenantId={}",
+                        eventId, requesterEmail, ownerTenantId);
+                throw new org.springframework.security.access.AccessDeniedException(
+                        "You do not own this event");
+            }
+        } catch (org.springframework.security.access.AccessDeniedException e) {
+            throw e;
+        } catch (Exception e) {
+            log.warn("Event ownership lookup failed eventId={} cause={}", eventId, e.toString());
+            throw new org.springframework.security.access.AccessDeniedException(
+                    "Cannot verify event ownership");
+        }
+    }
+
+    private CategoryBookingDTO toCategoryBookingDTO(BookingItem item) {
+        Booking b = item.getBooking();
+        return CategoryBookingDTO.builder()
+                .bookingId(b.getId())
+                .userEmail(b.getUserEmail())
+                .eventId(b.getEventId())
+                .status(b.getStatus())
+                .confirmationNumber(b.getConfirmationNumber())
+                .seatId(item.getSeatId())
+                .categoryId(item.getCategoryId())
+                .categoryName(item.getCategoryName())
+                .rowLabel(item.getRowLabel())
+                .seatNumber(item.getSeatNumber())
+                .ticketNumber(item.getTicketNumber())
+                .priceAtBooking(item.getPriceAtBooking())
+                .bookedAt(b.getCreatedAt())
+                .updatedAt(b.getUpdatedAt())
+                .expiresAt(b.getExpiresAt())
+                .build();
     }
 
     public List<BookingResponseDTO> getMyBookings(String userEmail) {
@@ -138,18 +312,43 @@ public class BookingService {
                 .collect(Collectors.toList());
     }
 
+    // Phone-number lookup (most-recent first). One phone may have many
+    // bookings; the caller decides how to render the list.
+    public List<BookingResponseDTO> getByPhoneNumber(String phoneNumber) {
+        log.debug("Fetching bookings phoneNumber={}", phoneNumber);
+        return bookingRepository.findByPhoneNumberOrderByCreatedAtDesc(phoneNumber)
+                .stream()
+                .map(this::toDTO)
+                .collect(Collectors.toList());
+    }
+
+    // Returns only CONFIRMED bookings for a phone number — excludes PENDING and
+    // CANCELLED so customers see only paid, valid tickets.
+    public List<BookingResponseDTO> getActiveByPhoneNumber(String phoneNumber) {
+        log.debug("Fetching confirmed bookings phoneNumber={}", phoneNumber);
+        return bookingRepository.findByPhoneNumberOrderByCreatedAtDesc(phoneNumber)
+                .stream()
+                .filter(b -> b.getStatus() == Booking.BookingStatus.CONFIRMED)
+                .map(this::toDTO)
+                .collect(Collectors.toList());
+    }
+
     public BookingResponseDTO getBookingById(UUID bookingId, String userEmail) {
-        log.debug("Fetching booking bookingId={} userEmail={}", bookingId, userEmail);
+        return getBookingById(bookingId, userEmail, false);
+    }
+
+    public BookingResponseDTO getBookingById(UUID bookingId, String userEmail, boolean isAdmin) {
+        log.debug("Fetching booking bookingId={} userEmail={} isAdmin={}", bookingId, userEmail, isAdmin);
         Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> {
                     log.warn("Booking lookup failed, not found bookingId={}", bookingId);
                     return new RuntimeException("Booking not found");
                 });
 
-        if (!booking.getUserEmail().equals(userEmail)) {
+        if (!isAdmin && !booking.getUserEmail().equals(userEmail)) {
             log.warn("Booking access denied bookingId={} requesterEmail={} ownerEmail={}",
                     bookingId, userEmail, booking.getUserEmail());
-            throw new RuntimeException("Access denied");
+            throw new org.springframework.security.access.AccessDeniedException("Access denied");
         }
 
         return toDTO(booking);
@@ -168,17 +367,22 @@ public class BookingService {
 
     @Transactional
     public BookingResponseDTO cancelBooking(UUID bookingId, String userEmail) {
-        log.info("Cancelling booking bookingId={} userEmail={}", bookingId, userEmail);
+        return cancelBooking(bookingId, userEmail, false);
+    }
+
+    @Transactional
+    public BookingResponseDTO cancelBooking(UUID bookingId, String userEmail, boolean isAdmin) {
+        log.info("Cancelling booking bookingId={} userEmail={} isAdmin={}", bookingId, userEmail, isAdmin);
         Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> {
                     log.warn("Cancel failed, booking not found bookingId={}", bookingId);
                     return new RuntimeException("Booking not found");
                 });
 
-        if (!booking.getUserEmail().equals(userEmail)) {
+        if (!isAdmin && !booking.getUserEmail().equals(userEmail)) {
             log.warn("Cancel rejected, access denied bookingId={} requesterEmail={} ownerEmail={}",
                     bookingId, userEmail, booking.getUserEmail());
-            throw new RuntimeException("Access denied");
+            throw new org.springframework.security.access.AccessDeniedException("Access denied");
         }
 
         if (booking.getStatus() == Booking.BookingStatus.CONFIRMED) {
@@ -194,6 +398,7 @@ public class BookingService {
         }
 
         booking.setStatus(Booking.BookingStatus.CANCELLED);
+        booking.setExpiresAt(null); // hold no longer applicable
         bookingRepository.save(booking);
 
         eventPublisher.publishEvent(BookingDomainEvent.BookingCancelled.of(booking));
@@ -202,9 +407,18 @@ public class BookingService {
         return toDTO(booking);
     }
 
-    @Transactional
+    // Backward-compatible overload: confirm with no points/cash split. Used
+    // by callers (tests, payment-service) that don't yet know about loyalty.
     public BookingResponseDTO confirmBooking(UUID bookingId) {
-        log.info("Confirming booking bookingId={}", bookingId);
+        return confirmBooking(bookingId, null);
+    }
+
+    @Transactional
+    public BookingResponseDTO confirmBooking(UUID bookingId, ConfirmBookingRequestDTO confirmRequest) {
+        log.info("Confirming booking bookingId={} pointsToUse={} cashAmount={}",
+                bookingId,
+                confirmRequest == null ? null : confirmRequest.getPointsToUse(),
+                confirmRequest == null ? null : confirmRequest.getCashAmount());
         Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> {
                     log.warn("Confirm failed, booking not found bookingId={}", bookingId);
@@ -217,13 +431,171 @@ public class BookingService {
             throw new RuntimeException("Only pending bookings can be confirmed");
         }
 
+        // Reject confirms that arrive after the seat hold has lapsed — the
+        // expiration scheduler may not have run yet, but the lock is gone.
+        if (booking.getExpiresAt() != null
+                && booking.getExpiresAt().isBefore(LocalDateTime.now())) {
+            log.warn("Confirm rejected, hold expired bookingId={} expiredAt={}",
+                    bookingId, booking.getExpiresAt());
+            throw new RuntimeException(
+                    "Seat hold expired — please create a new booking and pay within "
+                            + holdTtlMinutes + " minutes");
+        }
+
+        // Default to pure-cash if the caller didn't pass a payload. This
+        // preserves the legacy contract where PATCH /confirm has no body.
+        BigDecimal pointsToUse = confirmRequest == null || confirmRequest.getPointsToUse() == null
+                ? BigDecimal.ZERO : confirmRequest.getPointsToUse();
+        BigDecimal cashAmount = confirmRequest == null || confirmRequest.getCashAmount() == null
+                ? booking.getTotalAmount() : confirmRequest.getCashAmount();
+
+        applyLoyalty(booking, pointsToUse, cashAmount);
+
+        booking.setPointsUsed(pointsToUse.signum() > 0 ? pointsToUse : null);
+        booking.setCashAmount(cashAmount);
         booking.setStatus(Booking.BookingStatus.CONFIRMED);
+        booking.setExpiresAt(null); // paid — hold no longer applicable
         bookingRepository.save(booking);
+
+        // Decrement the event's stored availableTickets in event-service so its
+        // DB column actually drops as tickets are bought. Best-effort: if the
+        // gateway is degraded the booking still confirms and the event-service
+        // read-time enrichment keeps the response in sync until next call.
+        consumeEventAvailability(booking);
 
         eventPublisher.publishEvent(BookingDomainEvent.BookingConfirmed.of(booking));
 
-        log.info("Booking confirmed bookingId={} userEmail={}", bookingId, booking.getUserEmail());
+        log.info("Booking confirmed bookingId={} userEmail={} pointsUsed={} cashAmount={}",
+                bookingId, booking.getUserEmail(), booking.getPointsUsed(), booking.getCashAmount());
         return toDTO(booking);
+    }
+
+    // Validates the points/cash split against the tenant's loyalty rule and
+    // (if everything checks out) calls redeem then earn on loyalty-service.
+    // No-op when:
+    //   - the loyalty client isn't wired (unit tests),
+    //   - the booking has no tenantId (event-service was down at create),
+    //   - both pointsToUse and cashAmount cover the full total via cash only
+    //     AND the rule isn't reachable.
+    private void applyLoyalty(Booking booking, BigDecimal pointsToUse, BigDecimal cashAmount) {
+        LoyaltyServiceClient loyalty = loyaltyClientProvider == null ? null : loyaltyClientProvider.getIfAvailable();
+        if (loyalty == null) {
+            log.debug("Loyalty client unavailable; skipping loyalty for bookingId={}", booking.getId());
+            return;
+        }
+        if (booking.getTenantId() == null) {
+            if (pointsToUse.signum() > 0) {
+                throw new RuntimeException("Cannot redeem points — booking has no tenant attached");
+            }
+            log.debug("No tenantId on booking; skipping loyalty earn for bookingId={}", booking.getId());
+            return;
+        }
+
+        LoyaltyRuleResponse rule = fetchRule(loyalty, booking.getTenantId());
+        if (rule == null) {
+            if (pointsToUse.signum() > 0) {
+                throw new RuntimeException("Loyalty rule unavailable; cannot redeem points right now");
+            }
+            log.debug("Loyalty rule unavailable; skipping earn for bookingId={}", booking.getId());
+            return;
+        }
+
+        // Cross-check the math: pointsToUse / redeemRate + cashAmount ≈ totalAmount
+        BigDecimal pointsAsCash = pointsToUse.signum() == 0
+                ? BigDecimal.ZERO
+                : pointsToUse.divide(rule.getRedeemRate(), 4, RoundingMode.HALF_UP);
+        BigDecimal reconstructedTotal = pointsAsCash.add(cashAmount);
+        BigDecimal diff = reconstructedTotal.subtract(booking.getTotalAmount()).abs();
+        if (diff.compareTo(SPLIT_TOLERANCE) > 0) {
+            throw new RuntimeException(String.format(
+                    "Payment split does not match total: points worth %s + cash %s = %s, expected %s",
+                    pointsAsCash, cashAmount, reconstructedTotal, booking.getTotalAmount()));
+        }
+
+        String reference = booking.getId().toString();
+        if (pointsToUse.signum() > 0) {
+            loyalty.redeem(LoyaltyRedeemRequest.builder()
+                    .customerId(booking.getUserEmail())
+                    .tenantId(booking.getTenantId())
+                    .points(pointsToUse)
+                    .reference(reference)
+                    .build());
+        }
+        // Earn ONLY on the cash portion, per the program rule. Pure-points
+        // confirmations don't accumulate.
+        if (cashAmount.signum() > 0) {
+            try {
+                loyalty.earn(LoyaltyEarnRequest.builder()
+                        .customerId(booking.getUserEmail())
+                        .tenantId(booking.getTenantId())
+                        .cashAmount(cashAmount)
+                        .reference(reference)
+                        .build());
+            } catch (Exception ex) {
+                // Earning is best-effort; never fail a paid booking because we
+                // couldn't credit points. The redeem (if any) already succeeded
+                // and is idempotent on retry.
+                log.warn("Loyalty earn failed bookingId={} cashAmount={} reason={}",
+                        booking.getId(), cashAmount, ex.getMessage());
+            }
+        }
+    }
+
+    private LoyaltyRuleResponse fetchRule(LoyaltyServiceClient loyalty, String tenantId) {
+        try {
+            ApiResult<LoyaltyRuleResponse> envelope = loyalty.getRule(tenantId);
+            return envelope == null ? null : envelope.getData();
+        } catch (Exception ex) {
+            log.warn("Failed to fetch loyalty rule tenantId={} reason={}", tenantId, ex.getMessage());
+            return null;
+        }
+    }
+
+    private void consumeEventAvailability(Booking booking) {
+        EventServiceClient client = eventClientProvider == null
+                ? null : eventClientProvider.getIfAvailable();
+        if (client == null) {
+            log.debug("event client unavailable; skipping availability decrement bookingId={}",
+                    booking.getId());
+            return;
+        }
+        int count = booking.getItems() == null ? 0 : booking.getItems().size();
+        if (count <= 0) {
+            return;
+        }
+        try {
+            ApiResult<AvailabilityResponseDTO> envelope =
+                    client.consumeAvailability(booking.getEventId(), count);
+            AvailabilityResponseDTO data = envelope == null ? null : envelope.getData();
+            if (data != null) {
+                log.info("Decremented event availability eventId={} consumed={} remaining={}",
+                        booking.getEventId(), count, data.getAvailableTickets());
+            } else {
+                log.warn("Availability decrement returned no data eventId={} consumed={}",
+                        booking.getEventId(), count);
+            }
+        } catch (Exception ex) {
+            // Don't block confirmation on event-service trouble. The read-time
+            // enrichment in event-service still subtracts confirmed booking
+            // items so the API response stays correct.
+            log.warn("Failed to decrement event availability eventId={} count={} reason={}",
+                    booking.getEventId(), count, ex.getMessage());
+        }
+    }
+
+    private String lookupTenantId(UUID eventId) {
+        EventServiceClient event = eventClientProvider == null ? null : eventClientProvider.getIfAvailable();
+        if (event == null) {
+            return null;
+        }
+        try {
+            ApiResult<EventLookupDTO> envelope = event.getEvent(eventId);
+            EventLookupDTO data = envelope == null ? null : envelope.getData();
+            return data == null ? null : data.getTenantId();
+        } catch (Exception ex) {
+            log.warn("Failed to fetch event for tenant lookup eventId={} reason={}", eventId, ex.getMessage());
+            return null;
+        }
     }
 
     // ==================== HELPERS ====================
@@ -235,6 +607,30 @@ public class BookingService {
             throw new RuntimeException("Seat " + seatId + " not found");
         }
         return envelope.getData();
+    }
+
+    private List<UUID> fetchAvailableSeatIds(UUID categoryId) {
+        ApiResult<List<AvailableSeatDTO>> envelope = seatServiceClient.getAvailableSeats(categoryId);
+        if (envelope == null || envelope.getData() == null || envelope.getData().isEmpty()) {
+            log.warn("No available seats returned by seat-service categoryId={}", categoryId);
+            throw new RuntimeException("No available seats in category " + categoryId);
+        }
+        return envelope.getData().stream()
+                .map(AvailableSeatDTO::getId)
+                .collect(Collectors.toCollection(ArrayList::new));
+    }
+
+    // Returns a uniformly random seatId from the pool, skipping any already
+    // claimed by an earlier item in the same booking request. Returns null if
+    // the pool has no candidates left.
+    private UUID pickRandomAvailable(List<UUID> pool, Set<UUID> alreadyPicked) {
+        List<UUID> candidates = pool.stream()
+                .filter(id -> !alreadyPicked.contains(id))
+                .toList();
+        if (candidates.isEmpty()) {
+            return null;
+        }
+        return candidates.get(ThreadLocalRandom.current().nextInt(candidates.size()));
     }
 
     /**
@@ -303,19 +699,25 @@ public class BookingService {
                             .seatNumber(i.getSeatNumber())
                             .priceAtBooking(i.getPriceAtBooking())
                             .ticketNumber(i.getTicketNumber())
+                            .qrCode(qrCodeGenerator.toDataUri(i.getTicketNumber()))
                             .build())
                   .collect(Collectors.toList());
 
         return BookingResponseDTO.builder()
                 .id(booking.getId())
                 .userEmail(booking.getUserEmail())
+                .phoneNumber(booking.getPhoneNumber())
                 .eventId(booking.getEventId())
+                .tenantId(booking.getTenantId())
                 .confirmationNumber(booking.getConfirmationNumber())
                 .status(booking.getStatus())
                 .totalAmount(booking.getTotalAmount())
+                .pointsUsed(booking.getPointsUsed())
+                .cashAmount(booking.getCashAmount())
                 .items(itemDTOs)
                 .createdAt(booking.getCreatedAt())
                 .updatedAt(booking.getUpdatedAt())
+                .expiresAt(booking.getExpiresAt())
                 .build();
     }
 }

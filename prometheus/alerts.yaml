@@ -1,0 +1,197 @@
+# Prometheus alert rules for the ticketing-system stack.
+#
+# Vendor-neutral PromQL — drops into Prometheus' `rule_files`, kube-prometheus-
+# stack's PrometheusRule CRD, Grafana Cloud's "Alerts → Rules", or any other
+# backend that speaks PromQL.
+#
+# Naming convention:
+#   - Severity: page = wake someone up; ticket = next business day.
+#   - `summary` is the alert headline; `description` shows the offending value
+#     so the on-call doesn't have to re-derive context.
+#   - Every page-able alert points at prometheus/slo.md#<anchor> for the
+#     runbook so the responder isn't starting from a cold page.
+#
+# All metric names match the Micrometer → Prometheus mangling rules (dot →
+# underscore, Counter gets a `_total` suffix, Timer gets `_seconds_*`).
+
+groups:
+
+  # --------------------------------------------------------------------
+  # Availability — the "is the service up at all" page-able tier.
+  # --------------------------------------------------------------------
+  - name: availability
+    interval: 30s
+    rules:
+
+      - alert: ServiceDown
+        expr: up{job=~"api-gateway|user-service|event-service|seat-service|booking-service|payment-service|loyalty-service"} == 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.job }} is down"
+          description: "Prometheus has been unable to scrape {{ $labels.job }} on {{ $labels.instance }} for 2 minutes."
+          runbook: "prometheus/slo.md#servicedown"
+
+      - alert: HighHttp5xxRate
+        # 5xx rate > 1% over a 5m rolling window, sustained for 5m.
+        # Counters use `_total` suffix in the Prometheus exposition.
+        expr: |
+          sum by (job) (rate(http_server_requests_seconds_count{status=~"5..",job!="api-gateway"}[5m]))
+            / sum by (job) (rate(http_server_requests_seconds_count{job!="api-gateway"}[5m]))
+            > 0.01
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.job }} 5xx rate > 1%"
+          description: "{{ $labels.job }} returning {{ $value | humanizePercentage }} 5xx over the last 5m."
+          runbook: "prometheus/slo.md#highhttp5xxrate"
+
+  # --------------------------------------------------------------------
+  # Latency — symptom-level: customer-facing endpoints get their own
+  # p95 budget, infrastructure ones don't.
+  # --------------------------------------------------------------------
+  - name: latency
+    interval: 30s
+    rules:
+
+      - alert: ShopCheckoutP95Slow
+        # payment.shop_checkout.duration is the end-to-end shop payment
+        # including the loyalty round-trip. p95 budget: 1 second.
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, job) (rate(payment_shop_checkout_duration_seconds_bucket[5m]))
+          ) > 1
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "Shop checkout p95 latency > 1s"
+          description: "payment-service /payments/shop-checkout p95 = {{ $value | humanizeDuration }} over the last 5m."
+          runbook: "prometheus/slo.md#shopcheckoutp95slow"
+
+      - alert: ShopCheckoutP99Slow
+        expr: |
+          histogram_quantile(0.99,
+            sum by (le, job) (rate(payment_shop_checkout_duration_seconds_bucket[5m]))
+          ) > 3
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Shop checkout p99 latency > 3s"
+          description: "payment-service /payments/shop-checkout p99 = {{ $value | humanizeDuration }}."
+          runbook: "prometheus/slo.md#shopcheckoutp95slow"
+
+  # --------------------------------------------------------------------
+  # Business — the metrics added on the previous step. Designed to fire
+  # on symptoms a human would notice (customers can't pay, fraud spike).
+  # --------------------------------------------------------------------
+  - name: business
+    interval: 30s
+    rules:
+
+      - alert: LoyaltyUnavailableFromPayment
+        # payment-service couldn't reach loyalty-service. Even one
+        # occurrence in a 1m window is page-able — customers can't pay.
+        expr: rate(payment_shop_checkout_total{outcome="loyalty_unavailable"}[1m]) > 0
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "Shop checkout failing because loyalty-service is unreachable"
+          description: "{{ $value | humanize }} loyalty_unavailable events/sec on payment.shop_checkout."
+          runbook: "prometheus/slo.md#loyaltyunavailablefrompayment"
+
+      - alert: ShopCheckoutRejectionSpike
+        # Loyalty-side rejection rate jumped >5x its 1-hour baseline.
+        # Almost always a misconfigured rule, an inactive merchant, or
+        # a malformed POS integration that's retrying.
+        expr: |
+          sum by (reason) (rate(loyalty_shop_checkout_rejected_total[5m]))
+            >
+          5 * sum by (reason) (rate(loyalty_shop_checkout_rejected_total[1h] offset 5m))
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Shop checkout rejections spiked for reason={{ $labels.reason }}"
+          description: "Rejection rate is {{ $value | humanize }}/s vs 1h baseline."
+          runbook: "prometheus/slo.md#shopcheckoutrejectionspike"
+
+      - alert: FraudRejectionsHigh
+        # loyalty.fraud.rejected jumps — either an attack or a regression
+        # in our signing/QR generation logic. Either way, eyes-on.
+        expr: sum(rate(loyalty_fraud_rejected_total[5m])) > 0.5
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Loyalty fraud rejection rate > 0.5/s"
+          description: "loyalty_fraud_rejected ringing at {{ $value | humanize }}/s sustained."
+          runbook: "prometheus/slo.md#fraudrejectionshigh"
+
+      - alert: PointsEarnedFlatlined
+        # PURCHASE traffic is happening (loyalty.transaction.posted ticking)
+        # but no points are being awarded (loyalty.points.earned flat).
+        # Means the rules engine matched no rule — a config error, not a
+        # zero-traffic day. Only fires when there IS traffic.
+        expr: |
+          rate(loyalty_transaction_posted_total{type="PURCHASE"}[15m]) > 0.1
+            and
+          rate(loyalty_points_earned_points_total[15m]) == 0
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "PURCHASE transactions posting but zero points earned"
+          description: "Rules engine returned 0 for every PURCHASE in the last 15m. Check active rules."
+          runbook: "prometheus/slo.md#pointsearnedflatlined"
+
+  # --------------------------------------------------------------------
+  # Infrastructure — usually causes (vs the symptom alerts above). Page
+  # only when they're certain to translate into customer impact soon.
+  # --------------------------------------------------------------------
+  - name: infrastructure
+    interval: 30s
+    rules:
+
+      - alert: HikariPoolExhausted
+        # All Hikari connections held; requests will time out within
+        # seconds. Page.
+        expr: hikaricp_connections_active >= hikaricp_connections_max
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.job }} DB pool exhausted ({{ $labels.pool }})"
+          description: "All {{ $labels.pool }} Hikari connections in use for >1m on {{ $labels.instance }}."
+          runbook: "prometheus/slo.md#hikaripoolexhausted"
+
+      - alert: JvmHeapPressure
+        # Heap over 85% for 10m → next major GC will hurt; restart or
+        # scale before users feel it.
+        expr: |
+          sum by (job, instance) (jvm_memory_used_bytes{area="heap"})
+            / sum by (job, instance) (jvm_memory_max_bytes{area="heap"})
+            > 0.85
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.job }} heap > 85%"
+          description: "Heap usage on {{ $labels.instance }} = {{ $value | humanizePercentage }} for 10m."
+          runbook: "prometheus/slo.md#jvmheappressure"
+
+      - alert: OtelExportFailing
+        # Spans can't ship to the collector. Lose tracing visibility
+        # without crashing the app — ticket, not page.
+        expr: increase(otlp_exporter_exported_spans_failed_total[10m]) > 0
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "OTLP span export failing on {{ $labels.job }}"
+          description: "{{ $value | humanize }} failed span exports in the last 10m. OTLP_ENDPOINT reachable?"
+          runbook: "prometheus/slo.md#otelexportfailing"

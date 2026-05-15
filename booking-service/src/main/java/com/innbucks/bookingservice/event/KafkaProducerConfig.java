@@ -23,13 +23,23 @@ public class KafkaProducerConfig {
 
     @Bean
     public ProducerFactory<String, Object> producerFactory(
-            @Value("${spring.kafka.bootstrap-servers}") String bootstrapServers) {
+            @Value("${spring.kafka.bootstrap-servers}") String bootstrapServers,
+            @Value("${app.events.kafka.delivery-timeout-ms:30000}") int deliveryTimeoutMs,
+            @Value("${app.events.kafka.request-timeout-ms:5000}") int requestTimeoutMs,
+            @Value("${app.events.kafka.max-block-ms:5000}") int maxBlockMs) {
         Map<String, Object> props = new HashMap<>();
         props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
         props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
         props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, JsonSerializer.class);
         props.put(ProducerConfig.ACKS_CONFIG, "all");
         props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+        // Bound how long the producer keeps retrying a record before failing
+        // it. Defaults are dev-friendly: a misconfigured broker (e.g. wrong
+        // advertised listener) surfaces as a single warn per event instead of
+        // an infinite Sender retry loop. Tune up in prod if needed.
+        props.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, deliveryTimeoutMs);
+        props.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, requestTimeoutMs);
+        props.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, maxBlockMs);
         return new DefaultKafkaProducerFactory<>(props);
     }
 

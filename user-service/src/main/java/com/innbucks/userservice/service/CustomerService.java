@@ -1,5 +1,10 @@
 package com.innbucks.userservice.service;
 
+import com.innbucks.userservice.client.DepositAccount;
+import com.innbucks.userservice.client.OradianClient;
+import com.innbucks.userservice.client.OradianClientException;
+import com.innbucks.userservice.client.OradianCustomerRequest;
+import com.innbucks.userservice.client.OradianCustomerResponse;
 import com.innbucks.userservice.dto.*;
 import com.innbucks.userservice.entity.CustomerProfile;
 import com.innbucks.userservice.entity.Device;
@@ -17,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 
 @Service
 @RequiredArgsConstructor
@@ -31,6 +37,7 @@ public class CustomerService {
     private final PendingRegistrationRepository pendingRegistrationRepository;
     private final PasswordEncoder passwordEncoder;
     private final OtpService otpService;
+    private final OradianClient oradianClient;
 
     /**
      * Tier 1 no longer creates a User or CustomerProfile. It stashes the phone + hashed password
@@ -68,26 +75,69 @@ public class CustomerService {
     }
 
     @Transactional
-    public CustomerRegistrationResponseDTO registerTier2(String phoneNumber, CustomerTier2RegisterDTO request) {
-        CustomerProfile profile = loadProfile(phoneNumber, 1);
+    public CustomerRegistrationResponseDTO registerTier2(CustomerTier2RegisterDTO request) {
+        CustomerProfile profile = loadProfile(request.getMsisdn(), 1);
 
-        profile.setFullName(request.getFullName());
-        profile.setIdNumber(request.getIdNumber());
-        profile.setPassportNumber(request.getPassportNumber());
-        profile.setAddress(request.getAddress());
+        // Compose a canonical fullName from the three structured fields. The
+        // profile still keeps it as a denormalised column so ID-matching and
+        // downstream KYC checks have one human-readable string to work against.
+        String fullName = composeFullName(request.getFirstName(),
+                request.getMiddleName(), request.getLastName());
+        profile.setFullName(fullName);
+        profile.setNationalId(request.getNationalId());
+        profile.setDateOfBirth(request.getDateOfBirth());
         profile.setGender(request.getGender());
-        profile.setSelfiePicture(request.getSelfiePicture());
+
+        CustomerTier2RegisterDTO.Address addr = request.getAddress();
+        profile.setAddress(com.innbucks.userservice.entity.CustomerProfileAddress.builder()
+                .street1(addr.getStreet1())
+                .city(addr.getCity())
+                .postCode(addr.getPostCode())
+                .country(addr.getCountry())
+                .build());
+
+        profile.setClientCustomFields(request.getClientCustomFields() == null
+                ? new java.util.LinkedHashMap<>()
+                : new java.util.LinkedHashMap<>(request.getClientCustomFields()));
         profile.setRegistrationTier(2);
         customerProfileRepository.save(profile);
 
-        // Keep the User first/last name consistent with the submitted full name
-        String[] parts = request.getFullName().trim().split("\\s+", 2);
+        // Mirror the structured fields onto the User row so the JWT issuer can
+        // pick them up at next login (see AuthService.issueToken — tier>=2
+        // CUSTOMERS get firstName/middleName/lastName claims).
         User user = profile.getUser();
-        user.setFirstName(parts[0]);
-        if (parts.length > 1) {
-            user.setLastName(parts[1]);
-        }
+        user.setFirstName(request.getFirstName());
+        user.setMiddleName(request.getMiddleName());
+        user.setLastName(request.getLastName());
+        user.setEmail(request.getEmail());
         userRepository.save(user);
+
+        // Mirror the registration into Oradian middleware via the S2S endpoint.
+        // Failure throws OradianClientException, which rolls back the @Transactional
+        // saves above so local state can't advance to tier 2 without an Oradian
+        // Person+Client. GlobalExceptionHandler maps the exception to HTTP 502.
+        OradianCustomerResponse oradian = oradianClient.createCustomer(toOradianRequest(request));
+        if (oradian == null) {
+            // Defensive: RestClient.body() can return null on an empty 200. We treat
+            // that as a contract violation — the same as Oradian rejecting us — so
+            // the @Transactional rolls back and the caller gets 502 from
+            // GlobalExceptionHandler.
+            throw new OradianClientException("Oradian middleware returned an empty response body");
+        }
+
+        // Stamp the Oradian linkage on the local profile so subsequent reads
+        // (balance enquiries, account-status lookups, reconciliation jobs) can
+        // hit Oradian by the stored externalID / clientID instead of querying
+        // by msisdn each time.
+        profile.setOradianExternalId(oradian.getOradianExternalId());
+        profile.setOradianClientId(oradian.getOradianClientId());
+        customerProfileRepository.save(profile);
+
+        log.info("Tier-2 mirrored to Oradian phone={} userId={} oradianClientId={} externalId={}",
+                user.getPhoneNumber(),
+                user.getId(),
+                oradian.getOradianClientId(),
+                oradian.getOradianExternalId());
 
         return CustomerRegistrationResponseDTO.builder()
                 .userId(user.getId())
@@ -150,7 +200,7 @@ public class CustomerService {
     public CustomerTierResponseDTO getCustomerTierByPhoneNumber(String phoneNumber) {
         User user = userRepository.findByPhoneNumber(phoneNumber)
                 .orElseThrow(() -> new RuntimeException("Customer not found for phone " + phoneNumber));
-        if (user.getRole() != User.Role.CUSTOMER) {
+        if (!user.hasRole(User.Role.CUSTOMER)) {
             throw new RuntimeException("User is not a customer");
         }
         CustomerProfile profile = customerProfileRepository.findByUserId(user.getId())
@@ -161,15 +211,76 @@ public class CustomerService {
 
         return CustomerTierResponseDTO.builder()
                 .phoneNumber(user.getPhoneNumber())
+                .email(user.getEmail())
                 .currentTier(currentTier)
                 .nextTier(nextTier)
+                .build();
+    }
+
+    /**
+     * Customer-self deposits lookup. Verifies the JWT-derived phone resolves
+     * to a real CUSTOMER row, then delegates to OradianClient which calls
+     * Oradian middleware's S2S /internal/customers/{msisdn}/deposits and
+     * returns just the deposits array. Keeps a stale JWT issued for a
+     * de-registered customer from leaking Oradian data.
+     */
+    @Transactional(readOnly = true)
+    public List<DepositAccount> getDepositsForCustomer(String phoneNumber) {
+        User user = userRepository.findByPhoneNumber(phoneNumber)
+                .orElseThrow(() -> new RuntimeException("Customer not found for phone " + phoneNumber));
+        if (!user.hasRole(User.Role.CUSTOMER)) {
+            throw new RuntimeException("User is not a customer");
+        }
+        return oradianClient.getDeposits(phoneNumber);
+    }
+
+    /** Joins first / middle / last into a single string, skipping any blanks. */
+    private static String composeFullName(String first, String middle, String last) {
+        StringBuilder sb = new StringBuilder();
+        if (first != null && !first.isBlank()) sb.append(first.trim());
+        if (middle != null && !middle.isBlank()) {
+            if (sb.length() > 0) sb.append(' ');
+            sb.append(middle.trim());
+        }
+        if (last != null && !last.isBlank()) {
+            if (sb.length() > 0) sb.append(' ');
+            sb.append(last.trim());
+        }
+        return sb.toString();
+    }
+
+    private static OradianCustomerRequest toOradianRequest(CustomerTier2RegisterDTO request) {
+        // Oradian middleware's Gender enum only knows MALE / FEMALE; OTHER would be
+        // rejected at JSON deserialisation. Fail fast here with a readable message
+        // instead of relaying Oradian's 400.
+        if (request.getGender() == CustomerProfile.Gender.OTHER) {
+            throw new OradianClientException(
+                    "Oradian middleware does not yet support gender=OTHER. Use MALE or FEMALE.");
+        }
+        CustomerTier2RegisterDTO.Address addr = request.getAddress();
+        return OradianCustomerRequest.builder()
+                .firstName(request.getFirstName())
+                .middleName(request.getMiddleName())
+                .lastName(request.getLastName())
+                .dateOfBirth(request.getDateOfBirth())
+                .gender(request.getGender().name())
+                .msisdn(request.getMsisdn())
+                .nationalId(request.getNationalId())
+                .email(request.getEmail())
+                .address(OradianCustomerRequest.Address.builder()
+                        .street1(addr.getStreet1())
+                        .city(addr.getCity())
+                        .postCode(addr.getPostCode())
+                        .country(addr.getCountry())
+                        .build())
+                .clientCustomFields(request.getClientCustomFields())
                 .build();
     }
 
     private CustomerProfile loadProfile(String phoneNumber, int requiredCurrentTier) {
         User user = userRepository.findByPhoneNumber(phoneNumber)
                 .orElseThrow(() -> new RuntimeException("Customer not found for phone " + phoneNumber));
-        if (user.getRole() != User.Role.CUSTOMER) {
+        if (!user.hasRole(User.Role.CUSTOMER)) {
             throw new RuntimeException("User is not a customer");
         }
         CustomerProfile profile = customerProfileRepository.findByUserId(user.getId())

@@ -36,7 +36,7 @@ class JwtFilterTest {
 
     @Test
     void validBearerToken_populatesSecurityContext() throws Exception {
-        String token = jwtUtil.generateToken("user@example.com", "TENANT", 4, true);
+        String token = jwtUtil.generateToken("user@example.com", "EVENT_ORGANIZER", 4, true);
         MockHttpServletRequest req = new MockHttpServletRequest("GET", "/agents/me");
         req.addHeader("Authorization", "Bearer " + token);
         MockHttpServletResponse res = new MockHttpServletResponse();
@@ -48,7 +48,7 @@ class JwtFilterTest {
         assertNotNull(auth);
         assertEquals("user@example.com", auth.getName());
         assertTrue(auth.getAuthorities().stream()
-                .anyMatch(a -> a.getAuthority().equals("ROLE_TENANT")));
+                .anyMatch(a -> a.getAuthority().equals("ROLE_EVENT_ORGANIZER")));
         assertTrue(auth.getAuthorities().stream()
                 .anyMatch(a -> a.getAuthority().equals("TIER_4")));
         assertTrue(auth.getAuthorities().stream()
@@ -87,7 +87,10 @@ class JwtFilterTest {
     }
 
     @Test
-    void revokedToken_leavesContextEmpty_andStillChains() throws Exception {
+    void revokedToken_returns401_andHaltsChain() throws Exception {
+        // Hardened behaviour: a present-but-revoked Bearer token is rejected at
+        // the filter with 401 TOKEN_REVOKED. The chain does NOT continue (old
+        // code let it through unauthenticated, hiding the cause).
         String token = jwtUtil.generateToken("u@example.com", "CUSTOMER", 2, false);
         when(tokenRevocationService.isRevoked(token)).thenReturn(true);
         MockHttpServletRequest req = new MockHttpServletRequest("GET", "/agents/me");
@@ -98,11 +101,16 @@ class JwtFilterTest {
         filter.doFilterInternal(req, res, chain);
 
         assertNull(SecurityContextHolder.getContext().getAuthentication());
-        verify(chain).doFilter(req, res);
+        assertEquals(401, res.getStatus());
+        assertTrue(res.getContentAsString().contains("TOKEN_REVOKED"));
+        verify(chain, never()).doFilter(req, res);
     }
 
     @Test
-    void invalidToken_leavesContextEmpty_andStillChains() throws Exception {
+    void invalidToken_returns401_andHaltsChain() throws Exception {
+        // Hardened behaviour: tampered / malformed Bearer tokens get a clean
+        // 401 INVALID_TOKEN immediately so clients know to refresh rather than
+        // being told "you forgot a token" later in the chain.
         MockHttpServletRequest req = new MockHttpServletRequest("GET", "/agents/me");
         req.addHeader("Authorization", "Bearer garbage.token.here");
         MockHttpServletResponse res = new MockHttpServletResponse();
@@ -111,7 +119,9 @@ class JwtFilterTest {
         filter.doFilterInternal(req, res, chain);
 
         assertNull(SecurityContextHolder.getContext().getAuthentication());
-        verify(chain).doFilter(req, res);
+        assertEquals(401, res.getStatus());
+        assertTrue(res.getContentAsString().contains("INVALID_TOKEN"));
+        verify(chain, never()).doFilter(req, res);
     }
 
     @Test

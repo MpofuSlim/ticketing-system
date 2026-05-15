@@ -51,10 +51,11 @@ while IFS= read -r _line || [ -n "$_line" ]; do
   export "$_key=$_val"
 done < "$_env_file"
 
-# Map docker-compose's POSTGRES_USER/POSTGRES_PASSWORD onto the DB_USERNAME/
-# DB_PASSWORD names that each service's application.yaml reads.
+# Map the Postgres credentials onto the DB_* vars each service's
+# application.yaml expects (jdbc:postgresql://localhost:5432/<db>,
+# DB_USERNAME, DB_PASSWORD).
 export DB_USERNAME="${DB_USERNAME:-${POSTGRES_USER:-postgres}}"
 export DB_PASSWORD="${DB_PASSWORD:-${POSTGRES_PASSWORD:-}}"
 
-echo "loaded $_env_file (DB_USERNAME=$DB_USERNAME, DB_PASSWORD=***)"
+echo "loaded $_env_file"
 unset _env_file _line _key _val

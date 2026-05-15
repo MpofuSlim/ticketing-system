@@ -11,6 +11,8 @@ import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
+import org.springframework.web.multipart.MultipartException;
 
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -39,6 +41,41 @@ public class GlobalExceptionHandler {
                         "Event was modified by another request. Please refetch and retry."));
     }
 
+    // Banner / multipart payload exceeded the configured size. Returns 413 with
+    // the actual byte limit so the client can show a real error and retry with
+    // a smaller image instead of seeing a generic "Failed to parse multipart".
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiResult<Void>> handleMaxUpload(MaxUploadSizeExceededException ex) {
+        log.warn("Multipart payload too large: maxBytes={}", ex.getMaxUploadSize());
+        long maxMb = Math.max(1, ex.getMaxUploadSize() / (1024 * 1024));
+        return ResponseEntity.status(HttpStatus.PAYLOAD_TOO_LARGE)
+                .body(ApiResult.error(HttpStatus.PAYLOAD_TOO_LARGE,
+                        "Banner image is too large. Maximum allowed size is " + maxMb + " MB."));
+    }
+
+    // Catches every other multipart parse failure (truncated upload, broken
+    // boundary, client disconnect mid-stream). Surfaces as 400 with a clear
+    // message instead of falling into the generic RuntimeException handler.
+    // Logs the full cause chain so the underlying reason (boundary mismatch,
+    // EOF, malformed Content-Type) is visible in server logs — the wrapper
+    // message alone is "Failed to parse multipart servlet request" which is
+    // useless for diagnosis.
+    @ExceptionHandler(MultipartException.class)
+    public ResponseEntity<ApiResult<Void>> handleMultipart(MultipartException ex) {
+        StringBuilder chain = new StringBuilder(ex.getClass().getSimpleName())
+                .append(": ").append(ex.getMessage());
+        Throwable cause = ex.getCause();
+        while (cause != null) {
+            chain.append(" -> ").append(cause.getClass().getSimpleName())
+                 .append(": ").append(cause.getMessage());
+            cause = cause.getCause();
+        }
+        log.warn("Multipart parse failed [{}]", chain);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResult.error(HttpStatus.BAD_REQUEST,
+                        "Could not read the uploaded file. Please retry the upload."));
+    }
+
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<ApiResult<Void>> handleRuntime(RuntimeException ex) {
         log.warn("RuntimeException: {}", ex.getMessage());
@@ -49,7 +86,13 @@ public class GlobalExceptionHandler {
                 .body(ApiResult.error(status, ex.getMessage()));
     }
 
-    // Returns field-level validation errors in the ApiResponse envelope.
+    /**
+     * @Valid bean-validation failures on @RequestBody. Field-level messages
+     * land in data so the frontend can highlight the specific bad input.
+     * Aligned to 400 BAD_REQUEST + ApiResult envelope across the API; the
+     * previous 422 response was technically more REST-correct but forced the
+     * frontend to special-case event-service.
+     */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiResult<Map<String, String>>> handleValidation(MethodArgumentNotValidException ex) {
         Map<String, String> fieldErrors = ex.getBindingResult()
@@ -57,10 +100,15 @@ public class GlobalExceptionHandler {
                 .stream()
                 .collect(Collectors.toMap(
                         FieldError::getField,
-                        fe -> fe.getDefaultMessage() != null ? fe.getDefaultMessage() : "Invalid value"
+                        fe -> fe.getDefaultMessage() != null ? fe.getDefaultMessage() : "Invalid value",
+                        (a, b) -> a,
+                        java.util.LinkedHashMap::new
                 ));
-        log.warn("Validation failed: {}", fieldErrors);
-        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
-                .body(ApiResult.of(HttpStatus.UNPROCESSABLE_ENTITY, "Validation failed", fieldErrors));
+        log.warn("Validation failed fields={}", fieldErrors);
+        return ResponseEntity.badRequest().body(ApiResult.<Map<String, String>>builder()
+                .code("400 BAD_REQUEST")
+                .message("Validation failed")
+                .data(fieldErrors)
+                .build());
     }
 }

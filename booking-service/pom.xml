@@ -44,39 +44,54 @@
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
             <artifactId>jjwt-api</artifactId>
-            <version>0.11.5</version>
         </dependency>
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
             <artifactId>jjwt-impl</artifactId>
-            <version>0.11.5</version>
             <scope>runtime</scope>
         </dependency>
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
             <artifactId>jjwt-jackson</artifactId>
-            <version>0.11.5</version>
             <scope>runtime</scope>
         </dependency>
 
-        <!-- H2: in-memory database for unit tests only. Production runs on
-             PostgreSQL via Flyway-managed migrations. -->
-        <dependency>
-            <groupId>com.h2database</groupId>
-            <artifactId>h2</artifactId>
-            <scope>test</scope>
-        </dependency>
-
-        <!-- PostgreSQL for production -->
+        <!-- PostgreSQL is the runtime database. -->
         <dependency>
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
         </dependency>
 
-        <!-- Flyway: schema migrations against PostgreSQL in prod. Disabled in
-             tests via FLYWAY_ENABLED so H2 + Hibernate ddl-auto stays the
-             test-time path. -->
+        <!-- H2 is kept for tests only (in-memory, PostgreSQL compatibility mode). -->
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- ZXing for per-ticket QR code generation. core has the encoder;
+             javase brings MatrixToImageWriter so we can render to PNG bytes. -->
+        <dependency>
+            <groupId>com.google.zxing</groupId>
+            <artifactId>core</artifactId>
+            <version>3.5.3</version>
+        </dependency>
+        <dependency>
+            <groupId>com.google.zxing</groupId>
+            <artifactId>javase</artifactId>
+            <version>3.5.3</version>
+        </dependency>
+
+        <!-- Flyway: schema is owned by versioned migrations under
+             src/main/resources/db/migration. spring-boot-flyway carries the
+             auto-configuration (Spring Boot 4 split per-tech autoconfig into
+             dedicated modules); without it Flyway is on the classpath but is
+             never actually invoked at boot. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-flyway</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-core</artifactId>
@@ -133,6 +148,36 @@
         <dependency>
             <groupId>org.springframework.security</groupId>
             <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Sentry: ERROR logs become real-time alerts. Logback appender
+             owns the SDK lifecycle so we skip the Spring autoconfig (Sentry
+             8.x references Boot 3 classes that Boot 4 renamed); no-op when
+             SENTRY_DSN env var is blank, so dev/CI pay nothing. -->
+        <dependency>
+            <groupId>io.sentry</groupId>
+            <artifactId>sentry-logback</artifactId>
+        </dependency>
+
+        <!-- Testcontainers: spins a real Postgres container for *IT.java tests
+             so the production Flyway + JPA schema flow is exercised, not the
+             H2 stand-in. Failsafe (mvn verify) picks them up; Surefire (mvn
+             test) keeps running the fast H2 unit tests unchanged. Versions
+             managed by the testcontainers-bom imported in the parent pom. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
             <scope>test</scope>
         </dependency>
 

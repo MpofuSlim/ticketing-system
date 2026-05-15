@@ -1,0 +1,53 @@
+# Integration-test profile — runs against the Testcontainers Postgres
+# spun up by PostgresIntegrationTestBase. Mirrors production: Flyway owns
+# the schema, Hibernate validates entities against the actual columns.
+# Catches drift the H2 "test" profile (ddl-auto=create-drop) can't.
+#
+# datasource.url/username/password are injected by @DynamicPropertySource
+# in PostgresIntegrationTestBase — the values here are placeholders so
+# Boot's binding succeeds before Testcontainers starts the container.
+spring:
+  datasource:
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 0
+    locations: classpath:db/migration
+  cloud:
+    discovery:
+      enabled: false
+
+jwt:
+  secret: it-jwt-secret-it-jwt-secret-it-jwt-secret-it-jwt-secret
+  expiration: 3600000
+  refresh-expiration: 86400000
+
+innbucks:
+  internal-api-token: it-internal-token-it-internal-token
+
+# Oradian client is exercised in unit tests with a mock; the IT context
+# only needs Boot to bind the properties without trying a real HTTP call.
+oradian:
+  base-url: http://oradian.invalid
+  internal-token: it-oradian-token
+  connect-timeout-ms: 100
+  read-timeout-ms: 100
+
+logging:
+  level:
+    # Flyway logs migrations applied at INFO; Hibernate's schema validator
+    # logs each table+column lookup at DEBUG. Bumped above the WARN root so
+    # CI surfaces *which* migrations ran and *which* tables the validator
+    # missed — the difference between "Flyway never ran" and "Flyway ran
+    # but the entity expects a column the migration didn't create".
+    org.flywaydb: INFO
+    org.hibernate.tool.schema: DEBUG
+    root: WARN
+    com.innbucks.userservice: INFO

@@ -3,7 +3,6 @@ package com.innbucks.eventservice.dto;
 import com.innbucks.eventservice.entity.Province;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.*;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -36,20 +35,29 @@ public class EventResponseDTO {
     @Schema(example = "HRE", description = "Province code where the event is hosted.")
     private Province province;
 
-    @Schema(
-            description = """
-                    Event date exposed as a calendar date (`yyyy-MM-dd`).
+    @Schema(description = "Geographic coordinates of the venue (latitude/longitude in decimal degrees).")
+    private LocationDTO location;
 
-                    Note: Internally events store a full timestamp (`LocalDateTime`). This API returns only the date portion.
-                    """
+    @Schema(
+            example = "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+            description = "Relative URL to fetch the banner image (null if no banner uploaded)."
     )
-    private LocalDate dateTime;
+    private String bannerUrl;
+
+    @Schema(
+            example = "2026-06-15T19:00:00",
+            description = "Event start timestamp (`yyyy-MM-ddTHH:mm:ss`) — full ISO-8601 datetime including the start time."
+    )
+    private LocalDateTime dateTime;
 
     @Schema(description = "Maximum venue capacity.")
     private Integer totalCapacity;
 
     @Schema(description = "Tickets still available for sale.")
     private Integer availableTickets;
+
+    @Schema(description = "Whether the event is currently active (visible in /events/active and bookable).")
+    private boolean active;
 
     @Schema(description = "Creation timestamp (server time).")
     private LocalDateTime createdAt;

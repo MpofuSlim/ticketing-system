@@ -18,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.EnumSet;
 
 @Service
 @RequiredArgsConstructor
@@ -38,6 +39,7 @@ public class OtpService {
     private final UserRepository userRepository;
     private final CustomerProfileRepository customerProfileRepository;
     private final PendingRegistrationRepository pendingRegistrationRepository;
+    private final com.innbucks.userservice.integration.LoyaltyServiceClient loyaltyServiceClient;
 
     /**
      * Send an OTP with rate-limit enforcement. Used by the public /auth/otp/request endpoint
@@ -153,13 +155,18 @@ public class OtpService {
         var pendingOpt = pendingRegistrationRepository.findByPhoneNumber(phoneNumber);
         if (pendingOpt.isPresent()) {
             PendingRegistration pending = pendingOpt.get();
+            // CUSTOMERS are auto-active once they've proven phone ownership via
+            // OTP — there's no human approver in the customer onboarding flow,
+            // unlike business roles (EVENT_ORGANIZER / MERCHANT_ADMIN) which
+            // stay inactive until a SUPER_ADMIN approves them via /admin/users.
             User user = User.builder()
                     .firstName("Customer")
                     .lastName("Pending")
                     .phoneNumber(pending.getPhoneNumber())
                     .password(pending.getPasswordHash())
-                    .role(User.Role.CUSTOMER)
+                    .roles(EnumSet.of(User.Role.CUSTOMER))
                     .mfaEnabled(false)
+                    .active(true)
                     .build();
             userRepository.save(user);
             CustomerProfile profile = CustomerProfile.builder()
@@ -172,15 +179,24 @@ public class OtpService {
             pendingRegistrationRepository.delete(pending);
             log.info("Customer account materialised from pending registration phone={} userId={}",
                     phoneNumber, user.getId());
+            // Tell loyalty-service this phone has now registered so every
+            // PENDING LoyaltyUser row matching it (created by prior voucher
+            // issues, transactions, P2P transfers) flips ACTIVE and the
+            // customer can finally spend whatever was accrued for them.
+            // Best-effort: webhook failure does NOT roll back registration.
+            loyaltyServiceClient.promoteUserByPhone(phoneNumber);
             return;
         }
         userRepository.findByPhoneNumber(phoneNumber)
-                .filter(u -> u.getRole() == User.Role.CUSTOMER)
+                .filter(u -> u.hasRole(User.Role.CUSTOMER))
                 .flatMap(u -> customerProfileRepository.findByUserId(u.getId()))
                 .ifPresent(profile -> {
                     if (!profile.isPhoneVerified()) {
                         profile.setPhoneVerified(true);
                         customerProfileRepository.save(profile);
+                        // First time this phone has been verified — same
+                        // signal to loyalty as the pending-registration path.
+                        loyaltyServiceClient.promoteUserByPhone(phoneNumber);
                     }
                 });
     }

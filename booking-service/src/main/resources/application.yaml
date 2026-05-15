@@ -2,19 +2,10 @@ spring:
   application:
     name: booking-service
 
-  # Local dev: run `docker compose up -d postgres redis` first; the seed
-  # in docker/postgres/init-databases.sql creates booking_service with
-  # the default credentials below. Tests override these to in-memory H2
-  # via src/test/resources/application-test.yaml + @ActiveProfiles("test").
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/booking_service}
     driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
     username: ${DB_USERNAME:postgres}
-    # No empty default: an unset DB_PASSWORD must fail at startup with an
-    # unresolved-placeholder error rather than silently sending no password
-    # and producing the cryptic "SCRAM-based authentication, but no password
-    # was provided" deep inside Hibernate bootstrap. Source scripts/dev-env.sh
-    # before `mvn spring-boot:run`, or rely on docker-compose to inject it.
     password: ${DB_PASSWORD}
     hikari:
       pool-name: booking-service-pool
@@ -26,7 +17,8 @@ spring:
 
   jpa:
     hibernate:
-      # Flyway owns the schema; Hibernate validates entities against it.
+      # Schema is owned by Flyway migrations; Hibernate only validates that
+      # the JPA model matches the actual columns at boot.
       ddl-auto: ${JPA_DDL_AUTO:validate}
     show-sql: ${JPA_SHOW_SQL:false}
     properties:
@@ -43,12 +35,22 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+      # Redis is used for idempotency keys and caching only; we don't have any
+      # @RedisHash-annotated entities. Without this flag Spring Data Redis
+      # tries to classify every Repository<> bean (BookingRepository, etc.) as
+      # a potential Redis repository and logs a noisy INFO warning on each.
+      repositories:
+        enabled: false
 
   # KafkaProducerConfig builds the producer factory + template from this
   # property. Boot 4 no longer auto-configures Kafka, so spring.kafka.*
-  # subkeys are not consumed automatically.
+  # subkeys are not consumed automatically. The default targets the EXTERNAL
+  # listener exposed by docker-compose (localhost:29092 → kafka:9092 inside
+  # the network) so booking-service running on the host can talk to a
+  # docker-compose Kafka without further config. Inside Docker the compose
+  # file overrides this to kafka:9092.
   kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:29092}
 
   lifecycle:
     timeout-per-shutdown-phase: 30s
@@ -85,10 +87,44 @@ resilience4j:
         wait-duration-in-open-state: 30s
         permitted-number-of-calls-in-half-open-state: 3
         automatic-transition-from-open-to-half-open-enabled: true
+      LoyaltyServiceClient:
+        register-health-indicator: true
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+      EventServiceClient:
+        register-health-indicator: true
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
   retry:
     instances:
       SeatServiceClient:
         max-attempts: 3
+        wait-duration: 500ms
+        exponential-backoff-multiplier: 2.0
+        retry-exceptions:
+          - feign.RetryableException
+          - java.io.IOException
+          - org.springframework.web.client.ResourceAccessException
+      LoyaltyServiceClient:
+        max-attempts: 3
+        wait-duration: 500ms
+        exponential-backoff-multiplier: 2.0
+        retry-exceptions:
+          - feign.RetryableException
+          - java.io.IOException
+          - org.springframework.web.client.ResourceAccessException
+      EventServiceClient:
+        max-attempts: 2
         wait-duration: 500ms
         exponential-backoff-multiplier: 2.0
         retry-exceptions:
@@ -101,7 +137,30 @@ seat-service:
   # http://seat-service:8083 via SEAT_SERVICE_URL.
   url: ${SEAT_SERVICE_URL:http://localhost:8083}
 
+# Used at /bookings/{id}/confirm to redeem and earn loyalty points, and at
+# booking creation to attach the owning tenantId to the booking. Both calls
+# are wrapped in Resilience4j circuit breakers (see below) so a loyalty
+# outage degrades gracefully: cash bookings still work, redeem fails fast.
+loyalty-service:
+  url: ${LOYALTY_SERVICE_URL:http://localhost:8086}
+
+event-service:
+  url: ${EVENT_SERVICE_URL:http://localhost:8082}
+
+user-service:
+  url: ${USER_SERVICE_URL:http://localhost:8081}
+
 app:
+  booking:
+    # How long a PENDING booking holds its seats before the expiration
+    # scheduler auto-cancels it. Set to 5 minutes by default — matches
+    # seat-service's 5-min lock TTL.
+    hold-ttl-minutes: ${BOOKING_HOLD_TTL_MINUTES:5}
+    # How often the expiration scheduler scans for PENDING bookings whose
+    # hold has lapsed. 30s lag on a 5-min TTL is invisible to users; lower
+    # if you want tighter timing, raise to ease DB load. Tune with ShedLock
+    # when running multiple replicas (avoids duplicate work per tick).
+    expiration-poll-interval-ms: ${BOOKING_EXPIRATION_POLL_MS:30000}
   idempotency:
     # Set to "redis" for shared idempotency across replicas. Defaults to
     # in-memory so local dev and unit tests work without Redis.
@@ -142,7 +201,25 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+  # Distributed tracing via OTel. Sampling defaults to 10% — flip to 1.0 for
+  # debug sessions, leave low in prod for cost. OTLP_ENDPOINT points at the
+  # OTel collector / Tempo / Jaeger; default localhost is fine for laptop
+  # docker-compose, override in k8s. Set TRACING_ENABLED=false to disable
+  # entirely (no spans recorded, no exporter calls).
+  tracing:
+    enabled: ${TRACING_ENABLED:true}
+    sampling:
+      probability: ${TRACE_SAMPLE:0.1}
+  otlp:
+    tracing:
+      endpoint: ${OTLP_ENDPOINT:http://localhost:4318/v1/traces}
+
 
 logging:
   pattern:
-    level: "%5p [${spring.application.name:-},%X{traceId:-}]"
+    level: "%5p [${spring.application.name:-},%X{traceId:-},%X{spanId:-},%X{correlationId:-}]"
+cors:
+  # Comma-separated list of allowed origin patterns. Default whitelists the
+  # production frontend (innvents.vercel.app), Vercel preview deploys, and
+  # any localhost port for dev. Override in prod via CORS_ALLOWED_ORIGINS.
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:https://innvents.vercel.app,https://innbucks-ticketing.vercel.app,https://*.vercel.app,http://localhost:[*]}

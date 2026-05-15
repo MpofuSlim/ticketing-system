@@ -1,6 +1,8 @@
 package com.innbucks.userservice.controller;
 
+import com.innbucks.userservice.client.DepositAccount;
 import com.innbucks.userservice.dto.*;
+import com.innbucks.userservice.security.JwtUtil;
 import com.innbucks.userservice.service.AuthService;
 import com.innbucks.userservice.service.CustomerService;
 import com.innbucks.userservice.service.OtpService;
@@ -8,6 +10,7 @@ import com.innbucks.userservice.service.TokenRevocationService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
@@ -19,8 +22,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 @RestController
-@CrossOrigin
 @RequestMapping("/auth")
 @RequiredArgsConstructor
 @Slf4j
@@ -31,14 +35,37 @@ public class AuthController {
     private final CustomerService customerService;
     private final TokenRevocationService tokenRevocationService;
     private final OtpService otpService;
+    private final JwtUtil jwtUtil;
 
     @PostMapping("/register")
     @SecurityRequirements()
     @Operation(summary = "Register system user",
-            description = "Creates a system-user account (SYSTEM_MANAGER, TENANT, MERCHANT_ADMIN, SHOP_ADMIN, SHOP_USER, ADMIN). " +
-                    "Requires device registration and MFA registration. Customers must use the tiered /auth/customer/register endpoints.")
+            description = "Creates a system-user account. The caller picks one or more `defaultServices` " +
+                    "(`ticketing`, `loyalty`); the server derives the role and the underlying " +
+                    "microservice access. `ticketing` -> EVENT_ORGANIZER (events/seats/bookings/payments). " +
+                    "`loyalty` -> MERCHANT_ADMIN (loyalty/payments). Picking both grants both. " +
+                    "Customers must use the tiered /auth/customer/register endpoints.")
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "201", description = "User registered"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "201",
+                    description = "User registered",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = AuthResponseDTO.class),
+                            examples = @ExampleObject(name = "User registered", value = """
+                                    {
+                                      "code": "201 CREATED",
+                                      "message": "User registered successfully",
+                                      "data": {
+                                        "roles": ["EVENT_ORGANIZER"],
+                                        "defaultServices": ["ticketing"],
+                                        "email": "alice@innbucks.co.zw",
+                                        "mfaRequired": false
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Validation failed or email already exists")
     })
     public ResponseEntity<ApiResult<AuthResponseDTO>> register(@Valid @RequestBody RegisterRequestDTO request) {
@@ -59,11 +86,11 @@ public class AuthController {
                     number, together with `password`. The server picks the matching lookup based on whether the value
                     contains an `@`.
                     - Customers registered at tier 1 typically log in with their phone number.
-                    - System users (TENANT, ADMIN, MERCHANT_ADMIN, SHOP_ADMIN, SHOP_USER, SYSTEM_MANAGER) log in with email.
+                    - System users (EVENT_ORGANIZER, MERCHANT_ADMIN) log in with email.
 
                     **Tier / verified claims:** on success the response includes the customer's `tier` (1..4) and `verified` flag.
                     These are also embedded in the JWT as claims, so every downstream service can enforce tier-based access
-                    without re-querying user-service. System users are reported as tier 4, verified=true.
+                    without re-querying user-service. System users get `verified=true`; `tier` is null for system accounts.
 
                     **Using the token:** send it on every authenticated request as `Authorization: Bearer <token>`.
                     To pick up a new tier after the customer upgrades (e.g. tier 2 → tier 3), log in again to receive
@@ -80,7 +107,11 @@ public class AuthController {
                                               "code": "200 OK",
                                               "message": "Login successful",
                                               "data": {
-                                                "role": "CUSTOMER",
+                                                "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIrMjYzNzcxMjM0NTY3Iiwicm9sZXMiOlsiQ1VTVE9NRVIiXSwic2VydmljZXMiOltdLCJ0aWVyIjoyLCJ2ZXJpZmllZCI6ZmFsc2UsInBob25lTnVtYmVyIjoiKzI2Mzc3MTIzNDU2NyIsImZpcnN0TmFtZSI6IkphbmUiLCJsYXN0TmFtZSI6IkRvZSIsImlhdCI6MTcxNTY2NTYwMCwiZXhwIjoxNzE1NzUyMDAwfQ.access-signature",
+                                                "refreshToken": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIrMjYzNzcxMjM0NTY3IiwidHlwZSI6InJlZnJlc2giLCJpYXQiOjE3MTU2NjU2MDAsImV4cCI6MTcxNjI3MDQwMH0.refresh-signature",
+                                                "roles": ["CUSTOMER"],
+                                                "defaultServices": [],
+                                                "mfaRequired": false,
                                                 "tier": 2,
                                                 "verified": false
                                               }
@@ -91,7 +122,12 @@ public class AuthController {
                                               "code": "200 OK",
                                               "message": "Login successful",
                                               "data": {
-                                                "role": "TENANT",
+                                                "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhbGljZUBpbm5idWNrcy5jby56dyIsInJvbGVzIjpbIkVWRU5UX09SR0FOSVpFUiJdLCJzZXJ2aWNlcyI6WyJldmVudC1zZXJ2aWNlIiwiYm9va2luZy1zZXJ2aWNlIiwic2VhdC1zZXJ2aWNlIiwicGF5bWVudC1zZXJ2aWNlIl0sInRpZXIiOjQsInZlcmlmaWVkIjp0cnVlLCJpYXQiOjE3MTU2NjU2MDAsImV4cCI6MTcxNTc1MjAwMH0.access-signature",
+                                                "refreshToken": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhbGljZUBpbm5idWNrcy5jby56dyIsInR5cGUiOiJyZWZyZXNoIiwiaWF0IjoxNzE1NjY1NjAwLCJleHAiOjE3MTYyNzA0MDB9.refresh-signature",
+                                                "email": "alice@innbucks.co.zw",
+                                                "roles": ["EVENT_ORGANIZER"],
+                                                "defaultServices": ["ticketing"],
+                                                "mfaRequired": false,
                                                 "tier": 4,
                                                 "verified": true
                                               }
@@ -103,8 +139,140 @@ public class AuthController {
     public ResponseEntity<ApiResult<AuthResponseDTO>> login(@Valid @RequestBody LoginRequestDTO request) {
         log.info("Received login request identifier={}", request.getIdentifier());
         AuthResponseDTO response = authService.login(request);
-        log.info("Login successful role={}", response.getRole());
+        log.info("Login successful roles={}", response.getRoles());
         return ResponseEntity.ok(ApiResult.ok("Login successful", response));
+    }
+
+    @PostMapping("/refresh")
+    @SecurityRequirement(name = "bearerAuth")
+    @Operation(summary = "Rotate refresh token (and pick up updated tier/verified)",
+            description = """
+                    Exchanges a refresh token for a brand-new access token + refresh token pair.
+                    Reads the latest `tier`, `verified`, roles and bundles from the database,
+                    so this is the way to pick up a tier upgrade (e.g. tier 1 → tier 2)
+                    without a full re-login.
+
+                    **Required bearer token type:** must be the `refreshToken` returned by
+                    `/auth/login` (or by a previous call to `/auth/refresh`). Access tokens
+                    are rejected with HTTP 400 — they cannot be used for refresh.
+
+                    **Strict rotation with reuse detection:** every call consumes the supplied
+                    refresh token (it is marked revoked and CANNOT be used again) and mints a
+                    fresh one linked to the same family. If a refresh token that has already
+                    been rotated is presented again, the entire token family is revoked
+                    immediately — this catches credential theft. After family revocation, the
+                    user must log in again to get a new family.
+
+                    Clients should treat the response as a complete replacement: discard the
+                    old refresh token the moment the new one is received and store the new
+                    `refreshToken` atomically alongside the new access `token`.
+                    """)
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "Fresh token issued",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Token refreshed",
+                                      "data": {
+                                        "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIrMjYzNzcxMjM0NTY3Iiwicm9sZXMiOlsiQ1VTVE9NRVIiXSwic2VydmljZXMiOltdLCJ0aWVyIjoyLCJ2ZXJpZmllZCI6ZmFsc2UsInBob25lTnVtYmVyIjoiKzI2Mzc3MTIzNDU2NyIsImZpcnN0TmFtZSI6IkphbmUiLCJsYXN0TmFtZSI6IkRvZSIsImlhdCI6MTcxNTY2OTIwMCwiZXhwIjoxNzE1NzU1NjAwfQ.access-signature",
+                                        "refreshToken": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIrMjYzNzcxMjM0NTY3IiwidHlwZSI6InJlZnJlc2giLCJpYXQiOjE3MTU2NjkyMDAsImV4cCI6MTcxNjI3NDAwMH0.refresh-signature",
+                                        "roles": ["CUSTOMER"],
+                                        "defaultServices": [],
+                                        "mfaRequired": false,
+                                        "tier": 2,
+                                        "verified": false
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "Refresh token is invalid, expired, not of type=refresh, or has already been rotated " +
+                            "(reuse — the entire family is revoked).",
+                    content = @Content(mediaType = "application/json",
+                            examples = {
+                                    @ExampleObject(name = "Already rotated (reuse)", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Refresh token reuse detected; family revoked",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Wrong token type", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Not a refresh token",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Expired or unknown", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Refresh token not recognised",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
+                    description = "Missing or malformed bearer header",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "401 UNAUTHORIZED",
+                                      "message": "Missing Bearer token",
+                                      "data": null
+                                    }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<AuthResponseDTO>> refresh(HttpServletRequest request) {
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing Bearer token"));
+        }
+        String token = authHeader.substring(7);
+        AuthResponseDTO response = authService.refresh(token);
+        return ResponseEntity.ok(ApiResult.ok("Token refreshed", response));
+    }
+
+    @PostMapping("/change-password")
+    @SecurityRequirement(name = "bearerAuth")
+    @Operation(summary = "Change the caller's password",
+            description = """
+                    Replaces the current password with a new one. Both `currentPassword` and `newPassword`
+                    are required — the current password is checked against the stored hash to prevent a
+                    stolen-token attacker from locking the legitimate user out.
+
+                    Used by shop staff to replace the default password (`#Pass123`) stamped at onboarding
+                    by their merchant/shop admin. The existing JWT continues to work until it expires;
+                    no re-login is required.
+                    """)
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "Password changed",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Password changed",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "Validation failure, wrong current password, or new password matches the current one"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
+                    description = "Missing or invalid bearer token")
+    })
+    public ResponseEntity<ApiResult<Void>> changePassword(HttpServletRequest request,
+                                                          @Valid @RequestBody ChangePasswordRequestDTO body) {
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing Bearer token"));
+        }
+        String token = authHeader.substring(7);
+        authService.changePassword(token, body);
+        return ResponseEntity.ok(ApiResult.ok("Password changed", null));
     }
 
     @PostMapping("/logout")
@@ -123,7 +291,20 @@ public class AuthController {
                     Safe to call multiple times — revoking an already-revoked token is a no-op.
                     """)
             @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Token revoked"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Token revoked",
+                    content = @Content(
+                            mediaType = "application/json",
+                            examples = @ExampleObject(name = "Logout successful", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Logout successful",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Missing or malformed Authorization header, or token already expired")
     })
     public ResponseEntity<ApiResult<Void>> logout(HttpServletRequest request) {
@@ -169,28 +350,40 @@ public class AuthController {
     @PostMapping("/customer/register/tier2")
     @SecurityRequirements()
     @Operation(summary = "Customer registration - Tier 2",
-            description = "Tier 2: Captures fullName, idNumber, passport number, address, gender, and a base64-encoded selfie picture " +
-                    "(raw base64 or a data URL such as `data:image/png;base64,...`).")
-    @ApiResponses(@io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
-            description = "Tier 2 complete.",
-            content = @Content(mediaType = "application/json",
-                    examples = @ExampleObject(value = """
-                            {
-                              "code": "200 OK",
-                              "message": "Customer tier 2 registration successful",
-                              "data": {
-                                "userId": 42,
-                                "phoneNumber": "+263771234567",
-                                "tier": 2,
-                                "verified": false,
-                                "nextStep": "Submit biometrics and device registration at /auth/customer/register/tier3"
-                              }
-                            }
-                            """))))
+            description = "Tier 2: Captures full name, date of birth, gender, national ID, email, structured " +
+                    "postal address, and an open `clientCustomFields` map. The `msisdn` field identifies the " +
+                    "Tier-1 customer to upgrade (phone supplied at /auth/customer/register).")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "Tier 2 complete.",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Customer tier 2 registration successful",
+                                      "data": {
+                                        "userId": 42,
+                                        "phoneNumber": "0712345678",
+                                        "tier": 2,
+                                        "verified": false,
+                                        "nextStep": "Submit biometrics and device registration at /auth/customer/register/tier3"
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "Validation failure or no Tier-1 customer matches the supplied `msisdn`.",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "Customer not found for the supplied phone number",
+                                      "data": null
+                                    }
+                                    """)))
+    })
     public ResponseEntity<ApiResult<CustomerRegistrationResponseDTO>> customerTier2(
-            @RequestParam("phoneNumber") String phoneNumber,
             @Valid @RequestBody CustomerTier2RegisterDTO request) {
-        CustomerRegistrationResponseDTO response = customerService.registerTier2(phoneNumber, request);
+        CustomerRegistrationResponseDTO response = customerService.registerTier2(request);
         return ResponseEntity.ok(ApiResult.ok("Customer tier 2 registration successful", response));
     }
 
@@ -276,6 +469,79 @@ public class AuthController {
         return ResponseEntity.ok(ApiResult.ok("Customer tier retrieved", response));
     }
 
+    @GetMapping("/customer/deposits")
+    @SecurityRequirement(name = "bearerAuth")
+    @Operation(summary = "List my Oradian deposit accounts",
+            description = """
+                    Returns the authenticated customer's Oradian deposit accounts.
+
+                    The customer's phone number is taken from the `phoneNumber` claim
+                    on the bearer JWT — the caller doesn't pass it explicitly, and
+                    a customer can only ever read their own deposits. user-service
+                    forwards the phone to Oradian middleware's S2S
+                    /internal/customers/{msisdn}/deposits endpoint, which calls
+                    Oradian's instafin.LookupClient and returns just the deposits
+                    array. We pass that array through unchanged.
+
+                    A tier-1 customer (no Oradian Person+Client yet) gets a 400 —
+                    same shape as the existing tier-not-met errors. Tokens that
+                    aren't customer tokens (no phoneNumber claim) get a 400 as
+                    well.
+                    """)
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "Deposits returned (empty array if Oradian has none)",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Deposits", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Deposits retrieved",
+                                      "data": [
+                                        {
+                                          "internalID": "",
+                                          "ID": "A8347323",
+                                          "externalAccountNumber": "",
+                                          "clientInternalID": "",
+                                          "productID": "fixed_deposit_12",
+                                          "productName": "Fixed Deposit 12 Months",
+                                          "balance": "7500.00",
+                                          "currencyCode": "",
+                                          "status": "Active",
+                                          "isMainAccount": "true",
+                                          "isMessagingFeeAccount": "",
+                                          "isJointAccount": "",
+                                          "subscribed": "200.00",
+                                          "appliedDate": "2018-11-05",
+                                          "startDate": "2018-11-05",
+                                          "endDate": "2020-11-05",
+                                          "closeDate": "2019-11-05"
+                                        }
+                                      ]
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "Token has no phoneNumber claim, or the phone doesn't resolve to a customer"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing or invalid bearer token"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502", description = "Oradian middleware unreachable or upstream Oradian failed")
+    })
+    public ResponseEntity<ApiResult<List<DepositAccount>>> getCustomerDeposits(HttpServletRequest request) {
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing Bearer token"));
+        }
+        String token = authHeader.substring(7);
+        String phoneNumber = jwtUtil.extractPhoneNumber(token);
+        if (phoneNumber == null || phoneNumber.isBlank()) {
+            return ResponseEntity.badRequest()
+                    .body(ApiResult.error(HttpStatus.BAD_REQUEST,
+                            "Token has no phoneNumber claim; only CUSTOMER tokens can call /auth/customer/deposits"));
+        }
+        log.info("GET /auth/customer/deposits phoneNumber={}", phoneNumber);
+        List<DepositAccount> deposits = customerService.getDepositsForCustomer(phoneNumber);
+        return ResponseEntity.ok(ApiResult.ok("Deposits retrieved", deposits));
+    }
+
     @PostMapping("/otp/request")
     @SecurityRequirements()
     @Operation(summary = "Request (or re-send) an OTP",
@@ -291,7 +557,20 @@ public class AuthController {
                     resets the counter.
                     """)
             @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "OTP sent"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "OTP sent",
+                    content = @Content(
+                            mediaType = "application/json",
+                            examples = @ExampleObject(name = "OTP sent", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "OTP sent",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Missing or invalid phone number"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429", description = "Retry quota exceeded — try again after the lockout expires")
     })
@@ -316,7 +595,20 @@ public class AuthController {
                     forcing the user to request a fresh one.
                     """)
             @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "OTP verified and consumed"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "OTP verified and consumed",
+                    content = @Content(
+                            mediaType = "application/json",
+                            examples = @ExampleObject(name = "OTP verified", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "OTP verified",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "OTP invalid or expired")
     })
     public ResponseEntity<ApiResult<Void>> verifyOtp(@Valid @RequestBody OtpVerifyDTO request) {

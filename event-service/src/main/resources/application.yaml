@@ -2,19 +2,13 @@ spring:
   application:
     name: event-service
 
-  # Local dev: run `docker compose up -d postgres` first; the seed in
-  # docker/postgres/init-databases.sql creates event_service with the
-  # default credentials below. Tests override these to in-memory H2 via
-  # src/test/resources/application-test.yaml + @ActiveProfiles("test").
+  # Tests run on in-memory H2 (PostgreSQL compatibility mode) via
+  # src/test/resources/application-test.yaml + @ActiveProfiles("test"); the
+  # main runtime is PostgreSQL.
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/event_service}
     driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
     username: ${DB_USERNAME:postgres}
-    # No empty default: an unset DB_PASSWORD must fail at startup with an
-    # unresolved-placeholder error rather than silently sending no password
-    # and producing the cryptic "SCRAM-based authentication, but no password
-    # was provided" deep inside Hibernate bootstrap. Source scripts/dev-env.sh
-    # before `mvn spring-boot:run`, or rely on docker-compose to inject it.
     password: ${DB_PASSWORD}
     hikari:
       pool-name: event-service-pool
@@ -26,7 +20,8 @@ spring:
 
   jpa:
     hibernate:
-      # Flyway owns the schema; Hibernate validates entities against it.
+      # Schema is owned by Flyway migrations; Hibernate only validates that
+      # the JPA model matches the actual columns at boot.
       ddl-auto: ${JPA_DDL_AUTO:validate}
     show-sql: ${JPA_SHOW_SQL:false}
     properties:
@@ -41,6 +36,15 @@ spring:
 
   lifecycle:
     timeout-per-shutdown-phase: 30s
+
+  # POST /events accepts a multipart payload (JSON `event` part + optional
+  # `eventBanner` image part). Modern phone photos routinely exceed 5MB, so
+  # the cap is set to match the 10MB enforced in EventService.MAX_BANNER_BYTES.
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 15MB
+      file-size-threshold: 1MB
 
 jwt:
   secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
@@ -59,9 +63,14 @@ springdoc:
 seat-service:
   base-url: ${SEAT_SERVICE_BASE_URL:http://localhost:8083}
 
-# Circuit breaker + retry around the outbound call to seat-service
-# (SeatCategoryGateway). Fallback returns an empty category list, so events
-# remain visible even while seat-service is degraded.
+booking-service:
+  base-url: ${BOOKING_SERVICE_BASE_URL:http://localhost:8082}
+
+# Circuit breaker + retry around outbound calls.
+#  - seatCategories: SeatCategoryGateway (fallback = empty category list).
+#  - bookingActiveCounts: BookingGateway, used to compute availableTickets on
+#    every event response. Fallback = empty map, so events fall back to the
+#    stored availableTickets value rather than blocking the response.
 resilience4j:
   circuitbreaker:
     instances:
@@ -74,9 +83,25 @@ resilience4j:
         wait-duration-in-open-state: 30s
         permitted-number-of-calls-in-half-open-state: 3
         automatic-transition-from-open-to-half-open-enabled: true
+      bookingActiveCounts:
+        register-health-indicator: true
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
   retry:
     instances:
       seatCategories:
+        max-attempts: 3
+        wait-duration: 500ms
+        exponential-backoff-multiplier: 2.0
+        retry-exceptions:
+          - org.springframework.web.client.ResourceAccessException
+          - java.io.IOException
+      bookingActiveCounts:
         max-attempts: 3
         wait-duration: 500ms
         exponential-backoff-multiplier: 2.0
@@ -99,11 +124,29 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+  # Distributed tracing via OTel. Sampling defaults to 10% — flip to 1.0 for
+  # debug sessions, leave low in prod for cost. OTLP_ENDPOINT points at the
+  # OTel collector / Tempo / Jaeger; default localhost is fine for laptop
+  # docker-compose, override in k8s. Set TRACING_ENABLED=false to disable
+  # entirely (no spans recorded, no exporter calls).
+  tracing:
+    enabled: ${TRACING_ENABLED:true}
+    sampling:
+      probability: ${TRACE_SAMPLE:0.1}
+  otlp:
+    tracing:
+      endpoint: ${OTLP_ENDPOINT:http://localhost:4318/v1/traces}
+
 
 cors:
-  # Comma-separated list of allowed origins. Override via CORS_ALLOWED_ORIGINS in prod.
-  allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
+  # Comma-separated list of allowed origin patterns. Default is permissive ('*')
+  # so dev/Swagger/ngrok/any FE origin works out of the box (matches the gateway
+  # and user-service defaults). Safe with allowCredentials=true because
+  # SecurityConfig uses setAllowedOriginPatterns (not setAllowedOrigins). MUST
+  # be overridden in prod via CORS_ALLOWED_ORIGINS to your real client origins
+  # (e.g. https://app.example.com).
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:https://innvents.vercel.app,https://innbucks-ticketing.vercel.app,https://*.vercel.app,http://localhost:[*]}
 
 logging:
   pattern:
-    level: "%5p [${spring.application.name:-},%X{traceId:-}]"
+    level: "%5p [${spring.application.name:-},%X{traceId:-},%X{spanId:-},%X{correlationId:-}]"

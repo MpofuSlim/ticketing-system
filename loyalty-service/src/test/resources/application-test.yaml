@@ -1,0 +1,37 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:loyalty;MODE=PostgreSQL;DB_CLOSE_DELAY=-1
+    username: sa
+    password: ""
+    driver-class-name: org.h2.Driver
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+  flyway:
+    enabled: false
+
+loyalty:
+  voucher:
+    secret: test-voucher-secret-test-voucher-secret-test-voucher-secret
+    default-validity-days: 30
+    fraud-velocity-threshold: 3
+    fraud-window-seconds: 60
+  qr:
+    secret: test-qr-secret-test-qr-secret-test-qr-secret-test-qr-secret
+    ttl-seconds: 60
+  integration:
+    mpesa-enabled: false
+  invoice:
+    prefix: INV
+
+jwt:
+  secret: test-jwt-secret-test-jwt-secret-test-jwt-secret-test
+  expiration: 86400000
+
+logging:
+  level:
+    root: WARN
+    com.innbucks.loyaltyservice: INFO

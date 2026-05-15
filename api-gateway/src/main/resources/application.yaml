@@ -15,42 +15,148 @@ spring:
     gateway:
       server:
         webflux:
+          # Rate limiter applied to authenticated routes only. /auth is
+          # intentionally excluded so logins still work when Redis is
+          # unreachable (Redis-backed RequestRateLimiter fails closed
+          # with 403 on connection errors). Brute-force protection for
+          # /auth lives in user-service (OTP throttling, etc.).
           routes:
             - id: user-auth-route
               uri: ${USER_SERVICE_URI:http://localhost:8081}
               predicates:
                 - Path=/auth/**
 
+            - id: user-admin-route
+              uri: ${USER_SERVICE_URI:http://localhost:8081}
+              predicates:
+                - Path=/admin/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
+
+            # Self-service endpoints under /users/me/** (e.g. service requests).
+            # Authenticated; rate-limited like the rest of user-service.
+            - id: user-self-route
+              uri: ${USER_SERVICE_URI:http://localhost:8081}
+              predicates:
+                - Path=/users/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
+
             - id: event-service-route
               uri: ${EVENT_SERVICE_URI:http://localhost:8082}
               predicates:
                 - Path=/events/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
 
             - id: seat-service-seat-route
               uri: ${SEAT_SERVICE_URI:http://localhost:8083}
               predicates:
                 - Path=/seats/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
             - id: seat-service-category-route
               uri: ${SEAT_SERVICE_URI:http://localhost:8083}
               predicates:
                 - Path=/seat-categories/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
 
             - id: booking-service-route
               uri: ${BOOKING_SERVICE_URI:http://localhost:8084}
               predicates:
                 - Path=/bookings/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
 
             - id: payment-service-route
               uri: ${PAYMENT_SERVICE_URI:http://localhost:8085}
               predicates:
                 - Path=/payments/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
 
+            # Block /loyalty/internal/** at the edge. These are service-to-service
+            # endpoints (user-service -> loyalty-service) gated by the
+            # X-Internal-Token shared secret. They have no business being
+            # reachable from the public internet, even though the secret check
+            # would reject the call — defence in depth, and it also keeps the
+            # paths off attacker recon scans (they get a plain 404 instead of
+            # a 401 that gives away the endpoint exists). Real service-to-
+            # service traffic goes directly between pods inside the cluster
+            # network and never touches the gateway. MUST be declared before
+            # the catch-all loyalty-service-route so SCG matches it first.
+            - id: loyalty-internal-deny
+              uri: forward:/__edge_deny__
+              predicates:
+                - Path=/loyalty/internal/**
+
+            - id: loyalty-service-route
+              uri: ${LOYALTY_SERVICE_URI:http://localhost:8086}
+              predicates:
+                - Path=/loyalty/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
+
+            # /{service}-service/** proxy routes exist for the Swagger UI
+            # aggregator (it loads each backend's /v3/api-docs through these
+            # paths). StripPrefix=1 means /user-service/auth/login lands on
+            # user-service's /auth/login — without RequestRateLimiter that
+            # was a brute-force bypass route around the bucket on the regular
+            # /auth/** route. Same limiter applied here closes the gap; the
+            # per-IP token bucket cost is negligible.
             - id: user-service-proxy-route
               uri: ${USER_SERVICE_URI:http://localhost:8081}
               predicates:
                 - Path=/user-service/**
               filters:
                 - StripPrefix=1
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
 
             - id: event-service-proxy-route
               uri: ${EVENT_SERVICE_URI:http://localhost:8082}
@@ -58,6 +164,12 @@ spring:
                 - Path=/event-service/**
               filters:
                 - StripPrefix=1
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
 
             - id: seat-service-proxy-route
               uri: ${SEAT_SERVICE_URI:http://localhost:8083}
@@ -65,6 +177,12 @@ spring:
                 - Path=/seat-service/**
               filters:
                 - StripPrefix=1
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
 
             - id: booking-service-proxy-route
               uri: ${BOOKING_SERVICE_URI:http://localhost:8084}
@@ -72,6 +190,12 @@ spring:
                 - Path=/booking-service/**
               filters:
                 - StripPrefix=1
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
 
             - id: payment-service-proxy-route
               uri: ${PAYMENT_SERVICE_URI:http://localhost:8085}
@@ -79,30 +203,42 @@ spring:
                 - Path=/payment-service/**
               filters:
                 - StripPrefix=1
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
+
+            - id: loyalty-service-proxy-route
+              uri: ${LOYALTY_SERVICE_URI:http://localhost:8086}
+              predicates:
+                - Path=/loyalty-service/**
+              filters:
+                - StripPrefix=1
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
 
           default-filters:
             - DedupeResponseHeader=Access-Control-Allow-Credentials Access-Control-Allow-Origin Access-Control-Allow-Headers Access-Control-Allow-Methods, RETAIN_FIRST
-            # Gateway-wide rate limit. Token bucket per resolved key (bearer
-            # token if present, else client IP — see RateLimiterConfig).
-            # Defaults to 50 req/s sustained with a 100-burst, overridable
-            # via env. Returns 429 with Retry-After when over budget.
-            - name: RequestRateLimiter
-              args:
-                redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
-                redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
-                redis-rate-limiter.requestedTokens: 1
-                key-resolver: "#{@gatewayKeyResolver}"
 
           globalcors:
             add-to-simple-url-handler-mapping: true
             cors-configurations:
               '[/**]':
-                # Comma-separated list of allowed origins. Defaults to localhost
-                # for dev. In production set CORS_ALLOWED_ORIGINS to your real
-                # client origins (e.g. https://app.example.com,https://admin.example.com).
-                # Wildcard '*' is intentionally NOT supported here because
-                # allowCredentials=true requires explicit origins.
-                allowedOriginPatterns: "${CORS_ALLOWED_ORIGINS:http://localhost:3000}"
+                # Comma-separated list of allowed origin patterns. Default
+                # is permissive ('*') so dev/Swagger/ngrok/any FE origin
+                # works out of the box. Spring Cloud Gateway treats this
+                # as an allowed-origin PATTERN, which is compatible with
+                # allowCredentials=true (unlike a plain allowed-origins
+                # wildcard). MUST be overridden in prod via
+                # CORS_ALLOWED_ORIGINS to your real client origins
+                # (e.g. https://app.example.com,https://admin.example.com).
+                allowedOriginPatterns: "${CORS_ALLOWED_ORIGINS:https://innvents.vercel.app,https://innbucks-ticketing.vercel.app,https://*.vercel.app,http://localhost:[*]}"
                 allowedMethods:
                   - GET
                   - POST
@@ -133,10 +269,23 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+  # Distributed tracing via OTel. Sampling defaults to 10% — flip to 1.0 for
+  # debug sessions, leave low in prod for cost. OTLP_ENDPOINT points at the
+  # OTel collector / Tempo / Jaeger; default localhost is fine for laptop
+  # docker-compose, override in k8s. Set TRACING_ENABLED=false to disable
+  # entirely (no spans recorded, no exporter calls).
+  tracing:
+    enabled: ${TRACING_ENABLED:true}
+    sampling:
+      probability: ${TRACE_SAMPLE:0.1}
+  otlp:
+    tracing:
+      endpoint: ${OTLP_ENDPOINT:http://localhost:4318/v1/traces}
+
 
 logging:
   pattern:
-    level: "%5p [${spring.application.name:-},%X{traceId:-}]"
+    level: "%5p [${spring.application.name:-},%X{traceId:-},%X{spanId:-},%X{correlationId:-}]"
 
 springdoc:
   swagger-ui:
@@ -152,3 +301,5 @@ springdoc:
         url: /booking-service/v3/api-docs
       - name: payment-service
         url: /payment-service/v3/api-docs
+      - name: loyalty-service
+        url: /loyalty-service/v3/api-docs

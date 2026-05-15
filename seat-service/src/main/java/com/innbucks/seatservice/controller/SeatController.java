@@ -8,6 +8,9 @@ import com.innbucks.seatservice.security.MinTier;
 import com.innbucks.seatservice.service.SeatService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.media.Content;
+import io.swagger.v3.oas.annotations.media.ExampleObject;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -37,7 +40,38 @@ public class SeatController {
     @GetMapping
     @Operation(summary = "List seats by category", description = "Returns all seats for a given seat category.")
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Seats returned")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Seats returned",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = SeatResponseDTO.class),
+                            examples = @ExampleObject(name = "Seats by category", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Seats retrieved successfully",
+                                      "data": [
+                                        {
+                                          "id": "11111111-2222-3333-4444-555555555555",
+                                          "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                          "categoryName": "VIP",
+                                          "sectionLabel": "A",
+                                          "seatNumber": 12,
+                                          "status": "AVAILABLE"
+                                        },
+                                        {
+                                          "id": "22222222-3333-4444-5555-666666666666",
+                                          "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                          "categoryName": "VIP",
+                                          "sectionLabel": "A",
+                                          "seatNumber": 13,
+                                          "status": "BOOKED"
+                                        }
+                                      ]
+                                    }
+                                    """)
+                    )
+            )
     })
     public ResponseEntity<ApiResult<List<SeatResponseDTO>>> getSeatsByCategory(
             @Parameter(description = "Seat category UUID") @RequestParam UUID categoryId
@@ -54,7 +88,38 @@ public class SeatController {
     @GetMapping("/available")
     @Operation(summary = "List available seats", description = "Returns only seats that are currently AVAILABLE for a category.")
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Available seats returned")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Available seats returned",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = SeatResponseDTO.class),
+                            examples = @ExampleObject(name = "Available seats", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Available seats retrieved successfully",
+                                      "data": [
+                                        {
+                                          "id": "11111111-2222-3333-4444-555555555555",
+                                          "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                          "categoryName": "VIP",
+                                          "sectionLabel": "A",
+                                          "seatNumber": 14,
+                                          "status": "AVAILABLE"
+                                        },
+                                        {
+                                          "id": "22222222-3333-4444-5555-666666666666",
+                                          "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                          "categoryName": "VIP",
+                                          "sectionLabel": "A",
+                                          "seatNumber": 15,
+                                          "status": "AVAILABLE"
+                                        }
+                                      ]
+                                    }
+                                    """)
+                    )
+            )
     })
     public ResponseEntity<ApiResult<List<SeatResponseDTO>>> getAvailableSeats(
             @Parameter(description = "Seat category UUID") @RequestParam UUID categoryId
@@ -71,7 +136,30 @@ public class SeatController {
     @GetMapping("/{id}/lookup")
     @Operation(summary = "Lookup seat details", description = "Returns full seat details including event, category, price, and status. Used by booking-service to resolve a seatId without trusting client-supplied data.")
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Seat details returned"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Seat details returned",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = SeatLookupResponseDTO.class),
+                            examples = @ExampleObject(name = "Seat lookup", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Seat details retrieved successfully",
+                                      "data": {
+                                        "seatId": "11111111-2222-3333-4444-555555555555",
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                        "categoryName": "VIP",
+                                        "sectionLabel": "A",
+                                        "seatNumber": 12,
+                                        "price": 100.00,
+                                        "status": "AVAILABLE"
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Seat not found")
     })
     public ResponseEntity<ApiResult<SeatLookupResponseDTO>> lookupSeat(@PathVariable UUID id) {
@@ -84,7 +172,29 @@ public class SeatController {
     @MinTier(2)
     @Operation(summary = "Lock seat", description = "Locks an available seat for the authenticated user for a short TTL window. Requires tier 2.")
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Seat locked"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Seat locked",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = SeatLockResponseDTO.class),
+                            examples = @ExampleObject(name = "Seat locked", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Seat locked successfully",
+                                      "data": {
+                                        "seatId": "11111111-2222-3333-4444-555555555555",
+                                        "sectionLabel": "A",
+                                        "seatNumber": 12,
+                                        "categoryName": "VIP",
+                                        "status": "LOCKED",
+                                        "message": "Seat locked successfully",
+                                        "expiresInSeconds": 600
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Seat not found or unavailable")
     })
@@ -102,7 +212,28 @@ public class SeatController {
     @MinTier(2)
     @Operation(summary = "Confirm seat", description = "Confirms a locked seat after successful payment. Requires tier 2.")
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Seat confirmed"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Seat confirmed",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = SeatResponseDTO.class),
+                            examples = @ExampleObject(name = "Seat confirmed", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Seat confirmed successfully",
+                                      "data": {
+                                        "id": "11111111-2222-3333-4444-555555555555",
+                                        "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                        "categoryName": "VIP",
+                                        "sectionLabel": "A",
+                                        "seatNumber": 12,
+                                        "status": "BOOKED"
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Lock expired or belongs to another user")
     })
@@ -120,7 +251,20 @@ public class SeatController {
     @MinTier(2)
     @Operation(summary = "Release seat lock", description = "Releases a seat lock owned by the authenticated user. Requires tier 2.")
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Seat released"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Seat released",
+                    content = @Content(
+                            mediaType = "application/json",
+                            examples = @ExampleObject(name = "Seat released", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Seat released successfully",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Seat not found or lock belongs to another user")
     })

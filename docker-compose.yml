@@ -89,11 +89,11 @@ services:
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
       DB_DRIVER: org.postgresql.Driver
       HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
-      # Flyway owns the schema; Hibernate only validates entities against it.
       JPA_DDL_AUTO: validate
       FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       JWT_EXPIRATION_MS: 86400000
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
     ports:
       - "8081:8081"
     healthcheck:
@@ -119,7 +119,6 @@ services:
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
       DB_DRIVER: org.postgresql.Driver
       HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
-      # Flyway owns the schema; Hibernate only validates entities against it.
       JPA_DDL_AUTO: validate
       FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
@@ -152,7 +151,6 @@ services:
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
       DB_DRIVER: org.postgresql.Driver
       HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
-      # Flyway owns the schema; Hibernate only validates entities against it.
       JPA_DDL_AUTO: validate
       FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
@@ -188,7 +186,6 @@ services:
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
       DB_DRIVER: org.postgresql.Driver
       HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
-      # Flyway owns the schema; Hibernate only validates entities against it.
       JPA_DDL_AUTO: validate
       FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
@@ -197,6 +194,7 @@ services:
       IDEMPOTENCY_STORE: redis
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       SEAT_SERVICE_URL: http://seat-service:8083
+      LOYALTY_SERVICE_URL: http://loyalty-service:8086
     ports:
       - "8084:8084"
     healthcheck:
@@ -206,8 +204,10 @@ services:
       retries: 10
       start_period: 45s
 
-  # Payment service is intentionally unimplemented for staging.
-  # Start it with: docker compose --profile payments up
+  # Dummy payment-service: POST /payments confirms the matching booking via
+  # booking-service so the booking journey can complete end-to-end. No real
+  # processor — every call "succeeds" if booking-service accepts the confirm.
+  # Start with: docker compose --profile payments up
   payment-service:
     profiles: ["payments"]
     build:
@@ -217,18 +217,49 @@ services:
     container_name: innbucks-payment-service
     restart: unless-stopped
     depends_on:
+      booking-service:
+        condition: service_healthy
       postgres:
         condition: service_healthy
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/payment_service
-      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-postgres}
-      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
-      SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
-      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+      DB_URL: jdbc:postgresql://postgres:5432/payment_service
+      DB_USERNAME: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
+      DB_DRIVER: org.postgresql.Driver
+      JPA_DDL_AUTO: update
+      BOOKING_SERVICE_URL: http://booking-service:8084
     ports:
       - "8085:8085"
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8085/actuator/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 45s
+
+  loyalty-service:
+    build:
+      context: .
+      dockerfile: loyalty-service/Dockerfile
+    image: ticketing-loyalty-service:dev
+    container_name: innbucks-loyalty-service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/loyalty_service
+      DB_USERNAME: ${POSTGRES_USER:-postgres}
+      DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
+      DB_DRIVER: org.postgresql.Driver
+      HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
+      JPA_DDL_AUTO: validate
+      FLYWAY_ENABLED: "true"
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
+    ports:
+      - "8086:8086"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8086/actuator/health"]
       interval: 10s
       timeout: 3s
       retries: 10
@@ -250,6 +281,8 @@ services:
         condition: service_healthy
       booking-service:
         condition: service_healthy
+      loyalty-service:
+        condition: service_healthy
       redis:
         condition: service_healthy
     environment:
@@ -258,6 +291,7 @@ services:
       SEAT_SERVICE_URI: http://seat-service:8083
       BOOKING_SERVICE_URI: http://booking-service:8084
       PAYMENT_SERVICE_URI: http://payment-service:8085
+      LOYALTY_SERVICE_URI: http://loyalty-service:8086
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
       # Redis backs the gateway's RequestRateLimiter token bucket store.
       REDIS_HOST: redis

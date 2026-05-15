@@ -1,7 +1,10 @@
 package com.innbucks.eventservice.dto;
 
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import com.innbucks.eventservice.config.FlexibleLocalDateTimeDeserializer;
 import com.innbucks.eventservice.entity.Province;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 import java.time.LocalDateTime;
@@ -33,12 +36,20 @@ public class UpdateEventRequestDTO {
     )
     private Province province;
 
+    @Schema(description = "Geographic coordinates of the venue (latitude/longitude in decimal degrees).")
+    @Valid
+    private LocationDTO location;
+
     @Schema(
+            example = "2026-06-15T19:00:00",
             description = """
-                    If provided, must be strictly **in the future** at request time (`@Future`).
+                    Event start timestamp (`yyyy-MM-ddTHH:mm:ss`). If provided, must be strictly **in the future**.
+                    Updates both the date and the start time. Send the full ISO-8601 datetime;
+                    a date-only value (e.g. `"2026-06-15"`) is rejected.
                     """
     )
     @Future(message = "Event date must be in the future")
+    @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
     private LocalDateTime dateTime;
 
     @Schema(description = "If set, must be >= 1.")

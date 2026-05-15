@@ -24,8 +24,12 @@ public class SecurityConfig {
     private final JwtFilter jwtFilter;
 
     // Comma-separated; Spring binds a String -> List<String> automatically.
-    // Set CORS_ALLOWED_ORIGINS in prod (e.g. https://app.example.com).
-    @Value("${cors.allowed-origins:http://localhost:3000}")
+    // Default is permissive ('*') so dev/Swagger/ngrok/any FE origin works
+    // out of the box. Safe with allowCredentials=true because we use
+    // setAllowedOriginPatterns (not setAllowedOrigins). MUST be overridden
+    // in prod via CORS_ALLOWED_ORIGINS to your real client origins
+    // (e.g. https://app.example.com).
+    @Value("${cors.allowed-origins:*}")
     private List<String> allowedOrigins;
 
     @Bean
@@ -42,6 +46,8 @@ public class SecurityConfig {
                         .requestMatchers("/v3/api-docs/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/events").permitAll()
                         .requestMatchers(HttpMethod.GET, "/events/**").permitAll()
+                        // Internal: booking-service decrements availability on confirm.
+                        .requestMatchers(HttpMethod.PATCH, "/events/*/availability/consume").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                         .anyRequest().authenticated()
                 )
@@ -56,7 +62,7 @@ public class SecurityConfig {
                             response.setContentType("application/json");
                             response.setStatus(403);
                             response.getWriter().write(
-                                    "{\"code\":\"403 FORBIDDEN\",\"message\":\"Forbidden - you do not have the required role (TENANT or ADMIN)\",\"data\":null}");
+                                    "{\"code\":\"403 FORBIDDEN\",\"message\":\"Forbidden - you do not have the required role (EVENT_ORGANIZER or SUPER_ADMIN)\",\"data\":null}");
                         })
                 )
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);

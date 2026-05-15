@@ -1,7 +1,10 @@
 package com.innbucks.eventservice.dto;
 
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+import com.innbucks.eventservice.config.FlexibleLocalDateTimeDeserializer;
 import com.innbucks.eventservice.entity.Province;
 import io.swagger.v3.oas.annotations.media.Schema;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 import java.time.LocalDateTime;
@@ -29,15 +32,22 @@ public class CreateEventRequestDTO {
     @NotNull(message = "Province is required")
     private Province province;
 
-    @Schema(
-            description = """
-                    Full event schedule timestamp.
+    @Schema(description = "Geographic coordinates of the venue (latitude/longitude in decimal degrees).")
+    @NotNull(message = "Location is required")
+    @Valid
+    private LocationDTO location;
 
-                    Must be strictly **in the future** at request time (`@Future`).
+    @Schema(
+            example = "2026-06-15T19:00:00",
+            description = """
+                    Event start timestamp (`yyyy-MM-ddTHH:mm:ss`). Must be strictly **in the future**.
+                    Send the full ISO-8601 datetime including the time portion (e.g. `"2026-06-15T19:00:00"`);
+                    a date-only value is rejected.
                     """
     )
     @NotNull(message = "Date and time is required")
     @Future(message = "Event date must be in the future")
+    @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
     private LocalDateTime dateTime;
 
     @Schema(description = "Maximum venue capacity.")

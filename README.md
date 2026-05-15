@@ -1,8 +1,8 @@
 # Innbucks Ticketing System
 
 A microservices-based online ticketing platform built with Spring Boot 4 and
-Spring Cloud Gateway. Each service owns its own Postgres schema and
-communicates over REST.
+Spring Cloud Gateway. Each service owns its own database and communicates
+over REST.
 
 ## Services
 
@@ -15,8 +15,8 @@ communicates over REST.
 | `booking-service` | 8084 | Booking creation, idempotency, payment hand-off.        |
 | `payment-service` | 8085 | Payment integration (Stripe). Off by default; opt-in.   |
 
-Shared infrastructure: PostgreSQL 16 (one DB per service) and Redis 7
-(distributed locks + idempotency).
+Shared infrastructure: PostgreSQL 16 (one database per service, schema
+owned by Flyway migrations) and Redis 7 (distributed locks + idempotency).
 
 ## Quick start
 
@@ -54,8 +54,8 @@ fill in real values. Required:
 | Variable               | Purpose                                             |
 |------------------------|-----------------------------------------------------|
 | `JWT_SECRET`           | HS256 signing key. Must be ≥32 chars; share across services. |
-| `POSTGRES_USER`        | Postgres user (dev default: `innbucks`).            |
-| `POSTGRES_PASSWORD`    | Postgres password (dev default: `innbucks`).        |
+| `POSTGRES_PASSWORD`    | Password for the local Postgres container. Required by docker-compose. |
+| `POSTGRES_USER`        | Postgres user. Defaults to `postgres`.            |
 | `CORS_ALLOWED_ORIGINS` | Comma-separated list of origins allowed by the gateway and event-service. Defaults to `http://localhost:3000`. |
 
 Per-service overrides (`DB_URL`, `DB_POOL_MAX`, `FEIGN_*_TIMEOUT_MS`, etc.)
@@ -63,15 +63,18 @@ live in each service's `application.yaml` and can be overridden via env vars.
 
 ## Local development without Docker
 
-Bring up only the data stores, then run the service of your choice from
-your IDE or Maven:
+Bring up Postgres (and Redis if you set `LOCK_STORE=redis` or
+`IDEMPOTENCY_STORE=redis`) before running a service from your IDE:
 
 ```bash
 docker compose up -d postgres redis
 ./mvnw -pl seat-service spring-boot:run
 ```
 
-Tests use in-memory H2 and do not need Postgres:
+`DB_PASSWORD` (and `DB_USERNAME` if not `postgres`) must be exported in
+the shell — see `scripts/dev-env.sh` for a helper that loads `.env`.
+
+Tests use in-memory H2 in PostgreSQL compatibility mode:
 
 ```bash
 ./mvnw test
