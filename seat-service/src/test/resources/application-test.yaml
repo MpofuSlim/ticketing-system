@@ -25,3 +25,5 @@ jwt:
 app:
   lock:
     store: memory
+  seat-lock-reaper:
+    enabled: false
