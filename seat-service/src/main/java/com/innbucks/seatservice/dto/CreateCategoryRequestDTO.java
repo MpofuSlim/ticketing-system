@@ -13,6 +13,8 @@ import java.util.UUID;
         description = "Defines a new seat category for an event, including its sections and per-seat count.")
 public class CreateCategoryRequestDTO {
 
+    public static final int MAX_SECTIONS_PER_CATEGORY = 100;
+
     @Schema(example = "3fa85f64-5717-4562-b3fc-2c963f66afa6",
             description = "UUID of the event this category belongs to.")
     @NotNull(message = "Event ID is required")
@@ -21,9 +23,11 @@ public class CreateCategoryRequestDTO {
     @Schema(example = "VIP",
             description = "Display name of the category shown to customers (e.g. VIP, General Admission, VVIP).")
     @NotBlank(message = "Category name is required")
+    @Size(max = 255, message = "Category name must be at most 255 characters")
     private String name;
 
     @Schema(example = "Premium front-row seats with complimentary drink and priority access.", nullable = true)
+    @Size(max = 255, message = "Description must be at most 255 characters")
     private String description;
 
     @Schema(example = "100.00", description = "Ticket price per seat in the event's currency.")
@@ -32,7 +36,9 @@ public class CreateCategoryRequestDTO {
     private BigDecimal price;
 
     // sections = [{section:"A", seatCount:25}, {section:"B", seatCount:25}]
-    @Schema(description = "One entry per physical section. Total seats = sum of all seatCount values.")
+    @Schema(description = "One entry per physical section. Total seats = sum of all seatCount values. "
+            + "At most 100 sections per request; sum of seatCount is further capped at 500,000 server-side.")
     @NotEmpty(message = "At least one section is required")
+    @Size(max = MAX_SECTIONS_PER_CATEGORY, message = "At most 100 sections per category")
     private List<@Valid SectionSeatConfigDTO> sections;
 }

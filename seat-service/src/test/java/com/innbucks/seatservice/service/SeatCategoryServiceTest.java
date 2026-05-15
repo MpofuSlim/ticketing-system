@@ -109,6 +109,49 @@ class SeatCategoryServiceTest {
     }
 
     @Test
+    void createCategory_rejectsTotalSeatsAboveAggregateCap() {
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        SeatCategoryService service = new SeatCategoryService(catRepo, seatRepo,
+                org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class));
+
+        // 6 sections × 100,000 seats = 600,000 — within per-section @Max (100k)
+        // and sections @Size (100), but above the service's 500k aggregate cap.
+        // We can't trigger @Max here because bean validation is enforced by
+        // the @Valid binding at the controller, not by direct service calls.
+        List<SectionSeatConfigDTO> sections = List.of(
+                section("A", 100_000), section("B", 100_000), section("C", 100_000),
+                section("D", 100_000), section("E", 100_000), section("F", 100_000));
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> service.createCategory(request(UUID.randomUUID(), "Mega", sections)));
+
+        assertTrue(ex.getMessage().contains("exceeds the per-category cap"),
+                "expected aggregate-cap message, got: " + ex.getMessage());
+        verify(catRepo, never()).save(any());
+        verify(seatRepo, never()).saveAll(anyList());
+    }
+
+    @Test
+    void createCategory_acceptsSeatsExactlyAtAggregateCap() {
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        SeatCategoryService service = new SeatCategoryService(catRepo, seatRepo,
+                org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class));
+
+        // 5 × 100,000 = 500,000 — exactly the cap, must succeed.
+        List<SectionSeatConfigDTO> sections = List.of(
+                section("A", 100_000), section("B", 100_000), section("C", 100_000),
+                section("D", 100_000), section("E", 100_000));
+
+        service.createCategory(request(UUID.randomUUID(), "MaxCap", sections));
+
+        ArgumentCaptor<SeatCategory> savedCategory = ArgumentCaptor.forClass(SeatCategory.class);
+        verify(catRepo).save(savedCategory.capture());
+        assertEquals(500_000, savedCategory.getValue().getTotalSeats());
+    }
+
+    @Test
     void deleteCategory_softDeletes() {
         SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
         SeatCategoryService service = new SeatCategoryService(catRepo, mock(SeatRepository.class), org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class));
