@@ -86,7 +86,13 @@ public class GlobalExceptionHandler {
                 .body(ApiResult.error(status, ex.getMessage()));
     }
 
-    // Returns field-level validation errors in the ApiResponse envelope.
+    /**
+     * @Valid bean-validation failures on @RequestBody. Field-level messages
+     * land in data so the frontend can highlight the specific bad input.
+     * Aligned to 400 BAD_REQUEST + ApiResult envelope across the API; the
+     * previous 422 response was technically more REST-correct but forced the
+     * frontend to special-case event-service.
+     */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiResult<Map<String, String>>> handleValidation(MethodArgumentNotValidException ex) {
         Map<String, String> fieldErrors = ex.getBindingResult()
@@ -94,10 +100,15 @@ public class GlobalExceptionHandler {
                 .stream()
                 .collect(Collectors.toMap(
                         FieldError::getField,
-                        fe -> fe.getDefaultMessage() != null ? fe.getDefaultMessage() : "Invalid value"
+                        fe -> fe.getDefaultMessage() != null ? fe.getDefaultMessage() : "Invalid value",
+                        (a, b) -> a,
+                        java.util.LinkedHashMap::new
                 ));
-        log.warn("Validation failed: {}", fieldErrors);
-        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY)
-                .body(ApiResult.of(HttpStatus.UNPROCESSABLE_ENTITY, "Validation failed", fieldErrors));
+        log.warn("Validation failed fields={}", fieldErrors);
+        return ResponseEntity.badRequest().body(ApiResult.<Map<String, String>>builder()
+                .code("400 BAD_REQUEST")
+                .message("Validation failed")
+                .data(fieldErrors)
+                .build());
     }
 }

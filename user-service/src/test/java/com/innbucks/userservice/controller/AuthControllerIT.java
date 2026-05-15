@@ -280,4 +280,23 @@ class AuthControllerIT {
         public String identifier;
         public String password;
     }
+
+    @Test
+    void tier2Registration_missingFields_returnsFieldLevelMessages() throws Exception {
+        // Empty body — the DTO has @NotBlank/@NotNull on every required
+        // field, so the request should fail validation and the handler
+        // should surface each field's friendly message. Previously the
+        // request fell through to Spring's DefaultHandlerExceptionResolver
+        // which returned a single cryptic "Validation failed for object='…'".
+        mockMvc.perform(post("/auth/customer/register/tier2")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("400 BAD_REQUEST"))
+                .andExpect(jsonPath("$.message").value("Validation failed"))
+                .andExpect(jsonPath("$.data.email").value("Email is required"))
+                .andExpect(jsonPath("$.data.firstName").value("First name is required"))
+                .andExpect(jsonPath("$.data.lastName").value("Last name is required"))
+                .andExpect(jsonPath("$.data.msisdn").value("msisdn is required"));
+    }
 }

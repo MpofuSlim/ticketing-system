@@ -51,19 +51,32 @@ public class GlobalExceptionHandler {
         ));
     }
 
+    /**
+     * @Valid bean-validation failures on @RequestBody. Returns the project's
+     * standard ApiResult envelope with field-level messages in data — same
+     * shape as the matching handler in user-service / seat-service /
+     * booking-service / event-service / payment-service so the frontend has
+     * one render path for validation errors across the API.
+     *
+     * <p>Previously returned a raw Map with a top-level "fields" key — that
+     * worked but differed from every other service. data: { field → msg }
+     * is now the canonical shape.
+     */
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<Map<String, Object>> handle(MethodArgumentNotValidException ex) {
-        var fields = ex.getBindingResult().getFieldErrors().stream()
-                .collect(Collectors.toMap(f -> f.getField(),
-                        f -> f.getDefaultMessage() == null ? "invalid" : f.getDefaultMessage(),
-                        (a, b) -> a));
-        return ResponseEntity.badRequest().body(Map.of(
-                "timestamp", Instant.now().toString(),
-                "status", 400,
-                "code", "VALIDATION",
-                "message", "validation failed",
-                "fields", fields
-        ));
+    public ResponseEntity<com.innbucks.loyaltyservice.dto.ApiResult<Map<String, String>>> handle(
+            MethodArgumentNotValidException ex) {
+        Map<String, String> fields = new java.util.LinkedHashMap<>();
+        for (var fe : ex.getBindingResult().getFieldErrors()) {
+            fields.putIfAbsent(fe.getField(),
+                    fe.getDefaultMessage() == null ? "Invalid value" : fe.getDefaultMessage());
+        }
+        log.warn("Validation failed fields={}", fields);
+        return ResponseEntity.badRequest().body(
+                com.innbucks.loyaltyservice.dto.ApiResult.<Map<String, String>>builder()
+                        .code("400 BAD_REQUEST")
+                        .message("Validation failed")
+                        .data(fields)
+                        .build());
     }
 
     @ExceptionHandler(IllegalArgumentException.class)
