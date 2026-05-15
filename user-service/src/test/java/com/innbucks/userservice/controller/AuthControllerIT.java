@@ -288,15 +288,31 @@ class AuthControllerIT {
         // should surface each field's friendly message. Previously the
         // request fell through to Spring's DefaultHandlerExceptionResolver
         // which returned a single cryptic "Validation failed for object='…'".
+        // email is intentionally NOT in the asserted set — it's optional
+        // on tier-2 (many customers have no email), so an empty body must
+        // NOT produce a per-field error for it.
         mockMvc.perform(post("/auth/customer/register/tier2")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("400 BAD_REQUEST"))
                 .andExpect(jsonPath("$.message").value("Validation failed"))
-                .andExpect(jsonPath("$.data.email").value("Email is required"))
                 .andExpect(jsonPath("$.data.firstName").value("First name is required"))
                 .andExpect(jsonPath("$.data.lastName").value("Last name is required"))
-                .andExpect(jsonPath("$.data.msisdn").value("msisdn is required"));
+                .andExpect(jsonPath("$.data.msisdn").value("msisdn is required"))
+                .andExpect(jsonPath("$.data.email").doesNotExist());
+    }
+
+    @Test
+    void tier2Registration_invalidEmail_stillRejects() throws Exception {
+        // Email is optional, but if supplied it must be a valid address —
+        // @Email kicks in. This guards the "@NotBlank gone, but @Email kept"
+        // shape so a future change can't accidentally accept "not-an-email"
+        // through this endpoint.
+        mockMvc.perform(post("/auth/customer/register/tier2")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"not-an-email\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.data.email").value("Email must be a valid email address"));
     }
 }

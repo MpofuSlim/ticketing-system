@@ -47,8 +47,14 @@ public class CustomerTier2RegisterDTO {
     @NotBlank(message = "National ID is required")
     private String nationalId;
 
-    @Schema(example = "sarah@example.com")
-    @NotBlank(message = "Email is required")
+    // Email is OPTIONAL. The customer's primary identifier is the phone
+    // number (msisdn) — many customers in the target market don't have an
+    // email at all, and tier-2 registration should not block on it. If a
+    // value IS supplied it still has to look like an email, but null/empty
+    // is fine: the User entity's email column is nullable + unique, and
+    // Postgres allows multiple NULLs on a UNIQUE column.
+    @Schema(example = "sarah@example.com", nullable = true,
+            description = "Optional. Leave blank if the customer has no email.")
     @Email(message = "Email must be a valid email address")
     private String email;
 
