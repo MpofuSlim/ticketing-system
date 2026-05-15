@@ -1,0 +1,42 @@
+# Integration-test profile — Testcontainers Postgres + InMemory idempotency.
+# datasource.* injected by PostgresIntegrationTestBase. Redis autoconfig
+# excluded so the IT doesn't try to dial localhost:6379 during boot; the
+# InMemoryIdempotencyStore bean is picked because app.idempotency.store
+# != "redis".
+spring:
+  datasource:
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 0
+    locations: classpath:db/migration
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.data.redis.autoconfigure.RedisAutoConfiguration
+      - org.springframework.boot.data.redis.autoconfigure.RedisRepositoriesAutoConfiguration
+  cloud:
+    discovery:
+      enabled: false
+
+app:
+  idempotency:
+    store: memory
+
+jwt:
+  secret: it-jwt-secret-it-jwt-secret-it-jwt-secret-it-jwt-secret
+  expiration: 3600000
+
+innbucks:
+  internal-api-token: it-internal-token-it-internal-token
+
+logging:
+  level:
+    root: WARN
+    com.innbucks.bookingservice: INFO

@@ -1,0 +1,37 @@
+# Integration-test profile — Testcontainers Postgres + InMemory seat lock.
+# Redis autoconfig excluded so the IT doesn't dial localhost:6379 during
+# boot; InMemorySeatLockStore is picked because app.lock.store != "redis".
+spring:
+  datasource:
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 0
+    locations: classpath:db/migration
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.data.redis.autoconfigure.RedisAutoConfiguration
+      - org.springframework.boot.data.redis.autoconfigure.RedisRepositoriesAutoConfiguration
+  cloud:
+    discovery:
+      enabled: false
+
+app:
+  lock:
+    store: memory
+
+jwt:
+  secret: it-jwt-secret-it-jwt-secret-it-jwt-secret-it-jwt-secret
+  expiration: 3600000
+
+logging:
+  level:
+    root: WARN
+    com.innbucks.seatservice: INFO
