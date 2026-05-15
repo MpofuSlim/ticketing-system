@@ -35,4 +35,13 @@ USER app
 COPY --from=builder --chown=app:app /workspace/app.jar /app/app.jar
 
 EXPOSE 8084
+
+# k8s-style probe: hits actuator/health from inside the container. Spring Boot
+# returns 200 + {"status":"UP"} once the context is fully refreshed; before
+# that, hits to /actuator/health return 503 and the orchestrator holds traffic.
+# start-period gives the JVM + Flyway + Hibernate enough time to come up before
+# failures start counting against retries.
+HEALTHCHECK --interval=30s --timeout=3s --start-period=60s --retries=3 \
+    CMD wget --quiet --tries=1 --spider http://localhost:8084/actuator/health || exit 1
+
 ENTRYPOINT ["java", "-jar", "/app/app.jar"]

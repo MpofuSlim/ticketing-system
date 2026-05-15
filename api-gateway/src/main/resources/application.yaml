@@ -138,12 +138,25 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
+            # /{service}-service/** proxy routes exist for the Swagger UI
+            # aggregator (it loads each backend's /v3/api-docs through these
+            # paths). StripPrefix=1 means /user-service/auth/login lands on
+            # user-service's /auth/login — without RequestRateLimiter that
+            # was a brute-force bypass route around the bucket on the regular
+            # /auth/** route. Same limiter applied here closes the gap; the
+            # per-IP token bucket cost is negligible.
             - id: user-service-proxy-route
               uri: ${USER_SERVICE_URI:http://localhost:8081}
               predicates:
                 - Path=/user-service/**
               filters:
                 - StripPrefix=1
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
 
             - id: event-service-proxy-route
               uri: ${EVENT_SERVICE_URI:http://localhost:8082}
@@ -151,6 +164,12 @@ spring:
                 - Path=/event-service/**
               filters:
                 - StripPrefix=1
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
 
             - id: seat-service-proxy-route
               uri: ${SEAT_SERVICE_URI:http://localhost:8083}
@@ -158,6 +177,12 @@ spring:
                 - Path=/seat-service/**
               filters:
                 - StripPrefix=1
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
 
             - id: booking-service-proxy-route
               uri: ${BOOKING_SERVICE_URI:http://localhost:8084}
@@ -165,6 +190,12 @@ spring:
                 - Path=/booking-service/**
               filters:
                 - StripPrefix=1
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
 
             - id: payment-service-proxy-route
               uri: ${PAYMENT_SERVICE_URI:http://localhost:8085}
@@ -172,6 +203,12 @@ spring:
                 - Path=/payment-service/**
               filters:
                 - StripPrefix=1
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
 
             - id: loyalty-service-proxy-route
               uri: ${LOYALTY_SERVICE_URI:http://localhost:8086}
@@ -179,6 +216,12 @@ spring:
                 - Path=/loyalty-service/**
               filters:
                 - StripPrefix=1
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
 
           default-filters:
             - DedupeResponseHeader=Access-Control-Allow-Credentials Access-Control-Allow-Origin Access-Control-Allow-Headers Access-Control-Allow-Methods, RETAIN_FIRST
