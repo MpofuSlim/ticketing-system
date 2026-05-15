@@ -7,8 +7,12 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 @RestControllerAdvice
 @Slf4j
@@ -22,6 +26,27 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AccessDeniedException.class)
     public void handleAccessDenied(AccessDeniedException ex) throws AccessDeniedException {
         throw ex;
+    }
+
+    /**
+     * @Valid bean-validation failures on @RequestBody. Returns field-level
+     * messages keyed by field name in data.fields — same shape as the matching
+     * handler in user-service / seat-service / event-service / loyalty-service.
+     * One response shape across the API = one render path on the frontend.
+     */
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<ApiResult<Map<String, String>>> handleValidation(MethodArgumentNotValidException ex) {
+        Map<String, String> fields = new LinkedHashMap<>();
+        for (var fe : ex.getBindingResult().getFieldErrors()) {
+            fields.putIfAbsent(fe.getField(),
+                    fe.getDefaultMessage() == null ? "Invalid value" : fe.getDefaultMessage());
+        }
+        log.warn("Validation failed fields={}", fields);
+        return ResponseEntity.badRequest().body(ApiResult.<Map<String, String>>builder()
+                .code("400 BAD_REQUEST")
+                .message("Validation failed")
+                .data(fields)
+                .build());
     }
 
     @ExceptionHandler(SeatServiceUnavailableException.class)

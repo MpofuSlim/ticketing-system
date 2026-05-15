@@ -7,7 +7,11 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 @RestControllerAdvice
 @Slf4j
@@ -23,6 +27,34 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AccessDeniedException.class)
     public void handleAccessDenied(AccessDeniedException ex) throws AccessDeniedException {
         throw ex;
+    }
+
+    /**
+     * @Valid bean-validation failures on @RequestBody. Surfaces field-level
+     * messages in data.fields so the frontend can highlight the specific bad
+     * input without parsing a free-form string. Without this handler the
+     * request fell through to Spring's DefaultHandlerExceptionResolver which
+     * returned a cryptic "Validation failed for object='customerTier2RegisterDTO'"
+     * with no per-field detail — useless to the user.
+     *
+     * <p>{@code data} is a map keyed by field name, value is the
+     * {@code @NotBlank(message=…)} / {@code @Size(message=…)} text from the
+     * DTO. Multiple violations on the same field collapse to the first one
+     * (showing all of them tends to confuse rather than help).
+     */
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<ApiResult<Map<String, String>>> handleValidation(MethodArgumentNotValidException ex) {
+        Map<String, String> fields = new LinkedHashMap<>();
+        for (var fe : ex.getBindingResult().getFieldErrors()) {
+            fields.putIfAbsent(fe.getField(),
+                    fe.getDefaultMessage() == null ? "Invalid value" : fe.getDefaultMessage());
+        }
+        log.warn("Validation failed fields={}", fields);
+        return ResponseEntity.badRequest().body(ApiResult.<Map<String, String>>builder()
+                .code("400 BAD_REQUEST")
+                .message("Validation failed")
+                .data(fields)
+                .build());
     }
 
     // Surface Oradian middleware failures as 502 Bad Gateway so the client knows
