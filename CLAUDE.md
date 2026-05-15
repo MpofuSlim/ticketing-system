@@ -24,8 +24,6 @@ When adding a route:
   skip the rate limiter.
 - Use the existing `${SERVICE_URI:http://localhost:PORT}` env-var pattern
   for the `uri:`.
-- Add the route on **both** active branches when the feature lives on both
-  (currently `claude/add-loyalty-service` and `claude/add-loyalty-service-h2`).
 
 ## Swagger response examples
 
@@ -51,24 +49,11 @@ Concretely:
   `ShopStaffController` (user-service) for the canonical shape — copy
   that style for new controllers.
 
-## Active branches
+## Active branch
 
-- `claude/add-loyalty-service` — PostgreSQL + Flyway. Schema changes go in
-  `src/main/resources/db/migration/V<N>__*.sql`.
-- `claude/add-loyalty-service-h2` — H2 file-based, Flyway disabled,
-  Hibernate `ddl-auto=update` manages the schema. Migration files committed
-  here are dormant; safe to keep in sync with the Postgres branch.
+- `claude/add-loyalty-service` — the only working branch. PostgreSQL +
+  Flyway. Schema changes go in `src/main/resources/db/migration/V<N>__*.sql`.
 
-**ALL changes MUST be pushed to BOTH `claude/add-loyalty-service` AND
-`claude/add-loyalty-service-h2`.** This is unconditional — no change is
-"Postgres-only" or "H2-only". Workflow:
-
-1. Develop and commit on `claude/add-loyalty-service` first.
-2. Push `claude/add-loyalty-service` to `origin`.
-3. Cherry-pick the commit(s) onto `claude/add-loyalty-service-h2`.
-4. Push `claude/add-loyalty-service-h2` to `origin`.
-5. Confirm both branches were pushed before reporting the task complete.
-
-If a cherry-pick conflicts (e.g. Flyway migration files vs. H2's dormant
-copies), resolve the conflict so the H2 branch keeps its `ddl-auto=update`
-behavior — do NOT skip the cherry-pick.
+The previous `claude/add-loyalty-service-h2` sibling (H2 file-based,
+Flyway disabled, `ddl-auto=update`) has been deleted. Commits no longer
+need to be cherry-picked anywhere; develop, commit, push once.
