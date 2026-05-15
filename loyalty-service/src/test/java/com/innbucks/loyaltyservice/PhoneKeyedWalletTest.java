@@ -137,7 +137,7 @@ class PhoneKeyedWalletTest {
         // 5) Now the customer can redeem points (their accrued $100 -> 100 points).
         BigDecimal newBalance = redemptionService.redeemPoints(t.getId(), mr.id(),
                 new Dtos.RedemptionRequest(null, created.getId(),
-                        new BigDecimal("40"), "Coffee on the house"));
+                        new BigDecimal("40"), "Coffee on the house")).balance();
         assertThat(newBalance).isEqualByComparingTo("60");
 
         // 6) And the voucher redemption now succeeds.

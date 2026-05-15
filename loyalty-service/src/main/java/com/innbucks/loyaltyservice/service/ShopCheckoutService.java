@@ -119,11 +119,11 @@ public class ShopCheckoutService {
             Dtos.RedemptionRequest burn = new Dtos.RedemptionRequest(
                     merchantId, user.getId(), pointsAmount,
                     reference == null ? "shop-checkout" : reference);
-            balance = redemptionService.redeemPoints(tenantId, merchantId, burn);
+            RedemptionService.RedemptionResult burnResp =
+                    redemptionService.redeemPoints(tenantId, merchantId, burn);
+            balance = burnResp.balance();
+            redemptionTxnId = burnResp.transactionId();
             pointsRedeemed = pointsAmount;
-            // RedemptionService doesn't surface the txn id; the redemption row
-            // is identifiable by user_id + reference + REDEMPTION type if a
-            // caller needs to reconcile.
         }
 
         log.info("Shop checkout shopId={} merchantId={} phone={} cash={} pointsRedeemed={} pointsEarned={} balance={}",

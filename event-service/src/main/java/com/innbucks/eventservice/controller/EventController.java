@@ -142,14 +142,15 @@ public class EventController {
     ) {
         LocalDateTime fromDateTime = from == null ? null : from.atStartOfDay();
         LocalDateTime toDateTime = to == null ? null : to.atTime(LocalTime.MAX);
-        log.debug("GET /events from={} to={} venue={} page={} size={} sortBy={}",
-                from, to, venue, page, size, sortBy);
         Page<EventResponseDTO> result;
         if (isOrganizerOnly(authentication)) {
             String tenantId = authentication.getName();
-            log.debug("GET /events scoped to organizer tenantId={}", tenantId);
+            log.debug("Listing events (organizer scope) tenantId={} from={} to={} venue={} page={} size={} sortBy={}",
+                    tenantId, from, to, venue, page, size, sortBy);
             result = eventService.getMyEvents(tenantId, fromDateTime, toDateTime, venue, page, size, sortBy);
         } else {
+            log.debug("Listing events (public scope) from={} to={} venue={} page={} size={} sortBy={}",
+                    from, to, venue, page, size, sortBy);
             result = eventService.getAllActiveEvents(fromDateTime, toDateTime, venue, page, size, sortBy);
         }
         if (result.isEmpty()) {
@@ -316,14 +317,15 @@ public class EventController {
     ) {
         LocalDateTime fromDateTime = from == null ? null : from.atStartOfDay();
         LocalDateTime toDateTime = to == null ? null : to.atTime(LocalTime.MAX);
-        log.debug("GET /events/active from={} to={} venue={} page={} size={} sortBy={}",
-                from, to, venue, page, size, sortBy);
         Page<EventResponseDTO> result;
         if (isOrganizerOnly(authentication)) {
             String tenantId = authentication.getName();
-            log.debug("GET /events/active scoped to organizer tenantId={}", tenantId);
+            log.debug("Listing active events (organizer scope) tenantId={} from={} to={} venue={} page={} size={} sortBy={}",
+                    tenantId, from, to, venue, page, size, sortBy);
             result = eventService.getMyActiveEvents(tenantId, fromDateTime, toDateTime, venue, page, size, sortBy);
         } else {
+            log.debug("Listing active events (public scope) from={} to={} venue={} page={} size={} sortBy={}",
+                    from, to, venue, page, size, sortBy);
             result = eventService.getActiveOnlyEvents(fromDateTime, toDateTime, venue, page, size, sortBy);
         }
         if (result.isEmpty()) {
@@ -402,7 +404,7 @@ public class EventController {
     public ResponseEntity<ApiResult<EventResponseDTO>> getEventById(
             @Parameter(description = "Event UUID") @PathVariable UUID id
     ) {
-        log.debug("GET /events/{}", id);
+        log.debug("Lookup event by id eventId={}", id);
         return ResponseEntity.ok(ApiResult.ok("Event retrieved successfully", eventService.getEventById(id)));
     }
 

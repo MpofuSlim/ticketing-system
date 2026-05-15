@@ -458,9 +458,12 @@ public class TransactionController {
     })
     @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Map<String, Object>>> redeem(@Valid @RequestBody Dtos.RedemptionRequest req) {
-        BigDecimal balance = redemptionService.redeemPoints(tenantContext.requireTenantId(),
+        var result = redemptionService.redeemPoints(tenantContext.requireTenantId(),
                 CallerDetails.resolveMerchantId(req.merchantId()), req);
-        Map<String, Object> data = Map.of("status", "OK", "newBalance", balance);
+        Map<String, Object> data = Map.of(
+                "status", "OK",
+                "transactionId", result.transactionId(),
+                "newBalance", result.balance());
         return ResponseEntity.ok(ApiResult.ok("Points redeemed successfully", data));
     }
 

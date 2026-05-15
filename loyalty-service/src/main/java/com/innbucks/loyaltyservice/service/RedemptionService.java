@@ -35,9 +35,17 @@ public class RedemptionService {
     }
 
     /**
-     * Redeem points for in-platform credit (e.g. discount). Returns new balance.
+     * Outcome of a redemption: both the new wallet balance and the ledger
+     * transaction id. The id lets shop-checkout / receipts surface the
+     * specific REDEMPTION row a customer can later quote for support.
      */
-    public BigDecimal redeemPoints(UUID tenantId, UUID merchantId, Dtos.RedemptionRequest req) {
+    public record RedemptionResult(UUID transactionId, BigDecimal balance) {}
+
+    /**
+     * Redeem points for in-platform credit (e.g. discount). Returns the new
+     * balance plus the ledger transaction id for receipts/reconciliation.
+     */
+    public RedemptionResult redeemPoints(UUID tenantId, UUID merchantId, Dtos.RedemptionRequest req) {
         if (req.points() == null || req.points().signum() <= 0) {
             throw LoyaltyException.badRequest("BAD_AMOUNT", "points must be positive");
         }
@@ -59,6 +67,6 @@ public class RedemptionService {
         BigDecimal balance = walletService.apply(w.getId(), req.points().negate(), t.getId(),
                 "redeem:" + (req.reason() == null ? "n/a" : req.reason()));
         metrics.addPointsRedeemed(req.points());
-        return balance;
+        return new RedemptionResult(t.getId(), balance);
     }
 }
