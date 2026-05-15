@@ -1,5 +1,6 @@
 package com.innbucks.userservice.service;
 
+import com.innbucks.userservice.client.DepositAccount;
 import com.innbucks.userservice.client.OradianClient;
 import com.innbucks.userservice.client.OradianClientException;
 import com.innbucks.userservice.client.OradianCustomerRequest;
@@ -21,6 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 
 @Service
 @RequiredArgsConstructor
@@ -213,6 +215,23 @@ public class CustomerService {
                 .currentTier(currentTier)
                 .nextTier(nextTier)
                 .build();
+    }
+
+    /**
+     * Customer-self deposits lookup. Verifies the JWT-derived phone resolves
+     * to a real CUSTOMER row, then delegates to OradianClient which calls
+     * Oradian middleware's S2S /internal/customers/{msisdn}/deposits and
+     * returns just the deposits array. Keeps a stale JWT issued for a
+     * de-registered customer from leaking Oradian data.
+     */
+    @Transactional(readOnly = true)
+    public List<DepositAccount> getDepositsForCustomer(String phoneNumber) {
+        User user = userRepository.findByPhoneNumber(phoneNumber)
+                .orElseThrow(() -> new RuntimeException("Customer not found for phone " + phoneNumber));
+        if (!user.hasRole(User.Role.CUSTOMER)) {
+            throw new RuntimeException("User is not a customer");
+        }
+        return oradianClient.getDeposits(phoneNumber);
     }
 
     /** Joins first / middle / last into a single string, skipping any blanks. */

@@ -1,6 +1,8 @@
 package com.innbucks.userservice.controller;
 
+import com.innbucks.userservice.client.DepositAccount;
 import com.innbucks.userservice.dto.*;
+import com.innbucks.userservice.security.JwtUtil;
 import com.innbucks.userservice.service.AuthService;
 import com.innbucks.userservice.service.CustomerService;
 import com.innbucks.userservice.service.OtpService;
@@ -20,6 +22,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
+
 @RestController
 @RequestMapping("/auth")
 @RequiredArgsConstructor
@@ -31,6 +35,7 @@ public class AuthController {
     private final CustomerService customerService;
     private final TokenRevocationService tokenRevocationService;
     private final OtpService otpService;
+    private final JwtUtil jwtUtil;
 
     @PostMapping("/register")
     @SecurityRequirements()
@@ -462,6 +467,79 @@ public class AuthController {
         log.info("Get customer tier phone={}", phoneNumber);
         CustomerTierResponseDTO response = customerService.getCustomerTierByPhoneNumber(phoneNumber);
         return ResponseEntity.ok(ApiResult.ok("Customer tier retrieved", response));
+    }
+
+    @GetMapping("/customer/deposits")
+    @SecurityRequirement(name = "bearerAuth")
+    @Operation(summary = "List my Oradian deposit accounts",
+            description = """
+                    Returns the authenticated customer's Oradian deposit accounts.
+
+                    The customer's phone number is taken from the `phoneNumber` claim
+                    on the bearer JWT — the caller doesn't pass it explicitly, and
+                    a customer can only ever read their own deposits. user-service
+                    forwards the phone to Oradian middleware's S2S
+                    /internal/customers/{msisdn}/deposits endpoint, which calls
+                    Oradian's instafin.LookupClient and returns just the deposits
+                    array. We pass that array through unchanged.
+
+                    A tier-1 customer (no Oradian Person+Client yet) gets a 400 —
+                    same shape as the existing tier-not-met errors. Tokens that
+                    aren't customer tokens (no phoneNumber claim) get a 400 as
+                    well.
+                    """)
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "Deposits returned (empty array if Oradian has none)",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Deposits", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Deposits retrieved",
+                                      "data": [
+                                        {
+                                          "internalID": "",
+                                          "ID": "A8347323",
+                                          "externalAccountNumber": "",
+                                          "clientInternalID": "",
+                                          "productID": "fixed_deposit_12",
+                                          "productName": "Fixed Deposit 12 Months",
+                                          "balance": "7500.00",
+                                          "currencyCode": "",
+                                          "status": "Active",
+                                          "isMainAccount": "true",
+                                          "isMessagingFeeAccount": "",
+                                          "isJointAccount": "",
+                                          "subscribed": "200.00",
+                                          "appliedDate": "2018-11-05",
+                                          "startDate": "2018-11-05",
+                                          "endDate": "2020-11-05",
+                                          "closeDate": "2019-11-05"
+                                        }
+                                      ]
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "Token has no phoneNumber claim, or the phone doesn't resolve to a customer"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing or invalid bearer token"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502", description = "Oradian middleware unreachable or upstream Oradian failed")
+    })
+    public ResponseEntity<ApiResult<List<DepositAccount>>> getCustomerDeposits(HttpServletRequest request) {
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing Bearer token"));
+        }
+        String token = authHeader.substring(7);
+        String phoneNumber = jwtUtil.extractPhoneNumber(token);
+        if (phoneNumber == null || phoneNumber.isBlank()) {
+            return ResponseEntity.badRequest()
+                    .body(ApiResult.error(HttpStatus.BAD_REQUEST,
+                            "Token has no phoneNumber claim; only CUSTOMER tokens can call /auth/customer/deposits"));
+        }
+        log.info("GET /auth/customer/deposits phoneNumber={}", phoneNumber);
+        List<DepositAccount> deposits = customerService.getDepositsForCustomer(phoneNumber);
+        return ResponseEntity.ok(ApiResult.ok("Deposits retrieved", deposits));
     }
 
     @PostMapping("/otp/request")
