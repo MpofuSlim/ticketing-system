@@ -7,20 +7,29 @@ import jakarta.servlet.http.HttpServletResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.NonNull;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.web.util.ContentCachingResponseWrapper;
 
 import java.io.IOException;
+import java.util.Optional;
 import java.util.Set;
 
 /**
  * Intercepts mutating requests that carry an {@code Idempotency-Key} header.
- * On a hit, the cached response is replayed byte-for-byte. On a miss the
- * request is executed and the resulting 2xx response is stored under the
- * key for {@link #TTL_SECONDS}.
  *
- * Non-mutating methods and requests without the header pass straight through.
+ * <p>On a hit, the cached response is replayed byte-for-byte. On a miss the
+ * slot is atomically reserved before the request runs; concurrent callers
+ * presenting the same key see the reservation and get a 409 instead of
+ * both executing. On 2xx the reservation is overwritten by a completed
+ * entry that survives for {@link #COMPLETED_TTL_SECONDS}; on non-2xx or
+ * exception the reservation is released so a client retry can proceed.
+ *
+ * <p>The cache key is namespaced by caller identity (JWT email if
+ * authenticated, else client IP) so user B cannot replay user A's cached
+ * response by guessing or stealing the Idempotency-Key.
  */
 @Component
 @RequiredArgsConstructor
@@ -29,7 +38,9 @@ public class IdempotencyFilter extends OncePerRequestFilter {
 
     public static final String HEADER = "Idempotency-Key";
     private static final Set<String> MUTATING_METHODS = Set.of("POST", "PUT", "PATCH", "DELETE");
-    private static final long TTL_SECONDS = 24 * 60 * 60; // 24h
+    static final long COMPLETED_TTL_SECONDS = 10 * 60; // 10 minutes
+    static final long RESERVATION_TTL_SECONDS = 30;
+    private static final String ANONYMOUS_PRINCIPAL = "anonymousUser";
 
     private final IdempotencyStore store;
 
@@ -46,40 +57,110 @@ public class IdempotencyFilter extends OncePerRequestFilter {
             throws ServletException, IOException {
 
         String key = request.getHeader(HEADER);
+        String scope = resolveScope(request);
+        String cacheKey = request.getMethod() + " " + request.getRequestURI() + "#" + scope + "#" + key;
 
-        // Namespace by method + path so the same key used for different
-        // endpoints doesn't collide.
-        String cacheKey = request.getMethod() + " " + request.getRequestURI() + "#" + key;
-
-        var cached = store.get(cacheKey);
-        if (cached.isPresent()) {
-            StoredResponse prior = cached.get();
-            log.info("Idempotency hit key={} method={} path={} replayStatus={}",
-                    key, request.getMethod(), request.getRequestURI(), prior.status());
-            response.setStatus(prior.status());
-            if (prior.contentType() != null) {
-                response.setContentType(prior.contentType());
+        Optional<IdempotencyEntry> existing = store.get(cacheKey);
+        if (existing.isPresent()) {
+            IdempotencyEntry entry = existing.get();
+            if (entry instanceof IdempotencyEntry.Completed completed) {
+                log.info("Idempotency hit key={} scope={} method={} path={} replayStatus={}",
+                        key, scope, request.getMethod(), request.getRequestURI(),
+                        completed.response().status());
+                replay(completed.response(), response);
+                return;
             }
-            response.getOutputStream().write(prior.body());
-            response.getOutputStream().flush();
+            // Reserved: another request with this key is in flight.
+            log.info("Idempotency in-progress key={} scope={} method={} path={}",
+                    key, scope, request.getMethod(), request.getRequestURI());
+            writeConflict(response);
+            return;
+        }
+
+        if (!store.tryReserve(cacheKey, RESERVATION_TTL_SECONDS)) {
+            // Lost a race between get() and tryReserve(): another caller
+            // claimed the slot in between.
+            log.info("Idempotency reservation lost key={} scope={} method={} path={}",
+                    key, scope, request.getMethod(), request.getRequestURI());
+            writeConflict(response);
             return;
         }
 
         ContentCachingResponseWrapper wrapper = new ContentCachingResponseWrapper(response);
+        boolean stored = false;
         try {
             chain.doFilter(request, wrapper);
-        } finally {
             if (wrapper.getStatus() >= 200 && wrapper.getStatus() < 300) {
                 StoredResponse snapshot = new StoredResponse(
                         wrapper.getStatus(),
                         wrapper.getContentType(),
                         wrapper.getContentAsByteArray()
                 );
-                store.put(cacheKey, snapshot, TTL_SECONDS);
-                log.debug("Idempotency cache store key={} status={}", key, wrapper.getStatus());
+                store.put(cacheKey, snapshot, COMPLETED_TTL_SECONDS);
+                stored = true;
+                log.debug("Idempotency cache store key={} scope={} status={}",
+                        key, scope, wrapper.getStatus());
+            }
+        } finally {
+            if (!stored) {
+                try {
+                    store.release(cacheKey);
+                } catch (Exception e) {
+                    log.warn("Failed to release idempotency reservation cacheKey={}", cacheKey, e);
+                }
             }
             wrapper.copyBodyToResponse();
         }
+    }
+
+    private void replay(StoredResponse prior, HttpServletResponse response) throws IOException {
+        response.setStatus(prior.status());
+        if (prior.contentType() != null) {
+            response.setContentType(prior.contentType());
+        }
+        response.getOutputStream().write(prior.body());
+        response.getOutputStream().flush();
+    }
+
+    private void writeConflict(HttpServletResponse response) throws IOException {
+        response.setStatus(HttpServletResponse.SC_CONFLICT);
+        response.setContentType("application/json");
+        response.setHeader("Retry-After", "5");
+        response.getWriter().write(
+                "{\"code\":\"REQUEST_IN_PROGRESS\","
+                        + "\"message\":\"Another request with this Idempotency-Key is in progress; retry shortly\","
+                        + "\"data\":null}"
+        );
+    }
+
+    /**
+     * Namespace the cache by caller identity so user B can't replay user A's
+     * cached response with a known/guessed Idempotency-Key. Authenticated
+     * callers scope by JWT subject; guests scope by IP (X-Forwarded-For
+     * left-most token if present, else the immediate peer).
+     */
+    private String resolveScope(HttpServletRequest request) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth != null
+                && auth.isAuthenticated()
+                && auth.getPrincipal() != null
+                && !ANONYMOUS_PRINCIPAL.equals(auth.getPrincipal())) {
+            String name = auth.getName();
+            if (name != null && !name.isBlank()) {
+                return "user:" + name;
+            }
+        }
+        return "ip:" + extractClientIp(request);
+    }
+
+    private String extractClientIp(HttpServletRequest request) {
+        String xff = request.getHeader("X-Forwarded-For");
+        if (xff != null && !xff.isBlank()) {
+            int comma = xff.indexOf(',');
+            return (comma >= 0 ? xff.substring(0, comma) : xff).trim();
+        }
+        String remote = request.getRemoteAddr();
+        return remote != null ? remote : "unknown";
     }
 
     private static boolean isBlank(String s) {

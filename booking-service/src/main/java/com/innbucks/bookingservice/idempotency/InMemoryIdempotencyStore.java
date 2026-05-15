@@ -12,7 +12,7 @@ public class InMemoryIdempotencyStore implements IdempotencyStore {
     private final ConcurrentHashMap<String, Entry> entries = new ConcurrentHashMap<>();
 
     @Override
-    public Optional<StoredResponse> get(String key) {
+    public Optional<IdempotencyEntry> get(String key) {
         Entry entry = entries.get(key);
         if (entry == null) {
             return Optional.empty();
@@ -21,14 +21,35 @@ public class InMemoryIdempotencyStore implements IdempotencyStore {
             entries.remove(key);
             return Optional.empty();
         }
-        return Optional.of(entry.response());
+        return Optional.of(entry.payload());
+    }
+
+    @Override
+    public boolean tryReserve(String key, long ttlSeconds) {
+        long now = Instant.now().getEpochSecond();
+        Entry reservation = new Entry(new IdempotencyEntry.Reserved(), now + ttlSeconds);
+        Entry existing = entries.compute(key, (k, current) -> {
+            if (current == null || current.expiresAtEpochSeconds() <= now) {
+                return reservation;
+            }
+            return current;
+        });
+        return existing == reservation;
     }
 
     @Override
     public void put(String key, StoredResponse value, long ttlSeconds) {
-        entries.put(key, new Entry(value, Instant.now().getEpochSecond() + ttlSeconds));
+        entries.put(key, new Entry(
+                new IdempotencyEntry.Completed(value),
+                Instant.now().getEpochSecond() + ttlSeconds
+        ));
     }
 
-    private record Entry(StoredResponse response, long expiresAtEpochSeconds) {
+    @Override
+    public void release(String key) {
+        entries.remove(key);
+    }
+
+    private record Entry(IdempotencyEntry payload, long expiresAtEpochSeconds) {
     }
 }
