@@ -83,9 +83,45 @@ public class PaymentController {
                                     """)
                     )
             ),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Validation error or booking-service rejected the confirm (e.g. hold expired)"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Booking not found in booking-service"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503", description = "booking-service unreachable")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "Validation error or booking-service rejected the confirm (e.g. hold expired)",
+                    content = @Content(mediaType = "application/json",
+                            examples = {
+                                    @ExampleObject(name = "Missing bookingId", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "validation failed",
+                                              "data": { "bookingId": "bookingId is required" }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Hold expired", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Seat hold expired",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "Booking not found in booking-service",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Unknown booking", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "Booking not found",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503",
+                    description = "booking-service unreachable",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Downstream down", value = """
+                                    {
+                                      "code": "503 SERVICE_UNAVAILABLE",
+                                      "message": "Unable to reach booking-service to confirm the booking",
+                                      "data": null
+                                    }
+                                    """)))
     })
     public ResponseEntity<ApiResult<PaymentResponse>> processPayment(
             @Valid @RequestBody PaymentRequest request
@@ -184,9 +220,25 @@ public class PaymentController {
                                             """)
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
-                    description = "Shop not found in loyalty-service"),
+                    description = "Shop not found in loyalty-service",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Unknown shop", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "shop not found",
+                                      "data": null
+                                    }
+                                    """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503",
-                    description = "loyalty-service unreachable")
+                    description = "loyalty-service unreachable",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Loyalty down", value = """
+                                    {
+                                      "code": "503 SERVICE_UNAVAILABLE",
+                                      "message": "Unable to reach loyalty-service for checkout",
+                                      "data": null
+                                    }
+                                    """)))
     })
     public ResponseEntity<ApiResult<ShopCheckoutResponse>> shopCheckout(
             @Valid @RequestBody ShopCheckoutRequest request
