@@ -33,12 +33,11 @@ import java.util.List;
  * <p>Auth model is bespoke and intentional. payment-service has no Spring
  * Security filter chain (see {@link innbucks.paymentservice.exception.GlobalExceptionHandler}'s
  * comment) — the rest of the service is unauthenticated dummy endpoints
- * (PaymentController) or X-Internal-Token-gated S2S endpoints
- * ({@link InternalTransferController}). This controller is the one exception:
- * it inlines bearer-JWT verification and an Oradian-backed ownership check
- * so the frontend can call it directly without exposing the S2S shared
- * secret. The signing secret is {@code jwt.secret} and MUST match
- * user-service's {@code jwt.secret} exactly.
+ * (PaymentController). This controller is the one exception: it inlines
+ * bearer-JWT verification and an Oradian-backed ownership check so the
+ * frontend can call it directly without exposing any shared secret. The
+ * signing secret is {@code jwt.secret} and MUST match user-service's
+ * {@code jwt.secret} exactly.
  *
  * <p>Ownership check: the JWT's {@code phoneNumber} claim is used to look up
  * the caller's Oradian deposit accounts; {@code fromAccountId} from the body
