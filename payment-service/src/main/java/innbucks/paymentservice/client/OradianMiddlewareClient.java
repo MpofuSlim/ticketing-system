@@ -6,6 +6,8 @@ import innbucks.paymentservice.config.CorrelationIdPropagatingInterceptor;
 import innbucks.paymentservice.dto.DepositAccount;
 import innbucks.paymentservice.dto.DepositTransferRequest;
 import innbucks.paymentservice.dto.DepositTransferResponse;
+import innbucks.paymentservice.dto.WithdrawalRequest;
+import innbucks.paymentservice.dto.WithdrawalResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
@@ -99,6 +101,51 @@ public class OradianMiddlewareClient {
         } catch (Exception e) {
             log.warn("Oradian deposit transfer errored from={} to={} cause={}",
                     request.getFromAccountId(), request.getToAccountId(), e.toString());
+            throw new OradianMiddlewareException(
+                    "Unable to reach Oradian middleware: " + e.getMessage(), 502, e);
+        }
+    }
+
+    /**
+     * Submit a withdrawal against an Oradian deposit account. Calls Oradian
+     * middleware's /internal/transfers/withdraw, which proxies onto Oradian's
+     * instafin.EnterWithdrawalOnDepositAccount. Same wire conventions as
+     * {@link #submitDepositTransfer(DepositTransferRequest)} — RestClientResponseException
+     * mapped onto OradianMiddlewareException with the upstream status preserved,
+     * empty 200 body treated as a contract violation (502 fallback). The
+     * upstream relays Oradian's VALIDATION message in the ProblemDetail
+     * `detail` field; we surface it via parseErrorMessage.
+     */
+    public WithdrawalResponse submitWithdrawal(WithdrawalRequest request) {
+        try {
+            WithdrawalResponse response = restClient.post()
+                    .uri("/internal/transfers/withdraw")
+                    .header("X-Internal-Token", internalToken)
+                    .header("Content-Type", "application/json")
+                    .body(request)
+                    .retrieve()
+                    .body(WithdrawalResponse.class);
+            if (response == null) {
+                throw new OradianMiddlewareException(
+                        "Oradian middleware returned an empty response body", 502);
+            }
+            log.info("Oradian withdrawal succeeded account={} amount={} txnID={}",
+                    request.getAccountID(), request.getAmount(),
+                    response.getTransactionID());
+            return response;
+        } catch (RestClientResponseException e) {
+            String detail = parseErrorMessage(e.getResponseBodyAsString())
+                    .orElse(e.getStatusText());
+            log.warn("Oradian withdrawal failed account={} status={} detail={}",
+                    request.getAccountID(), e.getStatusCode().value(), detail);
+            throw new OradianMiddlewareException(
+                    "Oradian middleware rejected the withdrawal: " + detail,
+                    e.getStatusCode().value(), e);
+        } catch (OradianMiddlewareException e) {
+            throw e;
+        } catch (Exception e) {
+            log.warn("Oradian withdrawal errored account={} cause={}",
+                    request.getAccountID(), e.toString());
             throw new OradianMiddlewareException(
                     "Unable to reach Oradian middleware: " + e.getMessage(), 502, e);
         }
