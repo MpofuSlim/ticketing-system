@@ -22,10 +22,14 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Calls Oradian middleware's POST /internal/transfers/deposit to submit a
- * deposit account transfer via Oradian's instafin.SubmitDepositAccountTransfer.
- * Direct pod-to-pod — the request never traverses the api-gateway; the
- * X-Internal-Token shared secret is the only thing the middleware checks.
+ * Talks to Oradian middleware: deposit-account ownership lookups for
+ * POST /payments/deposit (via GET /internal/customers/{msisdn}/deposits)
+ * and the actual transfer (POST /internal/transfers/deposit, which calls
+ * Oradian's instafin.SubmitDepositAccountTransfer). Direct pod-to-pod —
+ * never via the api-gateway. The X-Internal-Token shared secret comes from
+ * {@code oradian-middleware.internal-token} (env {@code ORADIAN_INTERNAL_TOKEN})
+ * and is DIFFERENT from {@code innbucks.internal-api-token} — the latter is
+ * the loyalty-service secret. Mixing them up gets you a 401 from Oradian.
  *
  * Modelled after LoyaltyServiceClient so the wire conventions (JDK HttpClient
  * with explicit timeouts, correlation-id interceptor, RestClientResponseException
@@ -44,7 +48,7 @@ public class OradianMiddlewareClient {
             @Value("${oradian-middleware.base-url:http://localhost:8090}") String baseUrl,
             @Value("${oradian-middleware.connect-timeout-ms:2000}") int connectMs,
             @Value("${oradian-middleware.read-timeout-ms:10000}") int readMs,
-            @Value("${innbucks.internal-api-token:}") String internalToken,
+            @Value("${oradian-middleware.internal-token:}") String internalToken,
             ObjectMapper objectMapper) {
         HttpClient httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(connectMs))

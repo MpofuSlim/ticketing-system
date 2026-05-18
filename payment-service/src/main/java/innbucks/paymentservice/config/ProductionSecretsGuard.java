@@ -24,11 +24,15 @@ import java.util.List;
 @Slf4j
 public class ProductionSecretsGuard {
 
-    // Today payment-service only needs the shared internal token. As more
-    // secrets land (Stripe API key when real payments wire in, etc.) add
-    // them here and the prod-boot gate widens automatically.
+    // payment-service holds two distinct shared secrets:
+    //   - innbucks.internal-api-token (env INTERNAL_API_TOKEN) — talks to loyalty-service
+    //   - oradian-middleware.internal-token (env ORADIAN_INTERNAL_TOKEN) — talks to Oradian middleware
+    // Both must be set in prod. As more secrets land (Stripe API key when
+    // real payments wire in, etc.) add them here and the prod-boot gate
+    // widens automatically.
     private static final List<String> SECRETS_TO_CHECK = List.of(
-            "innbucks.internal-api-token"
+            "innbucks.internal-api-token",
+            "oradian-middleware.internal-token"
     );
 
     private static final String PLACEHOLDER_MARKER = "change-me";
@@ -52,8 +56,8 @@ public class ProductionSecretsGuard {
             throw new IllegalStateException(
                     "Refusing to start under 'prod' profile: the following secrets " +
                     "still have placeholder defaults containing '" + PLACEHOLDER_MARKER +
-                    "': " + offenders + ". Override them via env vars (INTERNAL_API_TOKEN) " +
-                    "before booting in production."
+                    "': " + offenders + ". Override them via env vars " +
+                    "(INTERNAL_API_TOKEN, ORADIAN_INTERNAL_TOKEN) before booting in production."
             );
         }
         log.info("ProductionSecretsGuard verified {} secret(s); none carry placeholder defaults.",
