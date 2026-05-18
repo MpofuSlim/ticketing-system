@@ -37,10 +37,19 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- Flyway owns the prod schema (transactions ledger). Postgres-13+
-             support split out of flyway-core in 10.x, so the database module
-             is a separate dependency. Tests disable Flyway and let Hibernate
-             ddl-auto=create-drop build the schema from @Entity instead. -->
+        <!-- Flyway: schema is owned by versioned migrations under
+             src/main/resources/db/migration. spring-boot-flyway carries the
+             auto-configuration (Spring Boot 4 split per-tech autoconfig into
+             dedicated modules); without it Flyway is on the classpath but is
+             never actually invoked at boot — Hibernate then schema-validates
+             against an empty schema and rejects every @Entity with
+             "Schema validation: missing table". Postgres-13+ support split
+             out of flyway-core in 10.x, so the database module is a separate
+             dependency. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-flyway</artifactId>
+        </dependency>
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-core</artifactId>
@@ -48,6 +57,7 @@
         <dependency>
             <groupId>org.flywaydb</groupId>
             <artifactId>flyway-database-postgresql</artifactId>
+            <scope>runtime</scope>
         </dependency>
 
         <!-- Testcontainers — production-fidelity integration tests against
