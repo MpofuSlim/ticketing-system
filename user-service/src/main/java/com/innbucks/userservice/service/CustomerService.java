@@ -248,13 +248,19 @@ public class CustomerService {
         if (!user.hasRole(User.Role.CUSTOMER)) {
             throw new RuntimeException("User is not a customer");
         }
+        // Capture the recipient's structured name once and stamp it onto every
+        // returned account row so the sender's UI can show "Sending to: Jane M.
+        // Doe" without a second lookup.
         return oradianClient.getDeposits(phoneNumber).stream()
-                .map(CustomerService::toSendMoneyDetail)
+                .map(d -> toSendMoneyDetail(d, user))
                 .toList();
     }
 
-    private static CustomerSendMoneyDetail toSendMoneyDetail(DepositAccount d) {
+    private static CustomerSendMoneyDetail toSendMoneyDetail(DepositAccount d, User recipient) {
         return CustomerSendMoneyDetail.builder()
+                .firstName(recipient.getFirstName())
+                .middleName(recipient.getMiddleName())
+                .lastName(recipient.getLastName())
                 .internalID(d.getInternalID())
                 .ID(d.getID())
                 .externalAccountNumber(d.getExternalAccountNumber())

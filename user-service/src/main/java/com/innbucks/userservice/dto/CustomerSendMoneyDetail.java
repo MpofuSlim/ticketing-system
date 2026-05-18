@@ -20,6 +20,14 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class CustomerSendMoneyDetail {
+    // Recipient identity — denormalised onto every deposit row so the sender's
+    // UI doesn't need a second round-trip to confirm "am I really sending to
+    // the right person?" before picking an account. Same first/middle/last
+    // across every row in a given response (one customer, many accounts).
+    private String firstName;
+    private String middleName;
+    private String lastName;
+
     private String internalID;
     private String ID;
     private String externalAccountNumber;

@@ -570,6 +570,9 @@ public class AuthController {
                                       "message": "Customer Details retrieved",
                                       "data": [
                                         {
+                                          "firstName": "Jane",
+                                          "middleName": "M",
+                                          "lastName": "Doe",
                                           "internalID": "",
                                           "ID": "A8347323",
                                           "externalAccountNumber": "",
