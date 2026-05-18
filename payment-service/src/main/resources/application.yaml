@@ -17,14 +17,18 @@ spring:
 
   jpa:
     hibernate:
-      # Matches the other services: schema lives outside Hibernate (Flyway when
-      # entities are added; today, an empty schema is fine). 'validate' is a no-op
-      # when there are no entities and prevents silent schema drift the moment
-      # JPA models start landing here.
+      # Schema is owned by Flyway migrations (src/main/resources/db/migration);
+      # Hibernate only validates the JPA model matches the actual columns at boot.
       ddl-auto: ${JPA_DDL_AUTO:validate}
     properties:
       hibernate:
         dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
+
+  flyway:
+    enabled: ${FLYWAY_ENABLED:true}
+    baseline-on-migrate: true
+    baseline-version: 0
+    locations: classpath:db/migration
 
   lifecycle:
     timeout-per-shutdown-phase: 30s

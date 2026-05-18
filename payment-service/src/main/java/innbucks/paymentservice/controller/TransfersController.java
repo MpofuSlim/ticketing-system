@@ -1,13 +1,17 @@
 package innbucks.paymentservice.controller;
 
 import innbucks.paymentservice.client.OradianMiddlewareClient;
+import innbucks.paymentservice.client.OradianMiddlewareException;
 import innbucks.paymentservice.dto.ApiResult;
 import innbucks.paymentservice.dto.DepositAccount;
 import innbucks.paymentservice.dto.DepositTransferRequest;
 import innbucks.paymentservice.dto.DepositTransferResponse;
 import innbucks.paymentservice.dto.WithdrawalRequest;
 import innbucks.paymentservice.dto.WithdrawalResponse;
+import innbucks.paymentservice.entity.Transaction;
+import innbucks.paymentservice.entity.TransactionType;
 import innbucks.paymentservice.security.JwtUtil;
+import innbucks.paymentservice.service.TransactionService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
@@ -26,6 +30,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -63,8 +68,11 @@ import java.util.List;
              "The customer can only move money out of accounts they own.")
 public class TransfersController {
 
+    private static final String IDEMPOTENCY_HEADER = "Idempotency-Key";
+
     private final JwtUtil jwtUtil;
     private final OradianMiddlewareClient oradianMiddlewareClient;
+    private final TransactionService transactionService;
 
     @PostMapping("/deposit")
     @SecurityRequirement(name = "bearerAuth")
@@ -228,13 +236,57 @@ public class TransfersController {
             request.setNotes("");
         }
 
-        log.info("POST /payments/deposit phone={} from={} to={} amount={} txnDate={} notesLen={}",
-                phoneNumber, request.getFromAccountId(), request.getToAccountId(),
-                request.getAmount(), request.getTransactionDate(),
-                request.getNotes().length());
+        BigDecimal parsedAmount = parsePositiveAmount(request.getAmount());
 
-        DepositTransferResponse response =
-                oradianMiddlewareClient.submitDepositTransfer(request);
+        // Open the local ledger row BEFORE calling Oradian (REQUIRES_NEW
+        // transaction so it commits independently). If Oradian succeeds
+        // and the markSucceeded write later fails, the row stays PENDING
+        // for reconciliation to pick up — much better than the orphan-
+        // in-upstream class of bug where the local rolls back silently.
+        Transaction ledger = transactionService.openPending(Transaction.builder()
+                .transactionType(TransactionType.DEPOSIT)
+                .customerPhone(phoneNumber)
+                .sourceAccountId(request.getFromAccountId())
+                .destinationAccountId(request.getToAccountId())
+                .amount(parsedAmount)
+                .notes(request.getNotes())
+                .transactionDate(request.getTransactionDate())
+                .idempotencyKey(httpRequest.getHeader(IDEMPOTENCY_HEADER))
+                .build());
+
+        log.info("POST /payments/deposit txId={} from={} to={} amount={} txnDate={}",
+                ledger.getId(), request.getFromAccountId(), request.getToAccountId(),
+                request.getAmount(), request.getTransactionDate());
+
+        DepositTransferResponse response;
+        try {
+            response = oradianMiddlewareClient.submitDepositTransfer(request);
+        } catch (OradianMiddlewareException ex) {
+            // Best-effort: log + carry on if markFailed itself throws so the
+            // original Oradian failure is what surfaces to the caller. A
+            // PENDING row left here is what reconciliation expects to see.
+            try {
+                transactionService.markFailed(ledger.getId(), ex);
+            } catch (Exception fail) {
+                log.error("markFailed failed for txId={}; row stays PENDING", ledger.getId(), fail);
+            }
+            throw ex;
+        }
+
+        try {
+            transactionService.markSucceeded(ledger.getId(),
+                    response.getTransactionID(), response.getReferenceNumber(), null);
+        } catch (Exception ex) {
+            // Oradian moved the money but the local SUCCEEDED write failed.
+            // Surface 200 to the client (the money DID move) and rely on
+            // reconciliation to flip the PENDING row — re-throwing here
+            // would make the FE think the transfer failed and trigger a
+            // retry that would either dedupe via Idempotency-Key OR
+            // double-create depending on the FE's behaviour. Logging at
+            // ERROR so operators see the gap.
+            log.error("Oradian deposit succeeded but markSucceeded failed for txId={} oradianTxn={}",
+                    ledger.getId(), response.getTransactionID(), ex);
+        }
         return ResponseEntity.ok(ApiResult.ok("Deposit transfer submitted", response));
     }
 
@@ -400,12 +452,77 @@ public class TransfersController {
             request.setNotes("");
         }
 
-        log.info("POST /payments/withdraw phone={} account={} amount={} paymentMethod={} txnDate={}",
-                phoneNumber, request.getAccountID(), request.getAmount(),
+        BigDecimal parsedAmount = parsePositiveAmount(request.getAmount());
+
+        // See the deposit flow for the same PENDING-then-mark pattern. The
+        // ledger is the single source of truth for "did we try?" — Oradian
+        // is the source of truth for "did the money move?". Reconciliation
+        // joins the two.
+        Transaction ledger = transactionService.openPending(Transaction.builder()
+                .transactionType(TransactionType.WITHDRAWAL)
+                .customerPhone(phoneNumber)
+                .sourceAccountId(request.getAccountID())
+                .amount(parsedAmount)
+                .paymentMethodName(request.getPaymentMethodName())
+                .notes(request.getNotes())
+                .transactionDate(request.getTransactionDate())
+                .transactionBranchId(request.getTransactionBranchID())
+                .idempotencyKey(httpRequest.getHeader(IDEMPOTENCY_HEADER))
+                .build());
+
+        log.info("POST /payments/withdraw txId={} account={} amount={} paymentMethod={} txnDate={}",
+                ledger.getId(), request.getAccountID(), request.getAmount(),
                 request.getPaymentMethodName(), request.getTransactionDate());
 
-        WithdrawalResponse response = oradianMiddlewareClient.submitWithdrawal(request);
+        WithdrawalResponse response;
+        try {
+            response = oradianMiddlewareClient.submitWithdrawal(request);
+        } catch (OradianMiddlewareException ex) {
+            try {
+                transactionService.markFailed(ledger.getId(), ex);
+            } catch (Exception fail) {
+                log.error("markFailed failed for txId={}; row stays PENDING", ledger.getId(), fail);
+            }
+            throw ex;
+        }
+
+        try {
+            transactionService.markSucceeded(ledger.getId(),
+                    response.getTransactionID(), response.getReferenceNumber(),
+                    response.getCommandID());
+        } catch (Exception ex) {
+            log.error("Oradian withdrawal succeeded but markSucceeded failed for txId={} oradianTxn={}",
+                    ledger.getId(), response.getTransactionID(), ex);
+        }
         return ResponseEntity.ok(ApiResult.ok("Withdrawal submitted", response));
+    }
+
+    /**
+     * Parse the FE-supplied amount string to a positive BigDecimal so the
+     * ledger column can take it as NUMERIC(19,4). Catches the things the
+     * pure {@code @NotBlank} string check on the DTO can't: non-numeric
+     * input, zero, negatives, and precision past four decimal places.
+     * Beyond-cap velocity / daily-limit checks are a separate concern and
+     * belong in their own service — this is just the wire-format guard.
+     *
+     * <p>Throws {@link IllegalArgumentException} on any failure;
+     * {@code GlobalExceptionHandler} maps that to a 400 with the message
+     * surfaced in the {@code ApiResult.message} field.
+     */
+    private static BigDecimal parsePositiveAmount(String amount) {
+        BigDecimal parsed;
+        try {
+            parsed = new BigDecimal(amount);
+        } catch (NumberFormatException ex) {
+            throw new IllegalArgumentException("amount must be a valid decimal number");
+        }
+        if (parsed.signum() <= 0) {
+            throw new IllegalArgumentException("amount must be greater than zero");
+        }
+        if (parsed.scale() > 4) {
+            throw new IllegalArgumentException("amount must have at most 4 decimal places");
+        }
+        return parsed;
     }
 
     private static <T> ResponseEntity<ApiResult<T>> unauthorized(String message) {

@@ -1,21 +1,27 @@
 package innbucks.paymentservice.controller;
 
 import innbucks.paymentservice.client.OradianMiddlewareClient;
+import innbucks.paymentservice.client.OradianMiddlewareException;
 import innbucks.paymentservice.dto.ApiResult;
 import innbucks.paymentservice.dto.DepositAccount;
 import innbucks.paymentservice.dto.DepositTransferRequest;
 import innbucks.paymentservice.dto.DepositTransferResponse;
 import innbucks.paymentservice.dto.WithdrawalRequest;
 import innbucks.paymentservice.dto.WithdrawalResponse;
+import innbucks.paymentservice.entity.Transaction;
+import innbucks.paymentservice.entity.TransactionType;
 import innbucks.paymentservice.security.JwtUtil;
+import innbucks.paymentservice.service.TransactionService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
+import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -50,6 +56,23 @@ class TransfersControllerTest {
         return http;
     }
 
+    /**
+     * Stubbed {@link TransactionService} for tests that don't care to assert
+     * on ledger writes — openPending returns an entity with a generated id
+     * so the controller doesn't NPE when reading {@code ledger.getId()}.
+     * Tests that DO want to verify ledger interactions construct their own
+     * mock locally so they can capture args.
+     */
+    private static TransactionService stubbedTxService() {
+        TransactionService svc = mock(TransactionService.class);
+        when(svc.openPending(any(Transaction.class))).thenAnswer(inv -> {
+            Transaction t = inv.getArgument(0);
+            if (t.getId() == null) t.setId(UUID.randomUUID());
+            return t;
+        });
+        return svc;
+    }
+
     @Test
     void transferDeposit_happyPath_forwardsToOradianAndReturns200() {
         JwtUtil jwt = mock(JwtUtil.class);
@@ -71,7 +94,7 @@ class TransfersControllerTest {
         when(oradian.submitDepositTransfer(any(DepositTransferRequest.class))).thenReturn(upstream);
 
         ResponseEntity<ApiResult<DepositTransferResponse>> resp =
-                new TransfersController(jwt, oradian)
+                new TransfersController(jwt, oradian, stubbedTxService())
                         .transferDeposit(bearerRequest(VALID_TOKEN), request(OWNED_ACCOUNT));
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
@@ -103,7 +126,7 @@ class TransfersControllerTest {
                 .amount("123.00")
                 .build(); // notes intentionally null
 
-        new TransfersController(jwt, oradian)
+        new TransfersController(jwt, oradian, stubbedTxService())
                 .transferDeposit(bearerRequest(VALID_TOKEN), body);
 
         ArgumentCaptor<DepositTransferRequest> forwarded = ArgumentCaptor.forClass(DepositTransferRequest.class);
@@ -131,7 +154,7 @@ class TransfersControllerTest {
                 .notes("School fees")
                 .build();
 
-        new TransfersController(jwt, oradian)
+        new TransfersController(jwt, oradian, stubbedTxService())
                 .transferDeposit(bearerRequest(VALID_TOKEN), body);
 
         ArgumentCaptor<DepositTransferRequest> forwarded = ArgumentCaptor.forClass(DepositTransferRequest.class);
@@ -160,7 +183,7 @@ class TransfersControllerTest {
         body.setTransactionDate(LocalDate.of(1999, 1, 1)); // attacker-supplied; must be ignored
 
         LocalDate before = LocalDate.now();
-        new TransfersController(jwt, oradian)
+        new TransfersController(jwt, oradian, stubbedTxService())
                 .transferDeposit(bearerRequest(VALID_TOKEN), body);
         LocalDate after = LocalDate.now();
 
@@ -184,7 +207,7 @@ class TransfersControllerTest {
         when(http.getHeader("Authorization")).thenReturn(null);
 
         ResponseEntity<ApiResult<DepositTransferResponse>> resp =
-                new TransfersController(jwt, oradian)
+                new TransfersController(jwt, oradian, stubbedTxService())
                         .transferDeposit(http, request(OWNED_ACCOUNT));
 
         assertEquals(HttpStatus.UNAUTHORIZED, resp.getStatusCode());
@@ -202,7 +225,7 @@ class TransfersControllerTest {
         when(http.getHeader("Authorization")).thenReturn("Basic abc123");
 
         ResponseEntity<ApiResult<DepositTransferResponse>> resp =
-                new TransfersController(jwt, oradian)
+                new TransfersController(jwt, oradian, stubbedTxService())
                         .transferDeposit(http, request(OWNED_ACCOUNT));
 
         assertEquals(HttpStatus.UNAUTHORIZED, resp.getStatusCode());
@@ -217,7 +240,7 @@ class TransfersControllerTest {
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
 
         ResponseEntity<ApiResult<DepositTransferResponse>> resp =
-                new TransfersController(jwt, oradian)
+                new TransfersController(jwt, oradian, stubbedTxService())
                         .transferDeposit(bearerRequest("bad-token"), request(OWNED_ACCOUNT));
 
         assertEquals(HttpStatus.UNAUTHORIZED, resp.getStatusCode());
@@ -234,7 +257,7 @@ class TransfersControllerTest {
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
 
         ResponseEntity<ApiResult<DepositTransferResponse>> resp =
-                new TransfersController(jwt, oradian)
+                new TransfersController(jwt, oradian, stubbedTxService())
                         .transferDeposit(bearerRequest(VALID_TOKEN), request(OWNED_ACCOUNT));
 
         assertEquals(HttpStatus.UNAUTHORIZED, resp.getStatusCode());
@@ -253,7 +276,7 @@ class TransfersControllerTest {
                 .thenReturn(List.of(ownedAccount("A000099"), ownedAccount("A000100")));
 
         ResponseEntity<ApiResult<DepositTransferResponse>> resp =
-                new TransfersController(jwt, oradian)
+                new TransfersController(jwt, oradian, stubbedTxService())
                         .transferDeposit(bearerRequest(VALID_TOKEN), request(OWNED_ACCOUNT));
 
         assertEquals(HttpStatus.FORBIDDEN, resp.getStatusCode());
@@ -273,7 +296,7 @@ class TransfersControllerTest {
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE)).thenReturn(List.of());
 
         ResponseEntity<ApiResult<DepositTransferResponse>> resp =
-                new TransfersController(jwt, oradian)
+                new TransfersController(jwt, oradian, stubbedTxService())
                         .transferDeposit(bearerRequest(VALID_TOKEN), request(OWNED_ACCOUNT));
 
         assertEquals(HttpStatus.FORBIDDEN, resp.getStatusCode());
@@ -295,7 +318,7 @@ class TransfersControllerTest {
                 .thenReturn(List.of(ownedAccount(""), ownedAccount(null)));
 
         ResponseEntity<ApiResult<DepositTransferResponse>> resp =
-                new TransfersController(jwt, oradian)
+                new TransfersController(jwt, oradian, stubbedTxService())
                         .transferDeposit(bearerRequest(VALID_TOKEN), request(""));
 
         assertEquals(HttpStatus.FORBIDDEN, resp.getStatusCode());
@@ -338,7 +361,7 @@ class TransfersControllerTest {
         when(oradian.submitWithdrawal(any(WithdrawalRequest.class))).thenReturn(upstream);
 
         ResponseEntity<ApiResult<WithdrawalResponse>> resp =
-                new TransfersController(jwt, oradian)
+                new TransfersController(jwt, oradian, stubbedTxService())
                         .withdraw(bearerRequest(VALID_TOKEN), withdrawalRequest(OWNED_ACCOUNT));
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
@@ -363,7 +386,7 @@ class TransfersControllerTest {
         when(http.getHeader("Authorization")).thenReturn(null);
 
         ResponseEntity<ApiResult<WithdrawalResponse>> resp =
-                new TransfersController(jwt, oradian)
+                new TransfersController(jwt, oradian, stubbedTxService())
                         .withdraw(http, withdrawalRequest(OWNED_ACCOUNT));
 
         assertEquals(HttpStatus.UNAUTHORIZED, resp.getStatusCode());
@@ -378,7 +401,7 @@ class TransfersControllerTest {
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
 
         ResponseEntity<ApiResult<WithdrawalResponse>> resp =
-                new TransfersController(jwt, oradian)
+                new TransfersController(jwt, oradian, stubbedTxService())
                         .withdraw(bearerRequest("bad-token"), withdrawalRequest(OWNED_ACCOUNT));
 
         assertEquals(HttpStatus.UNAUTHORIZED, resp.getStatusCode());
@@ -394,7 +417,7 @@ class TransfersControllerTest {
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
 
         ResponseEntity<ApiResult<WithdrawalResponse>> resp =
-                new TransfersController(jwt, oradian)
+                new TransfersController(jwt, oradian, stubbedTxService())
                         .withdraw(bearerRequest(VALID_TOKEN), withdrawalRequest(OWNED_ACCOUNT));
 
         assertEquals(HttpStatus.UNAUTHORIZED, resp.getStatusCode());
@@ -413,7 +436,7 @@ class TransfersControllerTest {
                 .thenReturn(List.of(ownedAccount("A000099"), ownedAccount("A000100")));
 
         ResponseEntity<ApiResult<WithdrawalResponse>> resp =
-                new TransfersController(jwt, oradian)
+                new TransfersController(jwt, oradian, stubbedTxService())
                         .withdraw(bearerRequest(VALID_TOKEN), withdrawalRequest(OWNED_ACCOUNT));
 
         assertEquals(HttpStatus.FORBIDDEN, resp.getStatusCode());
@@ -443,7 +466,7 @@ class TransfersControllerTest {
         body.setTransactionBranchID("HeadOffice");
         body.setOverrideLimitCheck(true);
 
-        new TransfersController(jwt, oradian)
+        new TransfersController(jwt, oradian, stubbedTxService())
                 .withdraw(bearerRequest(VALID_TOKEN), body);
 
         ArgumentCaptor<WithdrawalRequest> forwarded = ArgumentCaptor.forClass(WithdrawalRequest.class);
@@ -475,11 +498,230 @@ class TransfersControllerTest {
                 .amount("10.00")
                 .build(); // notes intentionally null
 
-        new TransfersController(jwt, oradian)
+        new TransfersController(jwt, oradian, stubbedTxService())
                 .withdraw(bearerRequest(VALID_TOKEN), body);
 
         ArgumentCaptor<WithdrawalRequest> forwarded = ArgumentCaptor.forClass(WithdrawalRequest.class);
         verify(oradian).submitWithdrawal(forwarded.capture());
         assertEquals("", forwarded.getValue().getNotes());
+    }
+
+    // ----- ledger interactions -----
+
+    @Test
+    void deposit_writesPendingThenMarksSucceeded_onHappyPath() {
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
+        when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+
+        OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
+        when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
+                .thenReturn(List.of(ownedAccount(OWNED_ACCOUNT)));
+        when(oradian.submitDepositTransfer(any(DepositTransferRequest.class)))
+                .thenReturn(DepositTransferResponse.builder()
+                        .transactionID("oradian-1155")
+                        .referenceNumber("ref-9999")
+                        .build());
+
+        TransactionService txService = stubbedTxService();
+
+        new TransfersController(jwt, oradian, txService)
+                .transferDeposit(bearerRequest(VALID_TOKEN), request(OWNED_ACCOUNT));
+
+        ArgumentCaptor<Transaction> pending = ArgumentCaptor.forClass(Transaction.class);
+        verify(txService).openPending(pending.capture());
+        Transaction draft = pending.getValue();
+        assertEquals(TransactionType.DEPOSIT, draft.getTransactionType());
+        assertEquals(CUSTOMER_PHONE, draft.getCustomerPhone());
+        assertEquals(OWNED_ACCOUNT, draft.getSourceAccountId());
+        assertEquals(DEST_ACCOUNT, draft.getDestinationAccountId());
+        assertEquals(0, new BigDecimal("123.00").compareTo(draft.getAmount()));
+
+        // markSucceeded must be called with the Oradian-assigned IDs from
+        // the upstream response — without this the ledger row stays PENDING
+        // forever even though Oradian successfully moved the money.
+        verify(txService).markSucceeded(eq(draft.getId()), eq("oradian-1155"), eq("ref-9999"), eq(null));
+        verify(txService, never()).markFailed(any(), any());
+    }
+
+    @Test
+    void deposit_writesPendingThenMarksFailed_whenOradianThrows() {
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
+        when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+
+        OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
+        when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
+                .thenReturn(List.of(ownedAccount(OWNED_ACCOUNT)));
+        OradianMiddlewareException upstream =
+                new OradianMiddlewareException("Insufficient funds", 422);
+        when(oradian.submitDepositTransfer(any(DepositTransferRequest.class)))
+                .thenThrow(upstream);
+
+        TransactionService txService = stubbedTxService();
+
+        // Controller re-throws so the GlobalExceptionHandler can map the
+        // upstream status into the ApiResult envelope; we expect the
+        // exception to propagate but the FAILED ledger write to still happen.
+        assertThrows(OradianMiddlewareException.class, () ->
+                new TransfersController(jwt, oradian, txService)
+                        .transferDeposit(bearerRequest(VALID_TOKEN), request(OWNED_ACCOUNT)));
+
+        ArgumentCaptor<Transaction> pending = ArgumentCaptor.forClass(Transaction.class);
+        verify(txService).openPending(pending.capture());
+        verify(txService).markFailed(eq(pending.getValue().getId()), eq(upstream));
+        verify(txService, never()).markSucceeded(any(), any(), any(), any());
+    }
+
+    @Test
+    void withdraw_writesPendingThenMarksSucceeded_onHappyPath() {
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
+        when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+
+        OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
+        when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
+                .thenReturn(List.of(ownedAccount(OWNED_ACCOUNT)));
+        when(oradian.submitWithdrawal(any(WithdrawalRequest.class)))
+                .thenReturn(WithdrawalResponse.builder()
+                        .transactionID("oradian-2233")
+                        .referenceNumber("ref-7777")
+                        .commandID("cmd-210")
+                        .build());
+
+        TransactionService txService = stubbedTxService();
+
+        new TransfersController(jwt, oradian, txService)
+                .withdraw(bearerRequest(VALID_TOKEN), withdrawalRequest(OWNED_ACCOUNT));
+
+        ArgumentCaptor<Transaction> pending = ArgumentCaptor.forClass(Transaction.class);
+        verify(txService).openPending(pending.capture());
+        Transaction draft = pending.getValue();
+        assertEquals(TransactionType.WITHDRAWAL, draft.getTransactionType());
+        assertEquals(OWNED_ACCOUNT, draft.getSourceAccountId());
+        assertNull(draft.getDestinationAccountId(), "withdrawal has no destination account");
+        assertEquals("Cash", draft.getPaymentMethodName());
+        assertEquals("MobileBanking", draft.getTransactionBranchId());
+
+        verify(txService).markSucceeded(eq(draft.getId()), eq("oradian-2233"), eq("ref-7777"), eq("cmd-210"));
+        verify(txService, never()).markFailed(any(), any());
+    }
+
+    @Test
+    void withdraw_writesPendingThenMarksFailed_whenOradianThrows() {
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
+        when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+
+        OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
+        when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
+                .thenReturn(List.of(ownedAccount(OWNED_ACCOUNT)));
+        OradianMiddlewareException upstream =
+                new OradianMiddlewareException("Account suspended", 422);
+        when(oradian.submitWithdrawal(any(WithdrawalRequest.class))).thenThrow(upstream);
+
+        TransactionService txService = stubbedTxService();
+
+        assertThrows(OradianMiddlewareException.class, () ->
+                new TransfersController(jwt, oradian, txService)
+                        .withdraw(bearerRequest(VALID_TOKEN), withdrawalRequest(OWNED_ACCOUNT)));
+
+        ArgumentCaptor<Transaction> pending = ArgumentCaptor.forClass(Transaction.class);
+        verify(txService).openPending(pending.capture());
+        verify(txService).markFailed(eq(pending.getValue().getId()), eq(upstream));
+        verify(txService, never()).markSucceeded(any(), any(), any(), any());
+    }
+
+    @Test
+    void deposit_returns400_whenAmountIsZero_andDoesNotTouchLedgerOrOradian() {
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
+        when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+
+        OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
+        when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
+                .thenReturn(List.of(ownedAccount(OWNED_ACCOUNT)));
+        TransactionService txService = stubbedTxService();
+
+        DepositTransferRequest body = request(OWNED_ACCOUNT);
+        body.setAmount("0.00");
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
+                new TransfersController(jwt, oradian, txService)
+                        .transferDeposit(bearerRequest(VALID_TOKEN), body));
+        assertTrue(ex.getMessage().contains("greater than zero"));
+        // Pre-Oradian validation; nothing must hit the ledger or upstream.
+        verify(txService, never()).openPending(any());
+        verify(oradian, never()).submitDepositTransfer(any());
+    }
+
+    @Test
+    void deposit_returns400_whenAmountIsNotParseable() {
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
+        when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+
+        OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
+        when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
+                .thenReturn(List.of(ownedAccount(OWNED_ACCOUNT)));
+        TransactionService txService = stubbedTxService();
+
+        DepositTransferRequest body = request(OWNED_ACCOUNT);
+        body.setAmount("ten bucks");
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
+                new TransfersController(jwt, oradian, txService)
+                        .transferDeposit(bearerRequest(VALID_TOKEN), body));
+        assertTrue(ex.getMessage().contains("valid decimal"));
+        verify(txService, never()).openPending(any());
+        verify(oradian, never()).submitDepositTransfer(any());
+    }
+
+    @Test
+    void deposit_returns400_whenAmountHasMoreThanFourDecimalPlaces() {
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
+        when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+
+        OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
+        when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
+                .thenReturn(List.of(ownedAccount(OWNED_ACCOUNT)));
+        TransactionService txService = stubbedTxService();
+
+        DepositTransferRequest body = request(OWNED_ACCOUNT);
+        body.setAmount("123.456789");
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
+                new TransfersController(jwt, oradian, txService)
+                        .transferDeposit(bearerRequest(VALID_TOKEN), body));
+        assertTrue(ex.getMessage().contains("4 decimal places"));
+        verify(txService, never()).openPending(any());
+    }
+
+    @Test
+    void deposit_capturesIdempotencyKeyOnLedgerRow_whenHeaderPresent() {
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
+        when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+
+        OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
+        when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
+                .thenReturn(List.of(ownedAccount(OWNED_ACCOUNT)));
+        when(oradian.submitDepositTransfer(any(DepositTransferRequest.class)))
+                .thenReturn(DepositTransferResponse.builder().transactionID("ok").build());
+
+        TransactionService txService = stubbedTxService();
+
+        HttpServletRequest http = mock(HttpServletRequest.class);
+        when(http.getHeader("Authorization")).thenReturn("Bearer " + VALID_TOKEN);
+        when(http.getHeader("Idempotency-Key")).thenReturn("idem-abc-123");
+
+        new TransfersController(jwt, oradian, txService)
+                .transferDeposit(http, request(OWNED_ACCOUNT));
+
+        ArgumentCaptor<Transaction> pending = ArgumentCaptor.forClass(Transaction.class);
+        verify(txService).openPending(pending.capture());
+        assertEquals("idem-abc-123", pending.getValue().getIdempotencyKey(),
+                "ledger row must carry the FE's Idempotency-Key for later replay/dedup audit");
     }
 }

@@ -37,10 +37,41 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- H2 is kept for tests only (in-memory, PostgreSQL compatibility mode). -->
+        <!-- Flyway owns the prod schema (transactions ledger). Postgres-13+
+             support split out of flyway-core in 10.x, so the database module
+             is a separate dependency. Tests disable Flyway and let Hibernate
+             ddl-auto=create-drop build the schema from @Entity instead. -->
         <dependency>
-            <groupId>com.h2database</groupId>
-            <artifactId>h2</artifactId>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
+
+        <!-- Testcontainers — production-fidelity integration tests against
+             a real Postgres 16. Replaces the H2-in-PostgreSQL-mode story
+             that ddl-auto=create-drop relied on: H2 can't exercise the
+             Flyway → JPA validate flow that prod does, so schema drift
+             between V*.sql migrations and @Entity columns only surfaced
+             at deploy time. The "it" Maven phase (Failsafe, *IT.java
+             naming) runs Postgres-backed; pure Mockito unit tests under
+             Surefire still need no infrastructure. Versions come from the
+             testcontainers-bom imported in the parent pom. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
             <scope>test</scope>
         </dependency>
 
