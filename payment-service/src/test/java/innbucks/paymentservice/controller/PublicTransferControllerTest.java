@@ -79,6 +79,65 @@ class PublicTransferControllerTest {
     }
 
     @Test
+    void transferDeposit_coercesNullNotesToEmptyStringBeforeForwardingToOradian() {
+        // Oradian Instafin's SubmitDepositAccountTransfer marks `notes` as a
+        // required field. With @JsonInclude(NON_NULL) on the DTO, a null
+        // notes value would be omitted from the JSON sent upstream and
+        // Oradian would 422 the whole request. The controller MUST coerce
+        // null -> "" so the field is always present on the wire.
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
+        when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+
+        OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
+        when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
+                .thenReturn(List.of(ownedAccount(OWNED_ACCOUNT)));
+        when(oradian.submitDepositTransfer(any(DepositTransferRequest.class)))
+                .thenReturn(DepositTransferResponse.builder().transactionID("ok").build());
+
+        DepositTransferRequest body = DepositTransferRequest.builder()
+                .fromAccountId(OWNED_ACCOUNT)
+                .toAccountId(DEST_ACCOUNT)
+                .amount("123.00")
+                .build(); // notes intentionally null
+
+        new PublicTransferController(jwt, oradian)
+                .transferDeposit(bearerRequest(VALID_TOKEN), body);
+
+        ArgumentCaptor<DepositTransferRequest> forwarded = ArgumentCaptor.forClass(DepositTransferRequest.class);
+        verify(oradian).submitDepositTransfer(forwarded.capture());
+        assertEquals("", forwarded.getValue().getNotes(),
+                "notes must be coerced from null to \"\" before forwarding");
+    }
+
+    @Test
+    void transferDeposit_keepsCallerSuppliedNotesIntactWhenPresent() {
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
+        when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+
+        OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
+        when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
+                .thenReturn(List.of(ownedAccount(OWNED_ACCOUNT)));
+        when(oradian.submitDepositTransfer(any(DepositTransferRequest.class)))
+                .thenReturn(DepositTransferResponse.builder().transactionID("ok").build());
+
+        DepositTransferRequest body = DepositTransferRequest.builder()
+                .fromAccountId(OWNED_ACCOUNT)
+                .toAccountId(DEST_ACCOUNT)
+                .amount("123.00")
+                .notes("School fees")
+                .build();
+
+        new PublicTransferController(jwt, oradian)
+                .transferDeposit(bearerRequest(VALID_TOKEN), body);
+
+        ArgumentCaptor<DepositTransferRequest> forwarded = ArgumentCaptor.forClass(DepositTransferRequest.class);
+        verify(oradian).submitDepositTransfer(forwarded.capture());
+        assertEquals("School fees", forwarded.getValue().getNotes());
+    }
+
+    @Test
     void transferDeposit_stampsTodayAsTransactionDateBeforeForwardingToOradian() {
         // The DTO marks transactionDate as JsonIgnore on input, but defence-
         // in-depth: even if a malicious client bypassed Jackson and got a date

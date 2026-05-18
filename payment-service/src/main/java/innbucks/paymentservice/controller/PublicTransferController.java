@@ -210,9 +210,20 @@ public class PublicTransferController {
         // here is the single source of truth for the date that hits Oradian.
         request.setTransactionDate(LocalDate.now());
 
-        log.info("POST /payments/deposit phone={} from={} to={} amount={} txnDate={}",
+        // Oradian Instafin's SubmitDepositAccountTransfer marks `notes` as
+        // required in its schema, but @JsonInclude(NON_NULL) on our DTO drops
+        // the field when the FE omits it — that gets us a generic 422
+        // "Request could not be processed" from upstream. Coerce null to ""
+        // so we always send the field. An empty string is an acceptable
+        // value per the upstream schema's example.
+        if (request.getNotes() == null) {
+            request.setNotes("");
+        }
+
+        log.info("POST /payments/deposit phone={} from={} to={} amount={} txnDate={} notesLen={}",
                 phoneNumber, request.getFromAccountId(), request.getToAccountId(),
-                request.getAmount(), request.getTransactionDate());
+                request.getAmount(), request.getTransactionDate(),
+                request.getNotes().length());
 
         DepositTransferResponse response =
                 oradianMiddlewareClient.submitDepositTransfer(request);

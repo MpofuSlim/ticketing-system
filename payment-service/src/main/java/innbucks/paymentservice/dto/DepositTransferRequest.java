@@ -46,7 +46,10 @@ public class DepositTransferRequest {
     @Schema(example = "123.00", description = "Amount as a string — matches Oradian's wire format.")
     private String amount;
 
-    @Schema(example = "", description = "Optional free-text notes; may be empty.")
+    @Schema(example = "Lunch",
+            description = "Optional free-text notes from the FE. Required by Oradian's wire " +
+                    "format though, so payment-service coerces a missing/null value to \"\" " +
+                    "before forwarding.")
     private String notes;
 
     @JsonProperty(access = JsonProperty.Access.READ_ONLY)
