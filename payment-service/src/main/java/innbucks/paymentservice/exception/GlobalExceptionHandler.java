@@ -1,5 +1,6 @@
 package innbucks.paymentservice.exception;
 
+import innbucks.paymentservice.client.OradianMiddlewareException;
 import innbucks.paymentservice.dto.ApiResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -63,6 +64,26 @@ public class GlobalExceptionHandler {
     // the classpath and those exceptions can never be thrown. If auth lands
     // here later, add them at that point — copy the shape from
     // loyalty-service's GlobalExceptionHandler.
+
+    /**
+     * Outbound failures from {@link innbucks.paymentservice.client.OradianMiddlewareClient}.
+     * Preserves the upstream HTTP status when we recognise it (so a 400 from
+     * Oradian validation stays a 400, a 401 stays a 401, etc.); falls back to
+     * 502 Bad Gateway for connectivity errors / empty bodies / unknown
+     * statuses, which is the canonical "upstream is having a moment" code.
+     */
+    @ExceptionHandler(OradianMiddlewareException.class)
+    public ResponseEntity<ApiResult<Void>> handle(OradianMiddlewareException ex) {
+        HttpStatus status = HttpStatus.resolve(ex.getStatusCode());
+        if (status == null) status = HttpStatus.BAD_GATEWAY;
+        log.warn("Oradian middleware call failed status={} message={}",
+                status.value(), ex.getMessage());
+        return ResponseEntity.status(status).body(ApiResult.<Void>builder()
+                .code(status.value() + " " + status.name())
+                .message(ex.getMessage() == null ? "oradian middleware error" : ex.getMessage())
+                .data(null)
+                .build());
+    }
 
     /**
      * Last-resort catch-all. Logs the full exception so on-call has the trace

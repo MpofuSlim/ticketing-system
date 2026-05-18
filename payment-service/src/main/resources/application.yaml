@@ -46,6 +46,16 @@ loyalty-service:
   connect-timeout-ms: ${LOYALTY_SERVICE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${LOYALTY_SERVICE_READ_TIMEOUT_MS:5000}
 
+# Oradian middleware is called by POST /internal/transfers/deposit to submit
+# a deposit account transfer via Oradian's instafin.SubmitDepositAccountTransfer.
+# Direct pod-to-pod (the api-gateway only routes /payments/** to this service,
+# so /internal/** is unreachable from outside); the shared secret below must
+# match Oradian middleware's innbucks.internal-api.token.
+oradian-middleware:
+  base-url: ${ORADIAN_MIDDLEWARE_URL:http://localhost:8090}
+  connect-timeout-ms: ${ORADIAN_MIDDLEWARE_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${ORADIAN_MIDDLEWARE_READ_TIMEOUT_MS:10000}
+
 innbucks:
   internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
 
