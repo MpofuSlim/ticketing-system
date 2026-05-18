@@ -87,9 +87,13 @@ public class TransfersController {
 
                     The accepted token is the standard customer access token
                     minted by user-service (same one used for
-                    `/auth/customer/deposits`). Send `Idempotency-Key` to
-                    deduplicate retries — payment-service caches the response
-                    for 24h per (method, path, key).
+                    `/auth/customer/deposits`). The `Idempotency-Key` header
+                    is **required** — payment-service caches the 200 response
+                    for 24h per (method, path, key) and refuses replays that
+                    reuse a key with a different request body (422
+                    `idempotency_conflict`). Use a fresh UUID per logical
+                    transfer attempt; send the SAME value on every retry of
+                    the same attempt.
 
                     `transactionDate` is stamped by payment-service on
                     receipt — clients do not supply it and any value sent in
@@ -123,13 +127,43 @@ public class TransfersController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
-                    description = "Validation failure (missing fromAccountId/toAccountId/amount)",
+                    description = "Validation failure (missing fromAccountId/toAccountId/amount), " +
+                            "missing Idempotency-Key header, or amount fails BigDecimal parse / sign / scale checks",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(name = "Missing field", value = """
+                            examples = {
+                                    @ExampleObject(name = "Missing field", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "validation failed",
+                                              "data": { "amount": "amount is required" }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Missing Idempotency-Key", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Idempotency-Key header is required for /payments/deposit",
+                                              "data": null,
+                                              "errorCode": "idempotency_key_required"
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Non-positive amount", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "amount must be greater than zero",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422",
+                    description = "Idempotency-Key reused with a different request body. Stripe-style " +
+                            "contract — a fresh key must be used for a new logical transfer.",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Idempotency conflict", value = """
                                     {
-                                      "code": "400 BAD_REQUEST",
-                                      "message": "validation failed",
-                                      "data": { "amount": "amount is required" }
+                                      "code": "422 UNPROCESSABLE_ENTITY",
+                                      "message": "Idempotency-Key reused with a different request body — refusing to replay",
+                                      "data": null,
+                                      "errorCode": "idempotency_conflict"
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
@@ -311,9 +345,13 @@ public class TransfersController {
 
                     The accepted token is the standard customer access token
                     minted by user-service (same one used for
-                    `/auth/customer/deposits` and `/payments/deposit`). Send
-                    `Idempotency-Key` to deduplicate retries — payment-service
-                    caches the response for 24h per (method, path, key).
+                    `/auth/customer/deposits` and `/payments/deposit`). The
+                    `Idempotency-Key` header is **required** — payment-service
+                    caches the 200 response for 24h per (method, path, key)
+                    and refuses replays that reuse a key with a different
+                    request body (422 `idempotency_conflict`). Use a fresh
+                    UUID per logical withdrawal attempt; send the SAME value
+                    on every retry of the same attempt.
                     """)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -340,13 +378,43 @@ public class TransfersController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
-                    description = "Validation failure (missing accountID/paymentMethodName/amount)",
+                    description = "Validation failure (missing accountID/paymentMethodName/amount), " +
+                            "missing Idempotency-Key header, or amount fails BigDecimal parse / sign / scale checks",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(name = "Missing field", value = """
+                            examples = {
+                                    @ExampleObject(name = "Missing field", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "validation failed",
+                                              "data": { "amount": "amount is required" }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Missing Idempotency-Key", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Idempotency-Key header is required for /payments/withdraw",
+                                              "data": null,
+                                              "errorCode": "idempotency_key_required"
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Non-positive amount", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "amount must be greater than zero",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422",
+                    description = "Idempotency-Key reused with a different request body. Stripe-style " +
+                            "contract — a fresh key must be used for a new logical withdrawal.",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Idempotency conflict", value = """
                                     {
-                                      "code": "400 BAD_REQUEST",
-                                      "message": "validation failed",
-                                      "data": { "amount": "amount is required" }
+                                      "code": "422 UNPROCESSABLE_ENTITY",
+                                      "message": "Idempotency-Key reused with a different request body — refusing to replay",
+                                      "data": null,
+                                      "errorCode": "idempotency_conflict"
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
