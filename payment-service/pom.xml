@@ -51,6 +51,26 @@
             <version>25.1.0</version>
         </dependency>
 
+        <!-- JJWT — verify-only. payment-service does NOT mint tokens; it
+             validates the bearer JWT issued by user-service on the public
+             /payments/deposit endpoint (the only authenticated endpoint in
+             this service) and reads its phoneNumber claim for ownership
+             checks. jwt.secret here MUST match user-service's jwt.secret. -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
         <!-- Publishes payment success/failure events -->
         <dependency>
             <groupId>org.springframework.kafka</groupId>

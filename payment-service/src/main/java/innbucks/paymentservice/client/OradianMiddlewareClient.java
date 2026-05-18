@@ -3,10 +3,12 @@ package innbucks.paymentservice.client;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import innbucks.paymentservice.config.CorrelationIdPropagatingInterceptor;
+import innbucks.paymentservice.dto.DepositAccount;
 import innbucks.paymentservice.dto.DepositTransferRequest;
 import innbucks.paymentservice.dto.DepositTransferResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -14,6 +16,8 @@ import org.springframework.web.client.RestClientResponseException;
 
 import java.net.http.HttpClient;
 import java.time.Duration;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -91,6 +95,42 @@ public class OradianMiddlewareClient {
         } catch (Exception e) {
             log.warn("Oradian deposit transfer errored from={} to={} cause={}",
                     request.getFromAccountId(), request.getToAccountId(), e.toString());
+            throw new OradianMiddlewareException(
+                    "Unable to reach Oradian middleware: " + e.getMessage(), 502, e);
+        }
+    }
+
+    /**
+     * Fetch the Oradian deposit accounts for a customer by msisdn. Used by
+     * the public deposit-transfer endpoint to verify that the JWT-derived
+     * caller actually owns the requested fromAccountId before forwarding the
+     * transfer to Oradian.
+     *
+     * <p>An empty list (rather than a thrown exception) is the legitimate
+     * shape when the customer has no Oradian accounts yet — callers map that
+     * to a 403/400 ownership rejection on their own.
+     */
+    public List<DepositAccount> getDepositsForMsisdn(String msisdn) {
+        if (msisdn == null || msisdn.isBlank()) {
+            return Collections.emptyList();
+        }
+        try {
+            List<DepositAccount> deposits = restClient.get()
+                    .uri("/internal/customers/{msisdn}/deposits", msisdn)
+                    .header("X-Internal-Token", internalToken)
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<List<DepositAccount>>() {});
+            return deposits == null ? Collections.emptyList() : deposits;
+        } catch (RestClientResponseException e) {
+            String detail = parseErrorMessage(e.getResponseBodyAsString())
+                    .orElse(e.getStatusText());
+            log.warn("Oradian deposits lookup failed msisdn={} status={} detail={}",
+                    msisdn, e.getStatusCode().value(), detail);
+            throw new OradianMiddlewareException(
+                    "Oradian middleware rejected the deposits lookup: " + detail,
+                    e.getStatusCode().value(), e);
+        } catch (Exception e) {
+            log.warn("Oradian deposits lookup errored msisdn={} cause={}", msisdn, e.toString());
             throw new OradianMiddlewareException(
                     "Unable to reach Oradian middleware: " + e.getMessage(), 502, e);
         }
