@@ -15,13 +15,23 @@ import java.util.UUID;
 
 public interface EventRepository extends JpaRepository<Event, UUID> {
 
+    // Note on the CAST(:venue AS string) / CAST(:q AS string) wrapping:
+    // when these parameters arrive as Java null, the PostgreSQL JDBC driver
+    // can't infer a Java-side type and binds the parameter as `bytea` (its
+    // default for "unknown type"). Postgres then refuses to plan the query
+    // because `lower(bytea)` has no overload — even though the IS NULL guard
+    // would short-circuit at runtime, Postgres type-checks the entire
+    // boolean tree at plan time. Adding the cast forces a varchar bind, so
+    // null travels as `NULL::varchar` and `lower('%' || NULL::varchar || '%')`
+    // evaluates to NULL cleanly. The cast is a no-op for non-null values.
+
     // Get all non-deleted events with optional date filter — paginated
     @Query("""
         SELECT e FROM Event e
         WHERE e.deleted = false
         AND (:from IS NULL OR e.dateTime >= :from)
         AND (:to IS NULL OR e.dateTime <= :to)
-        AND (:venue IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', :venue, '%')))
+        AND (:venue IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
     """)
     Page<Event> findAllActive(
             @Param("from") LocalDateTime from,
@@ -37,7 +47,7 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
         AND e.active = true
         AND (:from IS NULL OR e.dateTime >= :from)
         AND (:to IS NULL OR e.dateTime <= :to)
-        AND (:venue IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', :venue, '%')))
+        AND (:venue IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
     """)
     Page<Event> findAllActiveOnly(
             @Param("from") LocalDateTime from,
@@ -57,7 +67,7 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
         AND e.tenantId = :tenantId
         AND (:from IS NULL OR e.dateTime >= :from)
         AND (:to IS NULL OR e.dateTime <= :to)
-        AND (:venue IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', :venue, '%')))
+        AND (:venue IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
     """)
     Page<Event> findByTenantId(
             @Param("tenantId") String tenantId,
@@ -76,7 +86,7 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
         AND e.tenantId = :tenantId
         AND (:from IS NULL OR e.dateTime >= :from)
         AND (:to IS NULL OR e.dateTime <= :to)
-        AND (:venue IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', :venue, '%')))
+        AND (:venue IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
     """)
     Page<Event> findByTenantIdActiveOnly(
             @Param("tenantId") String tenantId,
@@ -110,9 +120,9 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
         WHERE e.deleted = false
         AND e.active = true
         AND (
-            LOWER(e.title)       LIKE LOWER(CONCAT('%', :q, '%'))
-         OR LOWER(e.description) LIKE LOWER(CONCAT('%', :q, '%'))
-         OR LOWER(e.venue)       LIKE LOWER(CONCAT('%', :q, '%'))
+            LOWER(e.title)       LIKE LOWER(CONCAT('%', CAST(:q AS string), '%'))
+         OR LOWER(e.description) LIKE LOWER(CONCAT('%', CAST(:q AS string), '%'))
+         OR LOWER(e.venue)       LIKE LOWER(CONCAT('%', CAST(:q AS string), '%'))
         )
     """)
     Page<Event> searchByKeyword(@Param("q") String q, Pageable pageable);
