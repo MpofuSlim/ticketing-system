@@ -8,6 +8,7 @@ import innbucks.paymentservice.dto.DepositTransferResponse;
 import innbucks.paymentservice.security.JwtUtil;
 import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
@@ -27,12 +28,13 @@ class PublicTransferControllerTest {
     private static final String DEST_ACCOUNT = "A000002";
 
     private static DepositTransferRequest request(String fromAccount) {
+        // transactionDate is server-stamped by the controller — clients do not
+        // supply it, so we deliberately leave it null on the inbound request.
         return DepositTransferRequest.builder()
                 .fromAccountId(fromAccount)
                 .toAccountId(DEST_ACCOUNT)
                 .amount("123.00")
                 .notes("Lunch")
-                .transactionDate(LocalDate.of(2026, 5, 18))
                 .build();
     }
 
@@ -62,7 +64,7 @@ class PublicTransferControllerTest {
                 .amount("123.00")
                 .transactionID("1155")
                 .referenceNumber("1234567980123")
-                .transactionDate(LocalDate.of(2026, 5, 18))
+                .transactionDate(LocalDate.now())
                 .build();
         when(oradian.submitDepositTransfer(any(DepositTransferRequest.class))).thenReturn(upstream);
 
@@ -74,6 +76,42 @@ class PublicTransferControllerTest {
         assertNotNull(resp.getBody());
         assertEquals("1155", resp.getBody().getData().getTransactionID());
         verify(oradian).submitDepositTransfer(any(DepositTransferRequest.class));
+    }
+
+    @Test
+    void transferDeposit_stampsTodayAsTransactionDateBeforeForwardingToOradian() {
+        // The DTO marks transactionDate as JsonIgnore on input, but defence-
+        // in-depth: even if a malicious client bypassed Jackson and got a date
+        // onto the object somehow, the controller MUST overwrite it. This
+        // test pins the contract that the value sent downstream is the
+        // server's LocalDate.now(), not whatever was on the inbound request.
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
+        when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+
+        OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
+        when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
+                .thenReturn(List.of(ownedAccount(OWNED_ACCOUNT)));
+        when(oradian.submitDepositTransfer(any(DepositTransferRequest.class)))
+                .thenReturn(DepositTransferResponse.builder().transactionID("ok").build());
+
+        DepositTransferRequest body = request(OWNED_ACCOUNT);
+        body.setTransactionDate(LocalDate.of(1999, 1, 1)); // attacker-supplied; must be ignored
+
+        LocalDate before = LocalDate.now();
+        new PublicTransferController(jwt, oradian)
+                .transferDeposit(bearerRequest(VALID_TOKEN), body);
+        LocalDate after = LocalDate.now();
+
+        ArgumentCaptor<DepositTransferRequest> forwarded = ArgumentCaptor.forClass(DepositTransferRequest.class);
+        verify(oradian).submitDepositTransfer(forwarded.capture());
+        LocalDate stamped = forwarded.getValue().getTransactionDate();
+        assertNotNull(stamped, "transactionDate must be stamped by the controller");
+        assertNotEquals(LocalDate.of(1999, 1, 1), stamped, "attacker-supplied date must be overwritten");
+        // LocalDate.now() may roll over mid-test on the stroke of midnight,
+        // so accept either the date observed just before or just after.
+        assertTrue(stamped.equals(before) || stamped.equals(after),
+                "stamped date " + stamped + " should be today (between " + before + " and " + after + ")");
     }
 
     @Test

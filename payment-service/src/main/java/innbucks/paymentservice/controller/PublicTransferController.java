@@ -24,6 +24,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.time.LocalDate;
 import java.util.List;
 
 /**
@@ -73,6 +74,11 @@ public class PublicTransferController {
                     `/auth/customer/deposits`). Send `Idempotency-Key` to
                     deduplicate retries — payment-service caches the response
                     for 24h per (method, path, key).
+
+                    `transactionDate` is stamped by payment-service on
+                    receipt — clients do not supply it and any value sent in
+                    the body is ignored. The stamped date is echoed back on
+                    the response.
                     """)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -101,7 +107,7 @@ public class PublicTransferController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
-                    description = "Validation failure (missing fromAccountId/toAccountId/amount/transactionDate)",
+                    description = "Validation failure (missing fromAccountId/toAccountId/amount)",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(name = "Missing field", value = """
                                     {
@@ -198,6 +204,11 @@ public class PublicTransferController {
                             .data(null)
                             .build());
         }
+
+        // Server-stamp the transaction date. transactionDate is JsonIgnore on
+        // input so anything the FE sent has already been dropped — overwriting
+        // here is the single source of truth for the date that hits Oradian.
+        request.setTransactionDate(LocalDate.now());
 
         log.info("POST /payments/deposit phone={} from={} to={} amount={} txnDate={}",
                 phoneNumber, request.getFromAccountId(), request.getToAccountId(),

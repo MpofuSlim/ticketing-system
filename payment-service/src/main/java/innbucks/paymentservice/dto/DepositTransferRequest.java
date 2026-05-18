@@ -1,9 +1,9 @@
 package innbucks.paymentservice.dto;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -12,11 +12,18 @@ import lombok.NoArgsConstructor;
 import java.time.LocalDate;
 
 /**
- * Request body for POST /internal/transfers/deposit. Mirrors Oradian
- * middleware's SubmitDepositAccountTransferRequest, which in turn mirrors
- * Oradian's instafin.SubmitDepositAccountTransfer. `amount` is a String
- * because Oradian's wire format expects "123.00" (quoted) for some product
+ * Request body for POST /payments/deposit (FE → payment-service) and the
+ * payload payment-service forwards to Oradian middleware's
+ * SubmitDepositAccountTransferRequest (which in turn mirrors Oradian's
+ * instafin.SubmitDepositAccountTransfer). `amount` is a String because
+ * Oradian's wire format expects "123.00" (quoted) for some product
  * configurations — we don't try to second-guess that here.
+ *
+ * <p>{@code transactionDate} is server-stamped: Jackson ignores it on the
+ * inbound deserialization ({@link JsonProperty.Access#READ_ONLY}) so a
+ * client can't predate or postdate a transfer, and PublicTransferController
+ * sets it to today before forwarding. It stays a regular serialized field
+ * on the outbound call so Oradian middleware still receives it.
  */
 @Data
 @Builder
@@ -42,7 +49,10 @@ public class DepositTransferRequest {
     @Schema(example = "", description = "Optional free-text notes; may be empty.")
     private String notes;
 
-    @NotNull
-    @Schema(example = "2020-02-28", description = "Transaction date (ISO-8601).")
+    @JsonProperty(access = JsonProperty.Access.READ_ONLY)
+    @Schema(accessMode = Schema.AccessMode.READ_ONLY,
+            description = "Server-stamped on POST /payments/deposit; clients do not supply this. " +
+                    "Included on the response (and on the outbound call to Oradian middleware).",
+            example = "2026-05-18")
     private LocalDate transactionDate;
 }
