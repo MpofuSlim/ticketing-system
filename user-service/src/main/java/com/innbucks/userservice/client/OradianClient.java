@@ -10,7 +10,6 @@ import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientResponseException;
 
 import java.util.List;
-import java.util.UUID;
 
 @Slf4j
 @Component
@@ -30,8 +29,27 @@ public class OradianClient {
         this.properties = properties;
     }
 
-    public OradianCustomerResponse createCustomer(OradianCustomerRequest request) {
-        String idempotencyKey = UUID.randomUUID().toString();
+    /**
+     * Create a customer in Oradian via the middleware's S2S endpoint.
+     *
+     * <p>{@code idempotencyKey} MUST be stable per customer (e.g. derived
+     * from {@code User.id}), not freshly generated per call. Reason: this
+     * endpoint may end up "Oradian-committed but local-rolled-back" if
+     * anything between the Oradian response and the local transaction
+     * commit fails. On retry, the same key lets Oradian middleware return
+     * the cached response (24h window) so the local profile can be
+     * stamped with the existing externalID / clientID instead of either
+     * orphaning the Oradian record or double-creating. Past 24h the
+     * cache evicts and Oradian's own duplicate-NationalID check is the
+     * backstop — currently surfaces as a 409 we don't auto-recover from
+     * (operator/reconciliation job territory).
+     */
+    public OradianCustomerResponse createCustomer(OradianCustomerRequest request, String idempotencyKey) {
+        if (idempotencyKey == null || idempotencyKey.isBlank()) {
+            throw new IllegalArgumentException(
+                    "idempotencyKey must be non-blank — retries with a fresh key would orphan " +
+                    "the Oradian record if the local transaction rolled back.");
+        }
         try {
             OradianCustomerResponse response = restClient.post()
                     .uri(CUSTOMERS_PATH)
@@ -41,18 +59,20 @@ public class OradianClient {
                     .body(request)
                     .retrieve()
                     .body(OradianCustomerResponse.class);
-            log.info("Oradian create succeeded msisdn={} customerId={} oradianClientId={}",
+            log.info("Oradian create succeeded msisdn={} customerId={} oradianClientId={} idemKey={}",
                     request.getMsisdn(),
                     response != null ? response.getCustomerId() : null,
-                    response != null ? response.getOradianClientId() : null);
+                    response != null ? response.getOradianClientId() : null,
+                    idempotencyKey);
             return response;
         } catch (RestClientResponseException ex) {
-            log.warn("Oradian create failed msisdn={} status={} body={}",
-                    request.getMsisdn(), ex.getStatusCode(), ex.getResponseBodyAsString());
+            log.warn("Oradian create failed msisdn={} idemKey={} status={} body={}",
+                    request.getMsisdn(), idempotencyKey, ex.getStatusCode(), ex.getResponseBodyAsString());
             throw new OradianClientException(
                     "Oradian middleware rejected the customer create: HTTP " + ex.getStatusCode().value(), ex);
         } catch (RuntimeException ex) {
-            log.warn("Oradian create failed msisdn={} message={}", request.getMsisdn(), ex.getMessage());
+            log.warn("Oradian create failed msisdn={} idemKey={} message={}",
+                    request.getMsisdn(), idempotencyKey, ex.getMessage());
             throw new OradianClientException(
                     "Oradian middleware is unreachable: " + ex.getMessage(), ex);
         }

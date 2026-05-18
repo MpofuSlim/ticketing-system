@@ -116,7 +116,22 @@ public class CustomerService {
         // Failure throws OradianClientException, which rolls back the @Transactional
         // saves above so local state can't advance to tier 2 without an Oradian
         // Person+Client. GlobalExceptionHandler maps the exception to HTTP 502.
-        OradianCustomerResponse oradian = oradianClient.createCustomer(toOradianRequest(request));
+        //
+        // Idempotency key MUST be stable per customer (User.id, set at tier-1
+        // and never re-issued). True atomicity between Oradian and the local
+        // DB isn't possible — there's always a window where Oradian commits
+        // but the local transaction rolls back (DB outage during commit, an
+        // exception between the response and the final save, etc.). A stable
+        // key lets a retry replay the Oradian call: within Oradian middleware's
+        // 24h idempotency window the same key returns the cached response,
+        // so we can stamp the existing externalID / clientID locally instead
+        // of orphaning the Oradian record. Previously this key was freshly
+        // randomised per call (UUID.randomUUID()) which defeated the entire
+        // mechanism — every retry looked like a brand-new request to the
+        // middleware.
+        String idempotencyKey = "customer-tier-2:" + user.getId();
+        OradianCustomerResponse oradian = oradianClient.createCustomer(
+                toOradianRequest(request), idempotencyKey);
         if (oradian == null) {
             // Defensive: RestClient.body() can return null on an empty 200. We treat
             // that as a contract violation — the same as Oradian rejecting us — so

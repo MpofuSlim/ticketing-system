@@ -49,7 +49,7 @@ class AuthControllerIT {
         fake.setCustomerId(java.util.UUID.randomUUID().toString());
         fake.setOradianClientId(1001L);
         fake.setOradianExternalId("stub-oradian-external");
-        when(oradianClient.createCustomer(any())).thenReturn(fake);
+        when(oradianClient.createCustomer(any(), any())).thenReturn(fake);
     }
 
     private void activate(String email) {

@@ -1,7 +1,10 @@
 package com.innbucks.userservice.service;
 
 import com.innbucks.userservice.client.OradianClient;
+import com.innbucks.userservice.client.OradianCustomerRequest;
+import com.innbucks.userservice.client.OradianCustomerResponse;
 import com.innbucks.userservice.dto.CustomerRegistrationResponseDTO;
+import com.innbucks.userservice.dto.CustomerTier2RegisterDTO;
 import com.innbucks.userservice.dto.CustomerTier4RegisterDTO;
 import com.innbucks.userservice.entity.CustomerProfile;
 import com.innbucks.userservice.entity.User;
@@ -13,17 +16,27 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
+import java.time.LocalDate;
 import java.util.EnumSet;
+import java.util.LinkedHashMap;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 class CustomerServiceTest {
 
     private CustomerService newService(UserRepository userRepo,
                                        CustomerProfileRepository profileRepo) {
+        return newService(userRepo, profileRepo, mock(OradianClient.class));
+    }
+
+    private CustomerService newService(UserRepository userRepo,
+                                       CustomerProfileRepository profileRepo,
+                                       OradianClient oradianClient) {
         return new CustomerService(
                 userRepo,
                 profileRepo,
@@ -31,8 +44,36 @@ class CustomerServiceTest {
                 mock(PendingRegistrationRepository.class),
                 mock(PasswordEncoder.class),
                 mock(OtpService.class),
-                mock(OradianClient.class)
+                oradianClient
         );
+    }
+
+    private CustomerTier2RegisterDTO tier2Request(String msisdn) {
+        CustomerTier2RegisterDTO dto = new CustomerTier2RegisterDTO();
+        dto.setFirstName("Alice");
+        dto.setMiddleName("M");
+        dto.setLastName("Moyo");
+        dto.setMsisdn(msisdn);
+        dto.setNationalId("12345678");
+        dto.setEmail("alice@example.com");
+        dto.setDateOfBirth(LocalDate.of(1995, 4, 12));
+        dto.setGender(CustomerProfile.Gender.FEMALE);
+        CustomerTier2RegisterDTO.Address addr = new CustomerTier2RegisterDTO.Address();
+        addr.setStreet1("1 Main St");
+        addr.setCity("Bulawayo");
+        addr.setPostCode("000000");
+        addr.setCountry("ZW");
+        dto.setAddress(addr);
+        dto.setClientCustomFields(new LinkedHashMap<>());
+        return dto;
+    }
+
+    private OradianCustomerResponse fakeOradianResponse() {
+        OradianCustomerResponse r = new OradianCustomerResponse();
+        r.setCustomerId(java.util.UUID.randomUUID().toString());
+        r.setOradianClientId(1001L);
+        r.setOradianExternalId("oradian-ext-1");
+        return r;
     }
 
     private User customerUser(long id, String phone) {
@@ -105,6 +146,85 @@ class CustomerServiceTest {
         assertTrue(ex.getMessage().contains("tier 3"),
                 "expected tier-3 prerequisite message, got: " + ex.getMessage());
         verify(profileRepo, never()).save(any());
+    }
+
+    @Test
+    void registerTier2_usesStableIdempotencyKeyDerivedFromUserId() {
+        // Pins the contract that makes Oradian-vs-local atomicity recoverable:
+        // the idempotency key MUST be derived from User.id, never randomised
+        // per call. If anything between the Oradian response and the local
+        // transaction commit fails, the @Transactional rolls back and the
+        // FE retries — and the retry must replay Oradian's cached response
+        // (same key, same body), not double-create a fresh client. Previous
+        // implementation called UUID.randomUUID() inside OradianClient,
+        // which defeated the whole mechanism: every retry looked brand new
+        // to the middleware so the orphan in Oradian could never be paired
+        // back with the local profile.
+        UserRepository userRepo = mock(UserRepository.class);
+        CustomerProfileRepository profileRepo = mock(CustomerProfileRepository.class);
+        OradianClient oradianClient = mock(OradianClient.class);
+        when(oradianClient.createCustomer(any(OradianCustomerRequest.class), anyString()))
+                .thenReturn(fakeOradianResponse());
+        CustomerService service = newService(userRepo, profileRepo, oradianClient);
+
+        User user = customerUser(42L, "+263770000001");
+        CustomerProfile profile = CustomerProfile.builder()
+                .user(user)
+                .registrationTier(1)
+                .build();
+        when(userRepo.findByPhoneNumber("+263770000001")).thenReturn(Optional.of(user));
+        when(profileRepo.findByUserId(42L)).thenReturn(Optional.of(profile));
+
+        service.registerTier2(tier2Request("+263770000001"));
+
+        ArgumentCaptor<String> keyCaptor = ArgumentCaptor.forClass(String.class);
+        verify(oradianClient).createCustomer(any(OradianCustomerRequest.class), keyCaptor.capture());
+        String key = keyCaptor.getValue();
+
+        assertEquals("customer-tier-2:42", key,
+                "idempotency key must be derived from User.id so retries replay Oradian's cached response");
+    }
+
+    @Test
+    void registerTier2_passesSameKeyOnRetryForSameCustomer() {
+        // Simulates the bug scenario: the first attempt's @Transactional rolls
+        // back AFTER Oradian successfully committed, so the profile stays at
+        // tier 1 locally. The user retries. The second call MUST send the
+        // same idempotency key (same user.id => same key) so Oradian replies
+        // from cache with the existing externalID / clientID — pairing the
+        // orphaned Oradian record back with the local profile instead of
+        // making a second one.
+        UserRepository userRepo = mock(UserRepository.class);
+        CustomerProfileRepository profileRepo = mock(CustomerProfileRepository.class);
+        OradianClient oradianClient = mock(OradianClient.class);
+        when(oradianClient.createCustomer(any(OradianCustomerRequest.class), anyString()))
+                .thenReturn(fakeOradianResponse());
+        CustomerService service = newService(userRepo, profileRepo, oradianClient);
+
+        User user = customerUser(99L, "+263770000099");
+        CustomerProfile profile = CustomerProfile.builder()
+                .user(user)
+                .registrationTier(1)
+                .build();
+        when(userRepo.findByPhoneNumber("+263770000099")).thenReturn(Optional.of(user));
+        when(profileRepo.findByUserId(99L)).thenReturn(Optional.of(profile));
+
+        // First attempt — Oradian commits, then imagine local rollback. After
+        // rollback the in-memory profile keeps its mutations, so reset its
+        // tier back to 1 to model the on-disk state the retry would observe.
+        service.registerTier2(tier2Request("+263770000099"));
+        profile.setRegistrationTier(1);
+
+        // Retry.
+        service.registerTier2(tier2Request("+263770000099"));
+
+        ArgumentCaptor<String> keyCaptor = ArgumentCaptor.forClass(String.class);
+        verify(oradianClient, times(2))
+                .createCustomer(any(OradianCustomerRequest.class), keyCaptor.capture());
+        assertEquals(2, keyCaptor.getAllValues().size());
+        assertEquals(keyCaptor.getAllValues().get(0), keyCaptor.getAllValues().get(1),
+                "two attempts for the same user must use the same idempotency key");
+        assertEquals("customer-tier-2:99", keyCaptor.getAllValues().get(0));
     }
 
     @Test
