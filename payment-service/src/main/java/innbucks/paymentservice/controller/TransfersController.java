@@ -834,7 +834,7 @@ public class TransfersController {
 
         Page<Transaction> rows = type == null
                 ? transactionRepository.findByCustomerPhone(phoneNumber, pageable)
-                : transactionRepository.findByCustomerPhoneAndType(phoneNumber, type, pageable);
+                : transactionRepository.findByCustomerPhoneAndTransactionType(phoneNumber, type, pageable);
         Page<TransactionView> view = rows.map(TransactionView::from);
 
         log.info("GET /payments/transactions phone={} type={} returned={}",

@@ -1028,7 +1028,7 @@ class TransfersControllerTest {
 
         ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
         verify(repo).findByCustomerPhone(eq(CUSTOMER_PHONE), pageable.capture());
-        verify(repo, never()).findByCustomerPhoneAndType(any(), any(), any());
+        verify(repo, never()).findByCustomerPhoneAndTransactionType(any(), any(), any());
         assertEquals(0, pageable.getValue().getPageNumber());
         assertEquals(10, pageable.getValue().getPageSize());
         var sortOrder = pageable.getValue().getSort().getOrderFor("createdAt");
@@ -1044,14 +1044,14 @@ class TransfersControllerTest {
         when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
 
         TransactionRepository repo = mock(TransactionRepository.class);
-        when(repo.findByCustomerPhoneAndType(any(), any(), any(Pageable.class)))
+        when(repo.findByCustomerPhoneAndTransactionType(any(), any(), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of()));
 
         new TransfersController(jwt, mock(OradianMiddlewareClient.class), stubbedTxService(),
                 stubbedLimitService(), repo)
                 .listTransactions(bearerRequest(VALID_TOKEN), TransactionType.WITHDRAWAL);
 
-        verify(repo).findByCustomerPhoneAndType(
+        verify(repo).findByCustomerPhoneAndTransactionType(
                 eq(CUSTOMER_PHONE), eq(TransactionType.WITHDRAWAL), any(Pageable.class));
         verify(repo, never()).findByCustomerPhone(any(), any(Pageable.class));
     }

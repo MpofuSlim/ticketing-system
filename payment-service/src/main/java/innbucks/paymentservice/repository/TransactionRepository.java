@@ -78,8 +78,8 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
      * Same shape but filtered to a single {@link TransactionType}. Used when
      * the customer narrows their history to TRANSFER or WITHDRAWAL.
      */
-    Page<Transaction> findByCustomerPhoneAndType(
-            String customerPhone, TransactionType type, Pageable pageable);
+    Page<Transaction> findByCustomerPhoneAndTransactionType(
+            String customerPhone, TransactionType transactionType, Pageable pageable);
 
     /**
      * Reconciliation finder: rows still in PENDING whose {@code created_at}
