@@ -77,6 +77,17 @@ innbucks:
     per-transaction-max: ${PER_TX_LIMIT:100000}
     per-day-max: ${PER_DAY_LIMIT:500000}
 
+# Reconciliation job (ReconciliationJob) surfaces ledger rows stuck in
+# PENDING longer than the threshold so operators can spot drift before
+# it accumulates silently. Defaults: scan every minute, flag anything
+# PENDING for > 5 minutes, max 100 rows per scan (next scan picks up
+# the rest if the page was full).
+payment-service:
+  reconciliation:
+    scan-interval: ${RECONCILIATION_SCAN_INTERVAL:PT1M}
+    stale-pending-threshold: ${RECONCILIATION_STALE_THRESHOLD:PT5M}
+    batch-size: ${RECONCILIATION_BATCH_SIZE:100}
+
 # Verify-only JWT secret. payment-service does NOT mint tokens — user-service
 # is the issuer. This must match user-service's jwt.secret exactly; tokens
 # signed by user-service are validated here for the authenticated

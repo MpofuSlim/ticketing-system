@@ -10,8 +10,10 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.util.Collection;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -61,4 +63,24 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
      */
     Page<Transaction> findByCustomerPhoneAndTransactionDateBetween(
             String customerPhone, LocalDate fromDate, LocalDate toDate, Pageable pageable);
+
+    /**
+     * Reconciliation finder: rows still in PENDING whose {@code created_at}
+     * is older than the supplied cutoff. The reconciliation job scans this
+     * every minute (configurable) and surfaces each via log + Prometheus
+     * counter so operators can investigate before drift accumulates.
+     *
+     * <p>Backed by the {@code idx_transactions_status_created_at} index
+     * from V1 — the filter is essentially "PENDING && created_at &lt; X"
+     * which is exactly what that index covers.
+     *
+     * <p>Caller passes a {@link Pageable} so a long-broken system doesn't
+     * pull millions of rows into memory in one scan. The job iterates
+     * pages until the page is short of size.
+     */
+    @Query("SELECT t FROM Transaction t " +
+            "WHERE t.status = innbucks.paymentservice.entity.TransactionStatus.PENDING " +
+            "AND t.createdAt < :cutoff " +
+            "ORDER BY t.createdAt ASC")
+    List<Transaction> findStalePending(@Param("cutoff") Instant cutoff, Pageable pageable);
 }
