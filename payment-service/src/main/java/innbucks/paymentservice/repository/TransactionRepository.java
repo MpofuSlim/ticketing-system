@@ -2,6 +2,7 @@ package innbucks.paymentservice.repository;
 
 import innbucks.paymentservice.entity.Transaction;
 import innbucks.paymentservice.entity.TransactionStatus;
+import innbucks.paymentservice.entity.TransactionType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -63,6 +64,22 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
      */
     Page<Transaction> findByCustomerPhoneAndTransactionDateBetween(
             String customerPhone, LocalDate fromDate, LocalDate toDate, Pageable pageable);
+
+    /**
+     * Customer-facing recent-history finder used by GET /payments/transactions
+     * (no date window — the endpoint now always returns the latest top-N).
+     * Backed by the same {@code idx_transactions_customer_phone_created_at}
+     * index as the date-window variant; default sort is supplied via the
+     * Pageable (createdAt DESC).
+     */
+    Page<Transaction> findByCustomerPhone(String customerPhone, Pageable pageable);
+
+    /**
+     * Same shape but filtered to a single {@link TransactionType}. Used when
+     * the customer narrows their history to TRANSFER or WITHDRAWAL.
+     */
+    Page<Transaction> findByCustomerPhoneAndType(
+            String customerPhone, TransactionType type, Pageable pageable);
 
     /**
      * Reconciliation finder: rows still in PENDING whose {@code created_at}

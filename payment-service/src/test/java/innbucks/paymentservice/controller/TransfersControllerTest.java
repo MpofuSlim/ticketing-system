@@ -968,14 +968,13 @@ class TransfersControllerTest {
         row.setOradianReferenceNumber("ref-1");
 
         TransactionRepository repo = mock(TransactionRepository.class);
-        when(repo.findByCustomerPhoneAndTransactionDateBetween(
-                eq(CUSTOMER_PHONE), any(), any(), any(Pageable.class)))
-                .thenReturn(new PageImpl<>(List.of(row), PageRequest.of(0, 20), 1));
+        when(repo.findByCustomerPhone(eq(CUSTOMER_PHONE), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of(row), PageRequest.of(0, 10), 1));
 
         ResponseEntity<ApiResult<TransactionHistoryResponse>> resp =
                 new TransfersController(jwt, mock(OradianMiddlewareClient.class), stubbedTxService(),
                         stubbedLimitService(), repo)
-                        .listTransactions(bearerRequest(VALID_TOKEN), null, null, 0, 20);
+                        .listTransactions(bearerRequest(VALID_TOKEN), null);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         TransactionHistoryResponse data = resp.getBody().getData();
@@ -1011,66 +1010,50 @@ class TransfersControllerTest {
     }
 
     @Test
-    void listTransactions_defaultsTo30DayWindow_endingToday_whenCallerOmitsDates() {
+    void listTransactions_defaults_alwaysReturnsLatest10NewestFirst() {
+        // No fromDate/toDate/page/size on the endpoint anymore — every call
+        // pulls page 0, size 10, sorted createdAt DESC. Lock that in so a
+        // future "let's bring pagination back" change is caught here.
         JwtUtil jwt = mock(JwtUtil.class);
         when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
         when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
 
         TransactionRepository repo = mock(TransactionRepository.class);
-        when(repo.findByCustomerPhoneAndTransactionDateBetween(any(), any(), any(), any(Pageable.class)))
+        when(repo.findByCustomerPhone(any(), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of()));
 
         new TransfersController(jwt, mock(OradianMiddlewareClient.class), stubbedTxService(),
                 stubbedLimitService(), repo)
-                .listTransactions(bearerRequest(VALID_TOKEN), null, null, 0, 20);
-
-        ArgumentCaptor<LocalDate> from = ArgumentCaptor.forClass(LocalDate.class);
-        ArgumentCaptor<LocalDate> to = ArgumentCaptor.forClass(LocalDate.class);
-        verify(repo).findByCustomerPhoneAndTransactionDateBetween(
-                eq(CUSTOMER_PHONE), from.capture(), to.capture(), any(Pageable.class));
-        LocalDate today = LocalDate.now();
-        assertEquals(today, to.getValue());
-        assertEquals(today.minusDays(30), from.getValue(),
-                "default window must be 30 days ending today");
-    }
-
-    @Test
-    void listTransactions_rejects_whenFromDateIsAfterToDate() {
-        JwtUtil jwt = mock(JwtUtil.class);
-        when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
-        when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
-
-        TransactionRepository repo = mock(TransactionRepository.class);
-        TransfersController ctrl = new TransfersController(jwt, mock(OradianMiddlewareClient.class),
-                stubbedTxService(), stubbedLimitService(), repo);
-
-        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
-                () -> ctrl.listTransactions(bearerRequest(VALID_TOKEN),
-                        LocalDate.of(2026, 6, 1), LocalDate.of(2026, 5, 1), 0, 20));
-        assertTrue(ex.getMessage().contains("fromDate must be on or before toDate"));
-        verifyNoInteractions(repo);
-    }
-
-    @Test
-    void listTransactions_clampsPageSizeTo100_evenWhenCallerAsksForMore() {
-        // Guard against a malicious / buggy caller asking for size=1000000
-        // and OOM-ing the response serializer. Max is 100.
-        JwtUtil jwt = mock(JwtUtil.class);
-        when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
-        when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
-
-        TransactionRepository repo = mock(TransactionRepository.class);
-        when(repo.findByCustomerPhoneAndTransactionDateBetween(any(), any(), any(), any(Pageable.class)))
-                .thenReturn(new PageImpl<>(List.of()));
-
-        new TransfersController(jwt, mock(OradianMiddlewareClient.class), stubbedTxService(),
-                stubbedLimitService(), repo)
-                .listTransactions(bearerRequest(VALID_TOKEN), null, null, 0, 999_999);
+                .listTransactions(bearerRequest(VALID_TOKEN), null);
 
         ArgumentCaptor<Pageable> pageable = ArgumentCaptor.forClass(Pageable.class);
-        verify(repo).findByCustomerPhoneAndTransactionDateBetween(
-                any(), any(), any(), pageable.capture());
-        assertEquals(100, pageable.getValue().getPageSize());
+        verify(repo).findByCustomerPhone(eq(CUSTOMER_PHONE), pageable.capture());
+        verify(repo, never()).findByCustomerPhoneAndType(any(), any(), any());
+        assertEquals(0, pageable.getValue().getPageNumber());
+        assertEquals(10, pageable.getValue().getPageSize());
+        var sortOrder = pageable.getValue().getSort().getOrderFor("createdAt");
+        assertEquals(org.springframework.data.domain.Sort.Direction.DESC, sortOrder.getDirection());
+    }
+
+    @Test
+    void listTransactions_typeFilter_routesToTypeFilteredRepo() {
+        // ?type=WITHDRAWAL must call the type-filtered finder, not the
+        // unfiltered one. Guards the routing in the controller's if/else.
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
+        when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+
+        TransactionRepository repo = mock(TransactionRepository.class);
+        when(repo.findByCustomerPhoneAndType(any(), any(), any(Pageable.class)))
+                .thenReturn(new PageImpl<>(List.of()));
+
+        new TransfersController(jwt, mock(OradianMiddlewareClient.class), stubbedTxService(),
+                stubbedLimitService(), repo)
+                .listTransactions(bearerRequest(VALID_TOKEN), TransactionType.WITHDRAWAL);
+
+        verify(repo).findByCustomerPhoneAndType(
+                eq(CUSTOMER_PHONE), eq(TransactionType.WITHDRAWAL), any(Pageable.class));
+        verify(repo, never()).findByCustomerPhone(any(), any(Pageable.class));
     }
 
     @Test
@@ -1084,7 +1067,7 @@ class TransfersControllerTest {
         when(http.getHeader("Authorization")).thenReturn(null);
 
         ResponseEntity<ApiResult<TransactionHistoryResponse>> resp =
-                ctrl.listTransactions(http, null, null, 0, 20);
+                ctrl.listTransactions(http, null);
 
         assertEquals(HttpStatus.UNAUTHORIZED, resp.getStatusCode());
         verifyNoInteractions(repo);
@@ -1101,7 +1084,7 @@ class TransfersControllerTest {
         ResponseEntity<ApiResult<TransactionHistoryResponse>> resp =
                 new TransfersController(jwt, mock(OradianMiddlewareClient.class),
                         stubbedTxService(), stubbedLimitService(), repo)
-                        .listTransactions(bearerRequest(VALID_TOKEN), null, null, 0, 20);
+                        .listTransactions(bearerRequest(VALID_TOKEN), null);
 
         assertEquals(HttpStatus.UNAUTHORIZED, resp.getStatusCode());
         verifyNoInteractions(repo);

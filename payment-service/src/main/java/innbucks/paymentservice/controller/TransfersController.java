@@ -82,14 +82,11 @@ public class TransfersController {
 
     private static final String IDEMPOTENCY_HEADER = "Idempotency-Key";
 
-    // History endpoint pagination caps. Defaults match Spring Data Page
-    // conventions; the max page-size guards against a malicious caller
-    // asking for size=1000000 and OOM-ing the response serializer.
-    private static final int DEFAULT_HISTORY_PAGE_SIZE = 20;
-    private static final int MAX_HISTORY_PAGE_SIZE = 100;
-    // Default date window when the caller doesn't specify one. Keeps the
-    // typical "show me my recent transactions" call cheap.
-    private static final int DEFAULT_HISTORY_WINDOW_DAYS = 30;
+    // GET /payments/transactions returns the latest N rows. Hard-coded
+    // (no client-supplied size) so an attacker can't request size=1M to
+    // dump the whole ledger via brute-force pagination — every legitimate
+    // surface today (home-screen recent-activity list) only needs ~10.
+    private static final int RECENT_HISTORY_SIZE = 10;
 
     private final JwtUtil jwtUtil;
     private final OradianMiddlewareClient oradianMiddlewareClient;
@@ -737,10 +734,9 @@ public class TransfersController {
                     PENDING rows so the FE can render in-flight transfers
                     that haven't yet reconciled with Oradian.
 
-                    Defaults to the last 30 days, newest first, 20 rows
-                    per page. Override via `fromDate` / `toDate` (ISO-8601)
-                    and `page` / `size`. Page size is capped at 100 to
-                    keep the response bounded.
+                    Always returns the latest 10 rows, newest first.
+                    Optionally pass `type` to narrow to TRANSFER or
+                    WITHDRAWAL.
 
                     Sensitive fields (idempotency key, correlation id,
                     internal command IDs) are stripped before serialisation
@@ -748,7 +744,7 @@ public class TransfersController {
                     """)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
-                    description = "Page of transactions, empty array when none in the window",
+                    description = "Latest 10 transactions; empty array when the customer has none",
                     content = @Content(mediaType = "application/json",
                             schema = @Schema(implementation = TransactionHistoryResponse.class),
                             examples = @ExampleObject(name = "Two transactions", value = """
@@ -787,20 +783,20 @@ public class TransfersController {
                                           }
                                         ],
                                         "page": 0,
-                                        "size": 20,
+                                        "size": 10,
                                         "totalElements": 2,
                                         "totalPages": 1
                                       }
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
-                    description = "fromDate is after toDate, dates are in the wrong format, or size > 100",
+                    description = "Unknown `type` value (must be TRANSFER or WITHDRAWAL)",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(name = "Reversed dates", value = """
+                            examples = @ExampleObject(name = "Unknown type", value = """
                                     {
                                       "code": "400 BAD_REQUEST",
-                                      "message": "fromDate must be on or before toDate",
-                                      "data": null
+                                      "message": "Validation failed",
+                                      "data": { "type": "must be one of [TRANSFER, WITHDRAWAL]" }
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
@@ -808,10 +804,10 @@ public class TransfersController {
     })
     public ResponseEntity<ApiResult<TransactionHistoryResponse>> listTransactions(
             HttpServletRequest httpRequest,
-            @RequestParam(name = "fromDate", required = false) LocalDate fromDate,
-            @RequestParam(name = "toDate", required = false) LocalDate toDate,
-            @RequestParam(name = "page", defaultValue = "0") int page,
-            @RequestParam(name = "size", defaultValue = "" + DEFAULT_HISTORY_PAGE_SIZE) int size) {
+            @io.swagger.v3.oas.annotations.Parameter(
+                    description = "Optional. Narrow the history to a single transaction type.",
+                    schema = @Schema(implementation = TransactionType.class))
+            @RequestParam(name = "type", required = false) TransactionType type) {
 
         String authHeader = httpRequest.getHeader("Authorization");
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
@@ -827,32 +823,24 @@ public class TransfersController {
                     "Token has no phoneNumber claim; only CUSTOMER tokens can call /payments/transactions");
         }
 
-        // Default window: last DEFAULT_HISTORY_WINDOW_DAYS days. Caller may
-        // narrow or widen — the only validation we enforce here is "from
-        // before to" + a sane page size; date upper-bound clamping is left
-        // to operational policy.
-        LocalDate today = LocalDate.now();
-        LocalDate effectiveTo = toDate == null ? today : toDate;
-        LocalDate effectiveFrom = fromDate == null
-                ? effectiveTo.minusDays(DEFAULT_HISTORY_WINDOW_DAYS)
-                : fromDate;
-        if (effectiveFrom.isAfter(effectiveTo)) {
-            throw new IllegalArgumentException("fromDate must be on or before toDate");
-        }
-
-        int clampedSize = Math.min(Math.max(size, 1), MAX_HISTORY_PAGE_SIZE);
-        int clampedPage = Math.max(page, 0);
-        var pageable = PageRequest.of(clampedPage, clampedSize,
+        // Always return the latest RECENT_HISTORY_SIZE rows, newest first.
+        // Pagination removed: every caller today only renders the home-screen
+        // recent-activity list, and an unbounded page param invited abuse
+        // (a malicious client could request size=10000 to dump the entire
+        // ledger). Date window dropped for the same reason — "I want the
+        // last 10" needs no date inputs.
+        var pageable = PageRequest.of(0, RECENT_HISTORY_SIZE,
                 Sort.by(Sort.Direction.DESC, "createdAt"));
 
-        Page<Transaction> rows = transactionRepository
-                .findByCustomerPhoneAndTransactionDateBetween(
-                        phoneNumber, effectiveFrom, effectiveTo, pageable);
+        Page<Transaction> rows = type == null
+                ? transactionRepository.findByCustomerPhone(phoneNumber, pageable)
+                : transactionRepository.findByCustomerPhoneAndType(phoneNumber, type, pageable);
         Page<TransactionView> view = rows.map(TransactionView::from);
 
-        log.info("GET /payments/transactions phone={} from={} to={} page={} size={} total={}",
-                MsisdnMasking.mask(phoneNumber), effectiveFrom, effectiveTo,
-                clampedPage, clampedSize, rows.getTotalElements());
+        log.info("GET /payments/transactions phone={} type={} returned={}",
+                MsisdnMasking.mask(phoneNumber),
+                type == null ? "ALL" : type.name(),
+                rows.getNumberOfElements());
 
         return ResponseEntity.ok(
                 ApiResult.ok("Transactions retrieved", TransactionHistoryResponse.from(view)));
