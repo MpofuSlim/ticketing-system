@@ -44,6 +44,55 @@ user-service:
   connect-timeout-ms: ${USER_SERVICE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${USER_SERVICE_READ_TIMEOUT_MS:5000}
 
+# Oradian middleware connection — S2S calls for the loyalty-LPW sync
+# path. Direct pod-to-pod, NOT via the api-gateway. The internal-token
+# is a distinct shared secret from `innbucks.internal-api-token`
+# (which is OUR ingress secret for /loyalty/internal/** webhooks).
+# Mixing them up gets you a 401 from Oradian middleware.
+oradian-middleware:
+  base-url: ${ORADIAN_MIDDLEWARE_URL:http://localhost:8090}
+  connect-timeout-ms: ${ORADIAN_MIDDLEWARE_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${ORADIAN_MIDDLEWARE_READ_TIMEOUT_MS:10000}
+  internal-token: ${ORADIAN_INTERNAL_TOKEN:change-me-internal-token-change-me-internal-token}
+
+# Resilience4j retry + circuit-breaker around OradianMiddlewareClient.
+# Same shape as payment-service's config so the two services degrade
+# identically when the middleware / Oradian is unavailable.
+#
+# Retry: 3 attempts with exponential 500ms / 1s / 2s — caps the total
+# customer-facing wait at ~3.5s before we surface 502. Only retries
+# on OradianMiddlewareTransientException (5xx, network, empty body)
+# so a 4xx validation rejection (idempotency_conflict, insufficient
+# funds) propagates on the first attempt.
+#
+# Circuit breaker: 50% failure rate over a 20-call sliding window
+# trips OPEN for 30s, then half-opens with 3 trial calls. Only
+# transient failures count toward tripping — a 4xx storm is a
+# customer-side problem, not an upstream-down signal.
+resilience4j:
+  retry:
+    instances:
+      oradian-middleware:
+        max-attempts: 3
+        wait-duration: 500ms
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2
+        retry-exceptions:
+          - com.innbucks.loyaltyservice.client.OradianMiddlewareTransientException
+  circuitbreaker:
+    instances:
+      oradian-middleware:
+        register-health-indicator: true
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+        record-exceptions:
+          - com.innbucks.loyaltyservice.client.OradianMiddlewareTransientException
+
 loyalty:
   voucher:
     secret: ${LOYALTY_VOUCHER_SECRET:change-me-voucher-secret-change-me-voucher-secret}

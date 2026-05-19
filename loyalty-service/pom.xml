@@ -81,6 +81,14 @@
             <optional>true</optional>
         </dependency>
 
+        <!-- Resilience4j: retry + circuit-breaker around the
+             OradianMiddlewareClient. Same pattern + config shape as
+             payment-service. -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-circuitbreaker-resilience4j</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test-classic</artifactId>
