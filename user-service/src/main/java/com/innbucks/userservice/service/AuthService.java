@@ -10,6 +10,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -29,6 +30,7 @@ public class AuthService {
     private final JwtUtil jwtUtil;
     private final TokenRevocationService tokenRevocationService;
     private final RefreshTokenService refreshTokenService;
+    private final RefreshTokenRepository refreshTokenRepository;
 
     @Transactional
     public AuthResponseDTO register(RegisterRequestDTO request) {
@@ -87,6 +89,7 @@ public class AuthService {
                 .build();
     }
 
+    @Transactional
     public AuthResponseDTO login(LoginRequestDTO request) {
         User user = resolveUser(request)
                 .orElseThrow(() -> new RuntimeException("Invalid credentials"));
@@ -97,6 +100,21 @@ public class AuthService {
         if (!user.isActive()) {
             throw new RuntimeException("Account is not active. Please contact a SUPER_ADMIN for approval.");
         }
+
+        // Single-active-session: bump the token version BEFORE minting and
+        // revoke every still-live refresh-token row for this user. The
+        // version bump invalidates every access token previously issued
+        // (JwtFilter compares the claim to users.token_version on each
+        // request); the refresh-revoke prevents the previous device from
+        // extending its session via /auth/refresh. Together they enforce
+        // "last login wins" — and the @Transactional means both writes
+        // commit atomically.
+        long newVersion = user.getTokenVersion() + 1;
+        user.setTokenVersion(newVersion);
+        userRepository.save(user);
+        int revokedFamilies = refreshTokenRepository.revokeAllForUser(user.getId(), Instant.now());
+        log.info("Login bumped tokenVersion userId={} newVersion={} revokedRefreshTokens={}",
+                user.getId(), newVersion, revokedFamilies);
 
         return issueToken(user);
     }
@@ -206,7 +224,7 @@ public class AuthService {
 
         String newToken = jwtUtil.generateToken(subject, roleNames, new ArrayList<>(microservices),
                 tier, verified, user.getPhoneNumber(), loyaltyMerchantId, loyaltyShopId,
-                firstName, middleName, lastName);
+                firstName, middleName, lastName, user.getTokenVersion());
 
         return AuthResponseDTO.builder()
                 .token(newToken)

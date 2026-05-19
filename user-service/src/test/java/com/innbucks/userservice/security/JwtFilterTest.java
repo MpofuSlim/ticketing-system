@@ -11,6 +11,8 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 class JwtFilterTest {
@@ -25,6 +27,10 @@ class JwtFilterTest {
         ReflectionTestUtils.setField(jwtUtil, "secret", "test-test-test-test-test-test-test-test");
         ReflectionTestUtils.setField(jwtUtil, "expiration", 3_600_000L);
         tokenRevocationService = mock(com.innbucks.userservice.service.TokenRevocationService.class);
+        // Default to "version is current" so tests that don't care about the
+        // single-session gate don't have to stub it — the dedicated test
+        // for SESSION_SUPERSEDED overrides this to false.
+        when(tokenRevocationService.isTokenVersionCurrent(anyString(), anyLong())).thenReturn(true);
         filter = new JwtFilter(jwtUtil, tokenRevocationService);
         SecurityContextHolder.clearContext();
     }
@@ -137,5 +143,30 @@ class JwtFilterTest {
     void shouldNotFilter_returnsFalseForBusinessPaths() {
         MockHttpServletRequest req = new MockHttpServletRequest("GET", "/agents/me");
         assertFalse(filter.shouldNotFilter(req));
+    }
+
+    @Test
+    void staleTokenVersion_returns401SessionSuperseded_andHaltsChain() throws Exception {
+        // Pin the single-active-session gate: a token whose tokenVersion claim
+        // is behind the user's current users.token_version (because a newer
+        // login bumped it) must be rejected at the filter with 401
+        // SESSION_SUPERSEDED. Without this, a previously-logged-in device
+        // would keep working in user-service after the customer logged in
+        // on a new device.
+        String token = jwtUtil.generateToken("u@example.com", "CUSTOMER", 2, false);
+        when(tokenRevocationService.isTokenVersionCurrent(anyString(), anyLong())).thenReturn(false);
+
+        MockHttpServletRequest req = new MockHttpServletRequest("GET", "/agents/me");
+        req.addHeader("Authorization", "Bearer " + token);
+        MockHttpServletResponse res = new MockHttpServletResponse();
+        FilterChain chain = mock(FilterChain.class);
+
+        filter.doFilterInternal(req, res, chain);
+
+        assertNull(SecurityContextHolder.getContext().getAuthentication());
+        assertEquals(401, res.getStatus());
+        assertTrue(res.getContentAsString().contains("SESSION_SUPERSEDED"),
+                "response must surface SESSION_SUPERSEDED so FE can distinguish from INVALID_TOKEN / TOKEN_REVOKED");
+        verify(chain, never()).doFilter(req, res);
     }
 }

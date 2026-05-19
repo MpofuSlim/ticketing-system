@@ -5,6 +5,7 @@ import com.innbucks.userservice.entity.CustomerProfile;
 import com.innbucks.userservice.entity.TenantProfile;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.repository.CustomerProfileRepository;
+import com.innbucks.userservice.repository.RefreshTokenRepository;
 import com.innbucks.userservice.repository.TenantProfileRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.security.JwtUtil;
@@ -21,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
@@ -34,7 +36,8 @@ class AuthServiceTest {
         return new AuthService(userRepo, tenantRepo,
                 mock(CustomerProfileRepository.class), encoder, jwt,
                 mock(TokenRevocationService.class),
-                mock(RefreshTokenService.class));
+                mock(RefreshTokenService.class),
+                mock(RefreshTokenRepository.class));
     }
 
     private AuthService newService(UserRepository userRepo,
@@ -44,7 +47,25 @@ class AuthServiceTest {
                                    JwtUtil jwt) {
         return new AuthService(userRepo, tenantRepo, customerRepo, encoder, jwt,
                 mock(TokenRevocationService.class),
-                mock(RefreshTokenService.class));
+                mock(RefreshTokenService.class),
+                mock(RefreshTokenRepository.class));
+    }
+
+    /**
+     * Overload that lets a test pass an explicit {@link RefreshTokenRepository}
+     * mock so it can verify the bulk-revoke call that /auth/login fires for
+     * single-active-session enforcement.
+     */
+    private AuthService newService(UserRepository userRepo,
+                                   TenantProfileRepository tenantRepo,
+                                   CustomerProfileRepository customerRepo,
+                                   PasswordEncoder encoder,
+                                   JwtUtil jwt,
+                                   RefreshTokenRepository refreshRepo) {
+        return new AuthService(userRepo, tenantRepo, customerRepo, encoder, jwt,
+                mock(TokenRevocationService.class),
+                mock(RefreshTokenService.class),
+                refreshRepo);
     }
 
     private RegisterRequestDTO baseRequest(String email, String phone, String... bundles) {
@@ -179,7 +200,7 @@ class AuthServiceTest {
         // MERCHANT_ADMIN — JwtUtil emits no name claims for staff roles.
         when(jwt.generateToken(eq("u@example.com"), eq(List.of("MERCHANT_ADMIN")),
                 eq(List.of("loyalty", "payments")), eq(4), eq(true), isNull(), isNull(), isNull(),
-                isNull(), isNull(), isNull())).thenReturn("tok");
+                isNull(), isNull(), isNull(), anyLong())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("u@example.com"); req.setPassword("pw");
@@ -207,7 +228,7 @@ class AuthServiceTest {
         when(userRepo.findByEmail("admin@innbucks.co.zw")).thenReturn(Optional.of(user));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
         when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), isNull(), isNull(), isNull(),
-                any(), any(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("admin@innbucks.co.zw"); req.setPassword("pw");
@@ -221,7 +242,7 @@ class AuthServiceTest {
         // Verify the JWT was issued with the expanded set covering every microservice.
         ArgumentCaptor<List<String>> servicesCaptor = ArgumentCaptor.forClass(List.class);
         verify(jwt).generateToken(any(), any(), servicesCaptor.capture(), anyInt(), anyBoolean(), isNull(), isNull(), isNull(),
-                any(), any(), any());
+                any(), any(), any(), anyLong());
         List<String> services = servicesCaptor.getValue();
         assertTrue(services.contains("events"));
         assertTrue(services.contains("seats"));
@@ -248,7 +269,7 @@ class AuthServiceTest {
         when(encoder.matches("pw", "hashed")).thenReturn(true);
         when(jwt.generateToken(eq("0777000099"), eq(List.of("CUSTOMER")),
                 any(), eq(2), eq(false), eq("0777000099"), isNull(), isNull(),
-                any(), any(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("0777000099"); req.setPassword("pw");
@@ -328,7 +349,7 @@ class AuthServiceTest {
         when(encoder.matches(any(), any())).thenReturn(true);
         when(jwt.generateToken(eq("u@example.com"), eq(List.of("CUSTOMER")),
                 any(), anyInt(), anyBoolean(), isNull(), isNull(), isNull(),
-                any(), any(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("u@example.com"); req.setPassword("pw");
@@ -338,5 +359,54 @@ class AuthServiceTest {
 
         assertEquals("tok", resp.getToken());
         assertFalse(resp.isMfaRequired());
+    }
+
+    @Test
+    void login_bumpsTokenVersion_andRevokesAllPriorRefreshTokens() {
+        // Single-active-session contract: a fresh login must invalidate
+        // every previously-issued token for this user. The mechanism is
+        // (1) increment users.token_version (every prior access token's
+        // tokenVersion claim now mismatches, JwtFilter rejects them),
+        // and (2) bulk-revoke the user's still-live refresh-token rows
+        // (the previous device can't extend its session via /auth/refresh).
+        UserRepository userRepo = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        RefreshTokenRepository refreshRepo = mock(RefreshTokenRepository.class);
+        when(refreshRepo.revokeAllForUser(anyLong(), any())).thenReturn(2);
+
+        User user = User.builder()
+                .id(42L)
+                .email("u@example.com")
+                .firstName("U").lastName("U")
+                .phoneNumber("0777000042")
+                .password("hashed")
+                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .defaultServices(new LinkedHashSet<>(List.of("loyalty")))
+                .active(true)
+                .tokenVersion(7L) // already had 7 prior sessions
+                .build();
+        when(userRepo.findByEmail("u@example.com")).thenReturn(Optional.of(user));
+        when(encoder.matches("pw", "hashed")).thenReturn(true);
+        when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+                any(), any(), any(), anyLong())).thenReturn("tok");
+
+        LoginRequestDTO req = new LoginRequestDTO();
+        req.setIdentifier("u@example.com"); req.setPassword("pw");
+
+        newService(userRepo, mock(TenantProfileRepository.class),
+                mock(CustomerProfileRepository.class), encoder, jwt, refreshRepo).login(req);
+
+        assertEquals(8L, user.getTokenVersion(), "login must bump token_version by 1");
+        verify(userRepo).save(user);
+        verify(refreshRepo).revokeAllForUser(eq(42L), any());
+
+        // The fresh access token must carry the BUMPED version (8), not the
+        // pre-login one (7) — otherwise the very token we just issued would
+        // be rejected by JwtFilter on the next request.
+        ArgumentCaptor<Long> versionCaptor = ArgumentCaptor.forClass(Long.class);
+        verify(jwt).generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+                any(), any(), any(), versionCaptor.capture());
+        assertEquals(8L, versionCaptor.getValue());
     }
 }

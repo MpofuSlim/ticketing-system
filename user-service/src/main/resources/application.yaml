@@ -34,7 +34,14 @@ spring:
 
 jwt:
   secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
-  expiration: ${JWT_EXPIRATION_MS:86400000}
+  # Access-token TTL is 15 min. Short on purpose: the single-active-session
+  # gate (users.token_version) gives immediate revocation inside user-service,
+  # but downstream services (payment-service, booking-service, etc.) validate
+  # the JWT signature only — they don't know about token_version. A 15 min
+  # ceiling caps the window where a superseded session can still hit those
+  # services to ~15 min. The FE refreshes silently via /auth/refresh against
+  # the 7-day refresh token, so the customer never sees this expiry.
+  expiration: ${JWT_EXPIRATION_MS:900000}
   # Refresh tokens are long-lived, claim-light JWTs (subject + type=refresh only).
   # Default 7 days; clients exchange them at /auth/refresh for a fresh access token.
   refresh-expiration: ${JWT_REFRESH_EXPIRATION_MS:604800000}

@@ -70,7 +70,8 @@ public class JwtUtil {
     public String generateToken(String email, Collection<String> roles, Collection<String> defaultServices,
                                 int tier, boolean verified, String phoneNumber,
                                 UUID merchantId, UUID shopId,
-                                String firstName, String middleName, String lastName) {
+                                String firstName, String middleName, String lastName,
+                                long tokenVersion) {
         List<String> roleList = roles == null ? List.of()
                 : roles.stream().filter(r -> r != null && !r.isBlank()).collect(Collectors.toList());
         List<String> serviceList = defaultServices == null ? List.of()
@@ -81,7 +82,12 @@ public class JwtUtil {
                 .claim("roles", roleList)
                 .claim("services", serviceList)
                 .claim("tier", tier)
-                .claim("verified", verified);
+                .claim("verified", verified)
+                // Per-user session epoch. JwtFilter rejects tokens whose
+                // value is stale relative to users.token_version — that's
+                // how a new login revokes the previous device's session
+                // without a per-token denylist entry.
+                .claim("tokenVersion", tokenVersion);
         if (phoneNumber != null && !phoneNumber.isBlank()) {
             builder.claim("phoneNumber", phoneNumber);
         }
@@ -112,6 +118,21 @@ public class JwtUtil {
                 .expiration(new Date(System.currentTimeMillis() + expiration))
                 .signWith(getSigningKey(), Jwts.SIG.HS256)
                 .compact();
+    }
+
+    /**
+     * Legacy 11-arg overload (no {@code tokenVersion}). Kept so existing
+     * tests that mint synthetic tokens don't break; defaults the version
+     * to 0 to match the {@code users.token_version DEFAULT 0} column.
+     * Production code (AuthService) calls the 12-arg form directly with
+     * the User row's current value.
+     */
+    public String generateToken(String email, Collection<String> roles, Collection<String> defaultServices,
+                                int tier, boolean verified, String phoneNumber,
+                                UUID merchantId, UUID shopId,
+                                String firstName, String middleName, String lastName) {
+        return generateToken(email, roles, defaultServices, tier, verified, phoneNumber,
+                merchantId, shopId, firstName, middleName, lastName, 0L);
     }
 
     public String generateToken(String email, Collection<String> roles, Collection<String> defaultServices,
@@ -172,6 +193,29 @@ public class JwtUtil {
 
     public Integer extractTier(String token) {
         return getClaims(token).get("tier", Integer.class);
+    }
+
+    /**
+     * Per-user session epoch. JwtFilter compares this against
+     * {@code users.token_version} on each authenticated request; a stale
+     * value means a newer login has invalidated this token.
+     *
+     * <p>Returns {@code 0L} when the claim is missing or unparseable —
+     * matches the column default so a token minted before the migration
+     * landed (or by a test helper using a shorter generateToken overload)
+     * still passes the check on the first request after deploy. The next
+     * login bumps the user's column to 1 and any stale tokens are
+     * invalidated from then on.
+     */
+    public long extractTokenVersion(String token) {
+        Object raw = getClaims(token).get("tokenVersion");
+        if (raw instanceof Number n) return n.longValue();
+        if (raw == null) return 0L;
+        try {
+            return Long.parseLong(raw.toString());
+        } catch (NumberFormatException e) {
+            return 0L;
+        }
     }
 
     /** Optional CUSTOMER display name claim. {@code null} for staff tokens or tier-1 customers. */

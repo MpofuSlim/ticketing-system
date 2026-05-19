@@ -68,6 +68,17 @@ public class User {
     @Column(updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now();
 
+    // Monotonically increasing per-user counter ("session epoch"). Every
+    // access JWT carries the value at mint time; JwtFilter rejects tokens
+    // whose claim is stale relative to the DB. /auth/login bumps this in
+    // the same transaction that revokes all prior refresh-token families,
+    // so a second login on any device immediately invalidates the first
+    // device's tokens inside user-service (and within 15 min everywhere
+    // else, once the access token's natural TTL elapses).
+    @Column(name = "token_version", nullable = false)
+    @Builder.Default
+    private long tokenVersion = 0;
+
     public boolean hasRole(Role role) {
         return roles != null && roles.contains(role);
     }

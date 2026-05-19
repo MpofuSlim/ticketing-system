@@ -2,6 +2,7 @@ package com.innbucks.userservice.service;
 
 import com.innbucks.userservice.entity.RevokedToken;
 import com.innbucks.userservice.repository.RevokedTokenRepository;
+import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.security.JwtUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -14,6 +15,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.HexFormat;
+import java.util.Optional;
 
 @Service
 @RequiredArgsConstructor
@@ -21,6 +23,7 @@ import java.util.HexFormat;
 public class TokenRevocationService {
 
     private final RevokedTokenRepository revokedTokenRepository;
+    private final UserRepository userRepository;
     private final JwtUtil jwtUtil;
 
     @Transactional
@@ -45,6 +48,20 @@ public class TokenRevocationService {
 
     public boolean isRevoked(String token) {
         return revokedTokenRepository.existsByTokenHash(hash(token));
+    }
+
+    /**
+     * True when the JWT's {@code tokenVersion} claim matches the user's
+     * current {@code users.token_version} value (single-active-session
+     * gate). Returns false on a stale token AND on a token whose subject
+     * doesn't resolve to a user — the latter is treated as "session ended"
+     * rather than "user not found" so the filter response stays uniform.
+     */
+    @Transactional(readOnly = true)
+    public boolean isTokenVersionCurrent(String subject, long tokenVersion) {
+        if (subject == null || subject.isBlank()) return false;
+        Optional<Long> current = userRepository.findTokenVersionBySubject(subject);
+        return current.map(v -> v == tokenVersion).orElse(false);
     }
 
     @Scheduled(fixedDelayString = "PT1H")
