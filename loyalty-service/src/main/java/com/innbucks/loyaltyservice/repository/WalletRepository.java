@@ -2,6 +2,8 @@ package com.innbucks.loyaltyservice.repository;
 
 import com.innbucks.loyaltyservice.entity.Wallet;
 import jakarta.persistence.LockModeType;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
@@ -31,4 +33,11 @@ public interface WalletRepository extends JpaRepository<Wallet, UUID> {
     @Query("SELECT w.userId, COALESCE(SUM(w.balance), 0) FROM Wallet w " +
             "WHERE w.userId IN :userIds GROUP BY w.userId")
     List<Object[]> sumBalanceGroupedByUserId(@Param("userIds") List<UUID> userIds);
+
+    /**
+     * Paged scan of wallets that have been bound to an Oradian LPW
+     * account — used by the nightly balance-audit job. Pagination so a
+     * 10M-wallet deployment doesn't OOM the loyalty pod.
+     */
+    Page<Wallet> findByOradianAccountIdIsNotNull(Pageable pageable);
 }
