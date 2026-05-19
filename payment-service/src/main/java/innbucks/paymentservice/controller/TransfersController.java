@@ -36,7 +36,7 @@ import java.util.List;
 
 /**
  * Public, JWT-authenticated money-movement endpoints — currently
- * {@code POST /payments/deposit} (transfer between two Oradian deposit
+ * {@code POST /payments/transfer} (transfer between two Oradian deposit
  * accounts) and {@code POST /payments/withdraw} (record a withdrawal
  * against a deposit account). Both require a customer bearer JWT and
  * both gate on the same Oradian-backed ownership check before forwarding
@@ -74,9 +74,9 @@ public class TransfersController {
     private final OradianMiddlewareClient oradianMiddlewareClient;
     private final TransactionService transactionService;
 
-    @PostMapping("/deposit")
+    @PostMapping("/transfer")
     @SecurityRequirement(name = "bearerAuth")
-    @Operation(summary = "Submit a deposit account transfer (authenticated)",
+    @Operation(summary = "Submit a deposit-account transfer (authenticated)",
             description = """
                     Submits a money transfer between two Oradian deposit accounts on
                     behalf of the authenticated customer. The source account
@@ -141,7 +141,7 @@ public class TransfersController {
                                     @ExampleObject(name = "Missing Idempotency-Key", value = """
                                             {
                                               "code": "400 BAD_REQUEST",
-                                              "message": "Idempotency-Key header is required for /payments/deposit",
+                                              "message": "Idempotency-Key header is required for /payments/transfer",
                                               "data": null,
                                               "errorCode": "idempotency_key_required"
                                             }
@@ -187,7 +187,7 @@ public class TransfersController {
                                     @ExampleObject(name = "No phoneNumber claim", value = """
                                             {
                                               "code": "401 UNAUTHORIZED",
-                                              "message": "Token has no phoneNumber claim; only CUSTOMER tokens can call /payments/deposit",
+                                              "message": "Token has no phoneNumber claim; only CUSTOMER tokens can call /payments/transfer",
                                               "data": null
                                             }
                                             """)
@@ -213,25 +213,25 @@ public class TransfersController {
                                     }
                                     """)))
     })
-    public ResponseEntity<ApiResult<DepositTransferResponse>> transferDeposit(
+    public ResponseEntity<ApiResult<DepositTransferResponse>> transfer(
             HttpServletRequest httpRequest,
             @Valid @RequestBody DepositTransferRequest request) {
 
         String authHeader = httpRequest.getHeader("Authorization");
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-            log.warn("Bearer token missing on POST /payments/deposit");
+            log.warn("Bearer token missing on POST /payments/transfer");
             return unauthorized("Missing Bearer token");
         }
         String token = authHeader.substring(7);
         if (!jwtUtil.isTokenValid(token)) {
-            log.warn("Invalid bearer token on POST /payments/deposit");
+            log.warn("Invalid bearer token on POST /payments/transfer");
             return unauthorized("Invalid or expired bearer token");
         }
         String phoneNumber = jwtUtil.extractPhoneNumber(token);
         if (phoneNumber == null) {
-            log.warn("Bearer token has no phoneNumber claim on POST /payments/deposit");
+            log.warn("Bearer token has no phoneNumber claim on POST /payments/transfer");
             return unauthorized(
-                    "Token has no phoneNumber claim; only CUSTOMER tokens can call /payments/deposit");
+                    "Token has no phoneNumber claim; only CUSTOMER tokens can call /payments/transfer");
         }
 
         // Ownership check: source account MUST be one of this customer's
@@ -245,7 +245,7 @@ public class TransfersController {
                 .filter(id -> id != null && !id.isBlank())
                 .anyMatch(id -> id.equals(request.getFromAccountId()));
         if (!ownsSource) {
-            log.warn("Ownership rejection on POST /payments/deposit phone={} from={}",
+            log.warn("Ownership rejection on POST /payments/transfer phone={} from={}",
                     phoneNumber, request.getFromAccountId());
             return ResponseEntity.status(HttpStatus.FORBIDDEN).body(
                     ApiResult.<DepositTransferResponse>builder()
@@ -278,7 +278,7 @@ public class TransfersController {
         // for reconciliation to pick up — much better than the orphan-
         // in-upstream class of bug where the local rolls back silently.
         Transaction ledger = transactionService.openPending(Transaction.builder()
-                .transactionType(TransactionType.DEPOSIT)
+                .transactionType(TransactionType.TRANSFER)
                 .customerPhone(phoneNumber)
                 .sourceAccountId(request.getFromAccountId())
                 .destinationAccountId(request.getToAccountId())
@@ -288,7 +288,7 @@ public class TransfersController {
                 .idempotencyKey(httpRequest.getHeader(IDEMPOTENCY_HEADER))
                 .build());
 
-        log.info("POST /payments/deposit txId={} from={} to={} amount={} txnDate={}",
+        log.info("POST /payments/transfer txId={} from={} to={} amount={} txnDate={}",
                 ledger.getId(), request.getFromAccountId(), request.getToAccountId(),
                 request.getAmount(), request.getTransactionDate());
 
@@ -345,7 +345,7 @@ public class TransfersController {
 
                     The accepted token is the standard customer access token
                     minted by user-service (same one used for
-                    `/auth/customer/deposits` and `/payments/deposit`). The
+                    `/auth/customer/deposits` and `/payments/transfer`). The
                     `Idempotency-Key` header is **required** — payment-service
                     caches the 200 response for 24h per (method, path, key)
                     and refuses replays that reuse a key with a different
@@ -487,7 +487,7 @@ public class TransfersController {
         }
 
         // Ownership check: accountID MUST be one of this customer's Oradian
-        // deposit accounts — same upstream as /payments/deposit and
+        // deposit accounts — same upstream as /payments/transfer and
         // /auth/customer/deposits so the view of "your accounts" is consistent.
         List<DepositAccount> deposits = oradianMiddlewareClient.getDepositsForMsisdn(phoneNumber);
         boolean ownsAccount = deposits.stream()

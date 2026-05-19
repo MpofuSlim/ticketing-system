@@ -21,7 +21,7 @@ class TransactionServiceTest {
 
     private static Transaction draftDeposit() {
         return Transaction.builder()
-                .transactionType(TransactionType.DEPOSIT)
+                .transactionType(TransactionType.TRANSFER)
                 .customerPhone("+254777224008")
                 .sourceAccountId("A000001")
                 .destinationAccountId("A000002")

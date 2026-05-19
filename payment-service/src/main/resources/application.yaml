@@ -51,7 +51,7 @@ loyalty-service:
   read-timeout-ms: ${LOYALTY_SERVICE_READ_TIMEOUT_MS:5000}
 
 # Oradian middleware is called for deposit-account lookups (ownership checks
-# on POST /payments/deposit) and to forward the actual deposit transfer.
+# on POST /payments/transfer) and to forward the actual deposit-account transfer.
 # Direct pod-to-pod; the shared secret below must match Oradian middleware's
 # innbucks.internal-api.token. It is a DIFFERENT secret from
 # innbucks.internal-api-token (loyalty-service shared secret) — keep them
@@ -70,7 +70,7 @@ innbucks:
 # Verify-only JWT secret. payment-service does NOT mint tokens — user-service
 # is the issuer. This must match user-service's jwt.secret exactly; tokens
 # signed by user-service are validated here for the authenticated
-# POST /payments/deposit endpoint (the only one that decodes a bearer JWT).
+# POST /payments/transfer endpoint (the only one that decodes a bearer JWT).
 jwt:
   secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
 

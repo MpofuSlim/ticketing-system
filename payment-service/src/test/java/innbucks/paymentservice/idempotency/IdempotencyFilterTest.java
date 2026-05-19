@@ -72,7 +72,7 @@ class IdempotencyFilterTest {
                 sha256("{\"amount\":\"1.00\"}"));
         when(store.get(any())).thenReturn(Optional.of(cached));
 
-        MockHttpServletRequest req = postWithBody("/payments/deposit", "{\"amount\":\"1000.00\"}");
+        MockHttpServletRequest req = postWithBody("/payments/transfer", "{\"amount\":\"1000.00\"}");
         req.addHeader("Idempotency-Key", "abc-123");
         MockHttpServletResponse res = new MockHttpServletResponse();
         FilterChain chain = mock(FilterChain.class);
@@ -153,7 +153,7 @@ class IdempotencyFilterTest {
     void shouldNotFilter_bypassesOptionalPath_whenHeaderIsMissing() {
         // /payments/shop-checkout is not in REQUIRED_PATHS — a missing
         // header is still legal there (existing FE behavior). Only the
-        // money-movement paths (/payments/deposit, /payments/withdraw)
+        // money-movement paths (/payments/transfer, /payments/withdraw)
         // require the header.
         IdempotencyFilter filter = new IdempotencyFilter(mock(IdempotencyStore.class));
 
@@ -176,9 +176,9 @@ class IdempotencyFilterTest {
     }
 
     @Test
-    void returns400_whenIdempotencyKeyMissingOnDepositPath() throws Exception {
+    void returns400_whenIdempotencyKeyMissingOnTransferPath() throws Exception {
         IdempotencyFilter filter = new IdempotencyFilter(mock(IdempotencyStore.class));
-        MockHttpServletRequest req = postWithBody("/payments/deposit", "{}");
+        MockHttpServletRequest req = postWithBody("/payments/transfer", "{}");
         MockHttpServletResponse res = new MockHttpServletResponse();
         FilterChain chain = mock(FilterChain.class);
 
@@ -209,7 +209,7 @@ class IdempotencyFilterTest {
         // A header present-but-blank is treated the same as missing — the
         // FE shouldn't get a free pass by sending "Idempotency-Key: ".
         IdempotencyFilter filter = new IdempotencyFilter(mock(IdempotencyStore.class));
-        MockHttpServletRequest req = postWithBody("/payments/deposit", "{}");
+        MockHttpServletRequest req = postWithBody("/payments/transfer", "{}");
         req.addHeader("Idempotency-Key", "   ");
         MockHttpServletResponse res = new MockHttpServletResponse();
 

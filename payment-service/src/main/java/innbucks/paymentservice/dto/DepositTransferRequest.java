@@ -12,7 +12,7 @@ import lombok.NoArgsConstructor;
 import java.time.LocalDate;
 
 /**
- * Request body for POST /payments/deposit (FE → payment-service) and the
+ * Request body for POST /payments/transfer (FE → payment-service) and the
  * payload payment-service forwards to Oradian middleware's
  * SubmitDepositAccountTransferRequest (which in turn mirrors Oradian's
  * instafin.SubmitDepositAccountTransfer). `amount` is a String because
@@ -54,7 +54,7 @@ public class DepositTransferRequest {
 
     @JsonProperty(access = JsonProperty.Access.READ_ONLY)
     @Schema(accessMode = Schema.AccessMode.READ_ONLY,
-            description = "Server-stamped on POST /payments/deposit; clients do not supply this. " +
+            description = "Server-stamped on POST /payments/transfer; clients do not supply this. " +
                     "Included on the response (and on the outbound call to Oradian middleware).",
             example = "2026-05-18")
     private LocalDate transactionDate;

@@ -15,7 +15,7 @@ import java.nio.charset.StandardCharsets;
  * is the sole issuer. This bean parses a bearer JWT signed with the shared
  * HS256 secret and exposes the claims payment-service cares about (today:
  * just the phoneNumber claim used for ownership checks on the public
- * /payments/deposit endpoint).
+ * /payments/transfer endpoint).
  *
  * <p>Keeps API surface minimal: no token generation, no role/tier extraction.
  * If a second authenticated endpoint lands here later, add only the claim

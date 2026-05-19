@@ -25,7 +25,7 @@ import java.util.Optional;
 
 /**
  * Talks to Oradian middleware: deposit-account ownership lookups for
- * POST /payments/deposit (via GET /internal/customers/{msisdn}/deposits)
+ * POST /payments/transfer (via GET /internal/customers/{msisdn}/deposits)
  * and the actual transfer (POST /internal/transfers/deposit, which calls
  * Oradian's instafin.SubmitDepositAccountTransfer). Direct pod-to-pod —
  * never via the api-gateway. The X-Internal-Token shared secret comes from

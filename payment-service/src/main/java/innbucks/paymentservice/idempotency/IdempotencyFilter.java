@@ -62,7 +62,7 @@ public class IdempotencyFilter extends OncePerRequestFilter {
      * opt-in for backward compatibility.
      */
     static final Set<String> REQUIRED_PATHS = Set.of(
-            "/payments/deposit",
+            "/payments/transfer",
             "/payments/withdraw"
     );
 
@@ -110,7 +110,7 @@ public class IdempotencyFilter extends OncePerRequestFilter {
 
         // Namespace by method + path so the same key used for different
         // endpoints doesn't collide (e.g. the client reusing one UUID for
-        // both POST /payments/deposit and POST /payments/withdraw).
+        // both POST /payments/transfer and POST /payments/withdraw).
         String cacheKey = request.getMethod() + " " + path + "#" + key;
 
         var cached = store.get(cacheKey);
