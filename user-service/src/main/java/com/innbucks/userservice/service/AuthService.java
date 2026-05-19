@@ -59,6 +59,24 @@ public class AuthService {
         }
     }
 
+    /**
+     * Raised on every "Invalid credentials" outcome (unknown identifier
+     * OR wrong password). A dedicated subclass lets the @Transactional
+     * {@code noRollbackFor} preserve the failed_login_attempts /
+     * locked_until writes that fire on the wrong-password path —
+     * Spring's default rollback-on-RuntimeException would otherwise
+     * undo them and the lockout would never actually persist.
+     * The 400 response shape matches whatever the generic
+     * RuntimeException handler renders ("Invalid credentials" in the
+     * message field) so the lockout-transition response stays
+     * indistinguishable from wrong-pw-against-nonexistent-account.
+     */
+    public static class InvalidCredentialsException extends RuntimeException {
+        public InvalidCredentialsException() {
+            super("Invalid credentials");
+        }
+    }
+
     @Transactional
     public AuthResponseDTO register(RegisterRequestDTO request) {
         log.info("Starting system user registration email={} defaultServices={}",
@@ -116,10 +134,21 @@ public class AuthService {
                 .build();
     }
 
-    @Transactional
+    // noRollbackFor: the wrong-password branch persists the
+    // failed_login_attempts increment (and possibly the locked_until
+    // stamp) and THEN throws InvalidCredentialsException so the caller
+    // sees a 400. Without this, Spring's default rollback would undo
+    // the save and the lockout counter would never accumulate.
+    // AccountLockedException doesn't actually need to suppress rollback
+    // (it throws without any writes) but is listed for clarity in case
+    // we add side-effects later.
+    @Transactional(noRollbackFor = {
+            InvalidCredentialsException.class,
+            AccountLockedException.class
+    })
     public AuthResponseDTO login(LoginRequestDTO request, String deviceId) {
         User user = resolveUser(request)
-                .orElseThrow(() -> new RuntimeException("Invalid credentials"));
+                .orElseThrow(InvalidCredentialsException::new);
 
         Instant now = Instant.now();
 
@@ -156,8 +185,9 @@ public class AuthService {
             // Same response shape as wrong-pw on a nonexistent account so
             // the lockout-triggering attempt doesn't become an oracle for
             // "this identifier exists". Subsequent attempts will hit the
-            // 423 branch above.
-            throw new RuntimeException("Invalid credentials");
+            // 423 branch above. The @Transactional noRollbackFor on this
+            // method keeps the save above committed despite the throw.
+            throw new InvalidCredentialsException();
         }
         if (!user.isActive()) {
             throw new RuntimeException("Account is not active. Please contact a SUPER_ADMIN for approval.");
