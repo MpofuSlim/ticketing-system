@@ -8,6 +8,7 @@ import innbucks.paymentservice.dto.DepositTransferRequest;
 import innbucks.paymentservice.dto.DepositTransferResponse;
 import innbucks.paymentservice.dto.WithdrawalRequest;
 import innbucks.paymentservice.dto.WithdrawalResponse;
+import innbucks.paymentservice.util.MsisdnMasking;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
@@ -176,12 +177,13 @@ public class OradianMiddlewareClient {
             String detail = parseErrorMessage(e.getResponseBodyAsString())
                     .orElse(e.getStatusText());
             log.warn("Oradian deposits lookup failed msisdn={} status={} detail={}",
-                    msisdn, e.getStatusCode().value(), detail);
+                    MsisdnMasking.mask(msisdn), e.getStatusCode().value(), detail);
             throw new OradianMiddlewareException(
                     "Oradian middleware rejected the deposits lookup: " + detail,
                     e.getStatusCode().value(), e);
         } catch (Exception e) {
-            log.warn("Oradian deposits lookup errored msisdn={} cause={}", msisdn, e.toString());
+            log.warn("Oradian deposits lookup errored msisdn={} cause={}",
+                    MsisdnMasking.mask(msisdn), e.toString());
             throw new OradianMiddlewareException(
                     "Unable to reach Oradian middleware: " + e.getMessage(), 502, e);
         }

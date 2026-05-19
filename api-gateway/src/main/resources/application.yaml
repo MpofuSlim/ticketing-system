@@ -99,6 +99,14 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
+            # /payments/** is the money path — transfer + withdraw move real
+            # money via Oradian. Bucket sized at ~1 req/sec / 5 burst per
+            # bearer token: a real customer transfers a handful of times
+            # per day; the bigger 50 rps default used elsewhere left ample
+            # room for a stolen-token attacker to drain accounts before
+            # the bucket bit. Override via PAYMENTS_RATE_LIMIT_* env vars
+            # when needed; the velocity service inside payment-service
+            # (per-account daily cap) is the second line of defence.
             - id: payment-service-route
               uri: ${PAYMENT_SERVICE_URI:http://localhost:8085}
               predicates:
@@ -106,8 +114,8 @@ spring:
               filters:
                 - name: RequestRateLimiter
                   args:
-                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
-                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.replenishRate: ${PAYMENTS_RATE_LIMIT_REPLENISH_PER_SECOND:1}
+                    redis-rate-limiter.burstCapacity: ${PAYMENTS_RATE_LIMIT_BURST_CAPACITY:5}
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 

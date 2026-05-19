@@ -4,6 +4,7 @@ import innbucks.paymentservice.client.OradianMiddlewareException;
 import innbucks.paymentservice.entity.Transaction;
 import innbucks.paymentservice.entity.TransactionStatus;
 import innbucks.paymentservice.repository.TransactionRepository;
+import innbucks.paymentservice.util.MsisdnMasking;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
@@ -54,7 +55,7 @@ public class TransactionService {
         Transaction saved = repository.save(draft);
         log.info("Transaction PENDING txId={} type={} phone={} amount={} src={} dst={}",
                 saved.getId(), saved.getTransactionType(),
-                maskPhone(saved.getCustomerPhone()), saved.getAmount(),
+                MsisdnMasking.mask(saved.getCustomerPhone()), saved.getAmount(),
                 saved.getSourceAccountId(), saved.getDestinationAccountId());
         return saved;
     }
@@ -115,15 +116,5 @@ public class TransactionService {
     private static String truncate(String s, int max) {
         if (s == null) return null;
         return s.length() <= max ? s : s.substring(0, max);
-    }
-
-    /**
-     * Last-4-digits mask for log lines. Avoid emitting full MSISDNs into
-     * structured logs — Data Protection Act and PCI-style banking standards
-     * treat full phone numbers as account-binding PII.
-     */
-    private static String maskPhone(String phone) {
-        if (phone == null || phone.length() <= 4) return "****";
-        return "****" + phone.substring(phone.length() - 4);
     }
 }

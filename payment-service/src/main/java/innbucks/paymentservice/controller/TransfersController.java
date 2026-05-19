@@ -13,6 +13,7 @@ import innbucks.paymentservice.entity.TransactionType;
 import innbucks.paymentservice.security.JwtUtil;
 import innbucks.paymentservice.service.TransactionService;
 import innbucks.paymentservice.service.TransferLimitService;
+import innbucks.paymentservice.util.MsisdnMasking;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
@@ -263,7 +264,7 @@ public class TransfersController {
         Integer tier = jwtUtil.extractTier(token);
         if (tier == null || tier < 2) {
             log.warn("Tier gate rejection on POST /payments/transfer phone={} tier={}",
-                    phoneNumber, tier);
+                    MsisdnMasking.mask(phoneNumber), tier);
             return forbidden(
                     "Customer must be at KYC tier 2 or higher to use this endpoint");
         }
@@ -281,7 +282,7 @@ public class TransfersController {
                 .orElse(null);
         if (sourceAccount == null) {
             log.warn("Ownership rejection on POST /payments/transfer phone={} from={}",
-                    phoneNumber, request.getFromAccountId());
+                    MsisdnMasking.mask(phoneNumber), request.getFromAccountId());
             return forbidden("fromAccountId does not belong to the authenticated customer");
         }
 
@@ -293,7 +294,7 @@ public class TransfersController {
         // consistent on casing.
         if (!"Active".equalsIgnoreCase(sourceAccount.getStatus())) {
             log.warn("Account status gate rejection on POST /payments/transfer phone={} account={} status={}",
-                    phoneNumber, request.getFromAccountId(), sourceAccount.getStatus());
+                    MsisdnMasking.mask(phoneNumber), request.getFromAccountId(), sourceAccount.getStatus());
             return forbidden(
                     "Source account is not Active (status: " + sourceAccount.getStatus() + ")");
         }
@@ -560,7 +561,7 @@ public class TransfersController {
         Integer tier = jwtUtil.extractTier(token);
         if (tier == null || tier < 2) {
             log.warn("Tier gate rejection on POST /payments/withdraw phone={} tier={}",
-                    phoneNumber, tier);
+                    MsisdnMasking.mask(phoneNumber), tier);
             return forbidden(
                     "Customer must be at KYC tier 2 or higher to use this endpoint");
         }
@@ -576,14 +577,14 @@ public class TransfersController {
                 .orElse(null);
         if (sourceAccount == null) {
             log.warn("Ownership rejection on POST /payments/withdraw phone={} account={}",
-                    phoneNumber, request.getAccountID());
+                    MsisdnMasking.mask(phoneNumber), request.getAccountID());
             return forbidden("accountID does not belong to the authenticated customer");
         }
 
         // Account status gate. See /payments/transfer for the rationale.
         if (!"Active".equalsIgnoreCase(sourceAccount.getStatus())) {
             log.warn("Account status gate rejection on POST /payments/withdraw phone={} account={} status={}",
-                    phoneNumber, request.getAccountID(), sourceAccount.getStatus());
+                    MsisdnMasking.mask(phoneNumber), request.getAccountID(), sourceAccount.getStatus());
             return forbidden(
                     "Source account is not Active (status: " + sourceAccount.getStatus() + ")");
         }
