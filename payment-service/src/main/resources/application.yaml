@@ -30,6 +30,12 @@ spring:
     baseline-version: 0
     locations: classpath:db/migration
 
+  # Kafka producer bootstrap. The rest of the producer config (acks=all,
+  # idempotence, JSON value serializer) lives in KafkaProducerConfig.java
+  # because Spring Boot's defaults aren't right for money-movement events.
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
   lifecycle:
     timeout-per-shutdown-phase: 30s
 
@@ -87,6 +93,13 @@ payment-service:
     scan-interval: ${RECONCILIATION_SCAN_INTERVAL:PT1M}
     stale-pending-threshold: ${RECONCILIATION_STALE_THRESHOLD:PT5M}
     batch-size: ${RECONCILIATION_BATCH_SIZE:100}
+  # Topic provisioning. Spring auto-creates from the NewTopic @Bean if
+  # the broker allows it; replication-factor of 1 is dev-only — bump to
+  # 3 in any environment with multiple brokers.
+  kafka:
+    transaction-completed:
+      partitions: ${PAYMENT_TX_TOPIC_PARTITIONS:3}
+      replicas: ${PAYMENT_TX_TOPIC_REPLICAS:1}
 
 # Verify-only JWT secret. payment-service does NOT mint tokens — user-service
 # is the issuer. This must match user-service's jwt.secret exactly; tokens

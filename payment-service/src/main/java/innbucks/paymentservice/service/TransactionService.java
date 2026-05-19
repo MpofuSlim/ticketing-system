@@ -3,11 +3,13 @@ package innbucks.paymentservice.service;
 import innbucks.paymentservice.client.OradianMiddlewareException;
 import innbucks.paymentservice.entity.Transaction;
 import innbucks.paymentservice.entity.TransactionStatus;
+import innbucks.paymentservice.messaging.TransactionCompletedEvent;
 import innbucks.paymentservice.repository.TransactionRepository;
 import innbucks.paymentservice.util.MsisdnMasking;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -38,6 +40,7 @@ public class TransactionService {
     private static final String CORRELATION_ID_MDC_KEY = "correlationId";
 
     private final TransactionRepository repository;
+    private final ApplicationEventPublisher eventPublisher;
 
     /**
      * Insert a row in PENDING state. Returns the persisted entity (with id
@@ -77,6 +80,11 @@ public class TransactionService {
             repository.save(tx);
             log.info("Transaction SUCCEEDED txId={} oradianTxnId={} reference={}",
                     id, oradianTransactionId, oradianReferenceNumber);
+            // Publish AFTER the row is in the persistence context. The
+            // @TransactionalEventListener on the consumer side fires only
+            // AFTER_COMMIT so this never emits for a transaction that
+            // ultimately rolls back.
+            eventPublisher.publishEvent(toEvent(tx));
         }, () -> log.error("markSucceeded called for unknown txId={} — investigate", id));
     }
 
@@ -97,7 +105,45 @@ public class TransactionService {
             tx.setCompletedAt(Instant.now());
             repository.save(tx);
             log.warn("Transaction FAILED txId={} code={} message={}", id, code, message);
+            // Same AFTER_COMMIT pattern as markSucceeded. Failed transfers
+            // are still observable events that downstream consumers
+            // (notification service, BI) want — "your transfer was
+            // rejected, here's why" UX needs them.
+            eventPublisher.publishEvent(toEvent(tx));
         }, () -> log.error("markFailed called for unknown txId={} — investigate", id));
+    }
+
+    /**
+     * Map the persistent Transaction to its outbound event shape. Carries
+     * the full phone number unmasked — downstream consumers (the future
+     * notification service) need it to send the SMS / push. Kafka is
+     * internal-network only.
+     */
+    private static TransactionCompletedEvent toEvent(Transaction tx) {
+        return new TransactionCompletedEvent(
+                UUID.randomUUID(),
+                Instant.now(),
+                tx.getId(),
+                tx.getTransactionType() == null ? null : tx.getTransactionType().name(),
+                tx.getStatus() == null ? null : tx.getStatus().name(),
+                tx.getCustomerPhone(),
+                tx.getSourceAccountId(),
+                tx.getDestinationAccountId(),
+                tx.getAmount(),
+                tx.getCurrency(),
+                tx.getPaymentMethodName(),
+                tx.getNotes(),
+                tx.getTransactionDate(),
+                tx.getTransactionBranchId(),
+                tx.getCreatedAt(),
+                tx.getCompletedAt(),
+                tx.getOradianTransactionId(),
+                tx.getOradianReferenceNumber(),
+                tx.getOradianCommandId(),
+                tx.getFailureCode(),
+                tx.getFailureMessage(),
+                tx.getCorrelationId()
+        );
     }
 
     /**
