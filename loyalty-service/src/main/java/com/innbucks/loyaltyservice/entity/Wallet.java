@@ -52,25 +52,6 @@ public class Wallet {
     @Column(name = "locked_until")
     private LocalDate lockedUntil;
 
-    /**
-     * Oradian external account ID of the customer's LPW deposit account
-     * — the source of truth for this wallet's points balance.
-     *
-     * <p>Nullable for two reasons:
-     * <ul>
-     *   <li>Wallets created before the Oradian-sync rollout don't have
-     *       an account ID stored. It's discovered lazily on first sync
-     *       attempt via {@code GET /auth/customer/deposits} + filter
-     *       {@code productID == "LPW"}.</li>
-     *   <li>Wallets attached to PENDING loyalty users (pre-tier-2, no
-     *       Oradian customer yet) stay local-only until the customer
-     *       is promoted; the LPW account is backfilled at promotion
-     *       time.</li>
-     * </ul>
-     */
-    @Column(name = "oradian_account_id", length = 64)
-    private String oradianAccountId;
-
     @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();
 
