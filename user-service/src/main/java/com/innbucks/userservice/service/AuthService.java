@@ -33,6 +33,7 @@ public class AuthService {
     private final TokenRevocationService tokenRevocationService;
     private final RefreshTokenService refreshTokenService;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final AuditService auditService;
 
     @Value("${innbucks.account-lockout.max-attempts:7}")
     private int maxFailedLoginAttempts;
@@ -142,13 +143,34 @@ public class AuthService {
     // AccountLockedException doesn't actually need to suppress rollback
     // (it throws without any writes) but is listed for clarity in case
     // we add side-effects later.
+    // noRollbackFor: the wrong-password branch persists the
+    // failed_login_attempts increment (and possibly the locked_until
+    // stamp) and THEN throws InvalidCredentialsException so the caller
+    // sees a 400. Without this, Spring's default rollback would undo
+    // the save and the lockout counter would never accumulate.
+    // AccountLockedException doesn't actually need to suppress rollback
+    // (it throws without any writes) but is listed for clarity in case
+    // we add side-effects later.
     @Transactional(noRollbackFor = {
             InvalidCredentialsException.class,
             AccountLockedException.class
     })
-    public AuthResponseDTO login(LoginRequestDTO request, String deviceId) {
-        User user = resolveUser(request)
-                .orElseThrow(InvalidCredentialsException::new);
+    public AuthResponseDTO login(LoginRequestDTO request, String deviceId, AuditContext auditContext) {
+        java.util.Optional<User> resolved = resolveUser(request);
+        if (resolved.isEmpty()) {
+            // Unknown identifier. actor stays ANONYMOUS; target_id is
+            // the offered identifier so forensics can answer "who's
+            // probing for accounts that don't exist".
+            auditService.recordFailure(
+                    AuditEventType.AUTH_LOGIN_FAILURE,
+                    null, AuditService.ACTOR_TYPE_ANONYMOUS,
+                    request.getIdentifier(), AuditService.TARGET_TYPE_USER,
+                    "unknown_identifier",
+                    java.util.Map.of("identifier", String.valueOf(request.getIdentifier())),
+                    auditContext);
+            throw new InvalidCredentialsException();
+        }
+        User user = resolved.get();
 
         Instant now = Instant.now();
 
@@ -159,6 +181,13 @@ public class AuthService {
         if (user.getLockedUntil() != null && user.getLockedUntil().isAfter(now)) {
             log.warn("Login rejected — account locked userId={} lockedUntil={}",
                     user.getId(), user.getLockedUntil());
+            auditService.recordFailure(
+                    AuditEventType.AUTH_LOGIN_REJECTED_LOCKED,
+                    null, AuditService.ACTOR_TYPE_ANONYMOUS,
+                    String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
+                    "account_locked",
+                    java.util.Map.of("lockedUntil", user.getLockedUntil().toString()),
+                    auditContext);
             throw new AccountLockedException(user.getLockedUntil());
         }
         // Lockout served — auto-reset so the user gets a fresh window
@@ -172,9 +201,11 @@ public class AuthService {
         if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
             int attempts = user.getFailedLoginAttempts() + 1;
             user.setFailedLoginAttempts(attempts);
+            boolean justLocked = false;
             if (attempts >= maxFailedLoginAttempts) {
                 Instant until = now.plus(Duration.ofMinutes(lockoutDurationMinutes));
                 user.setLockedUntil(until);
+                justLocked = true;
                 log.warn("Account locked userId={} attempts={} until={}",
                         user.getId(), attempts, until);
             } else {
@@ -182,6 +213,28 @@ public class AuthService {
                         user.getId(), attempts, maxFailedLoginAttempts);
             }
             userRepository.save(user);
+
+            auditService.recordFailure(
+                    AuditEventType.AUTH_LOGIN_FAILURE,
+                    null, AuditService.ACTOR_TYPE_ANONYMOUS,
+                    String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
+                    "wrong_password",
+                    java.util.Map.of("attempts", attempts),
+                    auditContext);
+            if (justLocked) {
+                // Separate event so dashboards can alert specifically on
+                // "this row just crossed the threshold" without scanning
+                // every failure for the metadata.attempts == threshold case.
+                auditService.recordSuccess(
+                        AuditEventType.AUTH_ACCOUNT_LOCKED,
+                        null, AuditService.ACTOR_TYPE_SYSTEM,
+                        String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
+                        java.util.Map.of(
+                                "attempts", attempts,
+                                "lockedUntil", user.getLockedUntil().toString(),
+                                "durationMinutes", lockoutDurationMinutes),
+                        auditContext);
+            }
             // Same response shape as wrong-pw on a nonexistent account so
             // the lockout-triggering attempt doesn't become an oracle for
             // "this identifier exists". Subsequent attempts will hit the
@@ -190,6 +243,11 @@ public class AuthService {
             throw new InvalidCredentialsException();
         }
         if (!user.isActive()) {
+            auditService.recordFailure(
+                    AuditEventType.AUTH_LOGIN_FAILURE,
+                    null, AuditService.ACTOR_TYPE_ANONYMOUS,
+                    String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
+                    "account_inactive", null, auditContext);
             throw new RuntimeException("Account is not active. Please contact a SUPER_ADMIN for approval.");
         }
 
@@ -211,6 +269,16 @@ public class AuthService {
         log.info("Login bumped tokenVersion userId={} newVersion={} revokedRefreshTokens={}",
                 user.getId(), newVersion, revokedFamilies);
 
+        auditService.recordSuccess(
+                AuditEventType.AUTH_LOGIN_SUCCESS,
+                String.valueOf(user.getId()), AuditService.ACTOR_TYPE_USER,
+                String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
+                java.util.Map.of(
+                        "tokenVersion", newVersion,
+                        "hasDeviceId", deviceId != null && !deviceId.isBlank(),
+                        "revokedPriorFamilies", revokedFamilies),
+                auditContext);
+
         return issueToken(user, deviceId);
     }
 
@@ -221,7 +289,7 @@ public class AuthService {
      * here would just create UX friction without a meaningful security gain.
      */
     @Transactional
-    public void changePassword(String token, ChangePasswordRequestDTO request) {
+    public void changePassword(String token, ChangePasswordRequestDTO request, AuditContext auditContext) {
         if (token == null || token.isBlank() || !jwtUtil.isTokenValid(token)) {
             throw new RuntimeException("Invalid or expired token");
         }
@@ -247,6 +315,11 @@ public class AuthService {
         user.setPassword(passwordEncoder.encode(request.getNewPassword()));
         userRepository.save(user);
         log.info("Password changed userId={} subject={}", user.getId(), subject);
+        auditService.recordSuccess(
+                AuditEventType.AUTH_PASSWORD_CHANGED,
+                String.valueOf(user.getId()), AuditService.ACTOR_TYPE_USER,
+                String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
+                null, auditContext);
     }
 
     /**
@@ -260,13 +333,52 @@ public class AuthService {
      * device hash, this rotate request MUST present the same device id —
      * mismatch is treated as token theft (family revoked).
      */
-    public AuthResponseDTO refresh(String refreshToken, String deviceId) {
-        RefreshTokenService.Rotation rotation = refreshTokenService.rotate(refreshToken, deviceId);
-        AuthResponseDTO response = buildResponse(rotation.user(), rotation.refreshToken());
-        log.info("Token refreshed subject={} roles={} tier={} verified={}",
-                rotation.user().getEmail() != null ? rotation.user().getEmail() : rotation.user().getPhoneNumber(),
-                response.getRoles(), response.getTier(), response.getVerified());
-        return response;
+    public AuthResponseDTO refresh(String refreshToken, String deviceId, AuditContext auditContext) {
+        // Best-effort subject extraction for audit attribution. The
+        // RefreshTokenService validates the token's signature again
+        // before doing anything; we just want a name to hang the audit
+        // row off if something goes wrong. Garbage tokens get a null
+        // subject — the row still lands, just with actor_id=null.
+        String subject = safeRefreshSubject(refreshToken);
+        try {
+            RefreshTokenService.Rotation rotation = refreshTokenService.rotate(refreshToken, deviceId);
+            AuthResponseDTO response = buildResponse(rotation.user(), rotation.refreshToken());
+            log.info("Token refreshed subject={} roles={} tier={} verified={}",
+                    rotation.user().getEmail() != null ? rotation.user().getEmail() : rotation.user().getPhoneNumber(),
+                    response.getRoles(), response.getTier(), response.getVerified());
+            auditService.recordSuccess(
+                    AuditEventType.AUTH_REFRESH_SUCCESS,
+                    String.valueOf(rotation.user().getId()), AuditService.ACTOR_TYPE_USER,
+                    String.valueOf(rotation.user().getId()), AuditService.TARGET_TYPE_USER,
+                    java.util.Map.of("hasDeviceId", deviceId != null && !deviceId.isBlank()),
+                    auditContext);
+            return response;
+        } catch (RefreshTokenService.ReuseDetectedException ex) {
+            // RefreshTokenService throws the same exception class for
+            // both the "token already rotated" replay case AND the
+            // "device-id mismatch" case. Both are equally serious
+            // (family revoked, customer + attacker forced to relogin)
+            // so we audit them under the same broader event type.
+            // Operators tail the WARN log line in RefreshTokenService
+            // to distinguish "replay" from "device-mismatch" today.
+            auditService.recordFailure(
+                    AuditEventType.AUTH_REFRESH_REUSE_DETECTED,
+                    subject, AuditService.ACTOR_TYPE_USER,
+                    subject, AuditService.TARGET_TYPE_USER,
+                    "refresh_token_reuse_or_device_mismatch",
+                    java.util.Map.of("hasDeviceId", deviceId != null && !deviceId.isBlank()),
+                    auditContext);
+            throw ex;
+        }
+    }
+
+    private String safeRefreshSubject(String token) {
+        if (token == null || token.isBlank()) return null;
+        try {
+            return jwtUtil.extractEmail(token);
+        } catch (RuntimeException ex) {
+            return null;
+        }
     }
 
     private AuthResponseDTO issueToken(User user, String deviceId) {

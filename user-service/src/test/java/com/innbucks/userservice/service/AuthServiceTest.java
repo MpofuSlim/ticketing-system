@@ -55,7 +55,8 @@ class AuthServiceTest {
                 mock(CustomerProfileRepository.class), encoder, jwt,
                 mock(TokenRevocationService.class),
                 mock(RefreshTokenService.class),
-                mock(RefreshTokenRepository.class)));
+                mock(RefreshTokenRepository.class),
+                mock(AuditService.class)));
     }
 
     private AuthService newService(UserRepository userRepo,
@@ -66,7 +67,8 @@ class AuthServiceTest {
         return withLockoutConfig(new AuthService(userRepo, tenantRepo, customerRepo, encoder, jwt,
                 mock(TokenRevocationService.class),
                 mock(RefreshTokenService.class),
-                mock(RefreshTokenRepository.class)));
+                mock(RefreshTokenRepository.class),
+                mock(AuditService.class)));
     }
 
     /**
@@ -83,7 +85,8 @@ class AuthServiceTest {
         return withLockoutConfig(new AuthService(userRepo, tenantRepo, customerRepo, encoder, jwt,
                 mock(TokenRevocationService.class),
                 mock(RefreshTokenService.class),
-                refreshRepo));
+                refreshRepo,
+                mock(AuditService.class)));
     }
 
     private RegisterRequestDTO baseRequest(String email, String phone, String... bundles) {
@@ -224,7 +227,7 @@ class AuthServiceTest {
         req.setIdentifier("u@example.com"); req.setPassword("pw");
 
         AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),
-                encoder, jwt).login(req, null);
+                encoder, jwt).login(req, null, com.innbucks.userservice.service.AuditContext.none());
 
         assertEquals("tok", resp.getToken());
         assertEquals(List.of("MERCHANT_ADMIN"), resp.getRoles());
@@ -252,7 +255,7 @@ class AuthServiceTest {
         req.setIdentifier("admin@innbucks.co.zw"); req.setPassword("pw");
 
         AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),
-                encoder, jwt).login(req, null);
+                encoder, jwt).login(req, null, com.innbucks.userservice.service.AuditContext.none());
 
         assertEquals(List.of("SUPER_ADMIN"), resp.getRoles());
         assertEquals(List.of("ticketing", "loyalty"), resp.getDefaultServices());
@@ -293,7 +296,7 @@ class AuthServiceTest {
         req.setIdentifier("0777000099"); req.setPassword("pw");
 
         AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),
-                customerRepo, encoder, jwt).login(req, null);
+                customerRepo, encoder, jwt).login(req, null, com.innbucks.userservice.service.AuditContext.none());
 
         assertEquals("tok", resp.getToken());
         assertEquals(List.of("CUSTOMER"), resp.getRoles());
@@ -315,7 +318,7 @@ class AuthServiceTest {
 
         AuthService service = newService(userRepo, mock(TenantProfileRepository.class),
                 encoder, mock(JwtUtil.class));
-        RuntimeException ex = assertThrows(RuntimeException.class, () -> service.login(req, null));
+        RuntimeException ex = assertThrows(RuntimeException.class, () -> service.login(req, null, com.innbucks.userservice.service.AuditContext.none()));
         assertEquals("Invalid credentials", ex.getMessage());
     }
 
@@ -334,7 +337,7 @@ class AuthServiceTest {
 
         AuthService service = newService(userRepo, mock(TenantProfileRepository.class),
                 encoder, mock(JwtUtil.class));
-        RuntimeException ex = assertThrows(RuntimeException.class, () -> service.login(req, null));
+        RuntimeException ex = assertThrows(RuntimeException.class, () -> service.login(req, null, com.innbucks.userservice.service.AuditContext.none()));
         assertTrue(ex.getMessage().toLowerCase().contains("not active"));
     }
 
@@ -348,7 +351,7 @@ class AuthServiceTest {
 
         AuthService service = newService(userRepo, mock(TenantProfileRepository.class),
                 mock(PasswordEncoder.class), mock(JwtUtil.class));
-        assertThrows(RuntimeException.class, () -> service.login(req, null));
+        assertThrows(RuntimeException.class, () -> service.login(req, null, com.innbucks.userservice.service.AuditContext.none()));
     }
 
     @Test
@@ -373,7 +376,7 @@ class AuthServiceTest {
         req.setIdentifier("u@example.com"); req.setPassword("pw");
 
         AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),
-                customerRepo, encoder, jwt).login(req, null);
+                customerRepo, encoder, jwt).login(req, null, com.innbucks.userservice.service.AuditContext.none());
 
         assertEquals("tok", resp.getToken());
         assertFalse(resp.isMfaRequired());
@@ -413,7 +416,7 @@ class AuthServiceTest {
         req.setIdentifier("u@example.com"); req.setPassword("pw");
 
         newService(userRepo, mock(TenantProfileRepository.class),
-                mock(CustomerProfileRepository.class), encoder, jwt, refreshRepo).login(req, null);
+                mock(CustomerProfileRepository.class), encoder, jwt, refreshRepo).login(req, null, com.innbucks.userservice.service.AuditContext.none());
 
         assertEquals(8L, user.getTokenVersion(), "login must bump token_version by 1");
         verify(userRepo).save(user);
@@ -462,7 +465,7 @@ class AuthServiceTest {
         AuthService svc = newService(userRepo, mock(TenantProfileRepository.class),
                 encoder, mock(JwtUtil.class));
         RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> svc.login(loginReq("wrong"), null));
+                () -> svc.login(loginReq("wrong"), null, com.innbucks.userservice.service.AuditContext.none()));
 
         // Still 400 — DIFFERENT exception type from AccountLockedException.
         assertEquals("Invalid credentials", ex.getMessage());
@@ -491,7 +494,7 @@ class AuthServiceTest {
         AuthService svc = newService(userRepo, mock(TenantProfileRepository.class),
                 encoder, mock(JwtUtil.class));
         RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> svc.login(loginReq("wrong"), null));
+                () -> svc.login(loginReq("wrong"), null, com.innbucks.userservice.service.AuditContext.none()));
 
         assertEquals("Invalid credentials", ex.getMessage(),
                 "The lockout-triggering attempt MUST return the same 400 shape as wrong-pw " +
@@ -523,7 +526,7 @@ class AuthServiceTest {
                 encoder, mock(JwtUtil.class));
         AuthService.AccountLockedException ex = assertThrows(
                 AuthService.AccountLockedException.class,
-                () -> svc.login(loginReq("right"), null));
+                () -> svc.login(loginReq("right"), null, com.innbucks.userservice.service.AuditContext.none()));
         assertEquals(lockedUntil, ex.getLockedUntil(),
                 "423 response must carry the deadline the FE renders as a countdown");
 
@@ -550,7 +553,7 @@ class AuthServiceTest {
         AuthService svc = newService(userRepo, mock(TenantProfileRepository.class),
                 encoder, mock(JwtUtil.class));
         assertThrows(AuthService.AccountLockedException.class,
-                () -> svc.login(loginReq("wrong-again"), null));
+                () -> svc.login(loginReq("wrong-again"), null, com.innbucks.userservice.service.AuditContext.none()));
         verify(encoder, never()).matches(any(), any());
         verify(userRepo, never()).save(any());
         assertEquals(lockedUntil, user.getLockedUntil());
@@ -573,7 +576,7 @@ class AuthServiceTest {
         AuthService svc = newService(userRepo, mock(TenantProfileRepository.class),
                 encoder, mock(JwtUtil.class));
         RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> svc.login(loginReq("wrong"), null));
+                () -> svc.login(loginReq("wrong"), null, com.innbucks.userservice.service.AuditContext.none()));
 
         assertEquals("Invalid credentials", ex.getMessage());
         assertEquals(1, user.getFailedLoginAttempts(),
@@ -601,11 +604,119 @@ class AuthServiceTest {
                 any(), any(), any(), anyLong())).thenReturn("tok");
 
         AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),
-                customerRepo, encoder, jwt).login(loginReq("right"), null);
+                customerRepo, encoder, jwt).login(loginReq("right"), null, com.innbucks.userservice.service.AuditContext.none());
 
         assertEquals("tok", resp.getToken());
         assertEquals(0, user.getFailedLoginAttempts(), "successful login must reset the strike counter");
         assertNull(user.getLockedUntil(), "successful login must clear any prior lockout");
+    }
+
+    @Test
+    void login_wrongPasswordAtThreshold_emitsBothLoginFailureAndAccountLockedAuditRows() {
+        // Threshold-crossing wrong-pw must produce TWO audit events:
+        // (1) AUTH_LOGIN_FAILURE with reason=wrong_password (same as
+        //     every other wrong-pw — keeps dashboards consistent),
+        // (2) AUTH_ACCOUNT_LOCKED — a separate marker so SOC dashboards
+        //     can alert on the lockout event without grepping every
+        //     failure for metadata.attempts==threshold.
+        UserRepository userRepo = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        AuditService audit = mock(AuditService.class);
+        User user = aliceWithAttempts(6, null);
+        when(userRepo.findByEmail("alice@example.com")).thenReturn(Optional.of(user));
+        when(encoder.matches(any(), any())).thenReturn(false);
+
+        AuthService svc = withLockoutConfig(new AuthService(userRepo,
+                mock(TenantProfileRepository.class),
+                mock(CustomerProfileRepository.class), encoder, mock(JwtUtil.class),
+                mock(TokenRevocationService.class),
+                mock(RefreshTokenService.class),
+                mock(RefreshTokenRepository.class),
+                audit));
+
+        assertThrows(AuthService.InvalidCredentialsException.class,
+                () -> svc.login(loginReq("wrong"), null, AuditContext.none()));
+
+        verify(audit).recordFailure(
+                eq(AuditEventType.AUTH_LOGIN_FAILURE),
+                isNull(), eq(AuditService.ACTOR_TYPE_ANONYMOUS),
+                eq("101"), eq(AuditService.TARGET_TYPE_USER),
+                eq("wrong_password"),
+                any(), any());
+        verify(audit).recordSuccess(
+                eq(AuditEventType.AUTH_ACCOUNT_LOCKED),
+                isNull(), eq(AuditService.ACTOR_TYPE_SYSTEM),
+                eq("101"), eq(AuditService.TARGET_TYPE_USER),
+                any(), any());
+    }
+
+    @Test
+    void login_lockedAccount_emitsRejectedLockedAuditRow_notFailure() {
+        // A locked account being probed is structurally different from
+        // wrong-pw. Separate audit type so "active brute-force against
+        // a known-locked account" can be alerted as a distinct signal.
+        UserRepository userRepo = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        AuditService audit = mock(AuditService.class);
+        java.time.Instant lockedUntil = java.time.Instant.now().plus(java.time.Duration.ofMinutes(20));
+        User user = aliceWithAttempts(7, lockedUntil);
+        when(userRepo.findByEmail("alice@example.com")).thenReturn(Optional.of(user));
+
+        AuthService svc = withLockoutConfig(new AuthService(userRepo,
+                mock(TenantProfileRepository.class),
+                mock(CustomerProfileRepository.class), encoder, mock(JwtUtil.class),
+                mock(TokenRevocationService.class),
+                mock(RefreshTokenService.class),
+                mock(RefreshTokenRepository.class),
+                audit));
+
+        assertThrows(AuthService.AccountLockedException.class,
+                () -> svc.login(loginReq("anything"), null, AuditContext.none()));
+
+        verify(audit).recordFailure(
+                eq(AuditEventType.AUTH_LOGIN_REJECTED_LOCKED),
+                isNull(), eq(AuditService.ACTOR_TYPE_ANONYMOUS),
+                eq("101"), eq(AuditService.TARGET_TYPE_USER),
+                eq("account_locked"),
+                any(), any());
+        // MUST NOT emit AUTH_LOGIN_FAILURE — the row is already locked,
+        // so this isn't a "wrong password" event, it's a "probe of a
+        // known-locked account".
+        verify(audit, never()).recordFailure(
+                eq(AuditEventType.AUTH_LOGIN_FAILURE),
+                any(), any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void login_unknownIdentifier_emitsFailureAuditRow_withAnonymousActor() {
+        // Probes for accounts that don't exist must still be auditable.
+        // actor_id is null, actor_type ANONYMOUS, target_id is the
+        // offered identifier (so forensics can spot the enumeration
+        // pattern).
+        UserRepository userRepo = mock(UserRepository.class);
+        AuditService audit = mock(AuditService.class);
+        when(userRepo.findByEmail("ghost@example.com")).thenReturn(Optional.empty());
+
+        AuthService svc = withLockoutConfig(new AuthService(userRepo,
+                mock(TenantProfileRepository.class),
+                mock(CustomerProfileRepository.class), mock(PasswordEncoder.class), mock(JwtUtil.class),
+                mock(TokenRevocationService.class),
+                mock(RefreshTokenService.class),
+                mock(RefreshTokenRepository.class),
+                audit));
+        LoginRequestDTO req = new LoginRequestDTO();
+        req.setIdentifier("ghost@example.com");
+        req.setPassword("anything");
+
+        assertThrows(AuthService.InvalidCredentialsException.class,
+                () -> svc.login(req, null, AuditContext.none()));
+
+        verify(audit).recordFailure(
+                eq(AuditEventType.AUTH_LOGIN_FAILURE),
+                isNull(), eq(AuditService.ACTOR_TYPE_ANONYMOUS),
+                eq("ghost@example.com"), eq(AuditService.TARGET_TYPE_USER),
+                eq("unknown_identifier"),
+                any(), any());
     }
 
     @Test
@@ -626,7 +737,7 @@ class AuthServiceTest {
                 any(), any(), any(), anyLong())).thenReturn("tok");
 
         newService(userRepo, mock(TenantProfileRepository.class), customerRepo, encoder, jwt)
-                .login(loginReq("right"), null);
+                .login(loginReq("right"), null, com.innbucks.userservice.service.AuditContext.none());
 
         assertEquals(0, user.getFailedLoginAttempts());
         assertNull(user.getLockedUntil());

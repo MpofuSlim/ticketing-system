@@ -3,6 +3,9 @@ package com.innbucks.userservice.controller;
 import com.innbucks.userservice.client.DepositAccount;
 import com.innbucks.userservice.dto.*;
 import com.innbucks.userservice.security.JwtUtil;
+import com.innbucks.userservice.service.AuditContext;
+import com.innbucks.userservice.service.AuditEventType;
+import com.innbucks.userservice.service.AuditService;
 import com.innbucks.userservice.service.AuthService;
 import com.innbucks.userservice.service.CustomerService;
 import com.innbucks.userservice.service.LoginRateLimiter;
@@ -38,6 +41,7 @@ public class AuthController {
     private final OtpService otpService;
     private final JwtUtil jwtUtil;
     private final LoginRateLimiter loginRateLimiter;
+    private final AuditService auditService;
 
     @PostMapping("/register")
     @SecurityRequirements()
@@ -175,7 +179,7 @@ public class AuthController {
         loginRateLimiter.checkLogin(request.getIdentifier(), clientIp(httpRequest));
         log.info("Received login request identifier={} hasDeviceId={}",
                 request.getIdentifier(), deviceId != null && !deviceId.isBlank());
-        AuthResponseDTO response = authService.login(request, deviceId);
+        AuthResponseDTO response = authService.login(request, deviceId, auditContext(httpRequest));
         log.info("Login successful roles={}", response.getRoles());
         return ResponseEntity.ok(ApiResult.ok("Login successful", response));
     }
@@ -286,7 +290,7 @@ public class AuthController {
         // counts so a host spamming garbage tokens gets throttled.
         String subject = safeSubject(token);
         loginRateLimiter.checkRefresh(subject, clientIp(request));
-        AuthResponseDTO response = authService.refresh(token, deviceId);
+        AuthResponseDTO response = authService.refresh(token, deviceId, auditContext(request));
         return ResponseEntity.ok(ApiResult.ok("Token refreshed", response));
     }
 
@@ -326,6 +330,15 @@ public class AuthController {
      * present so a relative-clock FE has a fallback.
      */
     public record AccountLockedDetail(java.time.Instant lockedUntil, long retryAfterSeconds) {}
+
+    /**
+     * Stamp the audit row with the request's source IP + user agent.
+     * Same X-Forwarded-For-aware IP resolution {@link #clientIp} uses,
+     * so the limiter bucket and the audit row agree on attribution.
+     */
+    private static AuditContext auditContext(HttpServletRequest request) {
+        return new AuditContext(clientIp(request), request.getHeader("User-Agent"));
+    }
 
     /**
      * Best-effort source-IP extraction. Behind the api-gateway every
@@ -388,7 +401,7 @@ public class AuthController {
                     .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing Bearer token"));
         }
         String token = authHeader.substring(7);
-        authService.changePassword(token, body);
+        authService.changePassword(token, body, auditContext(request));
         return ResponseEntity.ok(ApiResult.ok("Password changed", null));
     }
 
@@ -432,6 +445,15 @@ public class AuthController {
         }
         String token = authHeader.substring(7);
         tokenRevocationService.revoke(token);
+        // Audit attribution from the bearer's subject — the token is
+        // already valid enough to reach this point (the controller
+        // doesn't verify it further; revoke is idempotent).
+        String subject = safeSubject(token);
+        auditService.recordSuccess(
+                AuditEventType.AUTH_LOGOUT,
+                subject, AuditService.ACTOR_TYPE_USER,
+                subject, AuditService.TARGET_TYPE_USER,
+                null, auditContext(request));
         log.info("Logout successful");
         return ResponseEntity.ok(ApiResult.ok("Logout successful", null));
     }

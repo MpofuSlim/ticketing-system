@@ -1,0 +1,66 @@
+package com.innbucks.userservice.entity;
+
+import jakarta.persistence.*;
+import lombok.*;
+
+import java.time.Instant;
+
+/**
+ * Append-only row in the {@code audit_events} table. Writes go
+ * through {@code AuditService.record(...)} which manages a
+ * REQUIRES_NEW transaction so audit failures don't break the
+ * caller's flow and audit successes survive caller-side rollback.
+ *
+ * <p>Every field is non-functional from the application's point of
+ * view — the rows exist purely for forensics, compliance reporting,
+ * and incident response. The application never reads from this
+ * table on the hot path.
+ */
+@Entity
+@Table(name = "audit_events")
+@Data
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class AuditEvent {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(name = "occurred_at", nullable = false)
+    private Instant occurredAt;
+
+    @Column(name = "event_type", nullable = false, length = 64)
+    private String eventType;
+
+    @Column(name = "actor_id", length = 64)
+    private String actorId;
+
+    @Column(name = "actor_type", length = 32)
+    private String actorType;
+
+    @Column(name = "target_id", length = 64)
+    private String targetId;
+
+    @Column(name = "target_type", length = 32)
+    private String targetType;
+
+    @Column(name = "ip_address", length = 64)
+    private String ipAddress;
+
+    @Column(name = "user_agent", length = 512)
+    private String userAgent;
+
+    @Column(name = "outcome", nullable = false, length = 16)
+    private String outcome;
+
+    @Column(name = "failure_reason", length = 255)
+    private String failureReason;
+
+    @Column(name = "correlation_id", length = 64)
+    private String correlationId;
+
+    @Column(name = "metadata", columnDefinition = "TEXT")
+    private String metadata;
+}
