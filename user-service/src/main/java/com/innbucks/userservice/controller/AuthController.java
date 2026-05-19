@@ -3,8 +3,12 @@ package com.innbucks.userservice.controller;
 import com.innbucks.userservice.client.DepositAccount;
 import com.innbucks.userservice.dto.*;
 import com.innbucks.userservice.security.JwtUtil;
+import com.innbucks.userservice.service.AuditContext;
+import com.innbucks.userservice.service.AuditEventType;
+import com.innbucks.userservice.service.AuditService;
 import com.innbucks.userservice.service.AuthService;
 import com.innbucks.userservice.service.CustomerService;
+import com.innbucks.userservice.service.LoginRateLimiter;
 import com.innbucks.userservice.service.OtpService;
 import com.innbucks.userservice.service.TokenRevocationService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -36,6 +40,8 @@ public class AuthController {
     private final TokenRevocationService tokenRevocationService;
     private final OtpService otpService;
     private final JwtUtil jwtUtil;
+    private final LoginRateLimiter loginRateLimiter;
+    private final AuditService auditService;
 
     @PostMapping("/register")
     @SecurityRequirements()
@@ -134,11 +140,46 @@ public class AuthController {
                                             }
                                             """)
                             })),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid credentials or missing identifier")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid credentials or missing identifier"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "423",
+                    description = "Account locked due to too many consecutive failed login attempts " +
+                            "(default 7). The `lockedUntil` ISO-8601 timestamp tells the FE when " +
+                            "the next attempt will be accepted; `retryAfterSeconds` is the same " +
+                            "deadline expressed in seconds from now and is mirrored in the " +
+                            "`Retry-After` header. A successful login on a non-locked account " +
+                            "resets the strike counter; an expired lockout resets it on the next " +
+                            "attempt.",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Account locked", value = """
+                                    {
+                                      "code": "423 LOCKED",
+                                      "message": "Account temporarily locked due to too many failed login attempts",
+                                      "data": {
+                                        "lockedUntil": "2026-05-19T14:05:00Z",
+                                        "retryAfterSeconds": 1800
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429",
+                    description = "Rate limit exceeded on this identifier or source IP. Body contains a " +
+                            "`retryAfterSeconds` hint; the same value is mirrored in the `Retry-After` header.",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Too many login attempts", value = """
+                                    {
+                                      "code": "429 TOO_MANY_REQUESTS",
+                                      "message": "Too many login attempts on this account; try again shortly",
+                                      "data": { "retryAfterSeconds": 60 }
+                                    }
+                                    """)))
     })
-    public ResponseEntity<ApiResult<AuthResponseDTO>> login(@Valid @RequestBody LoginRequestDTO request) {
-        log.info("Received login request identifier={}", request.getIdentifier());
-        AuthResponseDTO response = authService.login(request);
+    public ResponseEntity<ApiResult<AuthResponseDTO>> login(
+            HttpServletRequest httpRequest,
+            @Valid @RequestBody LoginRequestDTO request,
+            @RequestHeader(value = "X-Device-Id", required = false) String deviceId) {
+        loginRateLimiter.checkLogin(request.getIdentifier(), clientIp(httpRequest));
+        log.info("Received login request identifier={} hasDeviceId={}",
+                request.getIdentifier(), deviceId != null && !deviceId.isBlank());
+        AuthResponseDTO response = authService.login(request, deviceId, auditContext(httpRequest));
         log.info("Login successful roles={}", response.getRoles());
         return ResponseEntity.ok(ApiResult.ok("Login successful", response));
     }
@@ -222,17 +263,106 @@ public class AuthController {
                                       "message": "Missing Bearer token",
                                       "data": null
                                     }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429",
+                    description = "Rate limit exceeded on this refresh-token subject or source IP. " +
+                            "Body carries the same `retryAfterSeconds` value as the `Retry-After` header.",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Too many refresh attempts", value = """
+                                    {
+                                      "code": "429 TOO_MANY_REQUESTS",
+                                      "message": "Too many refresh attempts from this address; try again shortly",
+                                      "data": { "retryAfterSeconds": 60 }
+                                    }
                                     """)))
     })
-    public ResponseEntity<ApiResult<AuthResponseDTO>> refresh(HttpServletRequest request) {
+    public ResponseEntity<ApiResult<AuthResponseDTO>> refresh(
+            HttpServletRequest request,
+            @RequestHeader(value = "X-Device-Id", required = false) String deviceId) {
         String authHeader = request.getHeader("Authorization");
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing Bearer token"));
         }
         String token = authHeader.substring(7);
-        AuthResponseDTO response = authService.refresh(token);
+        // Rate-limit BEFORE attempting rotation. extractEmail returns
+        // null on a malformed/expired token — the per-IP bucket still
+        // counts so a host spamming garbage tokens gets throttled.
+        String subject = safeSubject(token);
+        loginRateLimiter.checkRefresh(subject, clientIp(request));
+        AuthResponseDTO response = authService.refresh(token, deviceId, auditContext(request));
         return ResponseEntity.ok(ApiResult.ok("Token refreshed", response));
+    }
+
+    @ExceptionHandler(LoginRateLimiter.RateLimitedException.class)
+    public ResponseEntity<ApiResult<RateLimitDetail>> handleRateLimited(
+            LoginRateLimiter.RateLimitedException ex) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header(HttpHeaders.RETRY_AFTER, Integer.toString(ex.getRetryAfterSeconds()))
+                .body(ApiResult.of(HttpStatus.TOO_MANY_REQUESTS, ex.getMessage(),
+                        new RateLimitDetail(ex.getRetryAfterSeconds())));
+    }
+
+    @ExceptionHandler(AuthService.AccountLockedException.class)
+    public ResponseEntity<ApiResult<AccountLockedDetail>> handleAccountLocked(
+            AuthService.AccountLockedException ex) {
+        long retryAfterSeconds = Math.max(0,
+                java.time.Duration.between(java.time.Instant.now(), ex.getLockedUntil()).getSeconds());
+        return ResponseEntity.status(HttpStatus.LOCKED)
+                .header(HttpHeaders.RETRY_AFTER, Long.toString(retryAfterSeconds))
+                .body(ApiResult.of(HttpStatus.LOCKED, ex.getMessage(),
+                        new AccountLockedDetail(ex.getLockedUntil(), retryAfterSeconds)));
+    }
+
+    /**
+     * Body payload for 429 responses. The seconds hint matches the
+     * {@code Retry-After} header; clients that already display friendly
+     * countdowns can read either source.
+     */
+    public record RateLimitDetail(int retryAfterSeconds) {}
+
+    /**
+     * Body payload for 423 LOCKED responses. {@code lockedUntil} is the
+     * absolute ISO-8601 deadline (FE can render a countdown);
+     * {@code retryAfterSeconds} is the same deadline expressed as
+     * seconds-from-now and is mirrored in the {@code Retry-After}
+     * header. Both fields stay in the body even when the header is
+     * present so a relative-clock FE has a fallback.
+     */
+    public record AccountLockedDetail(java.time.Instant lockedUntil, long retryAfterSeconds) {}
+
+    /**
+     * Stamp the audit row with the request's source IP + user agent.
+     * Same X-Forwarded-For-aware IP resolution {@link #clientIp} uses,
+     * so the limiter bucket and the audit row agree on attribution.
+     */
+    private static AuditContext auditContext(HttpServletRequest request) {
+        return new AuditContext(clientIp(request), request.getHeader("User-Agent"));
+    }
+
+    /**
+     * Best-effort source-IP extraction. Behind the api-gateway every
+     * request carries an {@code X-Forwarded-For} chain; the leftmost
+     * entry is the originating client. Falling back to
+     * {@code remoteAddr} keeps direct-to-service callers (curl, dev)
+     * from skipping the limit.
+     */
+    private static String clientIp(HttpServletRequest request) {
+        String forwarded = request.getHeader("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isBlank()) {
+            int comma = forwarded.indexOf(',');
+            String first = (comma < 0 ? forwarded : forwarded.substring(0, comma)).trim();
+            if (!first.isEmpty()) return first;
+        }
+        return request.getRemoteAddr();
+    }
+
+    private String safeSubject(String token) {
+        try {
+            return jwtUtil.extractEmail(token);
+        } catch (RuntimeException ex) {
+            return null;
+        }
     }
 
     @PostMapping("/change-password")
@@ -271,7 +401,7 @@ public class AuthController {
                     .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing Bearer token"));
         }
         String token = authHeader.substring(7);
-        authService.changePassword(token, body);
+        authService.changePassword(token, body, auditContext(request));
         return ResponseEntity.ok(ApiResult.ok("Password changed", null));
     }
 
@@ -315,6 +445,15 @@ public class AuthController {
         }
         String token = authHeader.substring(7);
         tokenRevocationService.revoke(token);
+        // Audit attribution from the bearer's subject — the token is
+        // already valid enough to reach this point (the controller
+        // doesn't verify it further; revoke is idempotent).
+        String subject = safeSubject(token);
+        auditService.recordSuccess(
+                AuditEventType.AUTH_LOGOUT,
+                subject, AuditService.ACTOR_TYPE_USER,
+                subject, AuditService.TARGET_TYPE_USER,
+                null, auditContext(request));
         log.info("Logout successful");
         return ResponseEntity.ok(ApiResult.ok("Logout successful", null));
     }
@@ -540,6 +679,65 @@ public class AuthController {
         log.info("GET /auth/customer/deposits phoneNumber={}", phoneNumber);
         List<DepositAccount> deposits = customerService.getDepositsForCustomer(phoneNumber);
         return ResponseEntity.ok(ApiResult.ok("Deposits retrieved", deposits));
+    }
+
+    @GetMapping("/customer/send-money/details/{customerPhoneNumber}")
+    @SecurityRequirements()
+    @Operation(summary = "Get a customer's send-money details by phone",
+            description = """
+                    Returns the recipient customer's deposit-account identifiers
+                    (account ID, product, currency, status, joint/main flags) so
+                    a sender can pick which account to send money to.
+
+                    Uses the same upstream as /auth/customer/deposits (Oradian
+                    middleware's /internal/customers/{msisdn}/deposits, backed by
+                    instafin.LookupClient). The response strips balance,
+                    subscribed, and lifecycle-date fields so a sender doesn't
+                    see the recipient's private balance or account history.
+
+                    Phone comes from the path — the caller is expected to have
+                    already verified the recipient's identity (e.g. via the
+                    SuperApp's contact picker).
+                    """)
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "Customer details retrieved (empty array if Oradian has none)",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Send-money details", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Customer Details retrieved",
+                                      "data": [
+                                        {
+                                          "firstName": "Jane",
+                                          "middleName": "M",
+                                          "lastName": "Doe",
+                                          "internalID": "",
+                                          "ID": "A8347323",
+                                          "externalAccountNumber": "",
+                                          "clientInternalID": "",
+                                          "productID": "fixed_deposit_12",
+                                          "productName": "Fixed Deposit 12 Months",
+                                          "currencyCode": "",
+                                          "status": "Active",
+                                          "isMainAccount": "true",
+                                          "isMessagingFeeAccount": "",
+                                          "isJointAccount": ""
+                                        }
+                                      ]
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "Phone doesn't resolve to a customer"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502",
+                    description = "Oradian middleware unreachable or upstream Oradian failed")
+    })
+    public ResponseEntity<ApiResult<List<CustomerSendMoneyDetail>>> getCustomerSendMoneyDetails(
+            @PathVariable String customerPhoneNumber) {
+        log.info("GET /auth/customer/send-money/details phoneNumber={}", customerPhoneNumber);
+        List<CustomerSendMoneyDetail> details =
+                customerService.getSendMoneyDetailsForCustomer(customerPhoneNumber);
+        return ResponseEntity.ok(ApiResult.ok("Customer Details retrieved", details));
     }
 
     @PostMapping("/otp/request")

@@ -8,6 +8,7 @@ import com.innbucks.seatservice.repository.SeatRepository;
 import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 
+import java.time.LocalDateTime;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -50,14 +51,63 @@ class SeatServiceTest {
         when(seatRepo.findByIdForUpdate(seatId)).thenReturn(Optional.of(seat));
         when(catRepo.decrementAvailableSeats(cat.getId())).thenReturn(1);
 
+        LocalDateTime beforeLock = LocalDateTime.now();
         SeatLockResponseDTO resp = service.lockSeat(seatId, "user@example.com");
 
         assertEquals(Seat.SeatStatus.LOCKED, seat.getStatus());
         assertEquals("LOCKED", resp.getStatus());
+        // DB-tracked expiry must be set so the reaper can sweep it later.
+        assertNotNull(seat.getLockExpiresAt());
+        assertTrue(seat.getLockExpiresAt().isAfter(beforeLock.plusSeconds(299)));
         verify(store).put(eq("seat:lock:" + seatId), eq("user@example.com"), eq(300L));
         verify(seatRepo).save(seat);
         verify(catRepo).decrementAvailableSeats(cat.getId());
         verify(catRepo, never()).save(any());
+    }
+
+    @Test
+    void lockSeat_reclaimsStaleLock_withoutDecrementingCategoryAgain() {
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatLockStore store = mock(SeatLockStore.class);
+        SeatService service = new SeatService(seatRepo, catRepo, store);
+
+        UUID seatId = UUID.randomUUID();
+        SeatCategory cat = category(9); // previous owner already cost us 1
+        Seat seat = availableSeat(seatId, cat);
+        seat.setStatus(Seat.SeatStatus.LOCKED);
+        seat.setLockExpiresAt(LocalDateTime.now().minusSeconds(30));
+        when(seatRepo.findByIdForUpdate(seatId)).thenReturn(Optional.of(seat));
+
+        SeatLockResponseDTO resp = service.lockSeat(seatId, "new-owner@example.com");
+
+        assertEquals(Seat.SeatStatus.LOCKED, seat.getStatus());
+        assertEquals("LOCKED", resp.getStatus());
+        // Counter must NOT be decremented again — previous owner's decrement still stands.
+        verify(catRepo, never()).decrementAvailableSeats(any());
+        // Expiry must be pushed into the future.
+        assertNotNull(seat.getLockExpiresAt());
+        assertTrue(seat.getLockExpiresAt().isAfter(LocalDateTime.now()));
+        // New owner's lock takes over.
+        verify(store).put(eq("seat:lock:" + seatId), eq("new-owner@example.com"), eq(300L));
+    }
+
+    @Test
+    void lockSeat_rejectsWhenLockedAndNotYetExpired() {
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        SeatLockStore store = mock(SeatLockStore.class);
+        SeatService service = new SeatService(seatRepo, mock(SeatCategoryRepository.class), store);
+
+        UUID seatId = UUID.randomUUID();
+        Seat seat = availableSeat(seatId, category(9));
+        seat.setStatus(Seat.SeatStatus.LOCKED);
+        seat.setLockExpiresAt(LocalDateTime.now().plusSeconds(120));
+        when(seatRepo.findByIdForUpdate(seatId)).thenReturn(Optional.of(seat));
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> service.lockSeat(seatId, "intruder@example.com"));
+        assertTrue(ex.getMessage().contains("is not available"));
+        verify(store, never()).put(any(), any(), anyLong());
     }
 
     @Test
@@ -143,12 +193,14 @@ class SeatServiceTest {
         UUID seatId = UUID.randomUUID();
         Seat seat = availableSeat(seatId, category(9));
         seat.setStatus(Seat.SeatStatus.LOCKED);
+        seat.setLockExpiresAt(LocalDateTime.now().plusSeconds(60));
         when(seatRepo.findById(seatId)).thenReturn(Optional.of(seat));
         when(store.get("seat:lock:" + seatId)).thenReturn("user@example.com");
 
         service.confirmSeat(seatId, "user@example.com");
 
         assertEquals(Seat.SeatStatus.BOOKED, seat.getStatus());
+        assertNull(seat.getLockExpiresAt());
         verify(store).delete("seat:lock:" + seatId);
     }
 
@@ -196,6 +248,7 @@ class SeatServiceTest {
         SeatCategory cat = category(9);
         Seat seat = availableSeat(seatId, cat);
         seat.setStatus(Seat.SeatStatus.LOCKED);
+        seat.setLockExpiresAt(LocalDateTime.now().plusSeconds(60));
         when(seatRepo.findById(seatId)).thenReturn(Optional.of(seat));
         when(store.get(any())).thenReturn("me@example.com");
         when(catRepo.incrementAvailableSeats(cat.getId())).thenReturn(1);
@@ -203,9 +256,89 @@ class SeatServiceTest {
         service.releaseSeat(seatId, "me@example.com");
 
         assertEquals(Seat.SeatStatus.AVAILABLE, seat.getStatus());
+        assertNull(seat.getLockExpiresAt());
         verify(catRepo).incrementAvailableSeats(cat.getId());
         verify(catRepo, never()).save(any());
         verify(store).delete("seat:lock:" + seatId);
+    }
+
+    @Test
+    void releaseStaleLock_revertsExpiredLockedSeatToAvailable_andIncrementsCategory() {
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatLockStore store = mock(SeatLockStore.class);
+        SeatService service = new SeatService(seatRepo, catRepo, store);
+
+        UUID seatId = UUID.randomUUID();
+        SeatCategory cat = category(9);
+        Seat seat = availableSeat(seatId, cat);
+        seat.setStatus(Seat.SeatStatus.LOCKED);
+        seat.setLockExpiresAt(LocalDateTime.now().minusSeconds(10));
+        when(seatRepo.findByIdForUpdate(seatId)).thenReturn(Optional.of(seat));
+        when(catRepo.incrementAvailableSeats(cat.getId())).thenReturn(1);
+
+        boolean released = service.releaseStaleLock(seatId);
+
+        assertTrue(released);
+        assertEquals(Seat.SeatStatus.AVAILABLE, seat.getStatus());
+        assertNull(seat.getLockExpiresAt());
+        verify(catRepo).incrementAvailableSeats(cat.getId());
+        verify(store).delete("seat:lock:" + seatId);
+    }
+
+    @Test
+    void releaseStaleLock_returnsFalse_whenSeatNoLongerLocked() {
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatLockStore store = mock(SeatLockStore.class);
+        SeatService service = new SeatService(seatRepo, catRepo, store);
+
+        UUID seatId = UUID.randomUUID();
+        Seat seat = availableSeat(seatId, category(9));
+        // Already BOOKED — reaper raced and lost. Must not touch anything.
+        seat.setStatus(Seat.SeatStatus.BOOKED);
+        seat.setLockExpiresAt(null);
+        when(seatRepo.findByIdForUpdate(seatId)).thenReturn(Optional.of(seat));
+
+        boolean released = service.releaseStaleLock(seatId);
+
+        assertFalse(released);
+        verify(catRepo, never()).incrementAvailableSeats(any());
+        verify(store, never()).delete(any());
+    }
+
+    @Test
+    void releaseStaleLock_returnsFalse_whenLockExpiryStillInFuture() {
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatLockStore store = mock(SeatLockStore.class);
+        SeatService service = new SeatService(seatRepo, catRepo, store);
+
+        UUID seatId = UUID.randomUUID();
+        Seat seat = availableSeat(seatId, category(9));
+        seat.setStatus(Seat.SeatStatus.LOCKED);
+        // Another user reclaimed via lockSeat between candidate-find and now.
+        seat.setLockExpiresAt(LocalDateTime.now().plusSeconds(290));
+        when(seatRepo.findByIdForUpdate(seatId)).thenReturn(Optional.of(seat));
+
+        boolean released = service.releaseStaleLock(seatId);
+
+        assertFalse(released);
+        assertEquals(Seat.SeatStatus.LOCKED, seat.getStatus());
+        verify(catRepo, never()).incrementAvailableSeats(any());
+        verify(store, never()).delete(any());
+    }
+
+    @Test
+    void releaseStaleLock_returnsFalse_whenSeatMissing() {
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatLockStore store = mock(SeatLockStore.class);
+        SeatService service = new SeatService(seatRepo, catRepo, store);
+
+        when(seatRepo.findByIdForUpdate(any())).thenReturn(Optional.empty());
+
+        assertFalse(service.releaseStaleLock(UUID.randomUUID()));
     }
 
     @Test

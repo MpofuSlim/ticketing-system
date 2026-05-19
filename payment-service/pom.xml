@@ -25,6 +25,18 @@
             <artifactId>spring-boot-starter-data-jpa</artifactId>
         </dependency>
 
+        <!-- Redis: atomic INCRBY counter for the daily-velocity cap. The
+             SQL-based check (SUM(amount) ... GROUP BY account, date) had
+             a TOCTOU race — two parallel requests could both pass the
+             SUM check before either inserted its PENDING row, letting a
+             customer move ~one extra transaction's worth past the cap.
+             Redis INCRBY-then-compare is atomic, so the race is closed
+             at the cost of an extra round-trip per write. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>
@@ -37,10 +49,51 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- H2 is kept for tests only (in-memory, PostgreSQL compatibility mode). -->
+        <!-- Flyway: schema is owned by versioned migrations under
+             src/main/resources/db/migration. spring-boot-flyway carries the
+             auto-configuration (Spring Boot 4 split per-tech autoconfig into
+             dedicated modules); without it Flyway is on the classpath but is
+             never actually invoked at boot — Hibernate then schema-validates
+             against an empty schema and rejects every @Entity with
+             "Schema validation: missing table". Postgres-13+ support split
+             out of flyway-core in 10.x, so the database module is a separate
+             dependency. -->
         <dependency>
-            <groupId>com.h2database</groupId>
-            <artifactId>h2</artifactId>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-flyway</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- Testcontainers — production-fidelity integration tests against
+             a real Postgres 16. Replaces the H2-in-PostgreSQL-mode story
+             that ddl-auto=create-drop relied on: H2 can't exercise the
+             Flyway → JPA validate flow that prod does, so schema drift
+             between V*.sql migrations and @Entity columns only surfaced
+             at deploy time. The "it" Maven phase (Failsafe, *IT.java
+             naming) runs Postgres-backed; pure Mockito unit tests under
+             Surefire still need no infrastructure. Versions come from the
+             testcontainers-bom imported in the parent pom. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
             <scope>test</scope>
         </dependency>
 
@@ -49,6 +102,26 @@
             <groupId>com.stripe</groupId>
             <artifactId>stripe-java</artifactId>
             <version>25.1.0</version>
+        </dependency>
+
+        <!-- JJWT — verify-only. payment-service does NOT mint tokens; it
+             validates the bearer JWT issued by user-service on the public
+             /payments/deposit endpoint (the only authenticated endpoint in
+             this service) and reads its phoneNumber claim for ownership
+             checks. jwt.secret here MUST match user-service's jwt.secret. -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <scope>runtime</scope>
         </dependency>
 
         <!-- Publishes payment success/failure events -->
@@ -60,6 +133,19 @@
         <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-openfeign</artifactId>
+        </dependency>
+
+        <!-- Resilience4j: retry-on-transient + circuit-breaker around the
+             Oradian middleware client. Without this, a single TCP blip
+             becomes a customer-facing 502 and a wasted FAILED ledger row;
+             a sustained Oradian outage threads every customer's request
+             through the read-timeout (~10s) before failing, exhausting
+             the pool. The same Spring Cloud starter booking-service uses
+             so the registries (Retry + CircuitBreaker) auto-wire from
+             the application.yaml block. -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-circuitbreaker-resilience4j</artifactId>
         </dependency>
 
         <dependency>

@@ -99,15 +99,51 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
-            - id: payment-service-route
+            # /payments/** is split into READ vs WRITE routes so each gets
+            # the right-sized bucket. Lumping them together meant every
+            # history pagination tap counted against the same tight limit
+            # as the money-moving POSTs — a customer opening the app +
+            # scrolling history would hit 429 after a handful of requests.
+            #
+            # Both routes use the same Path predicate; the Method predicate
+            # disambiguates. Order doesn't matter (predicates are mutually
+            # exclusive). OPTIONS preflight is handled by globalcors before
+            # route matching so it never touches either rate limiter.
+
+            # READ side — history list + detail. App-open + scroll-paginate
+            # easily hits 5+ GETs in a burst; the same generous 50 rps /
+            # 100 burst used by /events, /bookings, /seats etc. matches
+            # the FE's actual read-traffic profile.
+            - id: payment-service-read-route
               uri: ${PAYMENT_SERVICE_URI:http://localhost:8085}
               predicates:
                 - Path=/payments/**
+                - Method=GET
               filters:
                 - name: RequestRateLimiter
                   args:
-                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
-                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.replenishRate: ${PAYMENTS_READ_RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${PAYMENTS_READ_RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
+
+            # WRITE side — transfer + withdraw move real money via Oradian.
+            # Bucket sized at ~1 req/sec / 5 burst per bearer token: a real
+            # customer transfers a handful of times per day; the generous
+            # 50 rps used elsewhere left ample room for a stolen-token
+            # attacker to drain accounts before the bucket bit. The
+            # velocity service inside payment-service (per-account daily
+            # cap) is the second line of defence.
+            - id: payment-service-write-route
+              uri: ${PAYMENT_SERVICE_URI:http://localhost:8085}
+              predicates:
+                - Path=/payments/**
+                - Method=POST,PUT,PATCH,DELETE
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${PAYMENTS_WRITE_RATE_LIMIT_REPLENISH_PER_SECOND:1}
+                    redis-rate-limiter.burstCapacity: ${PAYMENTS_WRITE_RATE_LIMIT_BURST_CAPACITY:5}
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 

@@ -17,14 +17,36 @@ spring:
 
   jpa:
     hibernate:
-      # Matches the other services: schema lives outside Hibernate (Flyway when
-      # entities are added; today, an empty schema is fine). 'validate' is a no-op
-      # when there are no entities and prevents silent schema drift the moment
-      # JPA models start landing here.
+      # Schema is owned by Flyway migrations (src/main/resources/db/migration);
+      # Hibernate only validates the JPA model matches the actual columns at boot.
       ddl-auto: ${JPA_DDL_AUTO:validate}
     properties:
       hibernate:
         dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
+
+  flyway:
+    enabled: ${FLYWAY_ENABLED:true}
+    baseline-on-migrate: true
+    baseline-version: 0
+    locations: classpath:db/migration
+
+  # Kafka producer bootstrap. The rest of the producer config (acks=all,
+  # idempotence, JSON value serializer) lives in KafkaProducerConfig.java
+  # because Spring Boot's defaults aren't right for money-movement events.
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+  # Redis backs the atomic daily-velocity counter in TransferLimitService.
+  # Without this flag Spring Data Redis classifies every JpaRepository<>
+  # bean as a Redis repository and warns about misconfiguration; we have
+  # no @RedisHash entities so disabling auto-config of redis repositories
+  # silences the warning and keeps boot fast.
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      repositories:
+        enabled: false
 
   lifecycle:
     timeout-per-shutdown-phase: 30s
@@ -46,8 +68,102 @@ loyalty-service:
   connect-timeout-ms: ${LOYALTY_SERVICE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${LOYALTY_SERVICE_READ_TIMEOUT_MS:5000}
 
+# Oradian middleware is called for deposit-account lookups (ownership checks
+# on POST /payments/transfer) and to forward the actual deposit-account transfer.
+# Direct pod-to-pod; the shared secret below must match Oradian middleware's
+# innbucks.internal-api.token. It is a DIFFERENT secret from
+# innbucks.internal-api-token (loyalty-service shared secret) — keep them
+# split so rotating one doesn't break the other. Same env var name as
+# user-service uses (ORADIAN_INTERNAL_TOKEN) so a single value configures
+# every service that talks to Oradian middleware.
+oradian-middleware:
+  base-url: ${ORADIAN_MIDDLEWARE_URL:http://localhost:8090}
+  internal-token: ${ORADIAN_INTERNAL_TOKEN:change-me-internal-token-change-me-internal-token}
+  connect-timeout-ms: ${ORADIAN_MIDDLEWARE_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${ORADIAN_MIDDLEWARE_READ_TIMEOUT_MS:10000}
+
 innbucks:
   internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
+  # Velocity caps on POST /payments/transfer + /payments/withdraw.
+  # Per-transaction max caps a single request; per-day max caps the sum
+  # of today's PENDING + SUCCEEDED rows on the same source account plus
+  # the new amount (calendar-day semantics, server timezone). Defaults
+  # are placeholders — override per deployment / regulator. Real-world
+  # caps should vary by KYC tier, account type, and country; that's
+  # follow-up work, this is the flat-cap v1.
+  transfer-limits:
+    per-transaction-max: ${PER_TX_LIMIT:100000}
+    per-day-max: ${PER_DAY_LIMIT:500000}
+
+# Reconciliation job (ReconciliationJob) surfaces ledger rows stuck in
+# PENDING longer than the threshold so operators can spot drift before
+# it accumulates silently. Defaults: scan every minute, flag anything
+# PENDING for > 5 minutes, max 100 rows per scan (next scan picks up
+# the rest if the page was full).
+payment-service:
+  reconciliation:
+    scan-interval: ${RECONCILIATION_SCAN_INTERVAL:PT1M}
+    stale-pending-threshold: ${RECONCILIATION_STALE_THRESHOLD:PT5M}
+    batch-size: ${RECONCILIATION_BATCH_SIZE:100}
+  # Topic provisioning. Spring auto-creates from the NewTopic @Bean if
+  # the broker allows it; replication-factor of 1 is dev-only — bump to
+  # 3 in any environment with multiple brokers.
+  kafka:
+    transaction-completed:
+      partitions: ${PAYMENT_TX_TOPIC_PARTITIONS:3}
+      replicas: ${PAYMENT_TX_TOPIC_REPLICAS:1}
+
+# Verify-only JWT secret. payment-service does NOT mint tokens — user-service
+# is the issuer. This must match user-service's jwt.secret exactly; tokens
+# signed by user-service are validated here for the authenticated
+# POST /payments/transfer endpoint (the only one that decodes a bearer JWT).
+jwt:
+  secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
+
+# Resilience4j wrap around the Oradian middleware client. Two failure
+# modes drove this: (a) a single TCP blip to Oradian became a customer-
+# facing 502 and a wasted FAILED ledger row, (b) a sustained Oradian
+# outage parked every customer's request on the read-timeout (~10s)
+# before failing, exhausting the request thread pool. Retry handles (a);
+# CircuitBreaker handles (b).
+#
+# Retry kicks in only on OradianMiddlewareTransientException (5xx from
+# upstream / network errors / empty body). 4xx rejections — validation,
+# insufficient funds, account suspended — are thrown as the plain
+# OradianMiddlewareException so they propagate immediately without
+# burning retry budget on a request Oradian has already definitively
+# refused.
+resilience4j:
+  retry:
+    instances:
+      oradian-middleware:
+        max-attempts: 3
+        wait-duration: 500ms
+        # Exponential backoff: 500ms, 1s, 2s between attempts. Caps the
+        # total customer-facing wait at ~3.5s before we surface a 502.
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2
+        retry-exceptions:
+          - innbucks.paymentservice.client.OradianMiddlewareTransientException
+  circuitbreaker:
+    instances:
+      oradian-middleware:
+        register-health-indicator: true
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        # Wait for some traffic before evaluating the rate — keeps the
+        # breaker from tripping on the first two failures after a
+        # cold start.
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50          # open if ≥50% of last 20 calls fail
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+        # Same retry-exceptions list — only transient failures should
+        # count toward tripping the breaker. A 4xx VALIDATION storm
+        # is a customer-side problem, not an upstream-down signal.
+        record-exceptions:
+          - innbucks.paymentservice.client.OradianMiddlewareTransientException
 
 springdoc:
   swagger-ui:

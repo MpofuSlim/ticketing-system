@@ -54,6 +54,14 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
+        <!-- Redis: backs the per-identifier and per-IP rate limiters on
+             /auth/login and /auth/refresh. Atomic INCR + EXPIRE avoids
+             the lost-update race a SQL counter would have. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
         <!-- PostgreSQL is the runtime database. -->
         <dependency>
             <groupId>org.postgresql</groupId>

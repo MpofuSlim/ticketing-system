@@ -50,6 +50,14 @@ app:
     # Set to "redis" for shared, cross-replica locks. Defaults to in-memory so
     # local dev and tests work without a running Redis.
     store: ${LOCK_STORE:memory}
+  # SeatLockReaper sweeps LOCKED seats whose lock_expires_at has elapsed and
+  # returns them to inventory. Without this, any seat whose Redis TTL expires
+  # before the user confirmed/released is permanently stuck.
+  seat-lock-reaper:
+    enabled: ${SEAT_LOCK_REAPER_ENABLED:true}
+    interval-ms: ${SEAT_LOCK_REAPER_INTERVAL_MS:60000}
+    initial-delay-ms: ${SEAT_LOCK_REAPER_INITIAL_DELAY_MS:30000}
+    batch-size: ${SEAT_LOCK_REAPER_BATCH_SIZE:200}
 
 # booking-service is queried by the analytics endpoint
 # (GET /seat-categories/{id}/analytics) to enrich the response with who-bought-

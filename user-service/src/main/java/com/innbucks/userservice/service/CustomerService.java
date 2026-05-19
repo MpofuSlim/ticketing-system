@@ -116,7 +116,22 @@ public class CustomerService {
         // Failure throws OradianClientException, which rolls back the @Transactional
         // saves above so local state can't advance to tier 2 without an Oradian
         // Person+Client. GlobalExceptionHandler maps the exception to HTTP 502.
-        OradianCustomerResponse oradian = oradianClient.createCustomer(toOradianRequest(request));
+        //
+        // Idempotency key MUST be stable per customer (User.id, set at tier-1
+        // and never re-issued). True atomicity between Oradian and the local
+        // DB isn't possible — there's always a window where Oradian commits
+        // but the local transaction rolls back (DB outage during commit, an
+        // exception between the response and the final save, etc.). A stable
+        // key lets a retry replay the Oradian call: within Oradian middleware's
+        // 24h idempotency window the same key returns the cached response,
+        // so we can stamp the existing externalID / clientID locally instead
+        // of orphaning the Oradian record. Previously this key was freshly
+        // randomised per call (UUID.randomUUID()) which defeated the entire
+        // mechanism — every retry looked like a brand-new request to the
+        // middleware.
+        String idempotencyKey = "customer-tier-2:" + user.getId();
+        OradianCustomerResponse oradian = oradianClient.createCustomer(
+                toOradianRequest(request), idempotencyKey);
         if (oradian == null) {
             // Defensive: RestClient.body() can return null on an empty 200. We treat
             // that as a contract violation — the same as Oradian rejecting us — so
@@ -232,6 +247,47 @@ public class CustomerService {
             throw new RuntimeException("User is not a customer");
         }
         return oradianClient.getDeposits(phoneNumber);
+    }
+
+    /**
+     * Send-money projection: same upstream Oradian call as the deposits
+     * lookup, but each row is reduced to identifying fields only — balance,
+     * subscribed, and lifecycle dates are dropped. Use case: a sender
+     * looking up a recipient by phone needs to pick the right account, not
+     * see the recipient's private balance or account history.
+     */
+    @Transactional(readOnly = true)
+    public List<CustomerSendMoneyDetail> getSendMoneyDetailsForCustomer(String phoneNumber) {
+        User user = userRepository.findByPhoneNumber(phoneNumber)
+                .orElseThrow(() -> new RuntimeException("Customer not found for phone " + phoneNumber));
+        if (!user.hasRole(User.Role.CUSTOMER)) {
+            throw new RuntimeException("User is not a customer");
+        }
+        // Capture the recipient's structured name once and stamp it onto every
+        // returned account row so the sender's UI can show "Sending to: Jane M.
+        // Doe" without a second lookup.
+        return oradianClient.getDeposits(phoneNumber).stream()
+                .map(d -> toSendMoneyDetail(d, user))
+                .toList();
+    }
+
+    private static CustomerSendMoneyDetail toSendMoneyDetail(DepositAccount d, User recipient) {
+        return CustomerSendMoneyDetail.builder()
+                .firstName(recipient.getFirstName())
+                .middleName(recipient.getMiddleName())
+                .lastName(recipient.getLastName())
+                .internalID(d.getInternalID())
+                .ID(d.getID())
+                .externalAccountNumber(d.getExternalAccountNumber())
+                .clientInternalID(d.getClientInternalID())
+                .productID(d.getProductID())
+                .productName(d.getProductName())
+                .currencyCode(d.getCurrencyCode())
+                .status(d.getStatus())
+                .isMainAccount(d.getIsMainAccount())
+                .isMessagingFeeAccount(d.getIsMessagingFeeAccount())
+                .isJointAccount(d.getIsJointAccount())
+                .build();
     }
 
     /** Joins first / middle / last into a single string, skipping any blanks. */

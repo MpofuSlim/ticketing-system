@@ -12,7 +12,7 @@ class InMemoryIdempotencyStoreTest {
     void putThenGet_returnsStoredResponse() {
         InMemoryIdempotencyStore store = new InMemoryIdempotencyStore();
         StoredResponse response = new StoredResponse(
-                201, "application/json", "{\"ok\":true}".getBytes());
+                201, "application/json", "{\"ok\":true}".getBytes(), "body-sha-256-hex");
 
         store.put("key", response, 60);
 
@@ -20,6 +20,9 @@ class InMemoryIdempotencyStoreTest {
         assertTrue(result.isPresent());
         assertEquals(201, result.get().status());
         assertArrayEquals("{\"ok\":true}".getBytes(), result.get().body());
+        assertEquals("body-sha-256-hex", result.get().bodySha256(),
+                "store must round-trip the body fingerprint so IdempotencyFilter " +
+                        "can detect same-key + different-body conflicts on replay");
     }
 
     @Test
@@ -30,7 +33,7 @@ class InMemoryIdempotencyStoreTest {
     @Test
     void get_returnsEmptyAfterTtlExpires() {
         InMemoryIdempotencyStore store = new InMemoryIdempotencyStore();
-        store.put("key", new StoredResponse(200, "text/plain", new byte[0]), 0);
+        store.put("key", new StoredResponse(200, "text/plain", new byte[0], "x"), 0);
 
         assertTrue(store.get("key").isEmpty());
         // A follow-up get should also miss (entry purged).

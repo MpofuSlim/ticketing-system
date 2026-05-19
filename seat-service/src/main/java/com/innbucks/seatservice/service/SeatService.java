@@ -10,8 +10,10 @@ import com.innbucks.seatservice.repository.SeatRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -25,8 +27,8 @@ public class SeatService {
     private final SeatCategoryRepository categoryRepository;
     private final SeatLockStore seatLockStore;
 
-    private static final long LOCK_TTL_SECONDS = 300; // 5 minutes
-    private static final String LOCK_KEY_PREFIX = "seat:lock:";
+    static final long LOCK_TTL_SECONDS = 300; // 5 minutes
+    static final String LOCK_KEY_PREFIX = "seat:lock:";
 
     public List<SeatResponseDTO> getSeatsByCategory(UUID categoryId) {
         log.debug("Fetching seats categoryId={}", categoryId);
@@ -79,7 +81,16 @@ public class SeatService {
                     return new RuntimeException("Seat not found");
                 });
 
-        if (seat.getStatus() != Seat.SeatStatus.AVAILABLE) {
+        LocalDateTime now = LocalDateTime.now();
+        // A LOCKED seat whose lockExpiresAt is in the past is stale (previous
+        // owner's TTL elapsed before the reaper got to it). The category
+        // counter was already decremented when the previous owner locked, so
+        // we skip the decrement here and just rewrite the owner + expiry.
+        boolean reclaimingStale = seat.getStatus() == Seat.SeatStatus.LOCKED
+                && seat.getLockExpiresAt() != null
+                && seat.getLockExpiresAt().isBefore(now);
+
+        if (!reclaimingStale && seat.getStatus() != Seat.SeatStatus.AVAILABLE) {
             log.warn("Lock rejected, seat not available seatId={} section={} number={} status={}",
                     seatId, seat.getSectionLabel(), seat.getSeatNumber(), seat.getStatus());
             throw new RuntimeException("Seat " + seat.getSectionLabel()
@@ -87,14 +98,20 @@ public class SeatService {
         }
 
         SeatCategory category = seat.getCategory();
-        int updated = categoryRepository.decrementAvailableSeats(category.getId());
-        if (updated == 0) {
-            log.warn("Lock rejected, category exhausted seatId={} categoryId={}",
-                    seatId, category.getId());
-            throw new RuntimeException("No seats available in category " + category.getName());
+        if (!reclaimingStale) {
+            int updated = categoryRepository.decrementAvailableSeats(category.getId());
+            if (updated == 0) {
+                log.warn("Lock rejected, category exhausted seatId={} categoryId={}",
+                        seatId, category.getId());
+                throw new RuntimeException("No seats available in category " + category.getName());
+            }
+        } else {
+            log.info("Reclaiming stale lock seatId={} previousExpiresAt={}",
+                    seatId, seat.getLockExpiresAt());
         }
 
         seat.setStatus(Seat.SeatStatus.LOCKED);
+        seat.setLockExpiresAt(now.plusSeconds(LOCK_TTL_SECONDS));
         seatRepository.save(seat);
 
         // Redis put goes last: if it throws, the surrounding transaction rolls
@@ -136,6 +153,7 @@ public class SeatService {
         }
 
         seat.setStatus(Seat.SeatStatus.BOOKED);
+        seat.setLockExpiresAt(null);
         seatRepository.save(seat);
         seatLockStore.delete(lockKey);
 
@@ -163,6 +181,7 @@ public class SeatService {
         }
 
         seat.setStatus(Seat.SeatStatus.AVAILABLE);
+        seat.setLockExpiresAt(null);
         seatRepository.save(seat);
 
         UUID categoryId = seat.getCategory().getId();
@@ -174,6 +193,42 @@ public class SeatService {
         seatLockStore.delete(lockKey);
         log.info("Seat released seatId={} section={} number={} userEmail={}",
                 seatId, seat.getSectionLabel(), seat.getSeatNumber(), userEmail);
+    }
+
+    // Called by SeatLockReaper for each stale candidate. REQUIRES_NEW so a
+    // single seat failing (e.g. another transaction holds the row lock) does
+    // not roll back the whole reaper batch. Returns true iff the seat was
+    // actually transitioned LOCKED -> AVAILABLE (so the reaper can tally).
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean releaseStaleLock(UUID seatId) {
+        Seat seat = seatRepository.findByIdForUpdate(seatId).orElse(null);
+        if (seat == null) {
+            return false;
+        }
+        // Re-check inside the pessimistic-locked transaction: another caller
+        // (e.g. a real user reclaiming via lockSeat) may have already moved
+        // this seat between candidate-discovery and now.
+        if (seat.getStatus() != Seat.SeatStatus.LOCKED
+                || seat.getLockExpiresAt() == null
+                || seat.getLockExpiresAt().isAfter(LocalDateTime.now())) {
+            return false;
+        }
+
+        seat.setStatus(Seat.SeatStatus.AVAILABLE);
+        seat.setLockExpiresAt(null);
+        seatRepository.save(seat);
+
+        UUID categoryId = seat.getCategory().getId();
+        int updated = categoryRepository.incrementAvailableSeats(categoryId);
+        if (updated == 0) {
+            log.warn("Reaper: category counter not incremented (already at total) seatId={} categoryId={}",
+                    seatId, categoryId);
+        }
+
+        seatLockStore.delete(LOCK_KEY_PREFIX + seatId);
+        log.info("Reaper released stale lock seatId={} section={} number={}",
+                seatId, seat.getSectionLabel(), seat.getSeatNumber());
+        return true;
     }
 
     private SeatResponseDTO toDTO(Seat seat) {

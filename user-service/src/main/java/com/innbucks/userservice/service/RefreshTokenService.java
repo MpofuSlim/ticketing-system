@@ -44,11 +44,19 @@ public class RefreshTokenService {
     /** Result of a rotation: the new refresh token (raw JWT) and the user it belongs to. */
     public record Rotation(User user, String refreshToken) {}
 
-    /** Mints the first refresh token of a new family for {@code user}. Called on login. */
+    /**
+     * Mints the first refresh token of a new family for {@code user}. Called on login.
+     * The {@code deviceId} is the raw {@code X-Device-Id} header from the
+     * FE — it's hashed before storage so a database leak doesn't expose
+     * device identifiers in plaintext. Pass {@code null} when the caller
+     * didn't send the header (legacy FE during rollout); the row stores
+     * a null device_id_hash and the future {@link #rotate} won't enforce
+     * device binding on it.
+     */
     @Transactional
-    public String issueNewFamily(User user) {
+    public String issueNewFamily(User user, String deviceId) {
         UUID familyId = UUID.randomUUID();
-        return mint(user, familyId, null);
+        return mint(user, familyId, null, hashOrNull(deviceId));
     }
 
     /**
@@ -56,15 +64,23 @@ public class RefreshTokenService {
      * along with a freshly-minted refresh token. The supplied token is marked
      * revoked and cannot be reused.
      *
-     * @throws ReuseDetectedException if the token has already been rotated.
-     *         The whole family is revoked as a side effect.
+     * <p>If the stored row carries a {@code device_id_hash} (i.e. the
+     * issuing login sent {@code X-Device-Id}), the rotate request MUST
+     * present the same device id — mismatch is treated as token theft
+     * and fires the same family-revoke side effect as a replayed token.
+     * Rows without a stored hash (legacy sessions from before the
+     * rollout) skip the check and rotate without device enforcement.
+     *
+     * @throws ReuseDetectedException if the token has already been
+     *         rotated OR the device-id doesn't match. Family revoked
+     *         in both cases.
      */
     // noRollbackFor: ReuseDetectedException is part of the security contract —
     // when we detect token replay we WANT the side-effect (revokeFamily) to
     // commit. Without this, Spring would roll back the family-revocation
     // UPDATE and an attacker could keep replaying the stolen token.
     @Transactional(noRollbackFor = ReuseDetectedException.class)
-    public Rotation rotate(String rawToken) {
+    public Rotation rotate(String rawToken, String deviceId) {
         if (rawToken == null || rawToken.isBlank() || !jwtUtil.isTokenValid(rawToken)) {
             throw new RuntimeException("Invalid or expired refresh token");
         }
@@ -82,6 +98,19 @@ public class RefreshTokenService {
             log.warn("Refresh-token reuse detected familyId={} rowsRevoked={}", row.getFamilyId(), killed);
             throw new ReuseDetectedException("Refresh token reuse detected; family revoked");
         }
+        // Device-binding check. Skipped only when the row was minted
+        // before the rollout (NULL stored hash). Once a row carries a
+        // hash, the request MUST present a matching X-Device-Id — same
+        // family-revoke side effect as replay detection above.
+        if (row.getDeviceIdHash() != null) {
+            String requestHash = hashOrNull(deviceId);
+            if (requestHash == null || !row.getDeviceIdHash().equals(requestHash)) {
+                int killed = refreshTokenRepository.revokeFamily(row.getFamilyId(), Instant.now());
+                log.warn("Refresh-token device mismatch familyId={} rowsRevoked={} hasHeader={}",
+                        row.getFamilyId(), killed, requestHash != null);
+                throw new ReuseDetectedException("Refresh token reuse detected; family revoked");
+            }
+        }
         if (row.getExpiresAt().isBefore(Instant.now())) {
             throw new RuntimeException("Refresh token expired");
         }
@@ -89,7 +118,11 @@ public class RefreshTokenService {
         User user = userRepository.findById(row.getUserId())
                 .orElseThrow(() -> new RuntimeException("User not found"));
 
-        String newToken = mint(user, row.getFamilyId(), row.getId());
+        // Preserve the device binding through the rotation chain. A
+        // family stays bound to whatever device its first token was
+        // minted for — a customer can't sneak their session onto a new
+        // device just by refreshing.
+        String newToken = mint(user, row.getFamilyId(), row.getId(), row.getDeviceIdHash());
 
         // Mark the consumed token as revoked and chained to its replacement.
         RefreshToken successor = refreshTokenRepository.findByTokenHash(sha256(newToken))
@@ -118,7 +151,7 @@ public class RefreshTokenService {
         }
     }
 
-    private String mint(User user, UUID familyId, UUID parentId) {
+    private String mint(User user, UUID familyId, UUID parentId, String deviceIdHash) {
         String subject = user.getEmail() != null ? user.getEmail() : user.getPhoneNumber();
         String raw = jwtUtil.generateRefreshToken(subject);
         RefreshToken row = RefreshToken.builder()
@@ -127,11 +160,17 @@ public class RefreshTokenService {
                 .tokenHash(sha256(raw))
                 .familyId(familyId)
                 .parentId(parentId)
+                .deviceIdHash(deviceIdHash)
                 .expiresAt(jwtUtil.extractExpiration(raw).toInstant())
                 .createdAt(Instant.now())
                 .build();
         refreshTokenRepository.save(row);
         return raw;
+    }
+
+    private static String hashOrNull(String deviceId) {
+        if (deviceId == null || deviceId.isBlank()) return null;
+        return sha256(deviceId);
     }
 
     static String sha256(String value) {

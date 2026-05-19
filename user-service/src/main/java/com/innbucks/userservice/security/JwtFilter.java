@@ -57,6 +57,20 @@ public class JwtFilter extends OncePerRequestFilter {
             }
 
             String email = jwtUtil.extractEmail(token);
+
+            // Single-active-session gate. Each /auth/login bumps the user's
+            // token_version column; a token whose claim is stale belongs to
+            // a session that was superseded by a later login (potentially
+            // on another device) and must be rejected. SESSION_SUPERSEDED
+            // is a distinct error code from INVALID_TOKEN / TOKEN_REVOKED so
+            // the FE can decide whether to redirect to login vs offer a
+            // refresh.
+            long claimedVersion = jwtUtil.extractTokenVersion(token);
+            if (!tokenRevocationService.isTokenVersionCurrent(email, claimedVersion)) {
+                writeUnauthorized(response, "SESSION_SUPERSEDED",
+                        "This session has been ended by a newer login");
+                return;
+            }
             List<String> roles = jwtUtil.extractRoles(token);
             List<String> services = jwtUtil.extractServices(token);
             Integer tier = jwtUtil.extractTier(token);

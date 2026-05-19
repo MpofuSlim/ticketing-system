@@ -85,4 +85,25 @@ class JwtUtilTest {
         assertFalse(jwtUtil.isRefreshToken(access));
         assertNull(jwtUtil.extractType(access));
     }
+
+    @Test
+    void extractTokenVersion_roundTripsThroughThe12ArgOverload() {
+        String token = jwtUtil.generateToken("u@example.com", java.util.List.of("CUSTOMER"),
+                java.util.List.of(), 2, true, "0777000000",
+                null, null, null, null, null, 42L);
+
+        assertEquals(42L, jwtUtil.extractTokenVersion(token),
+                "the 12-arg generateToken must stamp tokenVersion onto the JWT so " +
+                        "JwtFilter can compare it to users.token_version");
+    }
+
+    @Test
+    void extractTokenVersion_returnsZeroForLegacyTokensThatDontCarryTheClaim() {
+        // The shorter overloads default tokenVersion to 0 via the legacy
+        // 11-arg adapter. JwtFilter then compares 0 to users.token_version
+        // (column defaults to 0), so freshly-migrated users still pass the
+        // first request — they're invalidated only on the next login.
+        String legacy = jwtUtil.generateToken("u@example.com", "CUSTOMER", 2, true);
+        assertEquals(0L, jwtUtil.extractTokenVersion(legacy));
+    }
 }

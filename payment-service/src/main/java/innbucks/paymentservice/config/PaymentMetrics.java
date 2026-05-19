@@ -50,4 +50,24 @@ public class PaymentMetrics {
                 .register(registry)
                 .increment();
     }
+
+    /**
+     * Counter incremented once per stale-PENDING ledger row the
+     * reconciliation job surfaces on each scan. Tag by transaction_type
+     * so dashboards / alerts can split TRANSFER vs WITHDRAWAL drift.
+     *
+     * <p>Alerting target: any non-zero value sustained across two
+     * consecutive scrape windows. A single row is operator-investigate;
+     * a steady drip is "payment-service is failing to mark PENDING rows
+     * SUCCEEDED/FAILED" — likely a DB outage during commit AFTER Oradian
+     * already moved the money, i.e. the orphan-in-upstream class of bug
+     * the ledger exists to surface.
+     */
+    public void incStalePendingTransaction(String type) {
+        Counter.builder("payment.transactions.stale_pending")
+                .description("PENDING ledger rows older than the reconciliation threshold, by transaction type")
+                .tag("type", type == null ? "UNKNOWN" : type)
+                .register(registry)
+                .increment();
+    }
 }

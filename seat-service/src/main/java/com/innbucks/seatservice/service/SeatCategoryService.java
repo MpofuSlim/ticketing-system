@@ -26,6 +26,12 @@ import java.util.stream.Collectors;
 @Slf4j
 public class SeatCategoryService {
 
+    // Aggregate cap on top of the DTO's per-section @Max + sections @Size.
+    // A request that passes bean validation can still ask for 100 sections ×
+    // 100,000 seats = 10 million. This cap rejects that before we materialise
+    // the seat rows. Half a million is more than any real venue's capacity.
+    public static final long MAX_TOTAL_SEATS_PER_CATEGORY = 500_000L;
+
     private final SeatCategoryRepository categoryRepository;
     private final SeatRepository seatRepository;
     private final ObjectProvider<EventServiceClient> eventClientProvider;
@@ -56,9 +62,18 @@ public class SeatCategoryService {
                     + "' already exists for this event");
         }
 
-        int totalSeats = request.getSections().stream()
-                .mapToInt(SectionSeatConfigDTO::getSeatCount)
+        // Sum in long to dodge int overflow when validation has already
+        // passed but section counts approach Integer.MAX_VALUE collectively.
+        long totalSeatsLong = request.getSections().stream()
+                .mapToLong(SectionSeatConfigDTO::getSeatCount)
                 .sum();
+        if (totalSeatsLong > MAX_TOTAL_SEATS_PER_CATEGORY) {
+            log.warn("Category creation rejected, total seats exceeds cap eventId={} requested={} cap={}",
+                    request.getEventId(), totalSeatsLong, MAX_TOTAL_SEATS_PER_CATEGORY);
+            throw new RuntimeException("Total seats (" + totalSeatsLong
+                    + ") exceeds the per-category cap of " + MAX_TOTAL_SEATS_PER_CATEGORY);
+        }
+        int totalSeats = (int) totalSeatsLong;
 
         // Prevent duplicated sections in one request, e.g. "A" and "a"
         Set<String> seenSections = new HashSet<>();
