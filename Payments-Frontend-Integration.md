@@ -361,12 +361,21 @@ shouldn't see the recipient's full account state.
 
 ### 8.1 Gateway-side per-token rate limit
 
-`/payments/**` is capped at **1 request/sec, burst 5** per bearer token.
-Stricter than the rest of the API because it's the money path.
+`/payments/**` is split by HTTP method at the gateway:
+
+| Side  | Methods                  | Replenish | Burst |
+|-------|--------------------------|-----------|-------|
+| Read  | `GET`                    | 50 rps    | 100   |
+| Write | `POST`, `PUT`, `PATCH`, `DELETE` | 1 rps | 5  |
+
+Same limits per bearer token. Reads use the generous default that
+matches `/events/**`, `/bookings/**`, etc. — so history pagination,
+detail-screen fetches, and pull-to-refresh won't hit the bucket under
+normal use. Writes use the tight limit because real customers
+transfer / withdraw a handful of times per day; anything north of
+1 rps on the money path is anomalous.
 
 If you hit it, you get `HTTP 429` from the gateway. Back off and retry.
-For typical customer use this won't be reached; for FE testing /
-QA scripts it might.
 
 ### 8.2 Retries on transient failures
 
