@@ -193,15 +193,34 @@ public class TransfersController {
                                             """)
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
-                    description = "fromAccountId does not belong to the authenticated customer",
+                    description = "Ownership / KYC / account-status gate failed. Three reasons land here: " +
+                            "(a) fromAccountId doesn't belong to the authenticated customer, " +
+                            "(b) the JWT's tier claim is below 2 (tier-1 customers have no Oradian record), " +
+                            "or (c) the source account's Oradian status is not Active (Frozen / Closed / Dormant).",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(name = "Not your account", value = """
-                                    {
-                                      "code": "403 FORBIDDEN",
-                                      "message": "fromAccountId does not belong to the authenticated customer",
-                                      "data": null
-                                    }
-                                    """))),
+                            examples = {
+                                    @ExampleObject(name = "Not your account", value = """
+                                            {
+                                              "code": "403 FORBIDDEN",
+                                              "message": "fromAccountId does not belong to the authenticated customer",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "KYC tier too low", value = """
+                                            {
+                                              "code": "403 FORBIDDEN",
+                                              "message": "Customer must be at KYC tier 2 or higher to use this endpoint",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Account not Active", value = """
+                                            {
+                                              "code": "403 FORBIDDEN",
+                                              "message": "Source account is not Active (status: Frozen)",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502",
                     description = "Oradian middleware unreachable or upstream Oradian failed",
                     content = @Content(mediaType = "application/json",
@@ -234,25 +253,47 @@ public class TransfersController {
                     "Token has no phoneNumber claim; only CUSTOMER tokens can call /payments/transfer");
         }
 
+        // KYC tier gate. Customer-facing money endpoints require tier 2 or
+        // higher — tier 1 customers (phone + password only, no Oradian
+        // Person+Client yet) literally have nothing to transfer from, and
+        // staff tokens (no tier claim) shouldn't be hitting these paths
+        // at all. Both null and < 2 are 403.
+        Integer tier = jwtUtil.extractTier(token);
+        if (tier == null || tier < 2) {
+            log.warn("Tier gate rejection on POST /payments/transfer phone={} tier={}",
+                    phoneNumber, tier);
+            return forbidden(
+                    "Customer must be at KYC tier 2 or higher to use this endpoint");
+        }
+
         // Ownership check: source account MUST be one of this customer's
         // Oradian deposit accounts. We look these up by phone via the same
         // upstream as user-service's /auth/customer/deposits — so the
         // accounts shown to the user are exactly the accounts they can
         // transfer from here.
         List<DepositAccount> deposits = oradianMiddlewareClient.getDepositsForMsisdn(phoneNumber);
-        boolean ownsSource = deposits.stream()
-                .map(DepositAccount::getID)
-                .filter(id -> id != null && !id.isBlank())
-                .anyMatch(id -> id.equals(request.getFromAccountId()));
-        if (!ownsSource) {
+        DepositAccount sourceAccount = deposits.stream()
+                .filter(d -> d.getID() != null && !d.getID().isBlank())
+                .filter(d -> d.getID().equals(request.getFromAccountId()))
+                .findFirst()
+                .orElse(null);
+        if (sourceAccount == null) {
             log.warn("Ownership rejection on POST /payments/transfer phone={} from={}",
                     phoneNumber, request.getFromAccountId());
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(
-                    ApiResult.<DepositTransferResponse>builder()
-                            .code("403 FORBIDDEN")
-                            .message("fromAccountId does not belong to the authenticated customer")
-                            .data(null)
-                            .build());
+            return forbidden("fromAccountId does not belong to the authenticated customer");
+        }
+
+        // Account status gate. Frozen / Closed / Dormant accounts must reject
+        // before we even attempt to call Oradian — Oradian would refuse with
+        // a generic 4xx, but we'd rather surface a precise reason and avoid
+        // burning a ledger row + an upstream round-trip on a guaranteed-fail
+        // path. Case-insensitive compare because Oradian's wire format isn't
+        // consistent on casing.
+        if (!"Active".equalsIgnoreCase(sourceAccount.getStatus())) {
+            log.warn("Account status gate rejection on POST /payments/transfer phone={} account={} status={}",
+                    phoneNumber, request.getFromAccountId(), sourceAccount.getStatus());
+            return forbidden(
+                    "Source account is not Active (status: " + sourceAccount.getStatus() + ")");
         }
 
         // Server-stamp the transaction date. transactionDate is JsonIgnore on
@@ -444,15 +485,34 @@ public class TransfersController {
                                             """)
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
-                    description = "accountID does not belong to the authenticated customer",
+                    description = "Ownership / KYC / account-status gate failed. Three reasons land here: " +
+                            "(a) accountID doesn't belong to the authenticated customer, " +
+                            "(b) the JWT's tier claim is below 2, " +
+                            "or (c) the account's Oradian status is not Active.",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(name = "Not your account", value = """
-                                    {
-                                      "code": "403 FORBIDDEN",
-                                      "message": "accountID does not belong to the authenticated customer",
-                                      "data": null
-                                    }
-                                    """))),
+                            examples = {
+                                    @ExampleObject(name = "Not your account", value = """
+                                            {
+                                              "code": "403 FORBIDDEN",
+                                              "message": "accountID does not belong to the authenticated customer",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "KYC tier too low", value = """
+                                            {
+                                              "code": "403 FORBIDDEN",
+                                              "message": "Customer must be at KYC tier 2 or higher to use this endpoint",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Account not Active", value = """
+                                            {
+                                              "code": "403 FORBIDDEN",
+                                              "message": "Source account is not Active (status: Closed)",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "502",
                     description = "Oradian middleware unreachable or Oradian rejected the withdrawal " +
                             "(e.g. insufficient balance, account suspended, payment method unknown)",
@@ -486,23 +546,36 @@ public class TransfersController {
                     "Token has no phoneNumber claim; only CUSTOMER tokens can call /payments/withdraw");
         }
 
+        // KYC tier gate. See /payments/transfer for the rationale.
+        Integer tier = jwtUtil.extractTier(token);
+        if (tier == null || tier < 2) {
+            log.warn("Tier gate rejection on POST /payments/withdraw phone={} tier={}",
+                    phoneNumber, tier);
+            return forbidden(
+                    "Customer must be at KYC tier 2 or higher to use this endpoint");
+        }
+
         // Ownership check: accountID MUST be one of this customer's Oradian
         // deposit accounts — same upstream as /payments/transfer and
         // /auth/customer/deposits so the view of "your accounts" is consistent.
         List<DepositAccount> deposits = oradianMiddlewareClient.getDepositsForMsisdn(phoneNumber);
-        boolean ownsAccount = deposits.stream()
-                .map(DepositAccount::getID)
-                .filter(id -> id != null && !id.isBlank())
-                .anyMatch(id -> id.equals(request.getAccountID()));
-        if (!ownsAccount) {
+        DepositAccount sourceAccount = deposits.stream()
+                .filter(d -> d.getID() != null && !d.getID().isBlank())
+                .filter(d -> d.getID().equals(request.getAccountID()))
+                .findFirst()
+                .orElse(null);
+        if (sourceAccount == null) {
             log.warn("Ownership rejection on POST /payments/withdraw phone={} account={}",
                     phoneNumber, request.getAccountID());
-            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(
-                    ApiResult.<WithdrawalResponse>builder()
-                            .code("403 FORBIDDEN")
-                            .message("accountID does not belong to the authenticated customer")
-                            .data(null)
-                            .build());
+            return forbidden("accountID does not belong to the authenticated customer");
+        }
+
+        // Account status gate. See /payments/transfer for the rationale.
+        if (!"Active".equalsIgnoreCase(sourceAccount.getStatus())) {
+            log.warn("Account status gate rejection on POST /payments/withdraw phone={} account={} status={}",
+                    phoneNumber, request.getAccountID(), sourceAccount.getStatus());
+            return forbidden(
+                    "Source account is not Active (status: " + sourceAccount.getStatus() + ")");
         }
 
         // Server-stamp the three fields the FE can't supply. The DTO marks
@@ -597,6 +670,15 @@ public class TransfersController {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(
                 ApiResult.<T>builder()
                         .code("401 UNAUTHORIZED")
+                        .message(message)
+                        .data(null)
+                        .build());
+    }
+
+    private static <T> ResponseEntity<ApiResult<T>> forbidden(String message) {
+        return ResponseEntity.status(HttpStatus.FORBIDDEN).body(
+                ApiResult.<T>builder()
+                        .code("403 FORBIDDEN")
                         .message(message)
                         .data(null)
                         .build());

@@ -43,6 +43,21 @@ public class JwtUtil {
         return (phone == null || phone.isBlank()) ? null : phone;
     }
 
+    /**
+     * Extract the customer's KYC tier from the {@code tier} claim. Returns
+     * null when the token is invalid, when the claim is missing (staff
+     * tokens — MERCHANT_ADMIN / SHOP_ADMIN — don't carry it), or when the
+     * value can't be parsed as an integer. Callers that gate on
+     * "tier &gt;= 2" should treat null as a rejection: tier-1 customers
+     * have no Oradian record so they can't transfer, and staff tokens
+     * shouldn't be hitting customer money endpoints in the first place.
+     */
+    public Integer extractTier(String token) {
+        Claims claims = parseOrNull(token);
+        if (claims == null) return null;
+        return claims.get("tier", Integer.class);
+    }
+
     /** True iff the token's signature, expiry, and structure are all valid. */
     public boolean isTokenValid(String token) {
         return parseOrNull(token) != null;

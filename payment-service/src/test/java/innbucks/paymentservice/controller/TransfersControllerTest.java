@@ -78,6 +78,7 @@ class TransfersControllerTest {
         JwtUtil jwt = mock(JwtUtil.class);
         when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
         when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+        when(jwt.extractTier(VALID_TOKEN)).thenReturn(2);
 
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
@@ -113,6 +114,7 @@ class TransfersControllerTest {
         JwtUtil jwt = mock(JwtUtil.class);
         when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
         when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+        when(jwt.extractTier(VALID_TOKEN)).thenReturn(2);
 
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
@@ -140,6 +142,7 @@ class TransfersControllerTest {
         JwtUtil jwt = mock(JwtUtil.class);
         when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
         when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+        when(jwt.extractTier(VALID_TOKEN)).thenReturn(2);
 
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
@@ -172,6 +175,7 @@ class TransfersControllerTest {
         JwtUtil jwt = mock(JwtUtil.class);
         when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
         when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+        when(jwt.extractTier(VALID_TOKEN)).thenReturn(2);
 
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
@@ -270,6 +274,7 @@ class TransfersControllerTest {
         JwtUtil jwt = mock(JwtUtil.class);
         when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
         when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+        when(jwt.extractTier(VALID_TOKEN)).thenReturn(2);
 
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
@@ -291,6 +296,7 @@ class TransfersControllerTest {
         JwtUtil jwt = mock(JwtUtil.class);
         when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
         when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+        when(jwt.extractTier(VALID_TOKEN)).thenReturn(2);
 
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE)).thenReturn(List.of());
@@ -312,6 +318,7 @@ class TransfersControllerTest {
         JwtUtil jwt = mock(JwtUtil.class);
         when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
         when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+        when(jwt.extractTier(VALID_TOKEN)).thenReturn(2);
 
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
@@ -343,6 +350,7 @@ class TransfersControllerTest {
         JwtUtil jwt = mock(JwtUtil.class);
         when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
         when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+        when(jwt.extractTier(VALID_TOKEN)).thenReturn(2);
 
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
@@ -430,6 +438,7 @@ class TransfersControllerTest {
         JwtUtil jwt = mock(JwtUtil.class);
         when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
         when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+        when(jwt.extractTier(VALID_TOKEN)).thenReturn(2);
 
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
@@ -454,6 +463,7 @@ class TransfersControllerTest {
         JwtUtil jwt = mock(JwtUtil.class);
         when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
         when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+        when(jwt.extractTier(VALID_TOKEN)).thenReturn(2);
 
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
@@ -485,6 +495,7 @@ class TransfersControllerTest {
         JwtUtil jwt = mock(JwtUtil.class);
         when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
         when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+        when(jwt.extractTier(VALID_TOKEN)).thenReturn(2);
 
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
@@ -513,6 +524,7 @@ class TransfersControllerTest {
         JwtUtil jwt = mock(JwtUtil.class);
         when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
         when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+        when(jwt.extractTier(VALID_TOKEN)).thenReturn(2);
 
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
@@ -549,6 +561,7 @@ class TransfersControllerTest {
         JwtUtil jwt = mock(JwtUtil.class);
         when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
         when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+        when(jwt.extractTier(VALID_TOKEN)).thenReturn(2);
 
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
@@ -578,6 +591,7 @@ class TransfersControllerTest {
         JwtUtil jwt = mock(JwtUtil.class);
         when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
         when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+        when(jwt.extractTier(VALID_TOKEN)).thenReturn(2);
 
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
@@ -612,6 +626,7 @@ class TransfersControllerTest {
         JwtUtil jwt = mock(JwtUtil.class);
         when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
         when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+        when(jwt.extractTier(VALID_TOKEN)).thenReturn(2);
 
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
@@ -637,6 +652,7 @@ class TransfersControllerTest {
         JwtUtil jwt = mock(JwtUtil.class);
         when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
         when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+        when(jwt.extractTier(VALID_TOKEN)).thenReturn(2);
 
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
@@ -660,6 +676,7 @@ class TransfersControllerTest {
         JwtUtil jwt = mock(JwtUtil.class);
         when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
         when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+        when(jwt.extractTier(VALID_TOKEN)).thenReturn(2);
 
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
@@ -682,6 +699,7 @@ class TransfersControllerTest {
         JwtUtil jwt = mock(JwtUtil.class);
         when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
         when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+        when(jwt.extractTier(VALID_TOKEN)).thenReturn(2);
 
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
@@ -703,6 +721,7 @@ class TransfersControllerTest {
         JwtUtil jwt = mock(JwtUtil.class);
         when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
         when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+        when(jwt.extractTier(VALID_TOKEN)).thenReturn(2);
 
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
@@ -723,5 +742,111 @@ class TransfersControllerTest {
         verify(txService).openPending(pending.capture());
         assertEquals("idem-abc-123", pending.getValue().getIdempotencyKey(),
                 "ledger row must carry the FE's Idempotency-Key for later replay/dedup audit");
+    }
+
+    // ----- KYC tier + account status gates -----
+
+    @Test
+    void transfer_returns403_whenTierIsBelow2() {
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
+        when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+        when(jwt.extractTier(VALID_TOKEN)).thenReturn(1); // tier-1: no Oradian account
+
+        OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
+
+        ResponseEntity<ApiResult<DepositTransferResponse>> resp =
+                new TransfersController(jwt, oradian, stubbedTxService())
+                        .transfer(bearerRequest(VALID_TOKEN), request(OWNED_ACCOUNT));
+
+        assertEquals(HttpStatus.FORBIDDEN, resp.getStatusCode());
+        assertTrue(resp.getBody().getMessage().contains("tier 2"),
+                "message must explain the tier requirement");
+        // Reject BEFORE the deposits lookup — no point burning an Oradian
+        // round-trip for a customer who definitionally has no accounts.
+        verifyNoInteractions(oradian);
+    }
+
+    @Test
+    void transfer_returns403_whenJwtHasNoTierClaim() {
+        // Staff tokens (MERCHANT_ADMIN / SHOP_ADMIN) don't carry a tier
+        // claim — they shouldn't be hitting customer money endpoints at
+        // all, but if one ever does (mis-routed test traffic, etc.) it
+        // must be rejected at the gate.
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
+        when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+        when(jwt.extractTier(VALID_TOKEN)).thenReturn(null);
+
+        OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
+
+        ResponseEntity<ApiResult<DepositTransferResponse>> resp =
+                new TransfersController(jwt, oradian, stubbedTxService())
+                        .transfer(bearerRequest(VALID_TOKEN), request(OWNED_ACCOUNT));
+
+        assertEquals(HttpStatus.FORBIDDEN, resp.getStatusCode());
+        verifyNoInteractions(oradian);
+    }
+
+    @Test
+    void transfer_returns403_whenSourceAccountStatusIsNotActive() {
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
+        when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+        when(jwt.extractTier(VALID_TOKEN)).thenReturn(2);
+
+        OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
+        // Owned, but status=Frozen — must be rejected before the Oradian
+        // transfer call. (Oradian would refuse anyway, but with a generic
+        // 4xx that doesn't tell the FE the precise reason.)
+        DepositAccount frozen = DepositAccount.builder().ID(OWNED_ACCOUNT).status("Frozen").build();
+        when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE)).thenReturn(List.of(frozen));
+
+        ResponseEntity<ApiResult<DepositTransferResponse>> resp =
+                new TransfersController(jwt, oradian, stubbedTxService())
+                        .transfer(bearerRequest(VALID_TOKEN), request(OWNED_ACCOUNT));
+
+        assertEquals(HttpStatus.FORBIDDEN, resp.getStatusCode());
+        assertTrue(resp.getBody().getMessage().contains("Frozen"),
+                "message should leak the upstream status so the FE can render \"account frozen\" UX");
+        verify(oradian, never()).submitDepositTransfer(any());
+    }
+
+    @Test
+    void withdraw_returns403_whenTierIsBelow2() {
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
+        when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+        when(jwt.extractTier(VALID_TOKEN)).thenReturn(1);
+
+        OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
+
+        ResponseEntity<ApiResult<WithdrawalResponse>> resp =
+                new TransfersController(jwt, oradian, stubbedTxService())
+                        .withdraw(bearerRequest(VALID_TOKEN), withdrawalRequest(OWNED_ACCOUNT));
+
+        assertEquals(HttpStatus.FORBIDDEN, resp.getStatusCode());
+        assertTrue(resp.getBody().getMessage().contains("tier 2"));
+        verifyNoInteractions(oradian);
+    }
+
+    @Test
+    void withdraw_returns403_whenSourceAccountStatusIsNotActive() {
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
+        when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+        when(jwt.extractTier(VALID_TOKEN)).thenReturn(2);
+
+        OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
+        DepositAccount closed = DepositAccount.builder().ID(OWNED_ACCOUNT).status("Closed").build();
+        when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE)).thenReturn(List.of(closed));
+
+        ResponseEntity<ApiResult<WithdrawalResponse>> resp =
+                new TransfersController(jwt, oradian, stubbedTxService())
+                        .withdraw(bearerRequest(VALID_TOKEN), withdrawalRequest(OWNED_ACCOUNT));
+
+        assertEquals(HttpStatus.FORBIDDEN, resp.getStatusCode());
+        assertTrue(resp.getBody().getMessage().contains("Closed"));
+        verify(oradian, never()).submitWithdrawal(any());
     }
 }
