@@ -9,6 +9,11 @@ import innbucks.paymentservice.dto.DepositTransferResponse;
 import innbucks.paymentservice.dto.WithdrawalRequest;
 import innbucks.paymentservice.dto.WithdrawalResponse;
 import innbucks.paymentservice.util.MsisdnMasking;
+import io.github.resilience4j.circuitbreaker.CallNotPermittedException;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import io.github.resilience4j.retry.Retry;
+import io.github.resilience4j.retry.RetryRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
@@ -23,6 +28,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 /**
  * Talks to Oradian middleware: deposit-account ownership lookups for
@@ -34,25 +40,43 @@ import java.util.Optional;
  * and is DIFFERENT from {@code innbucks.internal-api-token} — the latter is
  * the loyalty-service secret. Mixing them up gets you a 401 from Oradian.
  *
- * Modelled after LoyaltyServiceClient so the wire conventions (JDK HttpClient
- * with explicit timeouts, correlation-id interceptor, RestClientResponseException
- * mapped to a typed domain exception that carries the upstream status) stay
- * uniform across all our S2S outbound calls.
+ * <p>Every outbound call is wrapped by Resilience4j Retry + CircuitBreaker
+ * via the {@code oradian-middleware} registry instances configured in
+ * {@code application.yaml}. Retry kicks in only on
+ * {@link OradianMiddlewareTransientException} — connectivity errors and
+ * 5xx from upstream — so 4xx validation rejections fail immediately
+ * (retrying "Insufficient funds" doesn't help the customer). When the
+ * circuit is open the decorated supplier throws
+ * {@link CallNotPermittedException}, which {@link #execute} maps to a
+ * 503-bearing transient exception so the FE can render an "upstream
+ * temporarily unavailable" UX without burning the read-timeout.
+ *
+ * <p>Modelled after LoyaltyServiceClient so the wire conventions (JDK
+ * HttpClient with explicit timeouts, correlation-id interceptor,
+ * RestClientResponseException mapped to a typed domain exception that
+ * carries the upstream status) stay uniform across all our S2S outbound
+ * calls.
  */
 @Component
 @Slf4j
 public class OradianMiddlewareClient {
 
+    private static final String RESILIENCE_INSTANCE_NAME = "oradian-middleware";
+
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
     private final String internalToken;
+    private final Retry retry;
+    private final CircuitBreaker circuitBreaker;
 
     public OradianMiddlewareClient(
             @Value("${oradian-middleware.base-url:http://localhost:8090}") String baseUrl,
             @Value("${oradian-middleware.connect-timeout-ms:2000}") int connectMs,
             @Value("${oradian-middleware.read-timeout-ms:10000}") int readMs,
             @Value("${oradian-middleware.internal-token:}") String internalToken,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            RetryRegistry retryRegistry,
+            CircuitBreakerRegistry circuitBreakerRegistry) {
         HttpClient httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofMillis(connectMs))
                 .build();
@@ -65,9 +89,32 @@ public class OradianMiddlewareClient {
                 .build();
         this.objectMapper = objectMapper;
         this.internalToken = internalToken;
+        this.retry = retryRegistry.retry(RESILIENCE_INSTANCE_NAME);
+        this.circuitBreaker = circuitBreakerRegistry.circuitBreaker(RESILIENCE_INSTANCE_NAME);
     }
 
     public DepositTransferResponse submitDepositTransfer(DepositTransferRequest request) {
+        return execute(() -> doSubmitDepositTransfer(request));
+    }
+
+    public WithdrawalResponse submitWithdrawal(WithdrawalRequest request) {
+        return execute(() -> doSubmitWithdrawal(request));
+    }
+
+    public List<DepositAccount> getDepositsForMsisdn(String msisdn) {
+        if (msisdn == null || msisdn.isBlank()) {
+            return Collections.emptyList();
+        }
+        return execute(() -> doGetDepositsForMsisdn(msisdn));
+    }
+
+    // ------------------------------------------------------------------
+    //  Inner call implementations — same wire logic as before, but every
+    //  thrown exception is correctly typed (transient vs permanent) so
+    //  the Retry instance can act on its retry-exceptions config.
+    // ------------------------------------------------------------------
+
+    private DepositTransferResponse doSubmitDepositTransfer(DepositTransferRequest request) {
         try {
             DepositTransferResponse response = restClient.post()
                     .uri("/internal/transfers/deposit")
@@ -78,8 +125,8 @@ public class OradianMiddlewareClient {
                     .body(DepositTransferResponse.class);
             if (response == null) {
                 // Treat an empty body as an upstream contract violation —
-                // same shape as a 502 from the middleware.
-                throw new OradianMiddlewareException(
+                // same shape as a 502, retryable in case it's a brief glitch.
+                throw new OradianMiddlewareTransientException(
                         "Oradian middleware returned an empty response body", 502);
             }
             log.info("Oradian deposit transfer succeeded from={} to={} txnID={}",
@@ -89,35 +136,24 @@ public class OradianMiddlewareClient {
         } catch (RestClientResponseException e) {
             String detail = parseErrorMessage(e.getResponseBodyAsString())
                     .orElse(e.getStatusText());
+            int status = e.getStatusCode().value();
             log.warn("Oradian deposit transfer failed from={} to={} status={} detail={}",
-                    request.getFromAccountId(), request.getToAccountId(),
-                    e.getStatusCode().value(), detail);
-            throw new OradianMiddlewareException(
+                    request.getFromAccountId(), request.getToAccountId(), status, detail);
+            throw classifyHttpFailure(
                     "Oradian middleware rejected the deposit transfer: " + detail,
-                    e.getStatusCode().value(), e);
+                    status, e);
         } catch (OradianMiddlewareException e) {
-            // Re-throw the empty-body case unchanged — don't let the generic
-            // catch below wrap it into a fresh OradianMiddlewareException.
+            // Re-throw the empty-body / classified-HTTP case unchanged.
             throw e;
         } catch (Exception e) {
             log.warn("Oradian deposit transfer errored from={} to={} cause={}",
                     request.getFromAccountId(), request.getToAccountId(), e.toString());
-            throw new OradianMiddlewareException(
+            throw new OradianMiddlewareTransientException(
                     "Unable to reach Oradian middleware: " + e.getMessage(), 502, e);
         }
     }
 
-    /**
-     * Submit a withdrawal against an Oradian deposit account. Calls Oradian
-     * middleware's /internal/transfers/withdraw, which proxies onto Oradian's
-     * instafin.EnterWithdrawalOnDepositAccount. Same wire conventions as
-     * {@link #submitDepositTransfer(DepositTransferRequest)} — RestClientResponseException
-     * mapped onto OradianMiddlewareException with the upstream status preserved,
-     * empty 200 body treated as a contract violation (502 fallback). The
-     * upstream relays Oradian's VALIDATION message in the ProblemDetail
-     * `detail` field; we surface it via parseErrorMessage.
-     */
-    public WithdrawalResponse submitWithdrawal(WithdrawalRequest request) {
+    private WithdrawalResponse doSubmitWithdrawal(WithdrawalRequest request) {
         try {
             WithdrawalResponse response = restClient.post()
                     .uri("/internal/transfers/withdraw")
@@ -127,7 +163,7 @@ public class OradianMiddlewareClient {
                     .retrieve()
                     .body(WithdrawalResponse.class);
             if (response == null) {
-                throw new OradianMiddlewareException(
+                throw new OradianMiddlewareTransientException(
                         "Oradian middleware returned an empty response body", 502);
             }
             log.info("Oradian withdrawal succeeded account={} amount={} txnID={}",
@@ -137,35 +173,22 @@ public class OradianMiddlewareClient {
         } catch (RestClientResponseException e) {
             String detail = parseErrorMessage(e.getResponseBodyAsString())
                     .orElse(e.getStatusText());
+            int status = e.getStatusCode().value();
             log.warn("Oradian withdrawal failed account={} status={} detail={}",
-                    request.getAccountID(), e.getStatusCode().value(), detail);
-            throw new OradianMiddlewareException(
-                    "Oradian middleware rejected the withdrawal: " + detail,
-                    e.getStatusCode().value(), e);
+                    request.getAccountID(), status, detail);
+            throw classifyHttpFailure(
+                    "Oradian middleware rejected the withdrawal: " + detail, status, e);
         } catch (OradianMiddlewareException e) {
             throw e;
         } catch (Exception e) {
             log.warn("Oradian withdrawal errored account={} cause={}",
                     request.getAccountID(), e.toString());
-            throw new OradianMiddlewareException(
+            throw new OradianMiddlewareTransientException(
                     "Unable to reach Oradian middleware: " + e.getMessage(), 502, e);
         }
     }
 
-    /**
-     * Fetch the Oradian deposit accounts for a customer by msisdn. Used by
-     * the public deposit-transfer endpoint to verify that the JWT-derived
-     * caller actually owns the requested fromAccountId before forwarding the
-     * transfer to Oradian.
-     *
-     * <p>An empty list (rather than a thrown exception) is the legitimate
-     * shape when the customer has no Oradian accounts yet — callers map that
-     * to a 403/400 ownership rejection on their own.
-     */
-    public List<DepositAccount> getDepositsForMsisdn(String msisdn) {
-        if (msisdn == null || msisdn.isBlank()) {
-            return Collections.emptyList();
-        }
+    private List<DepositAccount> doGetDepositsForMsisdn(String msisdn) {
         try {
             List<DepositAccount> deposits = restClient.get()
                     .uri("/internal/customers/{msisdn}/deposits", msisdn)
@@ -176,17 +199,59 @@ public class OradianMiddlewareClient {
         } catch (RestClientResponseException e) {
             String detail = parseErrorMessage(e.getResponseBodyAsString())
                     .orElse(e.getStatusText());
+            int status = e.getStatusCode().value();
             log.warn("Oradian deposits lookup failed msisdn={} status={} detail={}",
-                    MsisdnMasking.mask(msisdn), e.getStatusCode().value(), detail);
-            throw new OradianMiddlewareException(
-                    "Oradian middleware rejected the deposits lookup: " + detail,
-                    e.getStatusCode().value(), e);
+                    MsisdnMasking.mask(msisdn), status, detail);
+            throw classifyHttpFailure(
+                    "Oradian middleware rejected the deposits lookup: " + detail, status, e);
+        } catch (OradianMiddlewareException e) {
+            throw e;
         } catch (Exception e) {
             log.warn("Oradian deposits lookup errored msisdn={} cause={}",
                     MsisdnMasking.mask(msisdn), e.toString());
-            throw new OradianMiddlewareException(
+            throw new OradianMiddlewareTransientException(
                     "Unable to reach Oradian middleware: " + e.getMessage(), 502, e);
         }
+    }
+
+    /**
+     * Run the supplied upstream call inside the Retry + CircuitBreaker
+     * decorators. Order matters: CircuitBreaker is the outer wrap so once
+     * the breaker is OPEN the Retry doesn't burn its attempts hammering
+     * a known-dead upstream. CallNotPermittedException (breaker rejected
+     * the call before invoking the supplier) gets translated to a
+     * 503-bearing transient exception so the caller sees a clear "upstream
+     * temporarily unavailable" rather than a generic Resilience4j class.
+     */
+    private <T> T execute(Supplier<T> supplier) {
+        // Compose inside-out: CircuitBreaker wraps the raw call, then
+        // Retry wraps the CB. Effect: when the breaker is OPEN, Retry
+        // sees CallNotPermittedException on every attempt and gives up
+        // immediately (CallNotPermittedException isn't in retry-exceptions),
+        // so we don't burn the customer's request time hammering a
+        // known-dead upstream.
+        Supplier<T> withCb = CircuitBreaker.decorateSupplier(circuitBreaker, supplier);
+        Supplier<T> decorated = Retry.decorateSupplier(retry, withCb);
+        try {
+            return decorated.get();
+        } catch (CallNotPermittedException e) {
+            log.warn("Oradian middleware circuit breaker is OPEN — failing fast");
+            throw new OradianMiddlewareTransientException(
+                    "Oradian middleware is temporarily unavailable (circuit open)", 503, e);
+        }
+    }
+
+    /**
+     * Map an upstream HTTP status to the right exception class so the
+     * Retry instance retries only on truly transient failures.
+     *   * 5xx  -> transient (server-side problem, might recover on retry)
+     *   * 4xx  -> permanent (validation, ownership, etc. — retrying won't help)
+     */
+    private static OradianMiddlewareException classifyHttpFailure(String message, int status, Throwable cause) {
+        if (status >= 500 && status < 600) {
+            return new OradianMiddlewareTransientException(message, status, cause);
+        }
+        return new OradianMiddlewareException(message, status, cause);
     }
 
     /**

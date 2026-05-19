@@ -84,6 +84,51 @@ innbucks:
 jwt:
   secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
 
+# Resilience4j wrap around the Oradian middleware client. Two failure
+# modes drove this: (a) a single TCP blip to Oradian became a customer-
+# facing 502 and a wasted FAILED ledger row, (b) a sustained Oradian
+# outage parked every customer's request on the read-timeout (~10s)
+# before failing, exhausting the request thread pool. Retry handles (a);
+# CircuitBreaker handles (b).
+#
+# Retry kicks in only on OradianMiddlewareTransientException (5xx from
+# upstream / network errors / empty body). 4xx rejections — validation,
+# insufficient funds, account suspended — are thrown as the plain
+# OradianMiddlewareException so they propagate immediately without
+# burning retry budget on a request Oradian has already definitively
+# refused.
+resilience4j:
+  retry:
+    instances:
+      oradian-middleware:
+        max-attempts: 3
+        wait-duration: 500ms
+        # Exponential backoff: 500ms, 1s, 2s between attempts. Caps the
+        # total customer-facing wait at ~3.5s before we surface a 502.
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2
+        retry-exceptions:
+          - innbucks.paymentservice.client.OradianMiddlewareTransientException
+  circuitbreaker:
+    instances:
+      oradian-middleware:
+        register-health-indicator: true
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        # Wait for some traffic before evaluating the rate — keeps the
+        # breaker from tripping on the first two failures after a
+        # cold start.
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50          # open if ≥50% of last 20 calls fail
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+        # Same retry-exceptions list — only transient failures should
+        # count toward tripping the breaker. A 4xx VALIDATION storm
+        # is a customer-side problem, not an upstream-down signal.
+        record-exceptions:
+          - innbucks.paymentservice.client.OradianMiddlewareTransientException
+
 springdoc:
   swagger-ui:
     path: /swagger-ui/index.html

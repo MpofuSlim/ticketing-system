@@ -123,6 +123,19 @@
             <artifactId>spring-cloud-starter-openfeign</artifactId>
         </dependency>
 
+        <!-- Resilience4j: retry-on-transient + circuit-breaker around the
+             Oradian middleware client. Without this, a single TCP blip
+             becomes a customer-facing 502 and a wasted FAILED ledger row;
+             a sustained Oradian outage threads every customer's request
+             through the read-timeout (~10s) before failing, exhausting
+             the pool. The same Spring Cloud starter booking-service uses
+             so the registries (Retry + CircuitBreaker) auto-wire from
+             the application.yaml block. -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-circuitbreaker-resilience4j</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-devtools</artifactId>
