@@ -90,7 +90,7 @@ public class AuthService {
     }
 
     @Transactional
-    public AuthResponseDTO login(LoginRequestDTO request) {
+    public AuthResponseDTO login(LoginRequestDTO request, String deviceId) {
         User user = resolveUser(request)
                 .orElseThrow(() -> new RuntimeException("Invalid credentials"));
 
@@ -116,7 +116,7 @@ public class AuthService {
         log.info("Login bumped tokenVersion userId={} newVersion={} revokedRefreshTokens={}",
                 user.getId(), newVersion, revokedFamilies);
 
-        return issueToken(user);
+        return issueToken(user, deviceId);
     }
 
     /**
@@ -159,9 +159,14 @@ public class AuthService {
      * refresh token in the same family, and returns a fresh access token
      * with the latest user claims. Replay of an already-rotated refresh
      * token is treated as theft and revokes the entire family.
+     *
+     * <p>The {@code deviceId} is the raw {@code X-Device-Id} header from
+     * the caller. If the original refresh-token row was issued with a
+     * device hash, this rotate request MUST present the same device id —
+     * mismatch is treated as token theft (family revoked).
      */
-    public AuthResponseDTO refresh(String refreshToken) {
-        RefreshTokenService.Rotation rotation = refreshTokenService.rotate(refreshToken);
+    public AuthResponseDTO refresh(String refreshToken, String deviceId) {
+        RefreshTokenService.Rotation rotation = refreshTokenService.rotate(refreshToken, deviceId);
         AuthResponseDTO response = buildResponse(rotation.user(), rotation.refreshToken());
         log.info("Token refreshed subject={} roles={} tier={} verified={}",
                 rotation.user().getEmail() != null ? rotation.user().getEmail() : rotation.user().getPhoneNumber(),
@@ -169,8 +174,8 @@ public class AuthService {
         return response;
     }
 
-    private AuthResponseDTO issueToken(User user) {
-        String refreshToken = refreshTokenService.issueNewFamily(user);
+    private AuthResponseDTO issueToken(User user, String deviceId) {
+        String refreshToken = refreshTokenService.issueNewFamily(user, deviceId);
         return buildResponse(user, refreshToken);
     }
 

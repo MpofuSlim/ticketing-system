@@ -48,6 +48,17 @@ public class RefreshToken {
     @Column(name = "revoked_at")
     private Instant revokedAt;
 
+    /**
+     * SHA-256 of the FE-supplied {@code X-Device-Id} header at issuance.
+     * Null for rows minted before device-binding was rolled out (legacy
+     * sessions; not enforced on rotate). Once non-null, the rotate path
+     * compares against the hash of the incoming X-Device-Id and treats
+     * a mismatch as token theft — same family-revoke side effect as a
+     * replayed token.
+     */
+    @Column(name = "device_id_hash", length = 64)
+    private String deviceIdHash;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 }

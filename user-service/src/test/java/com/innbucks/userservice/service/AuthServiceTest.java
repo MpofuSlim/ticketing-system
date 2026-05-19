@@ -206,7 +206,7 @@ class AuthServiceTest {
         req.setIdentifier("u@example.com"); req.setPassword("pw");
 
         AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),
-                encoder, jwt).login(req);
+                encoder, jwt).login(req, null);
 
         assertEquals("tok", resp.getToken());
         assertEquals(List.of("MERCHANT_ADMIN"), resp.getRoles());
@@ -234,7 +234,7 @@ class AuthServiceTest {
         req.setIdentifier("admin@innbucks.co.zw"); req.setPassword("pw");
 
         AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),
-                encoder, jwt).login(req);
+                encoder, jwt).login(req, null);
 
         assertEquals(List.of("SUPER_ADMIN"), resp.getRoles());
         assertEquals(List.of("ticketing", "loyalty"), resp.getDefaultServices());
@@ -275,7 +275,7 @@ class AuthServiceTest {
         req.setIdentifier("0777000099"); req.setPassword("pw");
 
         AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),
-                customerRepo, encoder, jwt).login(req);
+                customerRepo, encoder, jwt).login(req, null);
 
         assertEquals("tok", resp.getToken());
         assertEquals(List.of("CUSTOMER"), resp.getRoles());
@@ -297,7 +297,7 @@ class AuthServiceTest {
 
         AuthService service = newService(userRepo, mock(TenantProfileRepository.class),
                 encoder, mock(JwtUtil.class));
-        RuntimeException ex = assertThrows(RuntimeException.class, () -> service.login(req));
+        RuntimeException ex = assertThrows(RuntimeException.class, () -> service.login(req, null));
         assertEquals("Invalid credentials", ex.getMessage());
     }
 
@@ -316,7 +316,7 @@ class AuthServiceTest {
 
         AuthService service = newService(userRepo, mock(TenantProfileRepository.class),
                 encoder, mock(JwtUtil.class));
-        RuntimeException ex = assertThrows(RuntimeException.class, () -> service.login(req));
+        RuntimeException ex = assertThrows(RuntimeException.class, () -> service.login(req, null));
         assertTrue(ex.getMessage().toLowerCase().contains("not active"));
     }
 
@@ -330,7 +330,7 @@ class AuthServiceTest {
 
         AuthService service = newService(userRepo, mock(TenantProfileRepository.class),
                 mock(PasswordEncoder.class), mock(JwtUtil.class));
-        assertThrows(RuntimeException.class, () -> service.login(req));
+        assertThrows(RuntimeException.class, () -> service.login(req, null));
     }
 
     @Test
@@ -355,7 +355,7 @@ class AuthServiceTest {
         req.setIdentifier("u@example.com"); req.setPassword("pw");
 
         AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),
-                customerRepo, encoder, jwt).login(req);
+                customerRepo, encoder, jwt).login(req, null);
 
         assertEquals("tok", resp.getToken());
         assertFalse(resp.isMfaRequired());
@@ -395,7 +395,7 @@ class AuthServiceTest {
         req.setIdentifier("u@example.com"); req.setPassword("pw");
 
         newService(userRepo, mock(TenantProfileRepository.class),
-                mock(CustomerProfileRepository.class), encoder, jwt, refreshRepo).login(req);
+                mock(CustomerProfileRepository.class), encoder, jwt, refreshRepo).login(req, null);
 
         assertEquals(8L, user.getTokenVersion(), "login must bump token_version by 1");
         verify(userRepo).save(user);

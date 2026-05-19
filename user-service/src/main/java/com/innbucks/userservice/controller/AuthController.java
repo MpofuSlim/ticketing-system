@@ -136,9 +136,12 @@ public class AuthController {
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid credentials or missing identifier")
     })
-    public ResponseEntity<ApiResult<AuthResponseDTO>> login(@Valid @RequestBody LoginRequestDTO request) {
-        log.info("Received login request identifier={}", request.getIdentifier());
-        AuthResponseDTO response = authService.login(request);
+    public ResponseEntity<ApiResult<AuthResponseDTO>> login(
+            @Valid @RequestBody LoginRequestDTO request,
+            @RequestHeader(value = "X-Device-Id", required = false) String deviceId) {
+        log.info("Received login request identifier={} hasDeviceId={}",
+                request.getIdentifier(), deviceId != null && !deviceId.isBlank());
+        AuthResponseDTO response = authService.login(request, deviceId);
         log.info("Login successful roles={}", response.getRoles());
         return ResponseEntity.ok(ApiResult.ok("Login successful", response));
     }
@@ -224,14 +227,16 @@ public class AuthController {
                                     }
                                     """)))
     })
-    public ResponseEntity<ApiResult<AuthResponseDTO>> refresh(HttpServletRequest request) {
+    public ResponseEntity<ApiResult<AuthResponseDTO>> refresh(
+            HttpServletRequest request,
+            @RequestHeader(value = "X-Device-Id", required = false) String deviceId) {
         String authHeader = request.getHeader("Authorization");
         if (authHeader == null || !authHeader.startsWith("Bearer ")) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing Bearer token"));
         }
         String token = authHeader.substring(7);
-        AuthResponseDTO response = authService.refresh(token);
+        AuthResponseDTO response = authService.refresh(token, deviceId);
         return ResponseEntity.ok(ApiResult.ok("Token refreshed", response));
     }
 

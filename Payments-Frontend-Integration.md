@@ -18,12 +18,17 @@ below assume that prefix unless noted.
 ```http
 POST /auth/login
 Content-Type: application/json
+X-Device-Id: 9f5e8c1a-3d0a-4b27-9f8d-7e1c0b6a2f54
 
 {
   "identifier": "+254777224008",       // email or msisdn — either works
   "password": "..."
 }
 ```
+
+`X-Device-Id` is **strongly recommended** — send a stable per-install UUID
+(see §1.5). The server stores its SHA-256 against the refresh-token row and
+will reject any subsequent `/auth/refresh` that doesn't present the same id.
 
 Returns:
 
@@ -63,13 +68,20 @@ refresh itself fails.
 ```http
 POST /auth/refresh
 Content-Type: application/json
-
-{ "refreshToken": "<the refresh token you stored>" }
+Authorization: Bearer <the refresh token you stored>
+X-Device-Id: 9f5e8c1a-3d0a-4b27-9f8d-7e1c0b6a2f54
 ```
 
 Returns the same envelope as login. **Replace both tokens** in storage
 (the refresh token rotates — the old one is now revoked, presenting it
 again is treated as token theft and the entire family is killed).
+
+`X-Device-Id` MUST match the value sent on the original `/auth/login`
+that minted the family. A mismatch — or the header missing on a family
+that was bound at login — fires the same "token reuse detected" path
+as a replayed refresh token: the entire family is revoked, the response
+is `400` with `Refresh token reuse detected; family revoked`, and the
+user has to log in again.
 
 ### 1.4 Single active session — `SESSION_SUPERSEDED`
 
@@ -101,7 +113,81 @@ the access token expires. That's acceptable because (a) the refresh is
 already dead so it can't extend itself, and (b) the FE should be routing
 to login on the first SESSION_SUPERSEDED hit anyway.
 
-### 1.5 Logout
+### 1.5 Device binding (`X-Device-Id`)
+
+Refresh tokens are bound to the device that minted them. A stolen
+refresh token replayed from a different device is rejected and burns
+the whole family. The mechanism is one header:
+
+```
+X-Device-Id: <stable per-install UUID>
+```
+
+Send it on `POST /auth/login` and on every `POST /auth/refresh`. The
+server stores `SHA-256(deviceId)` against the refresh-token row at
+login and compares against the hash of the rotate-request's header.
+
+**Generating the id**
+
+- Generate **once on app install** and persist it for the life of the
+  install. Reuse across logins on the same install.
+- Format: a v4 UUID is fine. Anything stable per install and hard to
+  guess for an attacker works.
+- Storage: a write-once secure-storage slot (iOS Keychain /
+  Android EncryptedSharedPreferences / web `localStorage` is acceptable
+  for the SuperApp since the threat is cross-device replay, not
+  same-origin XSS).
+
+```javascript
+// Web example — generate once, reuse forever
+function getDeviceId() {
+  let id = localStorage.getItem('deviceId');
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem('deviceId', id);
+  }
+  return id;
+}
+```
+
+```kotlin
+// Android example — EncryptedSharedPreferences
+fun getDeviceId(ctx: Context): String {
+    val prefs = EncryptedSharedPreferences.create(
+        ctx, "innbucks", masterKey,
+        AES256_SIV, AES256_GCM
+    )
+    return prefs.getString("deviceId", null) ?: UUID.randomUUID().toString().also {
+        prefs.edit().putString("deviceId", it).apply()
+    }
+}
+```
+
+**Rules**
+
+- Send the **same** id on `/auth/login` AND every `/auth/refresh` for
+  that session. If you can't read storage at refresh time, drop the
+  refresh token — don't fake a different id, that revokes the family.
+- Don't regenerate the id on login. Each fresh id starts a new
+  binding; if you regenerate every login the user just won't notice
+  the breakage, but you lose the cross-session-anomaly signal.
+- A user-initiated "log out everywhere" flow will re-mint the id
+  next install (uninstall + reinstall). That's fine.
+
+**Backward compatibility**
+
+Refresh-token rows minted **before** this feature shipped don't carry
+a hash. They keep rotating without enforcement for the remainder of
+their 7-day TTL. So FE clients can roll out the header at their own
+pace — old refresh tokens won't break — but every new login from a
+header-aware FE is bound immediately.
+
+If the FE is on an old build with no `X-Device-Id`, the login still
+works (the row is stored unbound, "legacy session" mode). Refreshing
+also works. The risk profile in that case is identical to today's
+behavior, just unimproved.
+
+### 1.6 Logout
 
 ```http
 POST /auth/logout
