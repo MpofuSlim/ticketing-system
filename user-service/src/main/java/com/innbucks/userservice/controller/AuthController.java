@@ -137,6 +137,25 @@ public class AuthController {
                                             """)
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid credentials or missing identifier"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "423",
+                    description = "Account locked due to too many consecutive failed login attempts " +
+                            "(default 7). The `lockedUntil` ISO-8601 timestamp tells the FE when " +
+                            "the next attempt will be accepted; `retryAfterSeconds` is the same " +
+                            "deadline expressed in seconds from now and is mirrored in the " +
+                            "`Retry-After` header. A successful login on a non-locked account " +
+                            "resets the strike counter; an expired lockout resets it on the next " +
+                            "attempt.",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Account locked", value = """
+                                    {
+                                      "code": "423 LOCKED",
+                                      "message": "Account temporarily locked due to too many failed login attempts",
+                                      "data": {
+                                        "lockedUntil": "2026-05-19T14:05:00Z",
+                                        "retryAfterSeconds": 1800
+                                      }
+                                    }
+                                    """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429",
                     description = "Rate limit exceeded on this identifier or source IP. Body contains a " +
                             "`retryAfterSeconds` hint; the same value is mirrored in the `Retry-After` header.",
@@ -280,12 +299,33 @@ public class AuthController {
                         new RateLimitDetail(ex.getRetryAfterSeconds())));
     }
 
+    @ExceptionHandler(AuthService.AccountLockedException.class)
+    public ResponseEntity<ApiResult<AccountLockedDetail>> handleAccountLocked(
+            AuthService.AccountLockedException ex) {
+        long retryAfterSeconds = Math.max(0,
+                java.time.Duration.between(java.time.Instant.now(), ex.getLockedUntil()).getSeconds());
+        return ResponseEntity.status(HttpStatus.LOCKED)
+                .header(HttpHeaders.RETRY_AFTER, Long.toString(retryAfterSeconds))
+                .body(ApiResult.of(HttpStatus.LOCKED, ex.getMessage(),
+                        new AccountLockedDetail(ex.getLockedUntil(), retryAfterSeconds)));
+    }
+
     /**
      * Body payload for 429 responses. The seconds hint matches the
      * {@code Retry-After} header; clients that already display friendly
      * countdowns can read either source.
      */
     public record RateLimitDetail(int retryAfterSeconds) {}
+
+    /**
+     * Body payload for 423 LOCKED responses. {@code lockedUntil} is the
+     * absolute ISO-8601 deadline (FE can render a countdown);
+     * {@code retryAfterSeconds} is the same deadline expressed as
+     * seconds-from-now and is mirrored in the {@code Retry-After}
+     * header. Both fields stay in the body even when the header is
+     * present so a relative-clock FE has a fallback.
+     */
+    public record AccountLockedDetail(java.time.Instant lockedUntil, long retryAfterSeconds) {}
 
     /**
      * Best-effort source-IP extraction. Behind the api-gateway every

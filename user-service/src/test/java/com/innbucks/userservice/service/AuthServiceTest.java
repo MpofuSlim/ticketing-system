@@ -29,15 +29,33 @@ import static org.mockito.Mockito.*;
 
 class AuthServiceTest {
 
+    /** Lockout threshold the test profile pins — matches application.yaml default. */
+    private static final int LOCKOUT_THRESHOLD = 7;
+    /** Lockout duration the test profile pins — matches application.yaml default. */
+    private static final int LOCKOUT_MINUTES = 30;
+
+    /**
+     * Inject the {@code @Value}-driven lockout config. Without this the
+     * primitive defaults (0) would lock every account on its first
+     * failed attempt, breaking every existing wrong-pw test.
+     */
+    private static AuthService withLockoutConfig(AuthService svc) {
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                svc, "maxFailedLoginAttempts", LOCKOUT_THRESHOLD);
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                svc, "lockoutDurationMinutes", LOCKOUT_MINUTES);
+        return svc;
+    }
+
     private AuthService newService(UserRepository userRepo,
                                    TenantProfileRepository tenantRepo,
                                    PasswordEncoder encoder,
                                    JwtUtil jwt) {
-        return new AuthService(userRepo, tenantRepo,
+        return withLockoutConfig(new AuthService(userRepo, tenantRepo,
                 mock(CustomerProfileRepository.class), encoder, jwt,
                 mock(TokenRevocationService.class),
                 mock(RefreshTokenService.class),
-                mock(RefreshTokenRepository.class));
+                mock(RefreshTokenRepository.class)));
     }
 
     private AuthService newService(UserRepository userRepo,
@@ -45,10 +63,10 @@ class AuthServiceTest {
                                    CustomerProfileRepository customerRepo,
                                    PasswordEncoder encoder,
                                    JwtUtil jwt) {
-        return new AuthService(userRepo, tenantRepo, customerRepo, encoder, jwt,
+        return withLockoutConfig(new AuthService(userRepo, tenantRepo, customerRepo, encoder, jwt,
                 mock(TokenRevocationService.class),
                 mock(RefreshTokenService.class),
-                mock(RefreshTokenRepository.class));
+                mock(RefreshTokenRepository.class)));
     }
 
     /**
@@ -62,10 +80,10 @@ class AuthServiceTest {
                                    PasswordEncoder encoder,
                                    JwtUtil jwt,
                                    RefreshTokenRepository refreshRepo) {
-        return new AuthService(userRepo, tenantRepo, customerRepo, encoder, jwt,
+        return withLockoutConfig(new AuthService(userRepo, tenantRepo, customerRepo, encoder, jwt,
                 mock(TokenRevocationService.class),
                 mock(RefreshTokenService.class),
-                refreshRepo);
+                refreshRepo));
     }
 
     private RegisterRequestDTO baseRequest(String email, String phone, String... bundles) {
@@ -408,5 +426,209 @@ class AuthServiceTest {
         verify(jwt).generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
                 any(), any(), any(), versionCaptor.capture());
         assertEquals(8L, versionCaptor.getValue());
+    }
+
+    // ----- Failed-login lockout -----
+
+    private User aliceWithAttempts(int attempts, java.time.Instant lockedUntil) {
+        return User.builder()
+                .id(101L)
+                .email("alice@example.com")
+                .password("hashed")
+                .roles(EnumSet.of(User.Role.CUSTOMER))
+                .active(true)
+                .failedLoginAttempts(attempts)
+                .lockedUntil(lockedUntil)
+                .build();
+    }
+
+    private static LoginRequestDTO loginReq(String pw) {
+        LoginRequestDTO r = new LoginRequestDTO();
+        r.setIdentifier("alice@example.com");
+        r.setPassword(pw);
+        return r;
+    }
+
+    @Test
+    void login_wrongPassword_incrementsFailedAttempts_butStaysBelowThreshold() {
+        // Sixth strike (threshold is 7). Counter goes to 6; lockedUntil
+        // stays null because we haven't crossed the line yet.
+        UserRepository userRepo = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        User user = aliceWithAttempts(5, null);
+        when(userRepo.findByEmail("alice@example.com")).thenReturn(Optional.of(user));
+        when(encoder.matches("wrong", "hashed")).thenReturn(false);
+
+        AuthService svc = newService(userRepo, mock(TenantProfileRepository.class),
+                encoder, mock(JwtUtil.class));
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> svc.login(loginReq("wrong"), null));
+
+        // Still 400 — DIFFERENT exception type from AccountLockedException.
+        assertEquals("Invalid credentials", ex.getMessage());
+        assertFalse(ex instanceof AuthService.AccountLockedException,
+                "Below-threshold failures must NOT throw the 423-mapped AccountLockedException");
+        assertEquals(6, user.getFailedLoginAttempts());
+        assertNull(user.getLockedUntil(),
+                "lockedUntil must stay null while attempts < threshold");
+        verify(userRepo).save(user);
+    }
+
+    @Test
+    void login_wrongPasswordAtThreshold_locksAccount_butStillReturns400() {
+        // Seventh strike → counter reaches threshold → lockedUntil
+        // stamped. CRITICAL: still throws "Invalid credentials" (400),
+        // NOT AccountLockedException (423). Otherwise the lockout-
+        // transition response shape leaks identifier existence — an
+        // attacker would know the account is real because they just
+        // saw a 423.
+        UserRepository userRepo = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        User user = aliceWithAttempts(6, null);
+        when(userRepo.findByEmail("alice@example.com")).thenReturn(Optional.of(user));
+        when(encoder.matches(any(), any())).thenReturn(false);
+
+        AuthService svc = newService(userRepo, mock(TenantProfileRepository.class),
+                encoder, mock(JwtUtil.class));
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> svc.login(loginReq("wrong"), null));
+
+        assertEquals("Invalid credentials", ex.getMessage(),
+                "The lockout-triggering attempt MUST return the same 400 shape as wrong-pw " +
+                        "on a nonexistent identifier — otherwise the response transition becomes " +
+                        "an oracle for identifier enumeration.");
+        assertFalse(ex instanceof AuthService.AccountLockedException);
+
+        assertEquals(7, user.getFailedLoginAttempts());
+        assertNotNull(user.getLockedUntil(),
+                "lockedUntil must be stamped on the threshold-crossing attempt");
+        assertTrue(user.getLockedUntil().isAfter(java.time.Instant.now()),
+                "lockedUntil must be in the future");
+        verify(userRepo).save(user);
+    }
+
+    @Test
+    void login_throws423_whenAccountIsCurrentlyLocked_evenWithCorrectPassword() {
+        // Correct password against a locked account must still 423.
+        // Otherwise an attacker who lucky-guesses during the lockout
+        // window sneaks in.
+        UserRepository userRepo = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        java.time.Instant lockedUntil = java.time.Instant.now().plus(java.time.Duration.ofMinutes(20));
+        User user = aliceWithAttempts(7, lockedUntil);
+        when(userRepo.findByEmail("alice@example.com")).thenReturn(Optional.of(user));
+        when(encoder.matches(any(), any())).thenReturn(true);  // would have passed!
+
+        AuthService svc = newService(userRepo, mock(TenantProfileRepository.class),
+                encoder, mock(JwtUtil.class));
+        AuthService.AccountLockedException ex = assertThrows(
+                AuthService.AccountLockedException.class,
+                () -> svc.login(loginReq("right"), null));
+        assertEquals(lockedUntil, ex.getLockedUntil(),
+                "423 response must carry the deadline the FE renders as a countdown");
+
+        // Password check must NOT have run (short-circuit before it).
+        verify(encoder, never()).matches(any(), any());
+        // No state mutation — counter / lockout stay as-is.
+        verify(userRepo, never()).save(any());
+        assertEquals(7, user.getFailedLoginAttempts());
+        assertEquals(lockedUntil, user.getLockedUntil());
+    }
+
+    @Test
+    void login_throws423_whenAccountIsCurrentlyLocked_withWrongPassword() {
+        // Wrong pw against a locked account: 423, NO counter increment,
+        // NO write. The wrong attempt doesn't extend the lockout —
+        // extending on lock-and-locked attempts would let an attacker
+        // refresh the lockout forever and lock a victim out indefinitely.
+        UserRepository userRepo = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        java.time.Instant lockedUntil = java.time.Instant.now().plus(java.time.Duration.ofMinutes(20));
+        User user = aliceWithAttempts(7, lockedUntil);
+        when(userRepo.findByEmail("alice@example.com")).thenReturn(Optional.of(user));
+
+        AuthService svc = newService(userRepo, mock(TenantProfileRepository.class),
+                encoder, mock(JwtUtil.class));
+        assertThrows(AuthService.AccountLockedException.class,
+                () -> svc.login(loginReq("wrong-again"), null));
+        verify(encoder, never()).matches(any(), any());
+        verify(userRepo, never()).save(any());
+        assertEquals(lockedUntil, user.getLockedUntil());
+    }
+
+    @Test
+    void login_expiredLockout_isAutoReset_andWrongPasswordIncrementsFromOne() {
+        // Lockout window has elapsed. User retries with the wrong
+        // password (typo). The counter must restart at 1 — NOT carry
+        // forward the 7 strikes from before the lockout. Otherwise a
+        // single mistake after waiting out the lockout would re-lock
+        // immediately.
+        UserRepository userRepo = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        java.time.Instant pastLockout = java.time.Instant.now().minus(java.time.Duration.ofMinutes(5));
+        User user = aliceWithAttempts(7, pastLockout);
+        when(userRepo.findByEmail("alice@example.com")).thenReturn(Optional.of(user));
+        when(encoder.matches(any(), any())).thenReturn(false);
+
+        AuthService svc = newService(userRepo, mock(TenantProfileRepository.class),
+                encoder, mock(JwtUtil.class));
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> svc.login(loginReq("wrong"), null));
+
+        assertEquals("Invalid credentials", ex.getMessage());
+        assertEquals(1, user.getFailedLoginAttempts(),
+                "Expired lockout must reset the counter — a single typo after waiting it out " +
+                        "should NOT re-lock immediately");
+        assertNull(user.getLockedUntil(),
+                "Auto-reset must clear the stale lockedUntil even on a failed attempt");
+    }
+
+    @Test
+    void login_expiredLockout_andRightPassword_resetsCounterAndIssuesToken() {
+        // Happy-path recovery: lockout served, user remembers password.
+        // Counter resets, lockedUntil cleared, token issued.
+        UserRepository userRepo = mock(UserRepository.class);
+        CustomerProfileRepository customerRepo = mock(CustomerProfileRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        java.time.Instant pastLockout = java.time.Instant.now().minus(java.time.Duration.ofMinutes(5));
+        User user = aliceWithAttempts(7, pastLockout);
+        when(userRepo.findByEmail("alice@example.com")).thenReturn(Optional.of(user));
+        CustomerProfile profile = CustomerProfile.builder().user(user).registrationTier(2).verified(true).build();
+        when(customerRepo.findByUserId(101L)).thenReturn(Optional.of(profile));
+        when(encoder.matches("right", "hashed")).thenReturn(true);
+        when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+                any(), any(), any(), anyLong())).thenReturn("tok");
+
+        AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),
+                customerRepo, encoder, jwt).login(loginReq("right"), null);
+
+        assertEquals("tok", resp.getToken());
+        assertEquals(0, user.getFailedLoginAttempts(), "successful login must reset the strike counter");
+        assertNull(user.getLockedUntil(), "successful login must clear any prior lockout");
+    }
+
+    @Test
+    void login_successfulAfterPartialFailures_resetsCounter() {
+        // User fat-fingered the password twice (counter=2), then got
+        // it right. Counter must reset to 0 — otherwise the next typo
+        // weeks later would unfairly push them closer to lockout.
+        UserRepository userRepo = mock(UserRepository.class);
+        CustomerProfileRepository customerRepo = mock(CustomerProfileRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        User user = aliceWithAttempts(2, null);
+        when(userRepo.findByEmail("alice@example.com")).thenReturn(Optional.of(user));
+        CustomerProfile profile = CustomerProfile.builder().user(user).registrationTier(2).verified(true).build();
+        when(customerRepo.findByUserId(101L)).thenReturn(Optional.of(profile));
+        when(encoder.matches("right", "hashed")).thenReturn(true);
+        when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+                any(), any(), any(), anyLong())).thenReturn("tok");
+
+        newService(userRepo, mock(TenantProfileRepository.class), customerRepo, encoder, jwt)
+                .login(loginReq("right"), null);
+
+        assertEquals(0, user.getFailedLoginAttempts());
+        assertNull(user.getLockedUntil());
     }
 }

@@ -98,6 +98,17 @@ innbucks:
       per-ip-max: ${AUTH_REFRESH_PER_IP_MAX:60}
       window-seconds: ${AUTH_REFRESH_WINDOW_SECONDS:60}
 
+  # Per-account brute-force lockout. After max-attempts consecutive
+  # wrong passwords, the account is locked for duration-minutes —
+  # subsequent /auth/login attempts return 423 LOCKED with the
+  # lockedUntil timestamp in the body so the FE can render a
+  # countdown. A successful login resets the counter; an expired
+  # lockout auto-resets on the next attempt. Persistent (DB-backed)
+  # so it survives Redis outages and IP rotation.
+  account-lockout:
+    max-attempts: ${ACCOUNT_LOCKOUT_MAX_ATTEMPTS:7}
+    duration-minutes: ${ACCOUNT_LOCKOUT_DURATION_MINUTES:30}
+
 springdoc:
   swagger-ui:
     path: /swagger-ui/index.html

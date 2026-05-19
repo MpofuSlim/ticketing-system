@@ -6,10 +6,12 @@ import com.innbucks.userservice.repository.*;
 import com.innbucks.userservice.security.JwtUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -31,6 +33,31 @@ public class AuthService {
     private final TokenRevocationService tokenRevocationService;
     private final RefreshTokenService refreshTokenService;
     private final RefreshTokenRepository refreshTokenRepository;
+
+    @Value("${innbucks.account-lockout.max-attempts:7}")
+    private int maxFailedLoginAttempts;
+
+    @Value("${innbucks.account-lockout.duration-minutes:30}")
+    private int lockoutDurationMinutes;
+
+    /**
+     * Raised by {@link #login} when the resolved account has an active
+     * lockout (see {@link User#getLockedUntil()}). Carries the deadline
+     * the FE renders as a countdown; the controller maps this to a
+     * 423 LOCKED response and surfaces {@code lockedUntil} in the body.
+     */
+    public static class AccountLockedException extends RuntimeException {
+        private final Instant lockedUntil;
+
+        public AccountLockedException(Instant lockedUntil) {
+            super("Account temporarily locked due to too many failed login attempts");
+            this.lockedUntil = lockedUntil;
+        }
+
+        public Instant getLockedUntil() {
+            return lockedUntil;
+        }
+    }
 
     @Transactional
     public AuthResponseDTO register(RegisterRequestDTO request) {
@@ -94,7 +121,42 @@ public class AuthService {
         User user = resolveUser(request)
                 .orElseThrow(() -> new RuntimeException("Invalid credentials"));
 
+        Instant now = Instant.now();
+
+        // Active lockout — short-circuit BEFORE the password check so
+        // an attacker who happens to guess the right password during a
+        // lockout window still can't sneak in. Stale rate-limit /
+        // brute-force counters aren't reset here.
+        if (user.getLockedUntil() != null && user.getLockedUntil().isAfter(now)) {
+            log.warn("Login rejected — account locked userId={} lockedUntil={}",
+                    user.getId(), user.getLockedUntil());
+            throw new AccountLockedException(user.getLockedUntil());
+        }
+        // Lockout served — auto-reset so the user gets a fresh window
+        // on this attempt. The reset lands in the DB as part of the
+        // success or failure write below, not a separate round-trip.
+        if (user.getLockedUntil() != null) {
+            user.setFailedLoginAttempts(0);
+            user.setLockedUntil(null);
+        }
+
         if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
+            int attempts = user.getFailedLoginAttempts() + 1;
+            user.setFailedLoginAttempts(attempts);
+            if (attempts >= maxFailedLoginAttempts) {
+                Instant until = now.plus(Duration.ofMinutes(lockoutDurationMinutes));
+                user.setLockedUntil(until);
+                log.warn("Account locked userId={} attempts={} until={}",
+                        user.getId(), attempts, until);
+            } else {
+                log.info("Failed login attempt userId={} attempts={} threshold={}",
+                        user.getId(), attempts, maxFailedLoginAttempts);
+            }
+            userRepository.save(user);
+            // Same response shape as wrong-pw on a nonexistent account so
+            // the lockout-triggering attempt doesn't become an oracle for
+            // "this identifier exists". Subsequent attempts will hit the
+            // 423 branch above.
             throw new RuntimeException("Invalid credentials");
         }
         if (!user.isActive()) {
@@ -108,9 +170,12 @@ public class AuthService {
         // request); the refresh-revoke prevents the previous device from
         // extending its session via /auth/refresh. Together they enforce
         // "last login wins" — and the @Transactional means both writes
-        // commit atomically.
+        // commit atomically. The lockout-counter reset rides on the same
+        // save so a successful login wipes any prior strikes.
         long newVersion = user.getTokenVersion() + 1;
         user.setTokenVersion(newVersion);
+        user.setFailedLoginAttempts(0);
+        user.setLockedUntil(null);
         userRepository.save(user);
         int revokedFamilies = refreshTokenRepository.revokeAllForUser(user.getId(), Instant.now());
         log.info("Login bumped tokenVersion userId={} newVersion={} revokedRefreshTokens={}",

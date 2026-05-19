@@ -2,6 +2,7 @@ package com.innbucks.userservice.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.EnumSet;
 import java.util.HashSet;
@@ -78,6 +79,28 @@ public class User {
     @Column(name = "token_version", nullable = false)
     @Builder.Default
     private long tokenVersion = 0;
+
+    /**
+     * Running count of consecutive wrong-password attempts. Bumped on
+     * every failed /auth/login against this account; reset to 0 on a
+     * successful login or when an expired {@link #lockedUntil} window
+     * elapses. Once it reaches the configured threshold
+     * ({@code innbucks.account-lockout.max-attempts}) the row is locked
+     * by stamping {@link #lockedUntil}.
+     */
+    @Column(name = "failed_login_attempts", nullable = false)
+    @Builder.Default
+    private int failedLoginAttempts = 0;
+
+    /**
+     * Account lockout deadline. {@code null} means not locked; a
+     * timestamp in the future means locked until then (returns 423 on
+     * every /auth/login). A timestamp in the past means the lockout
+     * has elapsed — the next attempt auto-resets both this and
+     * {@link #failedLoginAttempts} as part of the same write.
+     */
+    @Column(name = "locked_until")
+    private Instant lockedUntil;
 
     public boolean hasRole(Role role) {
         return roles != null && roles.contains(role);
