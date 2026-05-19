@@ -40,7 +40,7 @@ class TransactionServiceTest {
             if (t.getId() == null) t.setId(UUID.randomUUID());
             return t;
         });
-        TransactionService svc = new TransactionService(repo, mock(ApplicationEventPublisher.class));
+        TransactionService svc = new TransactionService(repo, mock(ApplicationEventPublisher.class), mock(TransferLimitService.class));
 
         Transaction result = svc.openPending(draftDeposit());
 
@@ -60,7 +60,7 @@ class TransactionServiceTest {
         existing.setStatus(TransactionStatus.PENDING);
         when(repo.findById(id)).thenReturn(Optional.of(existing));
 
-        TransactionService svc = new TransactionService(repo, mock(ApplicationEventPublisher.class));
+        TransactionService svc = new TransactionService(repo, mock(ApplicationEventPublisher.class), mock(TransferLimitService.class));
         svc.markSucceeded(id, "oradian-9999", "ref-1234", "cmd-77");
 
         assertEquals(TransactionStatus.SUCCEEDED, existing.getStatus());
@@ -80,7 +80,7 @@ class TransactionServiceTest {
         existing.setStatus(TransactionStatus.PENDING);
         when(repo.findById(id)).thenReturn(Optional.of(existing));
 
-        TransactionService svc = new TransactionService(repo, mock(ApplicationEventPublisher.class));
+        TransactionService svc = new TransactionService(repo, mock(ApplicationEventPublisher.class), mock(TransferLimitService.class));
         svc.markFailed(id, new OradianMiddlewareException("Insufficient funds", 422));
 
         assertEquals(TransactionStatus.FAILED, existing.getStatus());
@@ -99,7 +99,7 @@ class TransactionServiceTest {
         existing.setId(id);
         when(repo.findById(id)).thenReturn(Optional.of(existing));
 
-        TransactionService svc = new TransactionService(repo, mock(ApplicationEventPublisher.class));
+        TransactionService svc = new TransactionService(repo, mock(ApplicationEventPublisher.class), mock(TransferLimitService.class));
         svc.markFailed(id, new OradianMiddlewareException("connect timed out", 502));
 
         assertEquals("UPSTREAM_UNAVAILABLE", existing.getFailureCode());
@@ -113,7 +113,7 @@ class TransactionServiceTest {
         existing.setId(id);
         when(repo.findById(id)).thenReturn(Optional.of(existing));
 
-        TransactionService svc = new TransactionService(repo, mock(ApplicationEventPublisher.class));
+        TransactionService svc = new TransactionService(repo, mock(ApplicationEventPublisher.class), mock(TransferLimitService.class));
         String huge = "x".repeat(2000);
         svc.markFailed(id, new OradianMiddlewareException(huge, 422));
 
@@ -128,7 +128,7 @@ class TransactionServiceTest {
         TransactionRepository repo = mock(TransactionRepository.class);
         when(repo.findById(any(UUID.class))).thenReturn(Optional.empty());
 
-        TransactionService svc = new TransactionService(repo, mock(ApplicationEventPublisher.class));
+        TransactionService svc = new TransactionService(repo, mock(ApplicationEventPublisher.class), mock(TransferLimitService.class));
         svc.markSucceeded(UUID.randomUUID(), "x", "y", null);
 
         verify(repo, never()).save(any());
@@ -146,7 +146,7 @@ class TransactionServiceTest {
         existing.setStatus(TransactionStatus.PENDING);
         when(repo.findById(id)).thenReturn(Optional.of(existing));
 
-        new TransactionService(repo, publisher)
+        new TransactionService(repo, publisher, mock(TransferLimitService.class))
                 .markSucceeded(id, "oradian-9999", "ref-1234", "cmd-77");
 
         ArgumentCaptor<TransactionCompletedEvent> captor =
@@ -175,7 +175,7 @@ class TransactionServiceTest {
         existing.setStatus(TransactionStatus.PENDING);
         when(repo.findById(id)).thenReturn(Optional.of(existing));
 
-        new TransactionService(repo, publisher)
+        new TransactionService(repo, publisher, mock(TransferLimitService.class))
                 .markFailed(id, new OradianMiddlewareException("Insufficient funds", 422));
 
         ArgumentCaptor<TransactionCompletedEvent> captor =
@@ -202,7 +202,7 @@ class TransactionServiceTest {
             return t;
         });
 
-        new TransactionService(repo, publisher).openPending(draftDeposit());
+        new TransactionService(repo, publisher, mock(TransferLimitService.class)).openPending(draftDeposit());
 
         verify(publisher, never()).publishEvent(any());
     }
@@ -216,7 +216,7 @@ class TransactionServiceTest {
         ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
         when(repo.findById(any(UUID.class))).thenReturn(Optional.empty());
 
-        new TransactionService(repo, publisher)
+        new TransactionService(repo, publisher, mock(TransferLimitService.class))
                 .markSucceeded(UUID.randomUUID(), "x", "y", null);
 
         verify(publisher, never()).publishEvent(any());

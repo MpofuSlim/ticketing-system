@@ -349,16 +349,30 @@ public class TransfersController {
         // and the markSucceeded write later fails, the row stays PENDING
         // for reconciliation to pick up — much better than the orphan-
         // in-upstream class of bug where the local rolls back silently.
-        Transaction ledger = transactionService.openPending(Transaction.builder()
-                .transactionType(TransactionType.TRANSFER)
-                .customerPhone(phoneNumber)
-                .sourceAccountId(request.getFromAccountId())
-                .destinationAccountId(request.getToAccountId())
-                .amount(parsedAmount)
-                .notes(request.getNotes())
-                .transactionDate(request.getTransactionDate())
-                .idempotencyKey(httpRequest.getHeader(IDEMPOTENCY_HEADER))
-                .build());
+        //
+        // If openPending itself fails (rare — DB blip between enforce
+        // and the INSERT), release the velocity budget we just reserved
+        // so the customer's daily cap doesn't tighten by the amount of
+        // a transaction that never actually existed. Without this
+        // release, a customer retrying after a transient DB error would
+        // see their cap shrink by 2x amount on every retry.
+        Transaction ledger;
+        try {
+            ledger = transactionService.openPending(Transaction.builder()
+                    .transactionType(TransactionType.TRANSFER)
+                    .customerPhone(phoneNumber)
+                    .sourceAccountId(request.getFromAccountId())
+                    .destinationAccountId(request.getToAccountId())
+                    .amount(parsedAmount)
+                    .notes(request.getNotes())
+                    .transactionDate(request.getTransactionDate())
+                    .idempotencyKey(httpRequest.getHeader(IDEMPOTENCY_HEADER))
+                    .build());
+        } catch (RuntimeException ex) {
+            transferLimitService.releaseBudget(
+                    sourceAccount.getID(), parsedAmount, request.getTransactionDate());
+            throw ex;
+        }
 
         log.info("POST /payments/transfer txId={} from={} to={} amount={} txnDate={}",
                 ledger.getId(), request.getFromAccountId(), request.getToAccountId(),
@@ -634,17 +648,28 @@ public class TransfersController {
         // ledger is the single source of truth for "did we try?" — Oradian
         // is the source of truth for "did the money move?". Reconciliation
         // joins the two.
-        Transaction ledger = transactionService.openPending(Transaction.builder()
-                .transactionType(TransactionType.WITHDRAWAL)
-                .customerPhone(phoneNumber)
-                .sourceAccountId(request.getAccountID())
-                .amount(parsedAmount)
-                .paymentMethodName(request.getPaymentMethodName())
-                .notes(request.getNotes())
-                .transactionDate(request.getTransactionDate())
-                .transactionBranchId(request.getTransactionBranchID())
-                .idempotencyKey(httpRequest.getHeader(IDEMPOTENCY_HEADER))
-                .build());
+        //
+        // openPending-failure release: see /payments/transfer for the
+        // rationale. Reserved budget rolled back so a DB-blip retry
+        // doesn't permanently tighten the customer's daily cap.
+        Transaction ledger;
+        try {
+            ledger = transactionService.openPending(Transaction.builder()
+                    .transactionType(TransactionType.WITHDRAWAL)
+                    .customerPhone(phoneNumber)
+                    .sourceAccountId(request.getAccountID())
+                    .amount(parsedAmount)
+                    .paymentMethodName(request.getPaymentMethodName())
+                    .notes(request.getNotes())
+                    .transactionDate(request.getTransactionDate())
+                    .transactionBranchId(request.getTransactionBranchID())
+                    .idempotencyKey(httpRequest.getHeader(IDEMPOTENCY_HEADER))
+                    .build());
+        } catch (RuntimeException ex) {
+            transferLimitService.releaseBudget(
+                    sourceAccount.getID(), parsedAmount, request.getTransactionDate());
+            throw ex;
+        }
 
         log.info("POST /payments/withdraw txId={} account={} amount={} paymentMethod={} txnDate={}",
                 ledger.getId(), request.getAccountID(), request.getAmount(),

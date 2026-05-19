@@ -25,6 +25,18 @@
             <artifactId>spring-boot-starter-data-jpa</artifactId>
         </dependency>
 
+        <!-- Redis: atomic INCRBY counter for the daily-velocity cap. The
+             SQL-based check (SUM(amount) ... GROUP BY account, date) had
+             a TOCTOU race — two parallel requests could both pass the
+             SUM check before either inserted its PENDING row, letting a
+             customer move ~one extra transaction's worth past the cap.
+             Redis INCRBY-then-compare is atomic, so the race is closed
+             at the cost of an extra round-trip per write. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>

@@ -1,15 +1,19 @@
 package innbucks.paymentservice.service;
 
-import innbucks.paymentservice.entity.TransactionStatus;
-import innbucks.paymentservice.repository.TransactionRepository;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import org.springframework.data.redis.RedisConnectionFailureException;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.LocalDate;
-import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -18,110 +22,179 @@ class TransferLimitServiceTest {
     private static final BigDecimal PER_TX = new BigDecimal("100000");
     private static final BigDecimal PER_DAY = new BigDecimal("500000");
     private static final String ACCOUNT = "A000001";
+    private static final int SCALE = 4;
 
-    private static TransferLimitService newService(TransactionRepository repo) {
-        return new TransferLimitService(PER_TX, PER_DAY, repo);
+    /** NUMERIC(19,4) -> long (Redis INCRBY's integer unit). */
+    private static long units(String amount) {
+        return new BigDecimal(amount).movePointRight(SCALE).longValueExact();
     }
 
-    @Test
-    void enforce_passes_whenAmountIsBelowBothCaps_andDailyTotalHasRoom() {
-        TransactionRepository repo = mock(TransactionRepository.class);
-        when(repo.sumByAccountAndDateAndStatusIn(eq(ACCOUNT), any(LocalDate.class), any()))
-                .thenReturn(new BigDecimal("50000"));
+    @SuppressWarnings("unchecked")
+    private ValueOperations<String, String> ops;
+    private StringRedisTemplate redis;
 
-        // 50,000 already today + 30,000 new = 80,000 (well under 500,000 cap)
-        // and 30,000 is well under per-tx cap of 100,000.
-        assertDoesNotThrow(() -> newService(repo).enforce(ACCOUNT, new BigDecimal("30000")));
+    @BeforeEach
+    void setUp() {
+        ops = mock(ValueOperations.class);
+        redis = mock(StringRedisTemplate.class);
+        when(redis.opsForValue()).thenReturn(ops);
     }
+
+    private TransferLimitService newService() {
+        return new TransferLimitService(PER_TX, PER_DAY, redis);
+    }
+
+    // ---------- enforce: per-transaction cap ----------
 
     @Test
     void enforce_throws_whenAmountExceedsPerTransactionCap() {
-        // Single-shot guard. A typo turning "1000" into "1000000" lands
-        // here before the daily-sum check — no DB hit needed.
-        TransactionRepository repo = mock(TransactionRepository.class);
-        TransferLimitService svc = newService(repo);
+        // Single-shot guard runs BEFORE Redis. A typo turning "100" into
+        // "100001" lands here without burning a Redis round-trip.
+        TransferLimitService svc = newService();
 
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
                 () -> svc.enforce(ACCOUNT, new BigDecimal("100001")));
         assertTrue(ex.getMessage().contains("Per-transaction limit"));
-        // Confirm we short-circuited before hitting the ledger.
-        verifyNoInteractions(repo);
+        verifyNoInteractions(redis);
+    }
+
+    // ---------- enforce: atomic INCRBY ----------
+
+    @Test
+    void enforce_atomicallyIncrementsRedisCounter_keyedByAccountAndDate() {
+        when(ops.increment(any(String.class), anyLong())).thenReturn(units("80000"));
+        when(redis.expire(any(String.class), any(Duration.class))).thenReturn(true);
+
+        newService().enforce(ACCOUNT, new BigDecimal("80000"));
+
+        ArgumentCaptor<String> keyCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<Long> deltaCaptor = ArgumentCaptor.forClass(Long.class);
+        verify(ops).increment(keyCaptor.capture(), deltaCaptor.capture());
+
+        // Key shape: velocity:daily:{accountId}:{date} — date scopes the
+        // counter so it naturally resets each calendar day.
+        assertTrue(keyCaptor.getValue().startsWith("velocity:daily:" + ACCOUNT + ":"),
+                "key must start with velocity:daily:" + ACCOUNT + ": but was " + keyCaptor.getValue());
+        assertTrue(keyCaptor.getValue().endsWith(LocalDate.now().toString()),
+                "key must end with today's date but was " + keyCaptor.getValue());
+        assertEquals(units("80000"), deltaCaptor.getValue(),
+                "INCRBY delta must be the amount converted to NUMERIC(19,4) integer units");
+
+        // TTL set so the counter rolls each midnight without manual cleanup.
+        verify(redis).expire(eq(keyCaptor.getValue()), eq(Duration.ofHours(25)));
     }
 
     @Test
-    void enforce_throws_whenTodaySoFarPlusAmountExceedsDailyCap() {
-        TransactionRepository repo = mock(TransactionRepository.class);
-        when(repo.sumByAccountAndDateAndStatusIn(eq(ACCOUNT), any(LocalDate.class), any()))
-                .thenReturn(new BigDecimal("450000"));
+    void enforce_throws_whenIncrementPushesTotalOverDailyCap_andRollsBackTheIncrement() {
+        // Initial state: 450k already today. New request adds 60k -> 510k
+        // (> 500k cap). The service must (a) reject, (b) decrement Redis
+        // back to 450k so the next legitimate request still has the
+        // right baseline.
+        when(ops.increment(any(String.class), eq(units("60000")))).thenReturn(units("510000"));
+        when(redis.expire(any(String.class), any(Duration.class))).thenReturn(true);
 
-        // 450k today + 60k new = 510k > 500k cap. Per-tx OK (60k < 100k).
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
-                () -> newService(repo).enforce(ACCOUNT, new BigDecimal("60000")));
+                () -> newService().enforce(ACCOUNT, new BigDecimal("60000")));
+
         assertTrue(ex.getMessage().contains("Daily limit exceeded"));
-        assertTrue(ex.getMessage().contains("500000"), "message must expose the cap");
-        assertTrue(ex.getMessage().contains("450000"), "message must expose today's running total");
+        assertTrue(ex.getMessage().contains("510000"), "projected total must surface in the message");
+        assertTrue(ex.getMessage().contains("450000"), "today-so-far must surface so customer knows how much they've spent");
+
+        // Compensating DECRBY runs before the throw so the next request
+        // sees the correct baseline.
+        verify(ops).increment(any(String.class), eq(-units("60000")));
     }
 
     @Test
-    void enforce_passesAtExactBoundary_butThrowsOneShillingOver() {
-        // BigDecimal.compareTo: 500000 > 500000 is false, 500001 > 500000 is true.
-        // Boundary semantics: equal-to-the-cap is allowed. Tests pin this so
-        // a refactor to ">=" doesn't silently flip the semantics.
-        TransactionRepository repoExact = mock(TransactionRepository.class);
-        when(repoExact.sumByAccountAndDateAndStatusIn(eq(ACCOUNT), any(LocalDate.class), any()))
-                .thenReturn(new BigDecimal("400000"));
-        // 400k + 100k = 500k -> EXACTLY at cap, allowed.
-        assertDoesNotThrow(() -> newService(repoExact).enforce(ACCOUNT, new BigDecimal("100000")));
+    void enforce_passesAtExactBoundary_butThrowsOneCentOver() {
+        // Boundary: total == cap is allowed (compareTo > 0 semantics).
+        // Pinned so a refactor to ">=" doesn't silently flip it.
+        when(ops.increment(any(String.class), eq(units("100000")))).thenReturn(units("500000"));
+        when(redis.expire(any(String.class), any(Duration.class))).thenReturn(true);
 
-        TransactionRepository repoOver = mock(TransactionRepository.class);
-        when(repoOver.sumByAccountAndDateAndStatusIn(eq(ACCOUNT), any(LocalDate.class), any()))
-                .thenReturn(new BigDecimal("400000"));
-        // 400k + 100,001 = 500,001 -> over, but wait per-tx cap is 100k so
-        // 100,001 hits the per-tx gate first. Use an amount that's per-tx-OK
-        // but pushes daily over by 0.01.
-        TransactionRepository repoCent = mock(TransactionRepository.class);
-        when(repoCent.sumByAccountAndDateAndStatusIn(eq(ACCOUNT), any(LocalDate.class), any()))
-                .thenReturn(new BigDecimal("499999.99"));
+        assertDoesNotThrow(() -> newService().enforce(ACCOUNT, new BigDecimal("100000")));
+
+        // One cent over the cap (using 4-decimal units): rejected.
+        when(ops.increment(any(String.class), eq(units("0.0001"))))
+                .thenReturn(units("500000") + 1);
         assertThrows(IllegalArgumentException.class,
-                () -> newService(repoCent).enforce(ACCOUNT, new BigDecimal("0.02")));
+                () -> newService().enforce(ACCOUNT, new BigDecimal("0.0001")));
+    }
+
+    // ---------- enforce: fail-closed on Redis unreachable ----------
+
+    @Test
+    void enforce_failsClosed_whenRedisIsUnreachable() {
+        // Banking-grade default: if we can't verify the cap, reject. Better
+        // to deny a legitimate transfer than allow an attacker to bypass
+        // velocity when Redis is down.
+        when(ops.increment(any(String.class), anyLong()))
+                .thenThrow(new RedisConnectionFailureException("connection refused"));
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> newService().enforce(ACCOUNT, new BigDecimal("100")));
+        assertTrue(ex.getMessage().contains("temporarily unavailable"),
+                "message must signal a retryable infrastructure issue, not a permanent rejection");
     }
 
     @Test
-    void enforce_treatsNullSumAsZero_forFirstTransactionOfTheDay() {
-        // The JPQL COALESCE(SUM(...), 0) is the production safeguard, but
-        // a mocked repo returning null shouldn't NPE inside the service
-        // either. Tests pin that the service tolerates null too.
-        TransactionRepository repo = mock(TransactionRepository.class);
-        when(repo.sumByAccountAndDateAndStatusIn(eq(ACCOUNT), any(LocalDate.class), any()))
-                .thenReturn(null);
+    void enforce_failsClosed_whenRedisReturnsNull() {
+        // Defence in depth: INCRBY shouldn't return null, but if a Lettuce
+        // / connection-pool oddity surfaces a null we still fail-closed
+        // rather than allow the transfer past an unknown total.
+        when(ops.increment(any(String.class), anyLong())).thenReturn(null);
 
-        assertDoesNotThrow(() -> newService(repo).enforce(ACCOUNT, new BigDecimal("100000")));
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> newService().enforce(ACCOUNT, new BigDecimal("100")));
+        assertTrue(ex.getMessage().contains("temporarily unavailable"));
+    }
+
+    // ---------- releaseBudget ----------
+
+    @Test
+    void releaseBudget_decrementsTheCounter_byTheAmount() {
+        when(ops.increment(any(String.class), anyLong())).thenReturn(units("0"));
+
+        newService().releaseBudget(ACCOUNT, new BigDecimal("60000"), LocalDate.of(2026, 5, 19));
+
+        ArgumentCaptor<String> keyCaptor = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<Long> deltaCaptor = ArgumentCaptor.forClass(Long.class);
+        verify(ops).increment(keyCaptor.capture(), deltaCaptor.capture());
+
+        assertEquals("velocity:daily:" + ACCOUNT + ":2026-05-19", keyCaptor.getValue(),
+                "release MUST hit the same key the original enforce did — the row's stored " +
+                        "transactionDate, not LocalDate.now(), so a row inserted at 23:59 and " +
+                        "failed at 00:01 still rolls back the right daily counter");
+        assertEquals(-units("60000"), deltaCaptor.getValue());
     }
 
     @Test
-    void enforce_queriesByAccountAndTodaysDate_withCountedStatusesOnly() {
-        // Pin the contract that FAILED rows DON'T count against the cap
-        // (those didn't move money) while PENDING + SUCCEEDED do (PENDING
-        // means we attempted; outcome unknown, must conservatively count
-        // so a parallel-request attacker can't race past the limit).
-        TransactionRepository repo = mock(TransactionRepository.class);
-        when(repo.sumByAccountAndDateAndStatusIn(any(), any(), any()))
-                .thenReturn(BigDecimal.ZERO);
+    void releaseBudget_swallowsRedisFailures_doesNotThrow() {
+        // markFailed must complete even if Redis hiccups. Worst case the
+        // counter is artificially high until midnight; not customer-visible
+        // immediately, and the audit log surfaces it for ops.
+        when(ops.increment(any(String.class), anyLong()))
+                .thenThrow(new RedisConnectionFailureException("connection refused"));
 
-        newService(repo).enforce(ACCOUNT, new BigDecimal("1"));
-
-        verify(repo).sumByAccountAndDateAndStatusIn(
-                eq(ACCOUNT),
-                eq(LocalDate.now()),
-                eq(Set.of(TransactionStatus.PENDING, TransactionStatus.SUCCEEDED)));
+        assertDoesNotThrow(() ->
+                newService().releaseBudget(ACCOUNT, new BigDecimal("100"), LocalDate.now()));
     }
+
+    @Test
+    void releaseBudget_isSilentNoOp_onNullInputs() {
+        newService().releaseBudget(null, new BigDecimal("1"), LocalDate.now());
+        newService().releaseBudget(ACCOUNT, null, LocalDate.now());
+        newService().releaseBudget(ACCOUNT, new BigDecimal("1"), null);
+        verifyNoInteractions(ops);
+    }
+
+    // ---------- constructor ----------
 
     @Test
     void constructor_refusesNonPositiveLimits() {
-        TransactionRepository repo = mock(TransactionRepository.class);
         assertThrows(IllegalArgumentException.class,
-                () -> new TransferLimitService(BigDecimal.ZERO, PER_DAY, repo));
+                () -> new TransferLimitService(BigDecimal.ZERO, PER_DAY, redis));
         assertThrows(IllegalArgumentException.class,
-                () -> new TransferLimitService(PER_TX, new BigDecimal("-1"), repo));
+                () -> new TransferLimitService(PER_TX, new BigDecimal("-1"), redis));
     }
 }

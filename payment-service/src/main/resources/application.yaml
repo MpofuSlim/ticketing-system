@@ -36,6 +36,18 @@ spring:
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
 
+  # Redis backs the atomic daily-velocity counter in TransferLimitService.
+  # Without this flag Spring Data Redis classifies every JpaRepository<>
+  # bean as a Redis repository and warns about misconfiguration; we have
+  # no @RedisHash entities so disabling auto-config of redis repositories
+  # silences the warning and keeps boot fast.
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      repositories:
+        enabled: false
+
   lifecycle:
     timeout-per-shutdown-phase: 30s
 

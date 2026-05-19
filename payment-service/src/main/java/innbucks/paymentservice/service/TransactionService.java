@@ -41,6 +41,7 @@ public class TransactionService {
 
     private final TransactionRepository repository;
     private final ApplicationEventPublisher eventPublisher;
+    private final TransferLimitService transferLimitService;
 
     /**
      * Insert a row in PENDING state. Returns the persisted entity (with id
@@ -105,6 +106,16 @@ public class TransactionService {
             tx.setCompletedAt(Instant.now());
             repository.save(tx);
             log.warn("Transaction FAILED txId={} code={} message={}", id, code, message);
+            // Release the Redis velocity budget for this row — Oradian
+            // definitively rejected the call, the money didn't move,
+            // so this amount shouldn't count against the customer's
+            // daily cap. Without this release a customer who hits
+            // "Insufficient funds" five times would have their cap
+            // artificially tightened by the sum of those failed
+            // attempts until midnight. Best-effort: a Redis hiccup
+            // here logs but doesn't throw.
+            transferLimitService.releaseBudget(
+                    tx.getSourceAccountId(), tx.getAmount(), tx.getTransactionDate());
             // Same AFTER_COMMIT pattern as markSucceeded. Failed transfers
             // are still observable events that downstream consumers
             // (notification service, BI) want — "your transfer was
