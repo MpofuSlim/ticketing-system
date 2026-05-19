@@ -34,6 +34,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -43,6 +44,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Public, JWT-authenticated money-movement endpoints — currently
@@ -829,6 +831,102 @@ public class TransfersController {
 
         return ResponseEntity.ok(
                 ApiResult.ok("Transactions retrieved", TransactionHistoryResponse.from(view)));
+    }
+
+    @GetMapping("/transactions/{id}")
+    @SecurityRequirement(name = "bearerAuth")
+    @Operation(summary = "Get one of the authenticated customer's transactions by id",
+            description = """
+                    Returns the {@link TransactionView} for the requested
+                    ledger row. The receipt screen / share-receipt flow on
+                    the FE reads this endpoint to render details for a
+                    single transaction the customer tapped on in the
+                    history list.
+
+                    Ownership: the row's {@code customer_phone} MUST match
+                    the JWT-derived phoneNumber claim. A mismatch surfaces
+                    as 404 (not 403) — we don't leak the existence of
+                    transactions that belong to other customers, so a
+                    caller probing IDs can't tell apart "doesn't exist"
+                    and "belongs to someone else".
+                    """)
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "Transaction found and owned by the caller",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = TransactionView.class),
+                            examples = @ExampleObject(name = "Receipt", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Transaction retrieved",
+                                      "data": {
+                                        "id": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                        "type": "TRANSFER",
+                                        "status": "SUCCEEDED",
+                                        "sourceAccountId": "A000001",
+                                        "destinationAccountId": "A000002",
+                                        "amount": 123.00,
+                                        "notes": "Lunch",
+                                        "transactionDate": "2026-05-18",
+                                        "createdAt": "2026-05-18T10:30:00Z",
+                                        "completedAt": "2026-05-18T10:30:01.523Z",
+                                        "oradianTransactionId": "1155",
+                                        "oradianReferenceNumber": "ref-9999"
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
+                    description = "Missing or invalid bearer token, or token has no phoneNumber claim"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "Transaction does not exist OR belongs to a different customer " +
+                            "(merged on purpose so existence isn't leaked)",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Not found", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "Transaction not found",
+                                      "data": null
+                                    }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<TransactionView>> getTransaction(
+            HttpServletRequest httpRequest,
+            @PathVariable("id") UUID id) {
+
+        String authHeader = httpRequest.getHeader("Authorization");
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            return unauthorized("Missing Bearer token");
+        }
+        String token = authHeader.substring(7);
+        if (!jwtUtil.isTokenValid(token)) {
+            return unauthorized("Invalid or expired bearer token");
+        }
+        String phoneNumber = jwtUtil.extractPhoneNumber(token);
+        if (phoneNumber == null) {
+            return unauthorized(
+                    "Token has no phoneNumber claim; only CUSTOMER tokens can call /payments/transactions/{id}");
+        }
+
+        Transaction tx = transactionRepository.findById(id).orElse(null);
+        // Merge "not found" + "found-but-not-yours" into one 404 response so
+        // a caller probing UUIDs can't tell which transactions exist.
+        if (tx == null || !phoneNumber.equals(tx.getCustomerPhone())) {
+            if (tx != null) {
+                // Found, but the wrong owner — log so operators can spot a
+                // probing customer / token reuse. Phone numbers are masked.
+                log.warn("Transaction detail ownership mismatch txId={} requestedBy={} owner={}",
+                        id, MsisdnMasking.mask(phoneNumber),
+                        MsisdnMasking.mask(tx.getCustomerPhone()));
+            }
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(
+                    ApiResult.<TransactionView>builder()
+                            .code("404 NOT_FOUND")
+                            .message("Transaction not found")
+                            .data(null)
+                            .build());
+        }
+
+        return ResponseEntity.ok(ApiResult.ok("Transaction retrieved", TransactionView.from(tx)));
     }
 
     private static <T> ResponseEntity<ApiResult<T>> unauthorized(String message) {

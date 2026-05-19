@@ -7,6 +7,7 @@ import innbucks.paymentservice.dto.DepositAccount;
 import innbucks.paymentservice.dto.DepositTransferRequest;
 import innbucks.paymentservice.dto.DepositTransferResponse;
 import innbucks.paymentservice.dto.TransactionHistoryResponse;
+import innbucks.paymentservice.dto.TransactionView;
 import innbucks.paymentservice.dto.WithdrawalRequest;
 import innbucks.paymentservice.dto.WithdrawalResponse;
 import innbucks.paymentservice.entity.Transaction;
@@ -29,6 +30,7 @@ import org.springframework.http.ResponseEntity;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -1100,6 +1102,92 @@ class TransfersControllerTest {
                 new TransfersController(jwt, mock(OradianMiddlewareClient.class),
                         stubbedTxService(), stubbedLimitService(), repo)
                         .listTransactions(bearerRequest(VALID_TOKEN), null, null, 0, 20);
+
+        assertEquals(HttpStatus.UNAUTHORIZED, resp.getStatusCode());
+        verifyNoInteractions(repo);
+    }
+
+    // ----- GET /payments/transactions/{id} (detail endpoint) -----
+
+    @Test
+    void getTransaction_returnsRowOwnedByCaller() {
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
+        when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+
+        Transaction row = ledgerRow(TransactionType.WITHDRAWAL, TransactionStatus.SUCCEEDED, "75.00");
+        row.setOradianTransactionId("oradian-receipt-1");
+
+        TransactionRepository repo = mock(TransactionRepository.class);
+        when(repo.findById(row.getId())).thenReturn(Optional.of(row));
+
+        ResponseEntity<ApiResult<TransactionView>> resp =
+                new TransfersController(jwt, mock(OradianMiddlewareClient.class), stubbedTxService(),
+                        stubbedLimitService(), repo)
+                        .getTransaction(bearerRequest(VALID_TOKEN), row.getId());
+
+        assertEquals(HttpStatus.OK, resp.getStatusCode());
+        assertEquals(row.getId(), resp.getBody().getData().id());
+        assertEquals("oradian-receipt-1", resp.getBody().getData().oradianTransactionId());
+    }
+
+    @Test
+    void getTransaction_returns404_whenIdDoesNotExist() {
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
+        when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+
+        TransactionRepository repo = mock(TransactionRepository.class);
+        UUID missingId = UUID.randomUUID();
+        when(repo.findById(missingId)).thenReturn(Optional.empty());
+
+        ResponseEntity<ApiResult<TransactionView>> resp =
+                new TransfersController(jwt, mock(OradianMiddlewareClient.class), stubbedTxService(),
+                        stubbedLimitService(), repo)
+                        .getTransaction(bearerRequest(VALID_TOKEN), missingId);
+
+        assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
+        assertEquals("Transaction not found", resp.getBody().getMessage());
+    }
+
+    @Test
+    void getTransaction_returns404_whenRowBelongsToDifferentCustomer() {
+        // Defence against UUID-probing: existence is NOT leaked. A caller
+        // who guesses a real txId but doesn't own it gets the same 404
+        // shape as "doesn't exist" — they can't distinguish the two.
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.isTokenValid(VALID_TOKEN)).thenReturn(true);
+        when(jwt.extractPhoneNumber(VALID_TOKEN)).thenReturn(CUSTOMER_PHONE);
+
+        Transaction othersRow = ledgerRow(TransactionType.TRANSFER, TransactionStatus.SUCCEEDED, "100.00");
+        othersRow.setCustomerPhone("+254700000999"); // not CUSTOMER_PHONE
+
+        TransactionRepository repo = mock(TransactionRepository.class);
+        when(repo.findById(othersRow.getId())).thenReturn(Optional.of(othersRow));
+
+        ResponseEntity<ApiResult<TransactionView>> resp =
+                new TransfersController(jwt, mock(OradianMiddlewareClient.class), stubbedTxService(),
+                        stubbedLimitService(), repo)
+                        .getTransaction(bearerRequest(VALID_TOKEN), othersRow.getId());
+
+        assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
+        assertEquals("Transaction not found", resp.getBody().getMessage(),
+                "ownership mismatch must surface as the same 404 shape as 'no such row' so " +
+                        "a UUID-probing caller can't distinguish");
+    }
+
+    @Test
+    void getTransaction_returns401_whenAuthorizationHeaderIsMissing() {
+        TransactionRepository repo = mock(TransactionRepository.class);
+        TransfersController ctrl = new TransfersController(mock(JwtUtil.class),
+                mock(OradianMiddlewareClient.class), stubbedTxService(),
+                stubbedLimitService(), repo);
+
+        HttpServletRequest http = mock(HttpServletRequest.class);
+        when(http.getHeader("Authorization")).thenReturn(null);
+
+        ResponseEntity<ApiResult<TransactionView>> resp =
+                ctrl.getTransaction(http, UUID.randomUUID());
 
         assertEquals(HttpStatus.UNAUTHORIZED, resp.getStatusCode());
         verifyNoInteractions(repo);
