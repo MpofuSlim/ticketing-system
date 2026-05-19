@@ -66,6 +66,16 @@ oradian-middleware:
 
 innbucks:
   internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
+  # Velocity caps on POST /payments/transfer + /payments/withdraw.
+  # Per-transaction max caps a single request; per-day max caps the sum
+  # of today's PENDING + SUCCEEDED rows on the same source account plus
+  # the new amount (calendar-day semantics, server timezone). Defaults
+  # are placeholders — override per deployment / regulator. Real-world
+  # caps should vary by KYC tier, account type, and country; that's
+  # follow-up work, this is the flat-cap v1.
+  transfer-limits:
+    per-transaction-max: ${PER_TX_LIMIT:100000}
+    per-day-max: ${PER_DAY_LIMIT:500000}
 
 # Verify-only JWT secret. payment-service does NOT mint tokens — user-service
 # is the issuer. This must match user-service's jwt.secret exactly; tokens

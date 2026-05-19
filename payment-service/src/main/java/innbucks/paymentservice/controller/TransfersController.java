@@ -12,6 +12,7 @@ import innbucks.paymentservice.entity.Transaction;
 import innbucks.paymentservice.entity.TransactionType;
 import innbucks.paymentservice.security.JwtUtil;
 import innbucks.paymentservice.service.TransactionService;
+import innbucks.paymentservice.service.TransferLimitService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
@@ -73,6 +74,7 @@ public class TransfersController {
     private final JwtUtil jwtUtil;
     private final OradianMiddlewareClient oradianMiddlewareClient;
     private final TransactionService transactionService;
+    private final TransferLimitService transferLimitService;
 
     @PostMapping("/transfer")
     @SecurityRequirement(name = "bearerAuth")
@@ -312,6 +314,14 @@ public class TransfersController {
         }
 
         BigDecimal parsedAmount = parsePositiveAmount(request.getAmount());
+
+        // Velocity gate: reject above the per-transaction cap, or if this
+        // would push today's PENDING + SUCCEEDED total over the per-day
+        // cap on the SAME source account. Runs before the ledger write so
+        // a hit doesn't litter the table with a FAILED row for every
+        // breach — the rejection is policy, not an upstream failure.
+        // Throws IllegalArgumentException -> 400 via GlobalExceptionHandler.
+        transferLimitService.enforce(sourceAccount.getID(), parsedAmount);
 
         // Open the local ledger row BEFORE calling Oradian (REQUIRES_NEW
         // transaction so it commits independently). If Oradian succeeds
@@ -594,6 +604,10 @@ public class TransfersController {
         }
 
         BigDecimal parsedAmount = parsePositiveAmount(request.getAmount());
+
+        // Same velocity gate as /payments/transfer. See TransferLimitService
+        // for the per-tx + per-day rules.
+        transferLimitService.enforce(sourceAccount.getID(), parsedAmount);
 
         // See the deposit flow for the same PENDING-then-mark pattern. The
         // ledger is the single source of truth for "did we try?" — Oradian
