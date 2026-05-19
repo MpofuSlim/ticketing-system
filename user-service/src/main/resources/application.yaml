@@ -29,6 +29,15 @@ spring:
     baseline-version: 0
     locations: classpath:db/migration
 
+  # Redis backs the auth-endpoint rate limiters. Same instance the
+  # payment-service velocity counters use — different key prefix.
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      repositories:
+        enabled: false
+
   lifecycle:
     timeout-per-shutdown-phase: 30s
 
@@ -66,6 +75,28 @@ oradian:
 
 innbucks:
   internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
+  # Rate limits on the public auth endpoints. The gateway exempts
+  # /auth/** from its token-keyed limiter on purpose (no token exists
+  # at login time), so the floor against credential-stuffing /
+  # token-guessing has to live in user-service.
+  #
+  # Two dimensions per endpoint:
+  # - per-identifier: caps attempts against a single account (slows
+  #   targeted brute-force).
+  # - per-ip: caps attempts from a single client (slows a botnet host
+  #   that sprays many accounts).
+  # An exceeded limit returns HTTP 429 with retry-after-seconds in the
+  # body. Counters are sliding-window-ish fixed buckets in Redis with
+  # the configured TTL; reset naturally at TTL expiry.
+  auth-rate-limit:
+    login:
+      per-identifier-max: ${AUTH_LOGIN_PER_IDENTIFIER_MAX:5}
+      per-ip-max: ${AUTH_LOGIN_PER_IP_MAX:20}
+      window-seconds: ${AUTH_LOGIN_WINDOW_SECONDS:60}
+    refresh:
+      per-identifier-max: ${AUTH_REFRESH_PER_IDENTIFIER_MAX:10}
+      per-ip-max: ${AUTH_REFRESH_PER_IP_MAX:60}
+      window-seconds: ${AUTH_REFRESH_WINDOW_SECONDS:60}
 
 springdoc:
   swagger-ui:

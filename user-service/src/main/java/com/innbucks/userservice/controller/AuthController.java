@@ -5,6 +5,7 @@ import com.innbucks.userservice.dto.*;
 import com.innbucks.userservice.security.JwtUtil;
 import com.innbucks.userservice.service.AuthService;
 import com.innbucks.userservice.service.CustomerService;
+import com.innbucks.userservice.service.LoginRateLimiter;
 import com.innbucks.userservice.service.OtpService;
 import com.innbucks.userservice.service.TokenRevocationService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -36,6 +37,7 @@ public class AuthController {
     private final TokenRevocationService tokenRevocationService;
     private final OtpService otpService;
     private final JwtUtil jwtUtil;
+    private final LoginRateLimiter loginRateLimiter;
 
     @PostMapping("/register")
     @SecurityRequirements()
@@ -134,11 +136,24 @@ public class AuthController {
                                             }
                                             """)
                             })),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid credentials or missing identifier")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid credentials or missing identifier"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429",
+                    description = "Rate limit exceeded on this identifier or source IP. Body contains a " +
+                            "`retryAfterSeconds` hint; the same value is mirrored in the `Retry-After` header.",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Too many login attempts", value = """
+                                    {
+                                      "code": "429 TOO_MANY_REQUESTS",
+                                      "message": "Too many login attempts on this account; try again shortly",
+                                      "data": { "retryAfterSeconds": 60 }
+                                    }
+                                    """)))
     })
     public ResponseEntity<ApiResult<AuthResponseDTO>> login(
+            HttpServletRequest httpRequest,
             @Valid @RequestBody LoginRequestDTO request,
             @RequestHeader(value = "X-Device-Id", required = false) String deviceId) {
+        loginRateLimiter.checkLogin(request.getIdentifier(), clientIp(httpRequest));
         log.info("Received login request identifier={} hasDeviceId={}",
                 request.getIdentifier(), deviceId != null && !deviceId.isBlank());
         AuthResponseDTO response = authService.login(request, deviceId);
@@ -225,6 +240,17 @@ public class AuthController {
                                       "message": "Missing Bearer token",
                                       "data": null
                                     }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429",
+                    description = "Rate limit exceeded on this refresh-token subject or source IP. " +
+                            "Body carries the same `retryAfterSeconds` value as the `Retry-After` header.",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Too many refresh attempts", value = """
+                                    {
+                                      "code": "429 TOO_MANY_REQUESTS",
+                                      "message": "Too many refresh attempts from this address; try again shortly",
+                                      "data": { "retryAfterSeconds": 60 }
+                                    }
                                     """)))
     })
     public ResponseEntity<ApiResult<AuthResponseDTO>> refresh(
@@ -236,8 +262,54 @@ public class AuthController {
                     .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing Bearer token"));
         }
         String token = authHeader.substring(7);
+        // Rate-limit BEFORE attempting rotation. extractEmail returns
+        // null on a malformed/expired token — the per-IP bucket still
+        // counts so a host spamming garbage tokens gets throttled.
+        String subject = safeSubject(token);
+        loginRateLimiter.checkRefresh(subject, clientIp(request));
         AuthResponseDTO response = authService.refresh(token, deviceId);
         return ResponseEntity.ok(ApiResult.ok("Token refreshed", response));
+    }
+
+    @ExceptionHandler(LoginRateLimiter.RateLimitedException.class)
+    public ResponseEntity<ApiResult<RateLimitDetail>> handleRateLimited(
+            LoginRateLimiter.RateLimitedException ex) {
+        return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                .header(HttpHeaders.RETRY_AFTER, Integer.toString(ex.getRetryAfterSeconds()))
+                .body(ApiResult.of(HttpStatus.TOO_MANY_REQUESTS, ex.getMessage(),
+                        new RateLimitDetail(ex.getRetryAfterSeconds())));
+    }
+
+    /**
+     * Body payload for 429 responses. The seconds hint matches the
+     * {@code Retry-After} header; clients that already display friendly
+     * countdowns can read either source.
+     */
+    public record RateLimitDetail(int retryAfterSeconds) {}
+
+    /**
+     * Best-effort source-IP extraction. Behind the api-gateway every
+     * request carries an {@code X-Forwarded-For} chain; the leftmost
+     * entry is the originating client. Falling back to
+     * {@code remoteAddr} keeps direct-to-service callers (curl, dev)
+     * from skipping the limit.
+     */
+    private static String clientIp(HttpServletRequest request) {
+        String forwarded = request.getHeader("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isBlank()) {
+            int comma = forwarded.indexOf(',');
+            String first = (comma < 0 ? forwarded : forwarded.substring(0, comma)).trim();
+            if (!first.isEmpty()) return first;
+        }
+        return request.getRemoteAddr();
+    }
+
+    private String safeSubject(String token) {
+        try {
+            return jwtUtil.extractEmail(token);
+        } catch (RuntimeException ex) {
+            return null;
+        }
     }
 
     @PostMapping("/change-password")
