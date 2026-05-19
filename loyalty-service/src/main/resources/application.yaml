@@ -108,6 +108,20 @@ loyalty:
     prefix: ${LOYALTY_INVOICE_PREFIX:INV}
   scheduler:
     expiry-cron: ${LOYALTY_EXPIRY_CRON:0 5 * * * *}
+  # Loyalty <-> Oradian LPW sync. Off by default — flipping this on
+  # makes every WalletService.apply() try to mirror the delta to the
+  # customer's Oradian LPW account before committing locally. An
+  # upstream failure rolls the whole apply back (the customer's earn /
+  # spend doesn't appear locally either). FAILED rows are still
+  # persisted in oradian_sync_transactions via a REQUIRES_NEW write
+  # so ops have an audit trail.
+  oradian-sync:
+    enabled: ${LOYALTY_ORADIAN_SYNC_ENABLED:false}
+    # Payment-method names sent to Oradian. Must exist in the LPW
+    # product config on the deployment's Oradian tenant.
+    credit-payment-method: ${LOYALTY_CREDIT_METHOD:Cash}
+    debit-payment-method: ${LOYALTY_DEBIT_METHOD:Cash}
+    transaction-branch-id: ${LOYALTY_TXN_BRANCH:MobileBanking}
     invoice-cron: ${LOYALTY_INVOICE_CRON:0 30 1 * * *}
 
 # Shared secret presented as the X-Internal-Token header by other backends

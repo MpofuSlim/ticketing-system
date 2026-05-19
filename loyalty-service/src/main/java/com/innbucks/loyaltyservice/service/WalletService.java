@@ -20,10 +20,13 @@ public class WalletService {
 
     private final WalletRepository wallets;
     private final PointsLedgerRepository ledger;
+    private final OradianSyncService oradianSyncService;
 
-    public WalletService(WalletRepository wallets, PointsLedgerRepository ledger) {
+    public WalletService(WalletRepository wallets, PointsLedgerRepository ledger,
+                         OradianSyncService oradianSyncService) {
         this.wallets = wallets;
         this.ledger = ledger;
+        this.oradianSyncService = oradianSyncService;
     }
 
     @Transactional(readOnly = true)
@@ -61,6 +64,14 @@ public class WalletService {
      * Records a ledger entry. Caller must ensure the wallet belongs to the
      * expected tenant. Negative balances are rejected at the DB level via the
      * check constraint; we surface a domain error first when known.
+     *
+     * <p>When {@code loyalty.oradian-sync.enabled=true}, the delta is also
+     * mirrored to the customer's LPW account on Oradian BEFORE the local
+     * wallet mutation commits. An upstream failure throws
+     * {@code ORADIAN_SYNC_FAILED} → the surrounding {@code @Transactional}
+     * rolls back → the customer's earn / spend doesn't appear locally
+     * either. See {@link OradianSyncService} for the full sync-first
+     * model and how PENDING users / missing LPW accounts skip the sync.
      */
     public BigDecimal apply(UUID walletId, BigDecimal delta, UUID transactionId, String reason) {
         Wallet w = wallets.lockById(walletId)
@@ -73,6 +84,15 @@ public class WalletService {
         if (newBalance.signum() < 0) {
             throw LoyaltyException.badRequest("INSUFFICIENT_FUNDS", "wallet balance would go negative");
         }
+
+        // Sync to Oradian BEFORE mutating local state. On failure this
+        // throws and the @Transactional rolls back the lock + any
+        // partial wallet edits (none yet — we haven't set the new
+        // balance). FAILED audit rows persist via REQUIRES_NEW inside
+        // OradianSyncService. No-op when the feature flag is off or
+        // when the wallet's user is PENDING / has no LPW account.
+        oradianSyncService.syncDelta(w, delta, transactionId, reason);
+
         w.setBalance(newBalance);
 
         PointsLedger entry = new PointsLedger();
