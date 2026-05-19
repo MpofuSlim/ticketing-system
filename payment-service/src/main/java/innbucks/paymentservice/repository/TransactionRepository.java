@@ -2,6 +2,8 @@ package innbucks.paymentservice.repository;
 
 import innbucks.paymentservice.entity.Transaction;
 import innbucks.paymentservice.entity.TransactionStatus;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -45,4 +47,18 @@ public interface TransactionRepository extends JpaRepository<Transaction, UUID> 
             @Param("accountId") String accountId,
             @Param("date") LocalDate date,
             @Param("statuses") Collection<TransactionStatus> statuses);
+
+    /**
+     * Customer-facing history finder: rows where {@code customer_phone}
+     * matches the JWT-derived subject and {@code transaction_date} falls in
+     * the requested window. Backed by the
+     * {@code idx_transactions_customer_phone_created_at} index from V1 —
+     * default sort {@code createdAt DESC} keeps the index scan cheap.
+     *
+     * <p>Filtering by {@code customerPhone} (rather than by source account)
+     * gives the customer all their transactions in one view regardless of
+     * which of their Oradian accounts moved the money.
+     */
+    Page<Transaction> findByCustomerPhoneAndTransactionDateBetween(
+            String customerPhone, LocalDate fromDate, LocalDate toDate, Pageable pageable);
 }

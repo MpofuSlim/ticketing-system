@@ -8,8 +8,11 @@ import innbucks.paymentservice.dto.DepositTransferRequest;
 import innbucks.paymentservice.dto.DepositTransferResponse;
 import innbucks.paymentservice.dto.WithdrawalRequest;
 import innbucks.paymentservice.dto.WithdrawalResponse;
+import innbucks.paymentservice.dto.TransactionHistoryResponse;
+import innbucks.paymentservice.dto.TransactionView;
 import innbucks.paymentservice.entity.Transaction;
 import innbucks.paymentservice.entity.TransactionType;
+import innbucks.paymentservice.repository.TransactionRepository;
 import innbucks.paymentservice.security.JwtUtil;
 import innbucks.paymentservice.service.TransactionService;
 import innbucks.paymentservice.service.TransferLimitService;
@@ -25,11 +28,16 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
@@ -72,10 +80,20 @@ public class TransfersController {
 
     private static final String IDEMPOTENCY_HEADER = "Idempotency-Key";
 
+    // History endpoint pagination caps. Defaults match Spring Data Page
+    // conventions; the max page-size guards against a malicious caller
+    // asking for size=1000000 and OOM-ing the response serializer.
+    private static final int DEFAULT_HISTORY_PAGE_SIZE = 20;
+    private static final int MAX_HISTORY_PAGE_SIZE = 100;
+    // Default date window when the caller doesn't specify one. Keeps the
+    // typical "show me my recent transactions" call cheap.
+    private static final int DEFAULT_HISTORY_WINDOW_DAYS = 30;
+
     private final JwtUtil jwtUtil;
     private final OradianMiddlewareClient oradianMiddlewareClient;
     private final TransactionService transactionService;
     private final TransferLimitService transferLimitService;
+    private final TransactionRepository transactionRepository;
 
     @PostMapping("/transfer")
     @SecurityRequirement(name = "bearerAuth")
@@ -679,6 +697,138 @@ public class TransfersController {
             throw new IllegalArgumentException("amount must have at most 4 decimal places");
         }
         return parsed;
+    }
+
+    @GetMapping("/transactions")
+    @SecurityRequirement(name = "bearerAuth")
+    @Operation(summary = "List the authenticated customer's transaction history",
+            description = """
+                    Reads the local payment-service ledger filtered to the
+                    JWT-derived `phoneNumber` claim — customers see only
+                    their own transactions, regardless of which of their
+                    Oradian accounts the money moved through. Includes
+                    PENDING rows so the FE can render in-flight transfers
+                    that haven't yet reconciled with Oradian.
+
+                    Defaults to the last 30 days, newest first, 20 rows
+                    per page. Override via `fromDate` / `toDate` (ISO-8601)
+                    and `page` / `size`. Page size is capped at 100 to
+                    keep the response bounded.
+
+                    Sensitive fields (idempotency key, correlation id,
+                    internal command IDs) are stripped before serialisation
+                    — see `TransactionView`.
+                    """)
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "Page of transactions, empty array when none in the window",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = TransactionHistoryResponse.class),
+                            examples = @ExampleObject(name = "Two transactions", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Transactions retrieved",
+                                      "data": {
+                                        "transactions": [
+                                          {
+                                            "id": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                            "type": "TRANSFER",
+                                            "status": "SUCCEEDED",
+                                            "sourceAccountId": "A000001",
+                                            "destinationAccountId": "A000002",
+                                            "amount": 123.00,
+                                            "notes": "Lunch",
+                                            "transactionDate": "2026-05-18",
+                                            "createdAt": "2026-05-18T10:30:00Z",
+                                            "completedAt": "2026-05-18T10:30:01.523Z",
+                                            "oradianTransactionId": "1155",
+                                            "oradianReferenceNumber": "ref-9999"
+                                          },
+                                          {
+                                            "id": "f0e1d2c3-4567-890a-bcde-f01234567890",
+                                            "type": "WITHDRAWAL",
+                                            "status": "FAILED",
+                                            "sourceAccountId": "A000001",
+                                            "amount": 50.00,
+                                            "paymentMethodName": "Cash",
+                                            "transactionDate": "2026-05-17",
+                                            "transactionBranchId": "MobileBanking",
+                                            "createdAt": "2026-05-17T14:22:00Z",
+                                            "completedAt": "2026-05-17T14:22:00.812Z",
+                                            "failureCode": "UPSTREAM_REJECTED",
+                                            "failureMessage": "Insufficient funds"
+                                          }
+                                        ],
+                                        "page": 0,
+                                        "size": 20,
+                                        "totalElements": 2,
+                                        "totalPages": 1
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "fromDate is after toDate, dates are in the wrong format, or size > 100",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Reversed dates", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "fromDate must be on or before toDate",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
+                    description = "Missing or invalid bearer token, or token has no phoneNumber claim")
+    })
+    public ResponseEntity<ApiResult<TransactionHistoryResponse>> listTransactions(
+            HttpServletRequest httpRequest,
+            @RequestParam(name = "fromDate", required = false) LocalDate fromDate,
+            @RequestParam(name = "toDate", required = false) LocalDate toDate,
+            @RequestParam(name = "page", defaultValue = "0") int page,
+            @RequestParam(name = "size", defaultValue = "" + DEFAULT_HISTORY_PAGE_SIZE) int size) {
+
+        String authHeader = httpRequest.getHeader("Authorization");
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            return unauthorized("Missing Bearer token");
+        }
+        String token = authHeader.substring(7);
+        if (!jwtUtil.isTokenValid(token)) {
+            return unauthorized("Invalid or expired bearer token");
+        }
+        String phoneNumber = jwtUtil.extractPhoneNumber(token);
+        if (phoneNumber == null) {
+            return unauthorized(
+                    "Token has no phoneNumber claim; only CUSTOMER tokens can call /payments/transactions");
+        }
+
+        // Default window: last DEFAULT_HISTORY_WINDOW_DAYS days. Caller may
+        // narrow or widen — the only validation we enforce here is "from
+        // before to" + a sane page size; date upper-bound clamping is left
+        // to operational policy.
+        LocalDate today = LocalDate.now();
+        LocalDate effectiveTo = toDate == null ? today : toDate;
+        LocalDate effectiveFrom = fromDate == null
+                ? effectiveTo.minusDays(DEFAULT_HISTORY_WINDOW_DAYS)
+                : fromDate;
+        if (effectiveFrom.isAfter(effectiveTo)) {
+            throw new IllegalArgumentException("fromDate must be on or before toDate");
+        }
+
+        int clampedSize = Math.min(Math.max(size, 1), MAX_HISTORY_PAGE_SIZE);
+        int clampedPage = Math.max(page, 0);
+        var pageable = PageRequest.of(clampedPage, clampedSize,
+                Sort.by(Sort.Direction.DESC, "createdAt"));
+
+        Page<Transaction> rows = transactionRepository
+                .findByCustomerPhoneAndTransactionDateBetween(
+                        phoneNumber, effectiveFrom, effectiveTo, pageable);
+        Page<TransactionView> view = rows.map(TransactionView::from);
+
+        log.info("GET /payments/transactions phone={} from={} to={} page={} size={} total={}",
+                MsisdnMasking.mask(phoneNumber), effectiveFrom, effectiveTo,
+                clampedPage, clampedSize, rows.getTotalElements());
+
+        return ResponseEntity.ok(
+                ApiResult.ok("Transactions retrieved", TransactionHistoryResponse.from(view)));
     }
 
     private static <T> ResponseEntity<ApiResult<T>> unauthorized(String message) {
