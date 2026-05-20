@@ -94,6 +94,16 @@ services:
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       JWT_EXPIRATION_MS: 86400000
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      # Oradian middleware lives in the sibling stack on the shared
+      # innbucks-shared docker network — reachable by service name.
+      ORADIAN_BASE_URL: http://oradian-middleware:8090
+      # X-Internal-Token sent to the middleware on every S2S call.
+      # MUST equal the middleware's INTERNAL_API_TOKEN env var, otherwise
+      # the middleware rejects with 401 invalid_internal_token.
+      ORADIAN_INTERNAL_TOKEN: ${ORADIAN_INTERNAL_TOKEN:?set ORADIAN_INTERNAL_TOKEN in .env (must match middleware INTERNAL_API_TOKEN)}
+      # Shared secret between ticketing's own services (loyalty webhooks).
+      # Separate concern from ORADIAN_INTERNAL_TOKEN; can be a different value.
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
     ports:
       - "8081:8081"
     healthcheck:
@@ -227,7 +237,18 @@ services:
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
       DB_DRIVER: org.postgresql.Driver
       JPA_DDL_AUTO: update
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       BOOKING_SERVICE_URL: http://booking-service:8084
+      # Oradian middleware lives in the sibling stack on the shared
+      # innbucks-shared docker network — reachable by service name.
+      # payment-service uses ORADIAN_MIDDLEWARE_URL (different env var
+      # name from user-service's ORADIAN_BASE_URL).
+      ORADIAN_MIDDLEWARE_URL: http://oradian-middleware:8090
+      # X-Internal-Token sent to the middleware. MUST equal the
+      # middleware's INTERNAL_API_TOKEN env var.
+      ORADIAN_INTERNAL_TOKEN: ${ORADIAN_INTERNAL_TOKEN:?set ORADIAN_INTERNAL_TOKEN in .env (must match middleware INTERNAL_API_TOKEN)}
+      # Shared secret between ticketing's own services (loyalty webhooks).
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
     ports:
       - "8085:8085"
     healthcheck:
@@ -256,6 +277,10 @@ services:
       JPA_DDL_AUTO: validate
       FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
+      # Inbound shared secret validated on /loyalty/internal/** webhooks
+      # (caller is ticketing's other services). Must equal the
+      # INTERNAL_API_TOKEN the callers send.
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
     ports:
       - "8086:8086"
     healthcheck:
@@ -311,3 +336,14 @@ volumes:
   postgres_data:
   redis_data:
   kafka_data:
+
+# Shared with the OradianMiddleware stack (deployed separately on the
+# same EC2). Both stacks join this network so user-service /
+# payment-service can reach the middleware as `http://oradian-middleware:8090`
+# instead of dialing localhost (which inside a container points at the
+# container itself). The deploy workflow creates this network on the
+# EC2 if missing — idempotent.
+networks:
+  default:
+    name: innbucks-shared
+    external: true
