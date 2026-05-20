@@ -64,16 +64,22 @@ jobs:
             -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
             ./ ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/home/${{ secrets.EC2_USER }}/superApp/
 
-      - name: Bring up the stack
+      - name: Ensure shared docker network exists, then bring up the stack
         # Heredoc with quoted EOF — the body runs verbatim on the EC2, no
-        # variable interpolation on the runner side. Refuse to start if the
-        # .env file is missing (a first-time deploy on a fresh EC2 with no
-        # .env would otherwise produce confusing "POSTGRES_PASSWORD not set"
-        # errors from docker compose).
+        # variable interpolation on the runner side.
+        # The shared `innbucks-shared` docker network lets this stack talk
+        # to the OradianMiddleware stack (deployed separately) by service
+        # name. `docker network create` errors if it already exists, so
+        # we inspect-first; safe to run on every deploy.
+        # Refuse to start if .env is missing (a first-time deploy on a
+        # fresh EC2 with no .env would otherwise produce confusing
+        # "POSTGRES_PASSWORD not set" errors from docker compose).
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
             ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} <<'EOF'
             set -e
+            docker network inspect innbucks-shared >/dev/null 2>&1 \
+              || docker network create innbucks-shared
             cd ~/superApp
             if [ ! -f .env ]; then
               echo "::error::.env missing on EC2 — create ~/superApp/.env from .env.example first"

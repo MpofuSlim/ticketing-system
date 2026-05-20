@@ -311,3 +311,14 @@ volumes:
   postgres_data:
   redis_data:
   kafka_data:
+
+# Shared with the OradianMiddleware stack (deployed separately on the
+# same EC2). Both stacks join this network so user-service /
+# payment-service can reach the middleware as `http://oradian-middleware:8090`
+# instead of dialing localhost (which inside a container points at the
+# container itself). The deploy workflow creates this network on the
+# EC2 if missing — idempotent.
+networks:
+  default:
+    name: innbucks-shared
+    external: true
