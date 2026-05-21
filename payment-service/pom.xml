@@ -42,6 +42,22 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
+        <!-- Spring Security: until pre-staging-fix #2 this service had no
+             security filter chain at all — /payments and /actuator/prometheus
+             were anonymous. SecurityConfig now requires JWT on all customer
+             endpoints; JwtFilter populates SecurityContext with the
+             phoneNumber claim so controllers don't trust body-supplied
+             MSISDNs. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
         <!-- PostgreSQL is the runtime database. -->
         <dependency>
             <groupId>org.postgresql</groupId>
