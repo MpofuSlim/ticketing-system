@@ -86,7 +86,11 @@ jobs:
               exit 1
             fi
             echo "Bringing the stack up (--build rebuilds any service whose source changed) ..."
-            docker compose up -d --build --remove-orphans
+            # `--profile payments` activates the payment-service block, which
+            # is profile-gated in docker-compose.yml. Without this flag the
+            # service was silently NOT being deployed, so any call hitting
+            # /payments/** at the gateway 503'd in production.
+            docker compose --profile payments up -d --build --remove-orphans
             echo
             echo "Final state:"
             docker compose ps
