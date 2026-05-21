@@ -96,7 +96,7 @@ management:
   # docker-compose, override in k8s. Set TRACING_ENABLED=false to disable
   # entirely (no spans recorded, no exporter calls).
   tracing:
-    enabled: ${TRACING_ENABLED:true}
+    enabled: ${TRACING_ENABLED:false}
     sampling:
       probability: ${TRACE_SAMPLE:0.1}
   otlp:
