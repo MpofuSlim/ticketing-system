@@ -62,8 +62,20 @@ class PaymentSecurityIT extends PostgresIntegrationTestBase {
 
     @Test
     void actuatorHealth_isAnonymouslyReachable() throws Exception {
+        // The endpoint must accept the call without auth — status 200 (all
+        // downstreams healthy) or 503 (Spring health aggregator reports DOWN
+        // because the IT config points loyalty/oradian/booking at
+        // *.invalid hostnames) are both valid here. The contract under
+        // test is "the security filter let this through", and that's
+        // proven by anything NOT 401.
         mockMvc.perform(get("/actuator/health"))
-                .andExpect(status().isOk());
+                .andExpect(result -> {
+                    int s = result.getResponse().getStatus();
+                    if (s == 401) {
+                        throw new AssertionError(
+                                "Expected /actuator/health to be anonymously reachable, got 401");
+                    }
+                });
     }
 
     @Test
