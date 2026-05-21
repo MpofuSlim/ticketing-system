@@ -25,6 +25,24 @@
             <artifactId>spring-boot-starter-data-jpa</artifactId>
         </dependency>
 
+        <!-- ShedLock: leader-elects @Scheduled jobs across replicas.
+             Required for the loyalty-earn retry job — without it, every
+             pod would drain the same retry rows on each tick and
+             double-credit customers. Also the right home for the existing
+             BookingExpirationService (the TODO in its javadoc). The
+             jdbc-template provider shares the existing Hikari pool; the
+             shedlock table is provisioned by V7 Flyway migration. -->
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-spring</artifactId>
+            <version>5.16.0</version>
+        </dependency>
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-provider-jdbc-template</artifactId>
+            <version>5.16.0</version>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-redis</artifactId>
