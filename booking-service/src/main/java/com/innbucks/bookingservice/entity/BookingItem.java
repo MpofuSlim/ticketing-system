@@ -42,4 +42,16 @@ public class BookingItem {
     // e.g. 20260419-48291X — unique per seat
     @Column(nullable = false, unique = true)
     private String ticketNumber;
+
+    // Denormalised "is this row still locking the seat?" — true while the
+    // parent booking is PENDING/CONFIRMED, false when CANCELLED. Kept in
+    // sync by a Postgres AFTER UPDATE trigger on bookings (see migration
+    // V5) so application code can't forget. The partial unique index
+    // `uq_active_booking_item_per_seat` enforces "at most one active
+    // booking_item per seat_id" — closing the seat-pick race in
+    // createBooking where two bookers' cross-checks could each see the
+    // seat as free.
+    @Column(name = "is_active", nullable = false)
+    @Builder.Default
+    private Boolean isActive = Boolean.TRUE;
 }

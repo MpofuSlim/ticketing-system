@@ -20,8 +20,13 @@ import java.util.UUID;
 /**
  * Calls booking-service's PATCH /bookings/{id}/confirm to flip a booking from
  * PENDING to CONFIRMED. The dummy payment endpoint uses this once it's
- * "processed" the (fake) payment. The endpoint is publicly accessible on
- * booking-service, so no Authorization header is needed.
+ * "processed" the (fake) payment.
+ *
+ * <p>booking-service now requires the {@code X-Internal-Token} shared secret
+ * on the confirm path (mirror of loyalty + event-service patterns). The
+ * value is read from {@code innbucks.internal-api-token} (env
+ * {@code INTERNAL_API_TOKEN}) — same token everywhere else in the ticketing
+ * stack — and sent on every confirm call.
  */
 @Component
 @Slf4j
@@ -29,11 +34,13 @@ public class BookingServiceClient {
 
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
+    private final String internalToken;
 
     public BookingServiceClient(
             @Value("${booking-service.base-url:http://localhost:8084}") String baseUrl,
             @Value("${booking-service.connect-timeout-ms:2000}") int connectMs,
             @Value("${booking-service.read-timeout-ms:5000}") int readMs,
+            @Value("${innbucks.internal-api-token:}") String internalToken,
             ObjectMapper objectMapper) {
         // JDK HttpClient supports PATCH; SimpleClientHttpRequestFactory's
         // underlying HttpURLConnection rejects it ("Invalid HTTP method:
@@ -51,6 +58,7 @@ public class BookingServiceClient {
                 .requestInterceptor(new CorrelationIdPropagatingInterceptor())
                 .build();
         this.objectMapper = objectMapper;
+        this.internalToken = internalToken;
     }
 
     /**
@@ -62,6 +70,7 @@ public class BookingServiceClient {
         try {
             String body = restClient.patch()
                     .uri("/bookings/{id}/confirm", bookingId)
+                    .header("X-Internal-Token", internalToken)
                     .retrieve()
                     .body(String.class);
             ApiResult<Map<String, Object>> envelope = objectMapper.readValue(

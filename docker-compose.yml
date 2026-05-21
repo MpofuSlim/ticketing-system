@@ -84,6 +84,10 @@ services:
       postgres:
         condition: service_healthy
     environment:
+      # Activates ProductionSecretsGuard which refuses to boot if any
+      # sensitive secret still holds its `change-me-*` placeholder.
+      # Override per-environment in .env to relax (e.g. `dev` for local).
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
       DB_URL: jdbc:postgresql://postgres:5432/user_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
@@ -124,6 +128,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
       DB_URL: jdbc:postgresql://postgres:5432/event_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
@@ -132,6 +137,9 @@ services:
       JPA_DDL_AUTO: validate
       FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
+      # Required from booking-service on PATCH /events/{id}/availability/consume.
+      # Must match INTERNAL_API_TOKEN on the booking-service side.
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
       SEAT_SERVICE_BASE_URL: http://seat-service:8083
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
     ports:
@@ -156,6 +164,7 @@ services:
       redis:
         condition: service_healthy
     environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
       DB_URL: jdbc:postgresql://postgres:5432/seat_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
@@ -191,6 +200,7 @@ services:
       kafka:
         condition: service_healthy
     environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
       DB_URL: jdbc:postgresql://postgres:5432/booking_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
@@ -205,6 +215,10 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       SEAT_SERVICE_URL: http://seat-service:8083
       LOYALTY_SERVICE_URL: http://loyalty-service:8086
+      EVENT_SERVICE_URL: http://event-service:8082
+      # Presented to event-service on the internal availability/consume call.
+      # Must match INTERNAL_API_TOKEN on the event-service side.
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
     ports:
       - "8084:8084"
     healthcheck:
@@ -232,11 +246,15 @@ services:
       postgres:
         condition: service_healthy
     environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
       DB_URL: jdbc:postgresql://postgres:5432/payment_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
       DB_DRIVER: org.postgresql.Driver
-      JPA_DDL_AUTO: update
+      # Flyway owns the schema; Hibernate must NOT mutate it at boot.
+      # Every other service in this stack uses `validate`; payment-service
+      # was the odd one out — letting it silently drift the staging DB.
+      JPA_DDL_AUTO: validate
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       BOOKING_SERVICE_URL: http://booking-service:8084
       # Oradian middleware lives in the sibling stack on the shared
@@ -269,6 +287,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
       DB_URL: jdbc:postgresql://postgres:5432/loyalty_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
@@ -311,6 +330,7 @@ services:
       redis:
         condition: service_healthy
     environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
       USER_SERVICE_URI: http://user-service:8081
       EVENT_SERVICE_URI: http://event-service:8082
       SEAT_SERVICE_URI: http://seat-service:8083

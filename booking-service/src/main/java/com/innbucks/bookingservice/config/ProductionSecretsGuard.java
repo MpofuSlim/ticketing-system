@@ -20,7 +20,8 @@ import java.util.List;
 public class ProductionSecretsGuard {
 
     private static final List<String> SECRETS_TO_CHECK = List.of(
-            "jwt.secret"
+            "jwt.secret",
+            "innbucks.internal-api-token"
     );
 
     private static final String PLACEHOLDER_MARKER = "change-me";

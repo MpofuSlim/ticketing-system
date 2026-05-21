@@ -1,7 +1,6 @@
 package innbucks.paymentservice.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
-import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.PositiveOrZero;
 import lombok.Data;
@@ -22,8 +21,17 @@ public class ShopCheckoutRequest {
     @NotNull(message = "shopId is required")
     private UUID shopId;
 
-    @Schema(example = "0712345678", description = "Customer's phone number / MSISDN. Used to look up or auto-enrol the loyalty wallet.")
-    @NotBlank(message = "msisdn is required")
+    /**
+     * @deprecated The server now derives the customer's MSISDN from the
+     * authenticated JWT principal — values supplied in the body are silently
+     * ignored. Kept on the DTO so old FE clients sending the field don't 400
+     * with "unknown field"; a future release will remove it entirely.
+     */
+    @Deprecated
+    @Schema(example = "0712345678",
+            description = "Deprecated — ignored by the server, the customer's MSISDN comes from the JWT.",
+            deprecated = true,
+            nullable = true)
     private String msisdn;
 
     @Schema(example = "CASH_AND_POINTS")

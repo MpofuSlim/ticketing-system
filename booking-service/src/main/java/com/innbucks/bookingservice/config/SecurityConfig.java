@@ -38,9 +38,12 @@ public class SecurityConfig {
                         // availableTickets on every event response.
                         .requestMatchers(HttpMethod.GET, "/bookings/active-counts").permitAll()
                         .requestMatchers(HttpMethod.POST, "/bookings").permitAll()
-                        // Confirm is called by payment-service after a (dummy)
-                        // payment. Guests have no JWT, so the endpoint must
-                        // be reachable without one.
+                        // Confirm is called by payment-service after a payment.
+                        // No JWT is involved — payment-service authenticates via
+                        // the shared `X-Internal-Token` checked inside
+                        // BookingController#confirmBooking. We permit at the
+                        // Spring layer so the controller can return a clean
+                        // ApiResult body instead of Spring's opaque default 401.
                         .requestMatchers(HttpMethod.PATCH, "/bookings/*/confirm").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                         // Everything else requires authentication

@@ -22,6 +22,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -241,10 +242,37 @@ public class PaymentController {
                                     """)))
     })
     public ResponseEntity<ApiResult<ShopCheckoutResponse>> shopCheckout(
-            @Valid @RequestBody ShopCheckoutRequest request
+            @Valid @RequestBody ShopCheckoutRequest request,
+            Authentication authentication
     ) {
+        // CRITICAL: derive the customer's MSISDN from the authenticated
+        // principal, NOT from request.getMsisdn(). The previous version
+        // trusted the body field, letting any caller burn any other
+        // customer's loyalty points by supplying their phone. JwtFilter
+        // pins the JWT's `phoneNumber` claim into authentication.getName().
+        // Any body-supplied msisdn is now silently ignored.
+        String msisdn = (authentication == null) ? null : authentication.getName();
+        if (msisdn == null || msisdn.isBlank()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(
+                    ApiResult.<ShopCheckoutResponse>builder()
+                            .code("401 UNAUTHORIZED")
+                            .message("Authenticated customer MSISDN not available")
+                            .data(null)
+                            .build());
+        }
+        if (request.getMsisdn() != null && !request.getMsisdn().isBlank()
+                && !request.getMsisdn().equals(msisdn)) {
+            log.warn("Ignoring body-supplied msisdn on /payments/shop-checkout (token wins) " +
+                    "shopId={} tokenMsisdn={} bodyMsisdn={}",
+                    request.getShopId(),
+                    innbucks.paymentservice.util.MsisdnMasking.mask(msisdn),
+                    innbucks.paymentservice.util.MsisdnMasking.mask(request.getMsisdn()));
+        }
+
         log.info("POST /payments/shop-checkout shopId={} msisdn={} method={} cash={} points={}",
-                request.getShopId(), request.getMsisdn(), request.getPaymentMethod(),
+                request.getShopId(),
+                innbucks.paymentservice.util.MsisdnMasking.mask(msisdn),
+                request.getPaymentMethod(),
                 request.getCashAmount(), request.getPointsAmount());
 
         String mode = paymentModeTag(request.getPaymentMethod());
@@ -266,7 +294,7 @@ public class PaymentController {
         LoyaltyServiceClient.CheckoutResult result;
         try {
             result = loyaltyServiceClient.shopCheckout(
-                    request.getShopId(), request.getMsisdn(),
+                    request.getShopId(), msisdn,
                     request.getCashAmount(), request.getPointsAmount(),
                     request.getReference());
         } catch (LoyaltyCheckoutException e) {
@@ -291,7 +319,7 @@ public class PaymentController {
                 .transactionId(UUID.randomUUID())
                 .shopId(result.shopId())
                 .merchantId(result.merchantId())
-                .msisdn(request.getMsisdn())
+                .msisdn(msisdn)
                 .paymentMethod(request.getPaymentMethod())
                 .cashAmount(result.cashAmount())
                 .pointsRedeemed(result.pointsRedeemed())

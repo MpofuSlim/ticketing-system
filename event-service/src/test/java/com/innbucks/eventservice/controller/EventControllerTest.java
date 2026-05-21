@@ -231,4 +231,67 @@ class EventControllerTest {
                 .deleted(false)
                 .active(true);
     }
+
+    // Test config inherits `innbucks.internal-api-token` default from
+    // application.yaml: change-me-change-me-change-me-change-me.
+    private static final String VALID_INTERNAL_TOKEN = "change-me-change-me-change-me-change-me";
+
+    @Test
+    void consumeAvailability_withoutInternalToken_returns401_andDoesNotMutate() throws Exception {
+        Event saved = eventRepository.save(eventBuilder()
+                .title("Concert")
+                .province(Province.HRE)
+                .dateTime(LocalDateTime.now().plusDays(7))
+                .totalCapacity(100)
+                .availableTickets(100)
+                .build());
+
+        mockMvc.perform(patch("/events/{id}/availability/consume", saved.getEventId())
+                        .param("count", "5"))
+                .andExpect(status().isUnauthorized());
+
+        // Capacity must not have changed.
+        Event reloaded = eventRepository.findById(saved.getEventId()).orElseThrow();
+        org.junit.jupiter.api.Assertions.assertEquals(100, reloaded.getAvailableTickets());
+    }
+
+    @Test
+    void consumeAvailability_withWrongInternalToken_returns401_andDoesNotMutate() throws Exception {
+        Event saved = eventRepository.save(eventBuilder()
+                .title("Concert")
+                .province(Province.HRE)
+                .dateTime(LocalDateTime.now().plusDays(7))
+                .totalCapacity(100)
+                .availableTickets(100)
+                .build());
+
+        mockMvc.perform(patch("/events/{id}/availability/consume", saved.getEventId())
+                        .param("count", "5")
+                        .header("X-Internal-Token", "wrong-token"))
+                .andExpect(status().isUnauthorized());
+
+        Event reloaded = eventRepository.findById(saved.getEventId()).orElseThrow();
+        org.junit.jupiter.api.Assertions.assertEquals(100, reloaded.getAvailableTickets());
+    }
+
+    @Test
+    void consumeAvailability_withValidInternalToken_returns200_andDecrements() throws Exception {
+        Event saved = eventRepository.save(eventBuilder()
+                .title("Concert")
+                .province(Province.HRE)
+                .dateTime(LocalDateTime.now().plusDays(7))
+                .totalCapacity(100)
+                .availableTickets(100)
+                .build());
+
+        mockMvc.perform(patch("/events/{id}/availability/consume", saved.getEventId())
+                        .param("count", "5")
+                        .header("X-Internal-Token", VALID_INTERNAL_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code", is("200 OK")))
+                .andExpect(jsonPath("$.data.availableTickets", is(95)));
+
+        Event reloaded = eventRepository.findById(saved.getEventId()).orElseThrow();
+        org.junit.jupiter.api.Assertions.assertEquals(95, reloaded.getAvailableTickets());
+    }
 }
