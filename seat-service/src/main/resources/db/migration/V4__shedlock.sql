@@ -1,9 +1,9 @@
 -- V4: ShedLock table.
 --
 -- Used by net.javacrumbs.shedlock to leader-elect SeatLockReaper across
--- replicas. Without this, every pod runs reaper.reap() every
--- ${app.seat-lock-reaper.interval-ms:60000}ms simultaneously — same batch
--- of expired-lock candidates pulled three times in a three-pod deploy,
+-- replicas. Without this, every pod runs reaper.reap() every minute
+-- (configurable via app.seat-lock-reaper.interval-ms) simultaneously --
+-- same batch of expired-lock candidates pulled three times in a three-pod deploy,
 -- each thread then attempting per-row pessimistic locks via
 -- SeatService.releaseStaleLock and tripping on the others. Optimistic
 -- locking on Seat prevents bad writes but the wasted query traffic and
