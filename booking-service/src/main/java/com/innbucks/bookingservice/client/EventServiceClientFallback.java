@@ -21,7 +21,7 @@ public class EventServiceClientFallback implements EventServiceClient {
     }
 
     @Override
-    public ApiResult<AvailabilityResponseDTO> consumeAvailability(java.util.UUID id, int count) {
+    public ApiResult<AvailabilityResponseDTO> consumeAvailability(java.util.UUID id, int count, String internalToken) {
         log.warn("event-service circuit open or call failed (consumeAvailability) eventId={} count={}",
                 id, count);
         return ApiResult.<AvailabilityResponseDTO>builder()

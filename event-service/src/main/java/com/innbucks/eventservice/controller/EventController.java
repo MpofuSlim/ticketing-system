@@ -16,6 +16,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.*;
@@ -24,6 +25,8 @@ import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -37,6 +40,16 @@ import java.util.UUID;
 public class EventController {
 
     private final EventService eventService;
+
+    /**
+     * Shared secret booking-service must present on the internal
+     * PATCH /events/{id}/availability/consume call. Defense-in-depth
+     * on top of the gateway's event-availability-deny rule — even if a
+     * future routing mistake or pod-network breach makes the path
+     * reachable, the controller still demands the token.
+     */
+    @Value("${innbucks.internal-api-token}")
+    private String expectedInternalToken;
 
     @GetMapping
     @SecurityRequirements()
@@ -885,6 +898,11 @@ public class EventController {
                     confirmed so the event's stored `availableTickets` decrements
                     atomically. Returns the new value. Refuses to underflow — a
                     request that would push availability below zero is rejected.
+
+                    Requires the `X-Internal-Token` shared secret. Missing or
+                    wrong token returns 401. The gateway also blocks this path
+                    from the public internet via the event-availability-deny
+                    rule; this controller check is defence in depth.
                     """
     )
     @ApiResponses({
@@ -902,16 +920,42 @@ public class EventController {
                                     """)
                     )
             ),
-            @ApiResponse(responseCode = "400", description = "count missing/non-positive or insufficient availability")
+            @ApiResponse(responseCode = "400", description = "count missing/non-positive or insufficient availability"),
+            @ApiResponse(responseCode = "401", description = "Missing or invalid X-Internal-Token")
     })
     public ResponseEntity<ApiResult<AvailabilityResponseDTO>> consumeAvailability(
             @Parameter(description = "Event UUID") @PathVariable UUID id,
-            @RequestParam("count") int count
+            @RequestParam("count") int count,
+            @RequestHeader(value = "X-Internal-Token", required = false) String internalToken
     ) {
+        if (!authorizedInternal(internalToken)) {
+            log.warn("Unauthorized PATCH /events/{}/availability/consume — missing or wrong X-Internal-Token", id);
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing or invalid X-Internal-Token"));
+        }
         log.info("PATCH /events/{}/availability/consume count={}", id, count);
         int remaining = eventService.consumeAvailability(id, count);
         return ResponseEntity.ok(ApiResult.ok("Availability consumed",
                 new AvailabilityResponseDTO(remaining)));
+    }
+
+    /**
+     * Constant-time shared-secret check for the internal consume-availability
+     * endpoint. Mirrors loyalty-service's InternalMerchantLookupController
+     * pattern — {@code MessageDigest.isEqual} so an attacker can't derive the
+     * token byte-by-byte from response-time differences.
+     */
+    private boolean authorizedInternal(String presented) {
+        if (expectedInternalToken == null || expectedInternalToken.isBlank()) {
+            log.warn("innbucks.internal-api-token is not configured; rejecting internal call");
+            return false;
+        }
+        if (presented == null) {
+            return false;
+        }
+        return MessageDigest.isEqual(
+                expectedInternalToken.getBytes(StandardCharsets.UTF_8),
+                presented.getBytes(StandardCharsets.UTF_8));
     }
 
     private String getCurrentRole(Authentication authentication) {

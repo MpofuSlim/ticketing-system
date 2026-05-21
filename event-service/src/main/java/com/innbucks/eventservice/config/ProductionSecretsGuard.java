@@ -20,7 +20,8 @@ import java.util.List;
 public class ProductionSecretsGuard {
 
     private static final List<String> SECRETS_TO_CHECK = List.of(
-            "jwt.secret"
+            "jwt.secret",
+            "innbucks.internal-api-token"
     );
 
     private static final String PLACEHOLDER_MARKER = "change-me";
@@ -44,7 +45,7 @@ public class ProductionSecretsGuard {
             throw new IllegalStateException(
                     "Refusing to start under 'prod' profile: " + offenders +
                     " still contain the placeholder marker '" + PLACEHOLDER_MARKER +
-                    "'. Override via env vars (JWT_SECRET) before booting in production."
+                    "'. Override via env vars (JWT_SECRET, INTERNAL_API_TOKEN) before booting in production."
             );
         }
         log.info("Production secrets check passed ({} keys verified)", SECRETS_TO_CHECK.size());

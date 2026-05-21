@@ -147,6 +147,13 @@ loyalty-service:
 event-service:
   url: ${EVENT_SERVICE_URL:http://localhost:8082}
 
+innbucks:
+  # Shared secret presented to event-service on the internal PATCH
+  # /events/{id}/availability/consume call. Same env var as everywhere
+  # else in the ticketing stack; ProductionSecretsGuard refuses the
+  # `change-me-*` placeholder when SPRING_PROFILES_ACTIVE=prod.
+  internal-api-token: ${INTERNAL_API_TOKEN:change-me-change-me-change-me-change-me}
+
 user-service:
   url: ${USER_SERVICE_URL:http://localhost:8081}
 

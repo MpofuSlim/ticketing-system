@@ -54,6 +54,12 @@ public class BookingService {
     @org.springframework.beans.factory.annotation.Value("${app.booking.hold-ttl-minutes:5}")
     private long holdTtlMinutes = 5;
 
+    // Shared secret passed to event-service on the internal
+    // PATCH /events/{id}/availability/consume call. Same value as
+    // INTERNAL_API_TOKEN on the event-service end of the wire.
+    @org.springframework.beans.factory.annotation.Value("${innbucks.internal-api-token:}")
+    private String eventInternalToken;
+
     @Transactional
     public BookingResponseDTO createBooking(
             String userEmail,
@@ -565,7 +571,7 @@ public class BookingService {
         }
         try {
             ApiResult<AvailabilityResponseDTO> envelope =
-                    client.consumeAvailability(booking.getEventId(), count);
+                    client.consumeAvailability(booking.getEventId(), count, eventInternalToken);
             AvailabilityResponseDTO data = envelope == null ? null : envelope.getData();
             if (data != null) {
                 log.info("Decremented event availability eventId={} consumed={} remaining={}",
