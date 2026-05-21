@@ -189,17 +189,22 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
-            # /{service}-service/** proxy routes exist for the Swagger UI
-            # aggregator (it loads each backend's /v3/api-docs through these
-            # paths). StripPrefix=1 means /user-service/auth/login lands on
-            # user-service's /auth/login — without RequestRateLimiter that
-            # was a brute-force bypass route around the bucket on the regular
-            # /auth/** route. Same limiter applied here closes the gap; the
-            # per-IP token bucket cost is negligible.
+            # /{service}-service/v3/api-docs proxy routes exist SOLELY for
+            # the Swagger UI aggregator on the gateway (it loads each
+            # backend's OpenAPI spec through these paths). The predicate is
+            # deliberately scoped to /v3/api-docs/** ONLY — historically it
+            # was /**, which let an attacker bypass per-path security at the
+            # gateway (e.g. /event-service/events/<id>/availability/consume
+            # would skip event-availability-deny; /loyalty-service/loyalty/
+            # internal/** would skip loyalty-internal-deny). It also let
+            # /user-service/auth/login skip the per-route rate limiter on
+            # /auth/**. Locked down to api-docs only, none of that is
+            # possible. The RequestRateLimiter is retained as defence in
+            # depth against api-docs scraping.
             - id: user-service-proxy-route
               uri: ${USER_SERVICE_URI:http://localhost:8081}
               predicates:
-                - Path=/user-service/**
+                - Path=/user-service/v3/api-docs,/user-service/v3/api-docs/**
               filters:
                 - StripPrefix=1
                 - name: RequestRateLimiter
@@ -212,7 +217,7 @@ spring:
             - id: event-service-proxy-route
               uri: ${EVENT_SERVICE_URI:http://localhost:8082}
               predicates:
-                - Path=/event-service/**
+                - Path=/event-service/v3/api-docs,/event-service/v3/api-docs/**
               filters:
                 - StripPrefix=1
                 - name: RequestRateLimiter
@@ -225,7 +230,7 @@ spring:
             - id: seat-service-proxy-route
               uri: ${SEAT_SERVICE_URI:http://localhost:8083}
               predicates:
-                - Path=/seat-service/**
+                - Path=/seat-service/v3/api-docs,/seat-service/v3/api-docs/**
               filters:
                 - StripPrefix=1
                 - name: RequestRateLimiter
@@ -238,7 +243,7 @@ spring:
             - id: booking-service-proxy-route
               uri: ${BOOKING_SERVICE_URI:http://localhost:8084}
               predicates:
-                - Path=/booking-service/**
+                - Path=/booking-service/v3/api-docs,/booking-service/v3/api-docs/**
               filters:
                 - StripPrefix=1
                 - name: RequestRateLimiter
@@ -251,7 +256,7 @@ spring:
             - id: payment-service-proxy-route
               uri: ${PAYMENT_SERVICE_URI:http://localhost:8085}
               predicates:
-                - Path=/payment-service/**
+                - Path=/payment-service/v3/api-docs,/payment-service/v3/api-docs/**
               filters:
                 - StripPrefix=1
                 - name: RequestRateLimiter
@@ -264,7 +269,7 @@ spring:
             - id: loyalty-service-proxy-route
               uri: ${LOYALTY_SERVICE_URI:http://localhost:8086}
               predicates:
-                - Path=/loyalty-service/**
+                - Path=/loyalty-service/v3/api-docs,/loyalty-service/v3/api-docs/**
               filters:
                 - StripPrefix=1
                 - name: RequestRateLimiter
