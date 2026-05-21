@@ -5,6 +5,7 @@ import com.innbucks.userservice.dto.UpdateActiveStatusDTO;
 import com.innbucks.userservice.dto.UserResponseDTO;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.repository.UserRepository;
+import com.innbucks.userservice.service.UserAdminService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
@@ -31,6 +32,7 @@ import java.util.stream.Collectors;
 public class AdminUserController {
 
     private final UserRepository userRepository;
+    private final UserAdminService userAdminService;
 
     @GetMapping
     @PreAuthorize("hasRole('SUPER_ADMIN')")
@@ -117,15 +119,9 @@ public class AdminUserController {
             @PathVariable Long id,
             @Valid @RequestBody UpdateActiveStatusDTO request) {
 
-        User user = userRepository.findById(id)
-                .orElseThrow(() -> new RuntimeException("User not found: " + id));
-
-        user.setActive(request.getActive());
-        userRepository.save(user);
+        User user = userAdminService.setActive(id, request.getActive());
 
         String action = request.getActive() ? "activated" : "deactivated";
-        log.info("User {} userId={}", action, id);
-
         return ResponseEntity.ok(ApiResult.ok("User " + action, UserResponseDTO.from(user)));
     }
 }

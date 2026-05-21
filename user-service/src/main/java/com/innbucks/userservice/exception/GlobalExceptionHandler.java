@@ -66,6 +66,17 @@ public class GlobalExceptionHandler {
                 .body(ApiResult.error(HttpStatus.BAD_GATEWAY, ex.getMessage()));
     }
 
+    // Domain "no such resource" surface — must come BEFORE the
+    // RuntimeException fallback so a typed miss surfaces as 404 instead
+    // of being demoted to 400 by the catch-all. Use NotFoundException in
+    // service-layer findById().orElseThrow(...) calls.
+    @ExceptionHandler(NotFoundException.class)
+    public ResponseEntity<ApiResult<Void>> handleNotFound(NotFoundException ex) {
+        log.info("Not found: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ApiResult.error(HttpStatus.NOT_FOUND, ex.getMessage()));
+    }
+
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<ApiResult<Void>> handleRuntime(RuntimeException ex) {
         log.warn("RuntimeException: {}", ex.getMessage());

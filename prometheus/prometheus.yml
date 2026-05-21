@@ -1,0 +1,92 @@
+# Prometheus scrape config for the ticketing-system stack.
+#
+# Drop this into your Prometheus deployment as the (or part of the)
+# prometheus.yml. Pairs with alerts.yaml in this directory — every
+# `job_name` here is referenced by `up{job="<name>"}` somewhere in the
+# rule set.
+#
+# Service ports match docker-compose.yml. For k8s, replace each
+# static_configs/targets entry with a kubernetes_sd_configs block
+# selecting by `app.kubernetes.io/name`.
+
+global:
+  # 15s matches the SLO windows in slo.md — fast enough for the page-tier
+  # alerts to fire inside a single error-budget bucket without burning
+  # Prometheus CPU on idle services.
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  # Common labels stamped on every series so multi-cluster queries can
+  # disambiguate between environments.
+  external_labels:
+    stack: ticketing
+    # Override per environment: prod/staging/dev. Default left blank so a
+    # local run doesn't pretend to be prod.
+    environment: ""
+
+# Rule evaluation. Mount alerts.yaml at the same path inside your
+# Prometheus container or update this glob to wherever you keep it.
+rule_files:
+  - /etc/prometheus/rules/alerts.yaml
+
+# Every backend exposes Micrometer Prometheus on /actuator/prometheus.
+# loyalty-service and payment-service require an authenticated JWT (see
+# their SecurityConfig); the gateway and the rest are open on the
+# management endpoint by their respective SecurityConfigs.
+#
+# If you scrape the JWT-gated services, set the `authorization` block
+# below per-job to a service-account bearer token. The example uses an
+# env-var-templated value so the actual token never lives in this file.
+scrape_configs:
+
+  - job_name: api-gateway
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [ "api-gateway:8080" ]
+
+  - job_name: user-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [ "user-service:8081" ]
+
+  - job_name: event-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [ "event-service:8082" ]
+
+  - job_name: seat-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [ "seat-service:8083" ]
+
+  - job_name: booking-service
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: [ "booking-service:8084" ]
+
+  - job_name: payment-service
+    metrics_path: /actuator/prometheus
+    # payment-service's SecurityConfig requires JWT on /actuator/prometheus.
+    # Provision a long-lived service-account JWT (PROMETHEUS_SCRAPE_TOKEN)
+    # in the prometheus container's env; the file ships templated.
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/payment-service-token
+    static_configs:
+      - targets: [ "payment-service:8085" ]
+
+  - job_name: loyalty-service
+    metrics_path: /actuator/prometheus
+    # loyalty-service's SecurityConfig only permits /actuator/health and
+    # /actuator/info anonymously (tightened pre-staging); /actuator/prometheus
+    # requires JWT. Same scrape-token pattern as payment-service.
+    authorization:
+      type: Bearer
+      credentials_file: /etc/prometheus/secrets/loyalty-service-token
+    static_configs:
+      - targets: [ "loyalty-service:8086" ]
+
+  # Optional: Postgres exporter for the per-service DBs. Not on by default
+  # — wire postgres_exporter into docker-compose first, then uncomment.
+  # - job_name: postgres-exporter
+  #   static_configs:
+  #     - targets: [ "postgres-exporter:9187" ]
