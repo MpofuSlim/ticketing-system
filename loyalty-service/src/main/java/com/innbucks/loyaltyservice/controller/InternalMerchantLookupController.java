@@ -8,6 +8,7 @@ import com.innbucks.loyaltyservice.repository.ShopRepository;
 import com.innbucks.loyaltyservice.service.ShopCheckoutService;
 import com.innbucks.loyaltyservice.service.UserService;
 import io.swagger.v3.oas.annotations.Hidden;
+import io.swagger.v3.oas.annotations.Operation;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -24,9 +25,17 @@ import java.util.UUID;
 
 /**
  * Service-to-service endpoints consumed by other backends (today: user-service
- * at login + shop-staff creation). Gated by a shared-secret header rather than
- * the user JWT — the caller is another microservice, not a logged-in user.
- * Hidden from Swagger.
+ * at login + shop-staff creation, payment-service for shop-checkout). Gated
+ * by a shared-secret header rather than the user JWT — the caller is another
+ * microservice, not a logged-in user.
+ *
+ * <p>Class-level {@link Hidden} keeps every endpoint here out of the public
+ * Swagger UI; the gateway additionally blocks {@code /loyalty/internal/**}
+ * at the edge via the {@code loyalty-internal-deny} route. Per-method
+ * {@code @ApiResponses} blocks are intentionally omitted as a result (the
+ * endpoints never render in any consumer-facing spec); {@link Operation}
+ * summaries are kept so anyone reading the code or running springdoc
+ * locally still sees a one-line description per handler.
  */
 @RestController
 @RequestMapping("/loyalty/internal")
@@ -53,6 +62,9 @@ public class InternalMerchantLookupController {
     }
 
     @GetMapping("/merchants/by-admin")
+    @Operation(summary = "(S2S) Resolve a merchant by admin email",
+            description = "Returns the merchantId for the oldest merchant whose adminEmail matches the query. " +
+                          "Used by user-service when a logged-in admin's JWT carries an email but not a merchantId.")
     public ResponseEntity<?> byAdminEmail(@RequestHeader(value = "X-Internal-Token", required = false) String token,
                                           @RequestParam("email") String email) {
         if (!authorized(token)) {
@@ -71,6 +83,10 @@ public class InternalMerchantLookupController {
     }
 
     @GetMapping("/shops/{id}")
+    @Operation(summary = "(S2S) Resolve a shop by id",
+            description = "Returns the shop's tenantId + merchantId + status. Used by user-service " +
+                          "when promoting a shop-staff user — needs the parent tenant to grant the " +
+                          "right scope without trusting a client-supplied tenant claim.")
     public ResponseEntity<?> getShop(@RequestHeader(value = "X-Internal-Token", required = false) String token,
                                      @PathVariable UUID id) {
         if (!authorized(token)) {
@@ -98,6 +114,10 @@ public class InternalMerchantLookupController {
      * <p>Body: {@code {"phoneNumber": "+263771234567"}}.
      */
     @org.springframework.web.bind.annotation.PostMapping("/users/promote")
+    @Operation(summary = "(S2S) Promote a customer's PENDING loyalty rows to ACTIVE",
+            description = "Webhook from user-service: when a phone completes signup, every " +
+                          "PENDING LoyaltyUser row matching that phone (across all tenants) flips " +
+                          "to ACTIVE. Idempotent — replays report how many rows actually changed.")
     public ResponseEntity<?> promote(@RequestHeader(value = "X-Internal-Token", required = false) String token,
                                      @org.springframework.web.bind.annotation.RequestBody Map<String, String> body) {
         if (!authorized(token)) {
@@ -122,6 +142,11 @@ public class InternalMerchantLookupController {
      * At least one of {@code cashAmount} or {@code pointsAmount} must be > 0.
      */
     @PostMapping("/shop-checkout")
+    @Operation(summary = "(S2S) Shop checkout — optional earn + optional burn, atomic",
+            description = "Called by payment-service when a customer pays at a shop. The cash leg " +
+                          "earns points per the merchant's loyalty rules; the points leg burns " +
+                          "from the customer's wallet. Both legs commit in a single loyalty-service " +
+                          "transaction. At least one of cashAmount or pointsAmount must be > 0.")
     public ResponseEntity<?> shopCheckout(@RequestHeader(value = "X-Internal-Token", required = false) String token,
                                           @RequestBody Map<String, Object> body) {
         if (!authorized(token)) {

@@ -163,6 +163,43 @@ public class ShopController {
 
     @GetMapping("/{id}")
     @Operation(summary = "Get a shop by id")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Shop returned",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Shop", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Shop retrieved successfully",
+                                      "data": {
+                                        "id": "11111111-aaaa-bbbb-cccc-222222222222",
+                                        "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                        "name": "Pizza Inn Avondale",
+                                        "code": "AVONDALE",
+                                        "address": "123 King George Rd, Avondale, Harare",
+                                        "status": "ACTIVE",
+                                        "createdAt": "2026-05-11T10:15:00Z"
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
+                    description = "Missing or invalid bearer token"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "Caller's role is not permitted to read shops"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "No shop with that id in this tenant",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Not found", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "shop not found",
+                                      "data": null
+                                    }
+                                    """)))
+    })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.ShopResponse>> get(@PathVariable UUID id) {
         Dtos.ShopResponse data = shops.get(tenantContext.requireTenantId(), id);
@@ -172,6 +209,45 @@ public class ShopController {
     @PutMapping("/{id}")
     @Operation(summary = "Update a shop",
             description = "Updates display name, outlet code, or address.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Shop updated",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Updated", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Shop updated successfully",
+                                      "data": {
+                                        "id": "11111111-aaaa-bbbb-cccc-222222222222",
+                                        "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                        "name": "Pizza Inn Avondale (renamed)",
+                                        "code": "AVONDALE",
+                                        "address": "456 Samora Machel Ave, Harare",
+                                        "status": "ACTIVE",
+                                        "createdAt": "2026-05-11T10:15:00Z"
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "Validation failure",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Missing field", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "name: must not be blank",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
+                    description = "Missing or invalid bearer token"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "Caller's role is not permitted to update shops"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "No shop with that id in this tenant")
+    })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.ShopResponse>> update(@PathVariable UUID id,
                                                                @Valid @RequestBody Dtos.ShopRequest req) {
@@ -182,6 +258,35 @@ public class ShopController {
     @PostMapping("/{id}/activate")
     @Operation(summary = "Activate a shop",
             description = "Sets status to ACTIVE. Idempotent.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Shop activated (or already active — idempotent)",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Activated", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Shop activated successfully",
+                                      "data": {
+                                        "id": "11111111-aaaa-bbbb-cccc-222222222222",
+                                        "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                        "name": "Pizza Inn Avondale",
+                                        "code": "AVONDALE",
+                                        "address": "123 King George Rd, Avondale, Harare",
+                                        "status": "ACTIVE",
+                                        "createdAt": "2026-05-11T10:15:00Z"
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
+                    description = "Missing or invalid bearer token"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "Caller's role is not permitted to activate shops"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "No shop with that id in this tenant")
+    })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.ShopResponse>> activate(@PathVariable UUID id) {
         Dtos.ShopResponse data = shops.setActive(tenantContext.requireTenantId(), id, true);
@@ -192,6 +297,35 @@ public class ShopController {
     @Operation(summary = "Deactivate a shop",
             description = "Sets status to INACTIVE. The parent merchant and any issued vouchers are " +
                           "unaffected; only the shop outlet is taken offline.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Shop deactivated (or already inactive — idempotent)",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Deactivated", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Shop deactivated successfully",
+                                      "data": {
+                                        "id": "11111111-aaaa-bbbb-cccc-222222222222",
+                                        "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                        "name": "Pizza Inn Avondale",
+                                        "code": "AVONDALE",
+                                        "address": "123 King George Rd, Avondale, Harare",
+                                        "status": "INACTIVE",
+                                        "createdAt": "2026-05-11T10:15:00Z"
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
+                    description = "Missing or invalid bearer token"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "Caller's role is not permitted to deactivate shops"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "No shop with that id in this tenant")
+    })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.ShopResponse>> deactivate(@PathVariable UUID id) {
         Dtos.ShopResponse data = shops.setActive(tenantContext.requireTenantId(), id, false);
@@ -202,6 +336,47 @@ public class ShopController {
     @Operation(summary = "List shops under a merchant",
             description = "Convenience endpoint for nested navigation — returns every shop belonging " +
                           "to the given merchant in the current tenant.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Shops returned (empty array if the merchant has none)",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Two shops", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Shops retrieved successfully",
+                                      "data": [
+                                        {
+                                          "id": "11111111-aaaa-bbbb-cccc-222222222222",
+                                          "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                          "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                          "name": "Pizza Inn Avondale",
+                                          "code": "AVONDALE",
+                                          "address": "123 King George Rd, Avondale, Harare",
+                                          "status": "ACTIVE",
+                                          "createdAt": "2026-05-11T10:15:00Z"
+                                        },
+                                        {
+                                          "id": "22222222-bbbb-cccc-dddd-333333333333",
+                                          "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                          "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                          "name": "Pizza Inn Borrowdale",
+                                          "code": "BORROWDALE",
+                                          "address": "12 Sam Levy's Village, Borrowdale, Harare",
+                                          "status": "ACTIVE",
+                                          "createdAt": "2026-05-11T10:20:00Z"
+                                        }
+                                      ]
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
+                    description = "Missing or invalid bearer token"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "Caller's role is not permitted to list shops"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "No merchant with that id in this tenant")
+    })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<List<Dtos.ShopResponse>>> listForMerchant(@PathVariable UUID merchantId) {
         List<Dtos.ShopResponse> data = shops.listForMerchant(tenantContext.requireTenantId(), merchantId);
