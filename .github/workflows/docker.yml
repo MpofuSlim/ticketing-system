@@ -37,6 +37,7 @@ jobs:
           - seat-service
           - booking-service
           - payment-service
+          - loyalty-service
 
     steps:
       - name: Checkout
