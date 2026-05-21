@@ -52,6 +52,21 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
+            # Block /events/{id}/availability/** at the edge. These are
+            # service-to-service write endpoints (booking-service ->
+            # event-service decrements availableTickets on a confirmed
+            # booking). They have no business being reachable from the
+            # public internet — an anonymous PATCH /events/.../availability/
+            # consume?count=99999 would drain any event's capacity and DoS
+            # legitimate customers. Real service-to-service traffic goes
+            # directly between pods over the cluster network and never
+            # touches the gateway. MUST be declared before the catch-all
+            # event-service-route so SCG matches it first.
+            - id: event-availability-deny
+              uri: forward:/__edge_deny__
+              predicates:
+                - Path=/events/*/availability/**
+
             - id: event-service-route
               uri: ${EVENT_SERVICE_URI:http://localhost:8082}
               predicates:
