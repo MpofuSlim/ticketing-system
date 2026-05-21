@@ -49,7 +49,15 @@ public class SecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .requestMatchers(
-                                "/actuator/**",
+                                // Only health + info are anonymous — every other
+                                // actuator endpoint (notably /actuator/prometheus,
+                                // which exposes business metrics like points
+                                // earned/redeemed and voucher counts) must be
+                                // authenticated. Loosen explicitly per endpoint,
+                                // not via /actuator/**.
+                                "/actuator/health",
+                                "/actuator/health/**",
+                                "/actuator/info",
                                 "/v3/api-docs/**",
                                 "/swagger-ui/**",
                                 "/swagger-ui.html",

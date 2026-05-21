@@ -15,6 +15,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -169,6 +171,15 @@ public class InternalMerchantLookupController {
             log.warn("Internal API token is not configured; rejecting call");
             return false;
         }
-        return expectedToken.equals(presented);
+        if (presented == null) {
+            return false;
+        }
+        // Constant-time compare. String.equals exits on the first mismatching
+        // byte, leaving a measurable timing oracle on the shared secret —
+        // an attacker can derive it byte by byte. MessageDigest.isEqual runs
+        // the full comparison even when bytes diverge.
+        return MessageDigest.isEqual(
+                expectedToken.getBytes(StandardCharsets.UTF_8),
+                presented.getBytes(StandardCharsets.UTF_8));
     }
 }
