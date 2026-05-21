@@ -19,6 +19,15 @@ public class Booking {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
+    // Optimistic-lock token. Hibernate increments it on every UPDATE and
+    // adds `... WHERE id = ? AND version = ?` to the generated SQL, so two
+    // concurrent confirms can't both commit. The second one's UPDATE
+    // touches 0 rows and throws OptimisticLockException — confirmBooking
+    // surfaces that as a 409 Conflict ("booking already confirmed").
+    @Version
+    @Column(nullable = false)
+    private Long version;
+
     @Column
     private String userEmail;
 

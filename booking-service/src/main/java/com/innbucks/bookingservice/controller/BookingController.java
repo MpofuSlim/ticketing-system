@@ -21,6 +21,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -30,10 +31,13 @@ import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.List;
 import java.util.UUID;
 
@@ -46,6 +50,17 @@ public class BookingController {
 
     private final BookingService bookingService;
     private final com.innbucks.bookingservice.client.UserServiceClient userServiceClient;
+
+    /**
+     * Shared secret payment-service must present on PATCH
+     * /bookings/{id}/confirm. Booking confirm is service-to-service only —
+     * it's called from payment-service after a successful payment to flip
+     * PENDING -> CONFIRMED + trigger loyalty earn/redeem. Previously
+     * permitAll, so anyone with a UUID could confirm someone else's
+     * booking, burning their loyalty points before any payment landed.
+     */
+    @Value("${innbucks.internal-api-token}")
+    private String expectedInternalToken;
 
     @PostMapping
     @Operation(summary = "Create booking", description = "Creates a new pending booking. The customer's tier is resolved from user-service via the phone number — JWT phone wins when present, otherwise the request body's `phoneNumber`. " +
@@ -662,17 +677,64 @@ public class BookingController {
                                     """)
                     )
             ),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing or invalid X-Internal-Token"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409", description = "Concurrent confirm — another caller won the race; the booking is already CONFIRMED"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid booking state")
     })
     public ResponseEntity<ApiResult<BookingResponseDTO>> confirmBooking(
             @PathVariable UUID id,
+            @RequestHeader(value = "X-Internal-Token", required = false) String internalToken,
             @RequestBody(required = false) ConfirmBookingRequestDTO request
     ) {
+        if (!authorizedInternal(internalToken)) {
+            log.warn("Unauthorized PATCH /bookings/{}/confirm — missing or wrong X-Internal-Token", id);
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.<BookingResponseDTO>builder()
+                            .code("401 UNAUTHORIZED")
+                            .message("Missing or invalid X-Internal-Token")
+                            .data(null)
+                            .build());
+        }
         log.info("PATCH /bookings/{}/confirm pointsToUse={} cashAmount={}", id,
                 request == null ? null : request.getPointsToUse(),
                 request == null ? null : request.getCashAmount());
-        return ResponseEntity.ok(ApiResult.ok("Booking confirmed successfully",
-                bookingService.confirmBooking(id, request)));
+        try {
+            return ResponseEntity.ok(ApiResult.ok("Booking confirmed successfully",
+                    bookingService.confirmBooking(id, request)));
+        } catch (org.springframework.orm.ObjectOptimisticLockingFailureException
+                | jakarta.persistence.OptimisticLockException ex) {
+            // Two confirms raced; the loser sees zero-row UPDATE. Surface as
+            // 409 so the caller (payment-service) knows the booking has
+            // already been confirmed by the other side of the race — same
+            // resolution as the optimistic-replay case in our idempotency
+            // contract.
+            log.warn("Optimistic-lock collision on PATCH /bookings/{}/confirm — booking already confirmed", id);
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(ApiResult.<BookingResponseDTO>builder()
+                            .code("409 CONFLICT")
+                            .message("Booking already confirmed by a concurrent request")
+                            .data(null)
+                            .build());
+        }
+    }
+
+    /**
+     * Constant-time shared-secret check for the internal confirm endpoint.
+     * Mirrors loyalty-service's InternalMerchantLookupController and
+     * event-service's consumeAvailability — {@code MessageDigest.isEqual}
+     * so an attacker can't derive the token byte-by-byte from response-time
+     * differences.
+     */
+    private boolean authorizedInternal(String presented) {
+        if (expectedInternalToken == null || expectedInternalToken.isBlank()) {
+            log.warn("innbucks.internal-api-token is not configured; rejecting internal call");
+            return false;
+        }
+        if (presented == null) {
+            return false;
+        }
+        return MessageDigest.isEqual(
+                expectedInternalToken.getBytes(StandardCharsets.UTF_8),
+                presented.getBytes(StandardCharsets.UTF_8));
     }
 }
