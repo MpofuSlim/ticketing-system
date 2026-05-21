@@ -3,6 +3,7 @@ package com.innbucks.seatservice.service;
 import com.innbucks.seatservice.repository.SeatRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.domain.PageRequest;
@@ -41,6 +42,15 @@ public class SeatLockReaper {
     @Scheduled(
             fixedDelayString = "${app.seat-lock-reaper.interval-ms:60000}",
             initialDelayString = "${app.seat-lock-reaper.initial-delay-ms:30000}"
+    )
+    // ShedLock: exactly one pod runs the reaper per scheduled tick.
+    // lockAtMostFor is the fail-safe if the holder dies; lockAtLeastFor
+    // prevents very-fast-finishing reaps from re-acquiring inside the
+    // same interval (e.g. nothing to reap -> 5ms run).
+    @SchedulerLock(
+            name = "SeatLockReaper.reap",
+            lockAtMostFor = "PT5M",
+            lockAtLeastFor = "PT30S"
     )
     public void reap() {
         List<UUID> candidates = seatRepository.findExpiredLockIds(
