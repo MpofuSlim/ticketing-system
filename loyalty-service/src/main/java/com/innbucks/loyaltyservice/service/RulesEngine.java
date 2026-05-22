@@ -61,7 +61,15 @@ public class RulesEngine {
             points = rule.getMaxPointsPerTxn();
         }
 
-        points = points.setScale(4, RoundingMode.HALF_UP);
+        // Whole-number points only. A $1.30 purchase at 1 point/unit floors
+        // to 1 — never 1.3, never 2. Always rounding down (FLOOR, not
+        // HALF_UP as we used to) is the merchant-favourable + customer-
+        // friendly choice: customers can never see a fractional balance
+        // they "earned" without knowing why, and the merchant doesn't
+        // accidentally over-issue points on borderline values. The column
+        // is still NUMERIC(19,4) for backwards-compat with rows written
+        // before this change; new rows have scale 0 stored as 1.0000.
+        points = points.setScale(0, RoundingMode.FLOOR);
         return new Evaluation(points, rule.getId(),
                 campaign == null ? null : campaign.getId(), rule.getPocket());
     }

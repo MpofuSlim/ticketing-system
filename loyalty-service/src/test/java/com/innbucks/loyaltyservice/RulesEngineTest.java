@@ -79,6 +79,38 @@ class RulesEngineTest {
     }
 
     @Test
+    void roundsPointsDownToWholeNumber() {
+        // A $1.30 purchase at 1 point/unit must yield 1 point, not 1.3.
+        // A $2.80 purchase must yield 2, not 3 (HALF_UP would have rounded
+        // 2.8 up to 3 — the bug this test pins fixed).
+        LoyaltyRuleRepository rules = Mockito.mock(LoyaltyRuleRepository.class);
+        CampaignRepository campaigns = Mockito.mock(CampaignRepository.class);
+        UUID tenantId = UUID.randomUUID();
+        UUID merchantId = UUID.randomUUID();
+
+        LoyaltyRule rule = new LoyaltyRule();
+        rule.setTenantId(tenantId);
+        rule.setTransactionType(TransactionType.PURCHASE);
+        rule.setPointsPerUnit(BigDecimal.ONE);
+        rule.setMultiplier(BigDecimal.ONE);
+
+        Mockito.when(rules.findApplicable(Mockito.any(), Mockito.any(), Mockito.eq(TransactionType.PURCHASE)))
+                .thenReturn(List.of(rule));
+        Mockito.when(campaigns.findActive(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any()))
+                .thenReturn(List.of());
+
+        RulesEngine engine = new RulesEngine(rules, campaigns);
+
+        assertThat(engine.evaluate(tenantId, merchantId, TransactionType.PURCHASE, new BigDecimal("1.30")).points())
+                .isEqualByComparingTo("1");
+        assertThat(engine.evaluate(tenantId, merchantId, TransactionType.PURCHASE, new BigDecimal("2.80")).points())
+                .isEqualByComparingTo("2");
+        // Sub-unit transactions floor to zero — no fractional-points trickle.
+        assertThat(engine.evaluate(tenantId, merchantId, TransactionType.PURCHASE, new BigDecimal("0.99")).points())
+                .isEqualByComparingTo("0");
+    }
+
+    @Test
     void capRespectsMaxPerTransaction() {
         LoyaltyRuleRepository rules = Mockito.mock(LoyaltyRuleRepository.class);
         CampaignRepository campaigns = Mockito.mock(CampaignRepository.class);
