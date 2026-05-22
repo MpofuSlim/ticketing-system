@@ -70,6 +70,33 @@ public class Dtos {
                                com.innbucks.loyaltyservice.entity.Shop.Status status,
                                Instant createdAt) {}
 
+    // CSV bulk-upload result. Each row gets its own DB transaction, so a
+    // bad row in the middle of a 100-row file doesn't block the rest —
+    // the FE can show "82 created, 18 failed" and the failure list lets
+    // the operator fix the bad rows and re-upload just those.
+    public record BulkShopUploadResult(
+            @Schema(example = "100", description = "Total data rows attempted (excludes the header).")
+            int processed,
+            @Schema(example = "82", description = "Rows that created a shop successfully.")
+            int created,
+            @Schema(example = "18", description = "Rows that failed validation or persistence.")
+            int failed,
+            @ArraySchema(
+                    arraySchema = @Schema(description = "Per-row failure detail. Empty on a fully clean upload."),
+                    schema = @Schema(implementation = BulkShopRowFailure.class))
+            List<BulkShopRowFailure> failures
+    ) {}
+
+    public record BulkShopRowFailure(
+            @Schema(example = "5", description = "1-based row number in the uploaded CSV (header is row 1; first data row is 2).")
+            int row,
+            @Schema(example = "Pizza Inn Belgravia", nullable = true,
+                    description = "The `name` value from the row, if it was parseable.")
+            String name,
+            @Schema(example = "name is required", description = "Human-readable reason the row was rejected.")
+            String error
+    ) {}
+
     // Loyalty enrolment is by phone number only — name/email/nationalId belong
     // to user-service. Loyalty validates the phone exists there before
     // creating its local LoyaltyUser projection.
