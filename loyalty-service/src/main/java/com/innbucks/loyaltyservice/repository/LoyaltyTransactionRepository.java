@@ -22,6 +22,8 @@ public interface LoyaltyTransactionRepository extends JpaRepository<LoyaltyTrans
 
     Page<LoyaltyTransaction> findByUserIdOrderByCreatedAtDesc(UUID userId, Pageable pageable);
 
+    Page<LoyaltyTransaction> findByTenantIdAndShopIdOrderByCreatedAtDesc(UUID tenantId, UUID shopId, Pageable pageable);
+
     @Query("""
         SELECT COALESCE(SUM(CASE WHEN t.pointsDelta > 0 THEN t.pointsDelta ELSE 0 END), 0)
         FROM LoyaltyTransaction t

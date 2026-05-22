@@ -171,8 +171,8 @@ public class Dtos {
 
     public record TransactionResponse(UUID id, TransactionType type, BigDecimal amount,
                                       BigDecimal pointsDelta, BigDecimal balanceAfter,
-                                      UUID ruleId, UUID campaignId, String reference,
-                                      Instant createdAt) {}
+                                      UUID ruleId, UUID campaignId, UUID shopId,
+                                      String reference, Instant createdAt) {}
 
     // Sender (fromUserId) MUST be a registered LoyaltyUser — you can't spend a
     // pending balance. Recipient may be either a registered user (toUserId) or

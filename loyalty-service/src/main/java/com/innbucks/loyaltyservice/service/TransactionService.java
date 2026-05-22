@@ -82,6 +82,10 @@ public class TransactionService {
         LoyaltyTransaction t = new LoyaltyTransaction();
         t.setTenantId(tenantId);
         t.setMerchantId(m.getId());
+        // shopId is stamped from the caller's JWT — present only for
+        // SHOP_USER / SHOP_ADMIN tokens. Outlet-scoped reporting (the
+        // /loyalty/transactions/my-shop endpoint) keys off this column.
+        t.setShopId(com.innbucks.loyaltyservice.security.CallerDetails.currentShopId());
         t.setUserId(u.getId());
         t.setType(req.type());
         t.setAmount(req.amount());
@@ -110,9 +114,7 @@ public class TransactionService {
 
         metrics.incTransactionPosted(t.getType().name());
         metrics.addPointsEarned(eval.points());
-        return new Dtos.TransactionResponse(t.getId(), t.getType(), t.getAmount(),
-                t.getPointsDelta(), balance, t.getRuleId(), t.getCampaignId(),
-                t.getReference(), t.getCreatedAt());
+        return toResponse(t, balance);
     }
 
     private Wallet pickWallet(UUID userId, String pocket) {
@@ -137,6 +139,9 @@ public class TransactionService {
         LoyaltyTransaction rev = new LoyaltyTransaction();
         rev.setTenantId(tenantId);
         rev.setMerchantId(orig.getMerchantId());
+        // Reversal inherits the original's shop attribution so it shows up
+        // in the same outlet's "my-shop" feed.
+        rev.setShopId(orig.getShopId());
         rev.setUserId(orig.getUserId());
         rev.setType(TransactionType.ADJUSTMENT);
         rev.setAmount(orig.getAmount());
@@ -154,9 +159,7 @@ public class TransactionService {
         }
 
         metrics.incTransactionPosted("REVERSAL");
-        return new Dtos.TransactionResponse(rev.getId(), rev.getType(), rev.getAmount(),
-                rev.getPointsDelta(), balance, rev.getRuleId(), rev.getCampaignId(),
-                rev.getReference(), rev.getCreatedAt());
+        return toResponse(rev, balance);
     }
 
     public Dtos.TransactionResponse adjust(UUID tenantId, UUID userId, UUID merchantId,
@@ -176,24 +179,41 @@ public class TransactionService {
         BigDecimal balance = walletService.apply(w.getId(), points, t.getId(),
                 "adjust:" + (reason == null ? "n/a" : reason));
         metrics.incTransactionPosted("ADJUSTMENT");
-        return new Dtos.TransactionResponse(t.getId(), t.getType(), t.getAmount(),
-                t.getPointsDelta(), balance, null, null, t.getReference(), t.getCreatedAt());
+        return toResponse(t, balance);
     }
 
     @Transactional(readOnly = true)
     public List<Dtos.TransactionResponse> recentForUser(UUID userId) {
         return transactions.findTop50ByUserIdOrderByCreatedAtDesc(userId).stream()
-                .map(t -> new Dtos.TransactionResponse(t.getId(), t.getType(), t.getAmount(),
-                        t.getPointsDelta(), null, t.getRuleId(), t.getCampaignId(),
-                        t.getReference(), t.getCreatedAt()))
+                .map(t -> toResponse(t, null))
                 .toList();
     }
 
     @Transactional(readOnly = true)
     public Page<Dtos.TransactionResponse> recentForUser(UUID userId, Pageable pageable) {
         return transactions.findByUserIdOrderByCreatedAtDesc(userId, pageable)
-                .map(t -> new Dtos.TransactionResponse(t.getId(), t.getType(), t.getAmount(),
-                        t.getPointsDelta(), null, t.getRuleId(), t.getCampaignId(),
-                        t.getReference(), t.getCreatedAt()));
+                .map(t -> toResponse(t, null));
+    }
+
+    @Transactional(readOnly = true)
+    public Page<Dtos.TransactionResponse> recentForShop(UUID tenantId, UUID shopId, Pageable pageable) {
+        return transactions
+                .findByTenantIdAndShopIdOrderByCreatedAtDesc(tenantId, shopId, pageable)
+                .map(t -> toResponse(t, null));
+    }
+
+    /**
+     * {@code balanceAfter} is only populated on the write paths
+     * ({@link #post}, {@link #reverse}, {@link #adjust}) where the call site
+     * knows the wallet balance it just computed. The read paths
+     * ({@link #recentForUser}, {@link #recentForShop}) pass {@code null} to
+     * avoid a per-row wallet lookup — the SuperApp activity feed and the
+     * shop-staff feed don't need the running balance per row, they call the
+     * dedicated balance endpoint when they want it.
+     */
+    private static Dtos.TransactionResponse toResponse(LoyaltyTransaction t, BigDecimal balance) {
+        return new Dtos.TransactionResponse(t.getId(), t.getType(), t.getAmount(),
+                t.getPointsDelta(), balance, t.getRuleId(), t.getCampaignId(),
+                t.getShopId(), t.getReference(), t.getCreatedAt());
     }
 }

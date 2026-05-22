@@ -15,19 +15,33 @@ import java.util.UUID;
  * merchantId; those callers supply it in the request body, and write endpoints
  * use {@link #resolveMerchantId(UUID)} to pick the right source.
  *
+ * <p>{@code shopId} is set only for SHOP_ADMIN and SHOP_USER (cashiers and
+ * outlet supervisors). It identifies the specific outlet the principal works
+ * at, which lets shop-staff endpoints scope results to that outlet without
+ * exposing other outlets of the same merchant chain.
+ *
  * <p>{@code phoneNumber} is set for CUSTOMER tokens (and any other role that
  * carries the claim). It's the authoritative identifier for "the caller's
  * wallet" — used by P2P transfer to verify the request's {@code fromUserId}
  * actually belongs to the authenticated principal, so a logged-in user can't
  * drain someone else's balance.
  */
-public record CallerDetails(UUID merchantId, String phoneNumber) {
+public record CallerDetails(UUID merchantId, UUID shopId, String phoneNumber) {
 
     public static UUID currentMerchantId() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth == null) return null;
         Object details = auth.getDetails();
         if (details instanceof CallerDetails cd) return cd.merchantId();
+        return null;
+    }
+
+    /** JWT shopId claim, or {@code null} when the token doesn't carry one. */
+    public static UUID currentShopId() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null) return null;
+        Object details = auth.getDetails();
+        if (details instanceof CallerDetails cd) return cd.shopId();
         return null;
     }
 

@@ -92,13 +92,14 @@ public class JwtFilter extends OncePerRequestFilter {
             }
 
             UUID merchantId = jwtUtil.extractMerchantId(token);
+            UUID shopId = jwtUtil.extractShopId(token);
             String phoneNumber = jwtUtil.extractPhoneNumber(token);
 
             var auth = new UsernamePasswordAuthenticationToken(email, null, authorities);
-            auth.setDetails(new CallerDetails(merchantId, phoneNumber));
+            auth.setDetails(new CallerDetails(merchantId, shopId, phoneNumber));
             SecurityContextHolder.getContext().setAuthentication(auth);
-            log.debug("JWT authenticated subject={} roles={} merchantId={} path={}",
-                    email, roles, merchantId, request.getRequestURI());
+            log.debug("JWT authenticated subject={} roles={} merchantId={} shopId={} path={}",
+                    email, roles, merchantId, shopId, request.getRequestURI());
         } catch (Exception e) {
             // Defensive: if claim extraction blows up for any reason (corrupt
             // payload, etc.) treat it the same as an invalid token rather than
