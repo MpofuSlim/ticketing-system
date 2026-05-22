@@ -409,4 +409,55 @@ public class Dtos {
     public record FraudAttemptResponse(UUID id, String voucherCode, UUID merchantId,
                                        String reason, String detail,
                                        String deviceFingerprint, Instant createdAt) {}
+
+    /**
+     * Period-bounded points totals. Used by the per-merchant / per-user /
+     * per-shop point reports. `netPoints = pointsIssued - pointsRedeemed`;
+     * computed server-side so the FE doesn't have to and can never disagree.
+     */
+    public record PointsReport(
+            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
+                    description = "Subject of the report: merchant / user / shop UUID depending on which endpoint produced it.")
+            UUID subjectId,
+            @Schema(example = "2026-05-01")
+            LocalDate from,
+            @Schema(example = "2026-05-31")
+            LocalDate to,
+            @Schema(example = "152340.0000",
+                    description = "Sum of positive `pointsDelta` rows (earn / accrual / adjustment-up).")
+            BigDecimal pointsIssued,
+            @Schema(example = "47820.0000",
+                    description = "Sum of negative `pointsDelta` rows, returned positive (spend / redeem / adjustment-down).")
+            BigDecimal pointsRedeemed,
+            @Schema(example = "104520.0000",
+                    description = "`pointsIssued - pointsRedeemed`. Can be negative.")
+            BigDecimal netPoints,
+            @Schema(example = "1872", description = "Number of POSTED transactions matching the filter.")
+            long transactionCount
+    ) {}
+
+    /** One row of the points-by-type report. */
+    public record PointsByTypeRow(
+            @Schema(example = "PURCHASE", description = "TransactionType.")
+            String type,
+            @Schema(example = "1842")
+            long count,
+            @Schema(example = "184200.0000")
+            BigDecimal pointsIssued,
+            @Schema(example = "0.0000")
+            BigDecimal pointsRedeemed
+    ) {}
+
+    /** One bucket of the daily time-series. */
+    public record PointsTimeSeriesPoint(
+            @Schema(example = "2026-05-04T00:00:00Z",
+                    description = "Bucket start (UTC midnight). Missing days within the range have a row with zeros so the FE can render a contiguous chart.")
+            Instant bucket,
+            @Schema(example = "5120.0000")
+            BigDecimal pointsIssued,
+            @Schema(example = "1240.0000")
+            BigDecimal pointsRedeemed,
+            @Schema(example = "73")
+            long transactionCount
+    ) {}
 }

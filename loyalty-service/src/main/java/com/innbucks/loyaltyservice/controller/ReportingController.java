@@ -22,6 +22,7 @@ import org.springframework.web.bind.annotation.*;
 import lombok.extern.slf4j.Slf4j;
 
 import java.time.LocalDate;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -317,6 +318,218 @@ public class ReportingController {
         return ResponseEntity.ok(ApiResult.ok("Transaction mix retrieved successfully", data));
     }
 
+    @GetMapping("/points/merchant/{merchantId}")
+    @Operation(summary = "Points report (per merchant, period-bounded)",
+            description = "Sum of points issued and redeemed at this merchant between `from` and `to` (UTC " +
+                          "calendar days, inclusive). Complements `/reports/merchant/{id}` which is hardcoded " +
+                          "to today only. `netPoints = pointsIssued - pointsRedeemed`.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Points report",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Points report", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Points report retrieved successfully",
+                                      "data": {
+                                        "subjectId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                        "from": "2026-05-01",
+                                        "to": "2026-05-31",
+                                        "pointsIssued": 152340.0000,
+                                        "pointsRedeemed": 47820.0000,
+                                        "netPoints": 104520.0000,
+                                        "transactionCount": 1872
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "Missing/invalid/inverted date range",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Range inverted", value = """
+                                    {
+                                      "code": "RANGE_INVERTED",
+                                      "message": "from must not be after to",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
+    })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<Dtos.PointsReport>> pointsForMerchant(
+            @PathVariable UUID merchantId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        Dtos.PointsReport data = reporting.pointsForMerchant(
+                tenantContext.requireTenantId(), merchantId, from, to);
+        return ResponseEntity.ok(ApiResult.ok("Points report retrieved successfully", data));
+    }
+
+    @GetMapping("/points/user/{userId}")
+    @Operation(summary = "Points report (per user, period-bounded)",
+            description = "Sum of points earned and spent by this LoyaltyUser between `from` and `to`. " +
+                          "Complements the SuperApp dashboard's `totalPoints` (current balance, no period) " +
+                          "and `recentTransactions` (raw list) — useful for a customer's monthly statement " +
+                          "or a CS agent investigating a balance dispute.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Points report",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Points report", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Points report retrieved successfully",
+                                      "data": {
+                                        "subjectId": "d2c8f0a1-0123-4567-1234-567890123456",
+                                        "from": "2026-05-01",
+                                        "to": "2026-05-31",
+                                        "pointsIssued": 1240.0000,
+                                        "pointsRedeemed": 500.0000,
+                                        "netPoints": 740.0000,
+                                        "transactionCount": 18
+                                      }
+                                    }
+                                    """)
+                    )
+            )
+    })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<Dtos.PointsReport>> pointsForUser(
+            @PathVariable UUID userId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        Dtos.PointsReport data = reporting.pointsForUser(userId, from, to);
+        return ResponseEntity.ok(ApiResult.ok("Points report retrieved successfully", data));
+    }
+
+    @GetMapping("/points/shop/{shopId}")
+    @Operation(summary = "Points report (per shop, period-bounded)",
+            description = "Sum of points issued / redeemed at this outlet between `from` and `to`. Only " +
+                          "transactions stamped with `shopId` count — that's the ones produced by the " +
+                          "ShopCheckout flow with a SHOP_USER cashier on the JWT. Used by the per-outlet " +
+                          "leaderboard on the merchant dashboard.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Points report",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Points report", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Points report retrieved successfully",
+                                      "data": {
+                                        "subjectId": "c7d8e9f0-1234-5678-90ab-cdef12345678",
+                                        "from": "2026-05-01",
+                                        "to": "2026-05-31",
+                                        "pointsIssued": 18240.0000,
+                                        "pointsRedeemed": 5320.0000,
+                                        "netPoints": 12920.0000,
+                                        "transactionCount": 312
+                                      }
+                                    }
+                                    """)
+                    )
+            )
+    })
+    @PreAuthorize("hasAnyRole('SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<Dtos.PointsReport>> pointsForShop(
+            @PathVariable UUID shopId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        Dtos.PointsReport data = reporting.pointsForShop(
+                tenantContext.requireTenantId(), shopId, from, to);
+        return ResponseEntity.ok(ApiResult.ok("Points report retrieved successfully", data));
+    }
+
+    @GetMapping("/points/by-type")
+    @Operation(summary = "Points by transaction type",
+            description = "Per-type breakdown over a date range, returning count + pointsIssued + " +
+                          "pointsRedeemed for each `TransactionType`. The existing `/transactions/mix` " +
+                          "endpoint returns counts only (kept for backwards-compat); this one is the " +
+                          "report your donut-chart actually wants. Optional `merchantId` narrows to one " +
+                          "merchant; omit it for tenant-wide.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Per-type rows",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "By type", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Points by type retrieved successfully",
+                                      "data": [
+                                        {"type": "PURCHASE",   "count": 1842, "pointsIssued": 184200.0000, "pointsRedeemed":     0.0000},
+                                        {"type": "REDEMPTION", "count":  388, "pointsIssued":      0.0000, "pointsRedeemed": 38800.0000},
+                                        {"type": "ADJUSTMENT", "count":    7, "pointsIssued":    250.0000, "pointsRedeemed":     0.0000}
+                                      ]
+                                    }
+                                    """)
+                    )
+            )
+    })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<List<Dtos.PointsByTypeRow>>> pointsByType(
+            @RequestParam(required = false) UUID merchantId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        List<Dtos.PointsByTypeRow> data = reporting.pointsByType(
+                tenantContext.requireTenantId(), merchantId, from, to);
+        return ResponseEntity.ok(ApiResult.ok("Points by type retrieved successfully", data));
+    }
+
+    @GetMapping("/points/time-series")
+    @Operation(summary = "Points time-series (daily buckets)",
+            description = "One row per UTC calendar day in [from, to], each with pointsIssued / " +
+                          "pointsRedeemed / transactionCount. Days with no activity are filled with zeros " +
+                          "so the FE always gets a contiguous series and can render a chart without holes. " +
+                          "Optional `merchantId` narrows to one merchant. Cap the range at a few months — " +
+                          "the response is one JSON object per day, no streaming.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Daily series",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Series", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Points time-series retrieved successfully",
+                                      "data": [
+                                        {"bucket": "2026-05-01T00:00:00Z", "pointsIssued": 5120.0000, "pointsRedeemed": 1240.0000, "transactionCount": 73},
+                                        {"bucket": "2026-05-02T00:00:00Z", "pointsIssued":    0.0000, "pointsRedeemed":    0.0000, "transactionCount":  0},
+                                        {"bucket": "2026-05-03T00:00:00Z", "pointsIssued": 4280.0000, "pointsRedeemed":  500.0000, "transactionCount": 61}
+                                      ]
+                                    }
+                                    """)
+                    )
+            )
+    })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<List<Dtos.PointsTimeSeriesPoint>>> pointsTimeSeries(
+            @RequestParam(required = false) UUID merchantId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        List<Dtos.PointsTimeSeriesPoint> data = reporting.pointsTimeSeries(
+                tenantContext.requireTenantId(), merchantId, from, to);
+        return ResponseEntity.ok(ApiResult.ok("Points time-series retrieved successfully", data));
+    }
+
     @GetMapping("/fraud")
     @Operation(summary = "Recent fraud attempts",
             description = "Returns rejected redemption attempts (signature mismatch, expired, duplicate, " +
@@ -377,7 +590,9 @@ public class ReportingController {
     @Operation(summary = "Export transactions as CSV",
             description = "Streams a CSV of every transaction in [from, to], optionally scoped to a single " +
                           "merchant. Returns `Content-Disposition: attachment; filename=transactions.csv` so " +
-                          "browsers download rather than render.")
+                          "browsers download rather than render. Sorted ascending by `createdAt` for " +
+                          "deterministic output. `balanceAfter` is intentionally absent — it's computed " +
+                          "at write time and not stored, so an after-the-fact export can't reconstruct it.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -386,10 +601,10 @@ public class ReportingController {
                             mediaType = "text/csv",
                             schema = @Schema(type = "string", format = "binary"),
                             examples = @ExampleObject(name = "CSV", value = """
-                                    id,createdAt,type,amount,pointsDelta,balanceAfter,merchantId,userId,reference
-                                    11111111-2222-3333-4444-555555555555,2026-05-04T11:00:00Z,PURCHASE,100.00,100.0000,5100.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,d2c8f0a1-0123-4567-1234-567890123456,POS-20260504-0001
-                                    22222222-3333-4444-5555-666666666666,2026-05-04T12:00:00Z,REDEMPTION,,-500.0000,4600.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,d2c8f0a1-0123-4567-1234-567890123456,VOUCHER:VCH-AB12CD
-                                    33333333-4444-5555-6666-777777777777,2026-05-04T13:15:00Z,ADJUSTMENT,,250.0000,5250.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,d2c8f0a1-0123-4567-1234-567890123456,Goodwill credit
+                                    id,createdAt,type,amount,pointsDelta,merchantId,shopId,userId,reference
+                                    11111111-2222-3333-4444-555555555555,2026-05-04T11:00:00Z,PURCHASE,100.00,100.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,c7d8e9f0-1234-5678-90ab-cdef12345678,d2c8f0a1-0123-4567-1234-567890123456,POS-20260504-0001
+                                    22222222-3333-4444-5555-666666666666,2026-05-04T12:00:00Z,REDEMPTION,,-500.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,c7d8e9f0-1234-5678-90ab-cdef12345678,d2c8f0a1-0123-4567-1234-567890123456,VOUCHER:VCH-AB12CD
+                                    33333333-4444-5555-6666-777777777777,2026-05-04T13:15:00Z,ADJUSTMENT,,250.0000,b4c0d2e3-2345-6789-abcd-ef0123456789,,d2c8f0a1-0123-4567-1234-567890123456,Goodwill credit
                                     """)
                     )
             ),
