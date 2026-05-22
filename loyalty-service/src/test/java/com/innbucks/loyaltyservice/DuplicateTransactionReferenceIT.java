@@ -76,7 +76,7 @@ class DuplicateTransactionReferenceIT extends PostgresIntegrationTestBase {
         Dtos.MerchantResponse mr = merchantService.create(tenantId,
                 new Dtos.MerchantRequest("Dup Cafe", "F&B", "USD",
                         Merchant.BillingCycle.MONTHLY,
-                        new BigDecimal("0.001"), new BigDecimal("0.05"), new BigDecimal("0.10")));
+                        new BigDecimal("0.05"), new BigDecimal("0.10")));
         final UUID merchantId = mr.id();
 
         ruleAdminService.createRule(tenantId, merchantId,

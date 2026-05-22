@@ -82,7 +82,7 @@ class PhoneKeyedWalletTest {
         Dtos.MerchantResponse mr = merchantService.create(t.getId(),
                 new Dtos.MerchantRequest("Cafe Pending", "F&B", "USD",
                         Merchant.BillingCycle.MONTHLY,
-                        new BigDecimal("0.001"), new BigDecimal("0.05"), new BigDecimal("0.10")));
+                        new BigDecimal("0.05"), new BigDecimal("0.10")));
 
         ruleAdminService.createRule(t.getId(), mr.id(),
                 new Dtos.RuleRequest(null, TransactionType.PURCHASE,
@@ -161,7 +161,7 @@ class PhoneKeyedWalletTest {
         Dtos.MerchantResponse mr = merchantService.create(t.getId(),
                 new Dtos.MerchantRequest("AuthzCafe", "F&B", "USD",
                         Merchant.BillingCycle.MONTHLY,
-                        BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
+                        BigDecimal.ZERO, BigDecimal.ZERO));
         ruleAdminService.createRule(t.getId(), mr.id(),
                 new Dtos.RuleRequest(null, TransactionType.PURCHASE,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));

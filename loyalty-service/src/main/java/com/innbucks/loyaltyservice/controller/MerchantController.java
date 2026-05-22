@@ -27,7 +27,7 @@ import java.util.UUID;
 @RequestMapping("/loyalty/merchants")
 @Tag(name = "Merchants",
      description = "Merchants are the brands/outlets that issue points and vouchers within a tenant. " +
-                   "Each merchant has its own billing cycle and fee schedule (per-point, per-voucher-issued, " +
+                   "Each merchant has its own billing cycle and fee schedule (per-voucher-issued, " +
                    "per-voucher-redeemed) used by InvoicingService. Requires X-Tenant-Id.")
 public class MerchantController {
 

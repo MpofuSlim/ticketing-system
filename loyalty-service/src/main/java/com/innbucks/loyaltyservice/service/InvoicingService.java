@@ -58,10 +58,9 @@ public class InvoicingService {
         long voucherIssued = vouchers.countByMerchantIdAndIssuedAtBetween(m.getId(), from, to);
         long voucherRedeemed = vouchers.countByMerchantIdAndRedeemedAtBetween(m.getId(), from, to);
 
-        BigDecimal feePoints = m.getFeePerPointIssued().multiply(pointsIssued);
         BigDecimal feeVoucherIssued = m.getFeePerVoucherIssued().multiply(BigDecimal.valueOf(voucherIssued));
         BigDecimal feeVoucherRedeemed = m.getFeePerVoucherRedeemed().multiply(BigDecimal.valueOf(voucherRedeemed));
-        BigDecimal total = feePoints.add(feeVoucherIssued).add(feeVoucherRedeemed);
+        BigDecimal total = feeVoucherIssued.add(feeVoucherRedeemed);
 
         Invoice inv = new Invoice();
         inv.setTenantId(m.getTenantId());

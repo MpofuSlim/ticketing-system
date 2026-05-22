@@ -40,8 +40,6 @@ public class Dtos {
             String currency,
             @Schema(example = "MONTHLY", allowableValues = {"WEEKLY", "MONTHLY"})
             Merchant.BillingCycle billingCycle,
-            @Schema(example = "0.001000", nullable = true, description = "Fee charged per loyalty point issued (in currency).")
-            BigDecimal feePerPointIssued,
             @Schema(example = "0.050000", nullable = true, description = "Fee charged per voucher issued.")
             BigDecimal feePerVoucherIssued,
             @Schema(example = "0.100000", nullable = true, description = "Fee charged per voucher redeemed.")

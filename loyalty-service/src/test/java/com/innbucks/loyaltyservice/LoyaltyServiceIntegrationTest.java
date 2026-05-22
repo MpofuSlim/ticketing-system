@@ -75,7 +75,6 @@ class LoyaltyServiceIntegrationTest {
         Dtos.MerchantResponse mr = merchantService.create(t.getId(),
                 new Dtos.MerchantRequest("Cafe Westgate", "F&B", "USD",
                         Merchant.BillingCycle.MONTHLY,
-                        new BigDecimal("0.001"),
                         new BigDecimal("0.05"),
                         new BigDecimal("0.10")));
         ruleAdminService.createRule(t.getId(), mr.id(),
@@ -120,7 +119,7 @@ class LoyaltyServiceIntegrationTest {
         Dtos.MerchantResponse mr = merchantService.create(t.getId(),
                 new Dtos.MerchantRequest("Mall Bulawayo", "Retail", "USD",
                         Merchant.BillingCycle.MONTHLY,
-                        BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
+                        BigDecimal.ZERO, BigDecimal.ZERO));
         ruleAdminService.createRule(t.getId(), mr.id(),
                 new Dtos.RuleRequest(null, TransactionType.PURCHASE,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
@@ -152,7 +151,7 @@ class LoyaltyServiceIntegrationTest {
         Dtos.MerchantResponse mr = merchantService.create(t.getId(),
                 new Dtos.MerchantRequest("Pump Mutare", "Fuel", "USD",
                         Merchant.BillingCycle.MONTHLY,
-                        BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
+                        BigDecimal.ZERO, BigDecimal.ZERO));
         ruleAdminService.createRule(t.getId(), mr.id(),
                 new Dtos.RuleRequest(null, TransactionType.QR_PAY,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
@@ -179,7 +178,6 @@ class LoyaltyServiceIntegrationTest {
         Dtos.MerchantResponse mr = merchantService.create(t.getId(),
                 new Dtos.MerchantRequest("Pharmacy Gweru", "Health", "USD",
                         Merchant.BillingCycle.MONTHLY,
-                        new BigDecimal("0.01"),
                         new BigDecimal("1.00"),
                         new BigDecimal("0.50")));
         ruleAdminService.createRule(t.getId(), mr.id(),
@@ -194,9 +192,11 @@ class LoyaltyServiceIntegrationTest {
         var merchant = merchantService.requireMerchant(t.getId(), mr.id());
         var inv = invoicingService.generate(merchant,
                 LocalDate.now().minusDays(1), LocalDate.now().plusDays(1));
-        // 100 points * 0.01 fee/point = 1.00
+        // pointsIssued is still tracked on the invoice for reporting, but
+        // points carry no fee — total only sums voucher fees, and no vouchers
+        // were issued or redeemed in this scenario, so the bill is zero.
         assertThat(inv.getPointsIssued()).isEqualByComparingTo("100");
-        assertThat(inv.getTotalAmount()).isEqualByComparingTo("1.00");
+        assertThat(inv.getTotalAmount()).isEqualByComparingTo("0");
     }
 
     private Tenant saveTenant() {

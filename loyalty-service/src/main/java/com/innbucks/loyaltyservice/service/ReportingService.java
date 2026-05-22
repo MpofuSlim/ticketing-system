@@ -131,8 +131,7 @@ public class ReportingService {
                     ? LocalDate.now().plusWeeks(1).with(java.time.DayOfWeek.MONDAY)
                     : LocalDate.now().withDayOfMonth(1).plusMonths(1));
         BigDecimal estimatedInvoice = m == null ? BigDecimal.ZERO
-                : m.getFeePerPointIssued().multiply(pointsIssued)
-                    .add(m.getFeePerVoucherIssued().multiply(BigDecimal.valueOf(issued)))
+                : m.getFeePerVoucherIssued().multiply(BigDecimal.valueOf(issued))
                     .add(m.getFeePerVoucherRedeemed().multiply(BigDecimal.valueOf(redeemed)));
         return new Dtos.MerchantDashboard(merchantId, today, issued, redeemed,
                 pointsIssued, pointsRedeemed, fraudAlerts, nextInvoice, estimatedInvoice);

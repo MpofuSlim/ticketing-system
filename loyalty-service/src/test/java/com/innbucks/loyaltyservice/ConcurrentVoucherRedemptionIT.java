@@ -80,7 +80,7 @@ class ConcurrentVoucherRedemptionIT extends PostgresIntegrationTestBase {
         Dtos.MerchantResponse mr = merchantService.create(tenantId,
                 new Dtos.MerchantRequest("Race Cafe", "F&B", "USD",
                         Merchant.BillingCycle.MONTHLY,
-                        new BigDecimal("0.001"), new BigDecimal("0.05"), new BigDecimal("0.10")));
+                        new BigDecimal("0.05"), new BigDecimal("0.10")));
         final UUID merchantId = mr.id();
 
         LoyaltyUser u = userService.findOrEnrol(tenantId, "+263770099911", merchantId);
