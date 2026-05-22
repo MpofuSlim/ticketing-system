@@ -32,7 +32,6 @@ public class ShopService {
         s.setTenantId(tenantId);
         s.setMerchantId(m.getId());
         s.setName(req.name());
-        s.setCode(req.code());
         s.setAddress(req.address());
         shops.save(s);
         return toResponse(s);
@@ -61,7 +60,6 @@ public class ShopService {
     public Dtos.ShopResponse update(UUID tenantId, UUID shopId, Dtos.ShopRequest req) {
         Shop s = requireShop(tenantId, shopId);
         s.setName(req.name());
-        if (req.code() != null) s.setCode(req.code());
         if (req.address() != null) s.setAddress(req.address());
         return toResponse(s);
     }
@@ -82,6 +80,6 @@ public class ShopService {
 
     public static Dtos.ShopResponse toResponse(Shop s) {
         return new Dtos.ShopResponse(s.getId(), s.getTenantId(), s.getMerchantId(),
-                s.getName(), s.getCode(), s.getAddress(), s.getStatus(), s.getCreatedAt());
+                s.getName(), s.getAddress(), s.getStatus(), s.getCreatedAt());
     }
 }

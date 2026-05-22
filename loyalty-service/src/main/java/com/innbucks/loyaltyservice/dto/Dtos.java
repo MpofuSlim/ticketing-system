@@ -61,15 +61,12 @@ public class Dtos {
             @NotNull UUID merchantId,
             @Schema(example = "Pizza Inn Avondale", description = "Display name of the shop outlet.")
             @NotBlank String name,
-            @Schema(example = "AVONDALE", nullable = true,
-                    description = "Optional human-friendly outlet code for receipts and back-office search.")
-            String code,
             @Schema(example = "123 King George Rd, Avondale, Harare", nullable = true)
             String address
     ) {}
 
     public record ShopResponse(UUID id, UUID tenantId, UUID merchantId, String name,
-                               String code, String address,
+                               String address,
                                com.innbucks.loyaltyservice.entity.Shop.Status status,
                                Instant createdAt) {}
 

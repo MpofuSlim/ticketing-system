@@ -65,7 +65,6 @@ public class ShopController {
                                         "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                         "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                         "name": "Pizza Inn Avondale",
-                                        "code": "AVONDALE",
                                         "address": "123 King George Rd, Avondale, Harare",
                                         "status": "ACTIVE",
                                         "createdAt": "2026-05-11T10:15:00Z"
@@ -123,8 +122,7 @@ public class ShopController {
                                             "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                             "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                             "name": "Pizza Inn Avondale",
-                                            "code": "AVONDALE",
-                                            "address": "123 King George Rd, Avondale, Harare",
+                                                "address": "123 King George Rd, Avondale, Harare",
                                             "status": "ACTIVE",
                                             "createdAt": "2026-05-11T10:15:00Z"
                                           },
@@ -133,7 +131,6 @@ public class ShopController {
                                             "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                             "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                             "name": "Pizza Inn Westgate",
-                                            "code": "WESTGATE",
                                             "address": "Westgate Shopping Mall, Harare",
                                             "status": "ACTIVE",
                                             "createdAt": "2026-05-11T10:20:00Z"
@@ -178,7 +175,6 @@ public class ShopController {
                                         "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                         "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                         "name": "Pizza Inn Avondale",
-                                        "code": "AVONDALE",
                                         "address": "123 King George Rd, Avondale, Harare",
                                         "status": "ACTIVE",
                                         "createdAt": "2026-05-11T10:15:00Z"
@@ -224,7 +220,6 @@ public class ShopController {
                                         "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                         "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                         "name": "Pizza Inn Avondale (renamed)",
-                                        "code": "AVONDALE",
                                         "address": "456 Samora Machel Ave, Harare",
                                         "status": "ACTIVE",
                                         "createdAt": "2026-05-11T10:15:00Z"
@@ -273,7 +268,6 @@ public class ShopController {
                                         "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                         "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                         "name": "Pizza Inn Avondale",
-                                        "code": "AVONDALE",
                                         "address": "123 King George Rd, Avondale, Harare",
                                         "status": "ACTIVE",
                                         "createdAt": "2026-05-11T10:15:00Z"
@@ -312,7 +306,6 @@ public class ShopController {
                                         "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                         "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                         "name": "Pizza Inn Avondale",
-                                        "code": "AVONDALE",
                                         "address": "123 King George Rd, Avondale, Harare",
                                         "status": "INACTIVE",
                                         "createdAt": "2026-05-11T10:15:00Z"
@@ -352,8 +345,7 @@ public class ShopController {
                                           "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                           "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                           "name": "Pizza Inn Avondale",
-                                          "code": "AVONDALE",
-                                          "address": "123 King George Rd, Avondale, Harare",
+                                            "address": "123 King George Rd, Avondale, Harare",
                                           "status": "ACTIVE",
                                           "createdAt": "2026-05-11T10:15:00Z"
                                         },
@@ -362,7 +354,6 @@ public class ShopController {
                                           "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                           "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                           "name": "Pizza Inn Borrowdale",
-                                          "code": "BORROWDALE",
                                           "address": "12 Sam Levy's Village, Borrowdale, Harare",
                                           "status": "ACTIVE",
                                           "createdAt": "2026-05-11T10:20:00Z"
