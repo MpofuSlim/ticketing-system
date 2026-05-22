@@ -1,0 +1,142 @@
+# Dependabot — opens PRs when a security fix lands in any of our pinned
+# deps so the Trivy gate on the Release workflow doesn't surprise us on
+# a Friday-night deploy. Three ecosystems:
+#
+# 1. Maven (root pom + every submodule, walked automatically by the
+#    multi-module Maven scanner).
+# 2. Docker (one entry per Dockerfile — Dependabot needs an explicit
+#    directory per file).
+# 3. GitHub Actions (workflow action versions — covers actions/checkout,
+#    docker/build-push-action, etc).
+#
+# Schedule: weekly on Monday 08:00 UTC — start-of-week landing so we
+# can triage during business hours, not at midnight.
+#
+# Grouping: minor + patch updates in the Spring ecosystem are bundled
+# into one PR (otherwise a Spring Boot bump cascades into 30 PRs across
+# the BOM). Security updates ignore the group and always open their own
+# PR — that's the whole point of having Dependabot here.
+
+version: 2
+updates:
+
+  # --- Maven (Java dependencies) ---
+  # Multi-module Maven: a single entry at the root walks every pom.xml
+  # in the project, so we don't need to enumerate the 7 services.
+  - package-ecosystem: "maven"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 10
+    target-branch: "master"
+    labels:
+      - "dependencies"
+      - "java"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    # Group non-security updates to keep PR noise down. Security
+    # updates bypass groups (one PR per CVE) so each fix is reviewable
+    # in isolation.
+    groups:
+      spring-ecosystem:
+        patterns:
+          - "org.springframework*"
+          - "org.springframework.boot*"
+          - "org.springframework.cloud*"
+          - "org.springframework.security*"
+        update-types: ["minor", "patch"]
+      jackson:
+        patterns:
+          - "com.fasterxml.jackson*"
+          - "tools.jackson*"
+        update-types: ["minor", "patch"]
+      netty:
+        patterns:
+          - "io.netty*"
+        update-types: ["minor", "patch"]
+      testcontainers:
+        patterns:
+          - "org.testcontainers*"
+        update-types: ["minor", "patch"]
+      observability:
+        patterns:
+          - "io.micrometer*"
+          - "io.opentelemetry*"
+          - "io.sentry*"
+          - "net.logstash.logback*"
+        update-types: ["minor", "patch"]
+    # Major-version bumps are kept individual — they almost always need
+    # manual review and per-PR test runs.
+
+  # --- Docker base images, one entry per Dockerfile ---
+  - package-ecosystem: "docker"
+    directory: "/api-gateway"
+    schedule: { interval: "weekly", day: "monday", time: "08:00", timezone: "Etc/UTC" }
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "docker"]
+    commit-message: { prefix: "docker(api-gateway)" }
+
+  - package-ecosystem: "docker"
+    directory: "/user-service"
+    schedule: { interval: "weekly", day: "monday", time: "08:00", timezone: "Etc/UTC" }
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "docker"]
+    commit-message: { prefix: "docker(user-service)" }
+
+  - package-ecosystem: "docker"
+    directory: "/event-service"
+    schedule: { interval: "weekly", day: "monday", time: "08:00", timezone: "Etc/UTC" }
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "docker"]
+    commit-message: { prefix: "docker(event-service)" }
+
+  - package-ecosystem: "docker"
+    directory: "/seat-service"
+    schedule: { interval: "weekly", day: "monday", time: "08:00", timezone: "Etc/UTC" }
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "docker"]
+    commit-message: { prefix: "docker(seat-service)" }
+
+  - package-ecosystem: "docker"
+    directory: "/booking-service"
+    schedule: { interval: "weekly", day: "monday", time: "08:00", timezone: "Etc/UTC" }
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "docker"]
+    commit-message: { prefix: "docker(booking-service)" }
+
+  - package-ecosystem: "docker"
+    directory: "/payment-service"
+    schedule: { interval: "weekly", day: "monday", time: "08:00", timezone: "Etc/UTC" }
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "docker"]
+    commit-message: { prefix: "docker(payment-service)" }
+
+  - package-ecosystem: "docker"
+    directory: "/loyalty-service"
+    schedule: { interval: "weekly", day: "monday", time: "08:00", timezone: "Etc/UTC" }
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "docker"]
+    commit-message: { prefix: "docker(loyalty-service)" }
+
+  # --- GitHub Actions (workflow action versions) ---
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "ci"
+    groups:
+      docker-actions:
+        patterns:
+          - "docker/*"
