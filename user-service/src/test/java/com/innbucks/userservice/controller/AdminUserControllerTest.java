@@ -97,6 +97,69 @@ class AdminUserControllerTest {
 
     @Test
     @WithMockUser(roles = "SUPER_ADMIN")
+    void listUsersExcludesCustomersByDefault() throws Exception {
+        // The SUPER_ADMIN portal lists system users (admins / staff); the
+        // wallet-holding customer population belongs on the customer
+        // surface and would drown the page if mixed in. Seed one of each
+        // class and assert only the system user comes back.
+        User systemUser = User.builder()
+                .firstName("Sysadmin")
+                .lastName("One")
+                .email("sysadmin-default@example.com")
+                .phoneNumber("+260000000001")
+                .password(passwordEncoder.encode("Password123"))
+                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .active(true)
+                .build();
+        User customer = User.builder()
+                .firstName("Customer")
+                .lastName("One")
+                .email("customer-default@example.com")
+                .phoneNumber("+260000000002")
+                .password(passwordEncoder.encode("Password123"))
+                .roles(EnumSet.of(User.Role.CUSTOMER))
+                .active(true)
+                .build();
+        userRepository.save(systemUser);
+        userRepository.save(customer);
+
+        MvcResult result = mockMvc.perform(get("/admin/users")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        String body = result.getResponse().getContentAsString();
+        assertThat(body).contains("sysadmin-default@example.com");
+        assertThat(body).doesNotContain("customer-default@example.com");
+    }
+
+    @Test
+    @WithMockUser(roles = "SUPER_ADMIN")
+    void listUsersIncludesCustomersWhenOptedIn() throws Exception {
+        // ?includeCustomers=true is the escape hatch for support triage —
+        // it brings the customer population back into the result set.
+        User customer = User.builder()
+                .firstName("Customer")
+                .lastName("Two")
+                .email("customer-optin@example.com")
+                .phoneNumber("+260000000003")
+                .password(passwordEncoder.encode("Password123"))
+                .roles(EnumSet.of(User.Role.CUSTOMER))
+                .active(true)
+                .build();
+        userRepository.save(customer);
+
+        MvcResult result = mockMvc.perform(get("/admin/users?includeCustomers=true")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andReturn();
+
+        assertThat(result.getResponse().getContentAsString())
+                .contains("customer-optin@example.com");
+    }
+
+    @Test
+    @WithMockUser(roles = "SUPER_ADMIN")
     void testUpdateActiveStatusReturnsDefaultServicesAsBundle() throws Exception {
         // Create a test user with loyalty bundle
         User loyaltyUser = User.builder()
