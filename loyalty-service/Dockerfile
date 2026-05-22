@@ -2,7 +2,7 @@
 # Build from repo root:
 #     docker build -f loyalty-service/Dockerfile -t ticketing-loyalty-service .
 
-FROM eclipse-temurin:21-jdk-alpine AS builder
+FROM eclipse-temurin:25-jdk-alpine AS builder
 WORKDIR /workspace
 
 COPY .mvn .mvn
@@ -23,7 +23,7 @@ COPY loyalty-service/src loyalty-service/src
 RUN ./mvnw -B -pl loyalty-service -am -DskipTests package \
     && cp loyalty-service/target/loyalty-service-*.jar /workspace/app.jar
 
-FROM eclipse-temurin:21-jre-alpine AS runtime
+FROM eclipse-temurin:25-jre-alpine AS runtime
 # Pull in the latest patched alpine packages on every rebuild so CVEs
 # fixed upstream (e.g. CVE-2026-33845 in gnutls) close as soon as the
 # alpine repo publishes them, without waiting for a base-image retag.
