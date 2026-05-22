@@ -174,7 +174,13 @@ class LoyaltyServiceIntegrationTest {
 
     @Test
     @Transactional
-    void invoicingAggregatesFees() {
+    void invoicingSkipsZeroBillingPeriods() {
+        // After fee-per-point was removed (V11), a period with no voucher
+        // activity bills to zero. The service should NOT persist a $0.00
+        // invoice — the merchant's billing page would otherwise fill with
+        // phantom rows for every quiet month. Verified end-to-end: post a
+        // points-earning transaction (no fee on points), then call
+        // generate() and expect empty.
         Tenant t = saveTenant();
         Dtos.MerchantResponse mr = merchantService.create(t.getId(),
                 new Dtos.MerchantRequest("Pharmacy Gweru", "Health", "USD",
@@ -193,11 +199,7 @@ class LoyaltyServiceIntegrationTest {
         var merchant = merchantService.requireMerchant(t.getId(), mr.id());
         var inv = invoicingService.generate(merchant,
                 LocalDate.now().minusDays(1), LocalDate.now().plusDays(1));
-        // pointsIssued is still tracked on the invoice for reporting, but
-        // points carry no fee — total only sums voucher fees, and no vouchers
-        // were issued or redeemed in this scenario, so the bill is zero.
-        assertThat(inv.getPointsIssued()).isEqualByComparingTo("100");
-        assertThat(inv.getTotalAmount()).isEqualByComparingTo("0");
+        assertThat(inv).isEmpty();
     }
 
     private Tenant saveTenant() {

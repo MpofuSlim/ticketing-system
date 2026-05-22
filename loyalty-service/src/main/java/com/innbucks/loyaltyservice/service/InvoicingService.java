@@ -20,6 +20,7 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.temporal.TemporalAdjusters;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -44,7 +45,16 @@ public class InvoicingService {
         this.props = props;
     }
 
-    public Invoice generate(Merchant m, LocalDate periodStart, LocalDate periodEnd) {
+    /**
+     * Returns the new invoice, or {@link Optional#empty()} when the
+     * merchant had no billable activity in the period (totalAmount = 0).
+     * Skipping zero-total rows keeps the merchant's billing page clean
+     * — a chain that didn't issue or redeem a single voucher all month
+     * shouldn't see "INV-202605-0001 — $0.00" stacked alongside its
+     * real bills, and ops shouldn't have to mark phantom invoices PAID
+     * to dismiss them.
+     */
+    public Optional<Invoice> generate(Merchant m, LocalDate periodStart, LocalDate periodEnd) {
         invoices.findByMerchantIdAndPeriodStartAndPeriodEnd(m.getId(), periodStart, periodEnd)
                 .ifPresent(existing -> {
                     throw LoyaltyException.conflict("INVOICE_EXISTS",
@@ -62,6 +72,12 @@ public class InvoicingService {
         BigDecimal feeVoucherRedeemed = m.getFeePerVoucherRedeemed().multiply(BigDecimal.valueOf(voucherRedeemed));
         BigDecimal total = feeVoucherIssued.add(feeVoucherRedeemed);
 
+        // No money owed -> no invoice. compareTo(ZERO) instead of equals so
+        // a NUMERIC(19,4) zero with any scale matches.
+        if (total.signum() <= 0) {
+            return Optional.empty();
+        }
+
         Invoice inv = new Invoice();
         inv.setTenantId(m.getTenantId());
         inv.setMerchantId(m.getId());
@@ -74,7 +90,7 @@ public class InvoicingService {
         inv.setTotalAmount(total);
         inv.setCurrency(m.getCurrency());
         inv.setInvoiceNumber(nextInvoiceNumber());
-        return invoices.save(inv);
+        return Optional.of(invoices.save(inv));
     }
 
     private String nextInvoiceNumber() {
@@ -139,8 +155,9 @@ public class InvoicingService {
             LocalDate start = previousPeriodStart(today, m.getBillingCycle());
             LocalDate end = previousPeriodEnd(today, m.getBillingCycle());
             if (invoices.findByMerchantIdAndPeriodStartAndPeriodEnd(m.getId(), start, end).isEmpty()) {
-                generate(m, start, end);
-                created++;
+                if (generate(m, start, end).isPresent()) {
+                    created++;
+                }
             }
         }
         return created;
