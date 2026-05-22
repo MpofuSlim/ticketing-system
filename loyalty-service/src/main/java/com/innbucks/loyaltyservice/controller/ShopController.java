@@ -19,7 +19,9 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 import java.util.UUID;
@@ -65,7 +67,6 @@ public class ShopController {
                                         "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                         "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                         "name": "Pizza Inn Avondale",
-                                        "code": "AVONDALE",
                                         "address": "123 King George Rd, Avondale, Harare",
                                         "status": "ACTIVE",
                                         "createdAt": "2026-05-11T10:15:00Z"
@@ -101,6 +102,92 @@ public class ShopController {
                 .body(ApiResult.created("Shop created successfully", data));
     }
 
+    @PostMapping(value = "/bulk-upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @Operation(summary = "Bulk-upload shops via CSV",
+            description = "Imports a CSV of outlets under one merchant. Useful when a brand onboards " +
+                          "tens or hundreds of shops at once (e.g. launching a chain in a new country). " +
+                          "Each row runs in its own DB transaction — a validation failure on row 7 " +
+                          "does not block rows 1-6. The response lists every failed row with the " +
+                          "reason so the operator can correct the source spreadsheet and re-upload " +
+                          "only the affected rows.\n\n" +
+                          "**CSV format:** required header row with a `name` column (case-insensitive); " +
+                          "an optional `address` column is recognised if present. Extra columns are " +
+                          "ignored. Quoted fields support embedded commas (e.g. " +
+                          "`\"123 King George Rd, Avondale, Harare\"`). Max " +
+                          "5000 data rows per upload.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Upload processed. Some or all rows may have failed; check the response body.",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Mixed success", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Bulk shop upload processed",
+                                      "data": {
+                                        "processed": 3,
+                                        "created": 2,
+                                        "failed": 1,
+                                        "failures": [
+                                          {
+                                            "row": 3,
+                                            "name": null,
+                                            "error": "name is required"
+                                          }
+                                        ]
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "Upload itself is malformed — empty file, missing `name` header, or row count over the limit.",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Missing header", value = """
+                                    {
+                                      "code": "CSV_MISSING_HEADER",
+                                      "message": "header row must contain a 'name' column (case-insensitive); got: foo,bar",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "merchantId does not resolve to a merchant in this tenant.",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Merchant not found", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "merchant not found",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
+    })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<Dtos.BulkShopUploadResult>> bulkUpload(
+            @Parameter(description = "Merchant that every shop in the upload belongs to.")
+            @RequestParam("merchantId") java.util.UUID merchantId,
+            @Parameter(description = "CSV file with header row + name/address columns.")
+            @RequestParam("file") MultipartFile file) throws java.io.IOException {
+        if (file == null || file.isEmpty()) {
+            throw com.innbucks.loyaltyservice.exception.LoyaltyException.badRequest(
+                    "CSV_EMPTY", "uploaded file is empty");
+        }
+        Dtos.BulkShopUploadResult data = shops.bulkUploadFromCsv(
+                tenantContext.requireTenantId(), merchantId, file.getInputStream());
+        return ResponseEntity.ok(ApiResult.ok("Bulk shop upload processed", data));
+    }
+
     @GetMapping
     @Operation(summary = "List shops for the current tenant",
             description = "Returns every shop in the tenant. Pass `merchantId` to filter to a single " +
@@ -123,8 +210,7 @@ public class ShopController {
                                             "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                             "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                             "name": "Pizza Inn Avondale",
-                                            "code": "AVONDALE",
-                                            "address": "123 King George Rd, Avondale, Harare",
+                                                "address": "123 King George Rd, Avondale, Harare",
                                             "status": "ACTIVE",
                                             "createdAt": "2026-05-11T10:15:00Z"
                                           },
@@ -133,7 +219,6 @@ public class ShopController {
                                             "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                             "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                             "name": "Pizza Inn Westgate",
-                                            "code": "WESTGATE",
                                             "address": "Westgate Shopping Mall, Harare",
                                             "status": "ACTIVE",
                                             "createdAt": "2026-05-11T10:20:00Z"
@@ -178,7 +263,6 @@ public class ShopController {
                                         "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                         "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                         "name": "Pizza Inn Avondale",
-                                        "code": "AVONDALE",
                                         "address": "123 King George Rd, Avondale, Harare",
                                         "status": "ACTIVE",
                                         "createdAt": "2026-05-11T10:15:00Z"
@@ -224,7 +308,6 @@ public class ShopController {
                                         "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                         "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                         "name": "Pizza Inn Avondale (renamed)",
-                                        "code": "AVONDALE",
                                         "address": "456 Samora Machel Ave, Harare",
                                         "status": "ACTIVE",
                                         "createdAt": "2026-05-11T10:15:00Z"
@@ -273,7 +356,6 @@ public class ShopController {
                                         "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                         "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                         "name": "Pizza Inn Avondale",
-                                        "code": "AVONDALE",
                                         "address": "123 King George Rd, Avondale, Harare",
                                         "status": "ACTIVE",
                                         "createdAt": "2026-05-11T10:15:00Z"
@@ -312,7 +394,6 @@ public class ShopController {
                                         "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                         "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                         "name": "Pizza Inn Avondale",
-                                        "code": "AVONDALE",
                                         "address": "123 King George Rd, Avondale, Harare",
                                         "status": "INACTIVE",
                                         "createdAt": "2026-05-11T10:15:00Z"
@@ -352,8 +433,7 @@ public class ShopController {
                                           "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                           "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                           "name": "Pizza Inn Avondale",
-                                          "code": "AVONDALE",
-                                          "address": "123 King George Rd, Avondale, Harare",
+                                            "address": "123 King George Rd, Avondale, Harare",
                                           "status": "ACTIVE",
                                           "createdAt": "2026-05-11T10:15:00Z"
                                         },
@@ -362,7 +442,6 @@ public class ShopController {
                                           "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                           "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
                                           "name": "Pizza Inn Borrowdale",
-                                          "code": "BORROWDALE",
                                           "address": "12 Sam Levy's Village, Borrowdale, Harare",
                                           "status": "ACTIVE",
                                           "createdAt": "2026-05-11T10:20:00Z"

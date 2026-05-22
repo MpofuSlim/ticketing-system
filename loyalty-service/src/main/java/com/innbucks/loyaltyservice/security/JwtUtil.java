@@ -56,7 +56,15 @@ public class JwtUtil {
     }
 
     public UUID extractMerchantId(String token) {
-        String raw = getClaims(token).get("merchantId", String.class);
+        return extractUuidClaim(token, "merchantId");
+    }
+
+    public UUID extractShopId(String token) {
+        return extractUuidClaim(token, "shopId");
+    }
+
+    private UUID extractUuidClaim(String token, String claim) {
+        String raw = getClaims(token).get(claim, String.class);
         if (raw == null || raw.isBlank()) return null;
         try {
             return UUID.fromString(raw);

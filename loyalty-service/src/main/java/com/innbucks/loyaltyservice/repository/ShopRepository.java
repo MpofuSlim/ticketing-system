@@ -6,7 +6,6 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 public interface ShopRepository extends JpaRepository<Shop, UUID> {
@@ -14,5 +13,4 @@ public interface ShopRepository extends JpaRepository<Shop, UUID> {
     Page<Shop> findByTenantId(UUID tenantId, Pageable pageable);
     List<Shop> findByTenantIdAndMerchantId(UUID tenantId, UUID merchantId);
     Page<Shop> findByTenantIdAndMerchantId(UUID tenantId, UUID merchantId, Pageable pageable);
-    Optional<Shop> findByTenantIdAndCode(UUID tenantId, String code);
 }

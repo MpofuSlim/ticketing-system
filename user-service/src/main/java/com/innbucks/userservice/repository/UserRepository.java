@@ -19,6 +19,19 @@ public interface UserRepository extends JpaRepository<User, Long> {
     List<User> findByLoyaltyMerchantId(UUID loyaltyMerchantId);
 
     /**
+     * "System users" projection — every row except those whose roles
+     * include the supplied value. Used by the SUPER_ADMIN portal to list
+     * administrators / staff while keeping the (much larger) customer
+     * population off the page. `NOT MEMBER OF` is the JPA-standard way to
+     * filter an @ElementCollection without dropping to a native query.
+     */
+    @Query("SELECT u FROM User u WHERE :role NOT MEMBER OF u.roles")
+    List<User> findAllExcludingRole(@Param("role") User.Role role);
+
+    @Query("SELECT u FROM User u WHERE u.active = :active AND :role NOT MEMBER OF u.roles")
+    List<User> findByActiveExcludingRole(@Param("active") boolean active, @Param("role") User.Role role);
+
+    /**
      * Project-only lookup for the token_version column. JwtFilter calls this
      * on every authenticated request to validate the JWT's session epoch
      * against the current DB value — fetching the column directly avoids

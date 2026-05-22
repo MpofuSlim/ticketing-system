@@ -40,8 +40,6 @@ public class Dtos {
             String currency,
             @Schema(example = "MONTHLY", allowableValues = {"WEEKLY", "MONTHLY"})
             Merchant.BillingCycle billingCycle,
-            @Schema(example = "0.001000", nullable = true, description = "Fee charged per loyalty point issued (in currency).")
-            BigDecimal feePerPointIssued,
             @Schema(example = "0.050000", nullable = true, description = "Fee charged per voucher issued.")
             BigDecimal feePerVoucherIssued,
             @Schema(example = "0.100000", nullable = true, description = "Fee charged per voucher redeemed.")
@@ -63,17 +61,41 @@ public class Dtos {
             @NotNull UUID merchantId,
             @Schema(example = "Pizza Inn Avondale", description = "Display name of the shop outlet.")
             @NotBlank String name,
-            @Schema(example = "AVONDALE", nullable = true,
-                    description = "Optional human-friendly outlet code for receipts and back-office search.")
-            String code,
             @Schema(example = "123 King George Rd, Avondale, Harare", nullable = true)
             String address
     ) {}
 
     public record ShopResponse(UUID id, UUID tenantId, UUID merchantId, String name,
-                               String code, String address,
+                               String address,
                                com.innbucks.loyaltyservice.entity.Shop.Status status,
                                Instant createdAt) {}
+
+    // CSV bulk-upload result. Each row gets its own DB transaction, so a
+    // bad row in the middle of a 100-row file doesn't block the rest —
+    // the FE can show "82 created, 18 failed" and the failure list lets
+    // the operator fix the bad rows and re-upload just those.
+    public record BulkShopUploadResult(
+            @Schema(example = "100", description = "Total data rows attempted (excludes the header).")
+            int processed,
+            @Schema(example = "82", description = "Rows that created a shop successfully.")
+            int created,
+            @Schema(example = "18", description = "Rows that failed validation or persistence.")
+            int failed,
+            @ArraySchema(
+                    arraySchema = @Schema(description = "Per-row failure detail. Empty on a fully clean upload."),
+                    schema = @Schema(implementation = BulkShopRowFailure.class))
+            List<BulkShopRowFailure> failures
+    ) {}
+
+    public record BulkShopRowFailure(
+            @Schema(example = "5", description = "1-based row number in the uploaded CSV (header is row 1; first data row is 2).")
+            int row,
+            @Schema(example = "Pizza Inn Belgravia", nullable = true,
+                    description = "The `name` value from the row, if it was parseable.")
+            String name,
+            @Schema(example = "name is required", description = "Human-readable reason the row was rejected.")
+            String error
+    ) {}
 
     // Loyalty enrolment is by phone number only — name/email/nationalId belong
     // to user-service. Loyalty validates the phone exists there before
@@ -176,8 +198,8 @@ public class Dtos {
 
     public record TransactionResponse(UUID id, TransactionType type, BigDecimal amount,
                                       BigDecimal pointsDelta, BigDecimal balanceAfter,
-                                      UUID ruleId, UUID campaignId, String reference,
-                                      Instant createdAt) {}
+                                      UUID ruleId, UUID campaignId, UUID shopId,
+                                      String reference, Instant createdAt) {}
 
     // Sender (fromUserId) MUST be a registered LoyaltyUser — you can't spend a
     // pending balance. Recipient may be either a registered user (toUserId) or
@@ -221,10 +243,10 @@ public class Dtos {
             @NotBlank String name,
             @Schema(example = "SINGLE_USE", allowableValues = {"SINGLE_USE", "MULTI_USE", "FREE_ITEM"})
             @NotNull VoucherTemplate.VoucherType type,
-            @Schema(example = "AMOUNT", allowableValues = {"AMOUNT", "PERCENTAGE", "FREE_ITEM"})
+            @Schema(example = "AMOUNT", allowableValues = {"AMOUNT", "PERCENTAGE", "FREE_ITEM"},
+                    description = "Shape of the discount the template represents. The numeric value " +
+                                  "(e.g. $5, 10%) is supplied per issuance in IssueVoucherRequest.value.")
             @NotNull VoucherTemplate.ValueType valueType,
-            @Schema(example = "5.0000", nullable = true, description = "Discount value (amount or percentage).")
-            BigDecimal value,
             @Schema(example = "USD", nullable = true)
             String currency,
             @Schema(example = "COFFEE-001", nullable = true, description = "SKU of the free item (FREE_ITEM type only).")
@@ -250,6 +272,11 @@ public class Dtos {
             UUID merchantId,
             @Schema(example = "d6e2f4a5-4567-8901-bcde-f01234567890", description = "Template to issue from.")
             @NotNull UUID templateId,
+            @Schema(example = "5.0000", nullable = true,
+                    description = "Per-issuance face value (e.g. 5 for $5 off, 10 for 10% off). Required for " +
+                                  "AMOUNT and PERCENT value-types; ignored for FREE_ITEM / COMBO. The " +
+                                  "value is snapshotted onto the issued voucher and cannot be changed.")
+            BigDecimal value,
             @Schema(example = "+263771234567", nullable = true, description = "Recipient phone — used if assignedUserId is null.")
             String assigneePhone,
             @Schema(example = "Alice Moyo", nullable = true)
@@ -273,6 +300,10 @@ public class Dtos {
             UUID merchantId,
             @Schema(example = "d6e2f4a5-4567-8901-bcde-f01234567890")
             @NotNull UUID templateId,
+            @Schema(example = "5.0000", nullable = true,
+                    description = "Per-voucher face value applied to every voucher in the batch. Required " +
+                                  "for AMOUNT and PERCENT value-types; ignored for FREE_ITEM / COMBO.")
+            BigDecimal value,
             @Schema(example = "100", description = "Number of vouchers to generate.")
             @Min(1) int quantity,
             @Schema(example = "WINTER_PROMO_2026", nullable = true)
@@ -378,4 +409,55 @@ public class Dtos {
     public record FraudAttemptResponse(UUID id, String voucherCode, UUID merchantId,
                                        String reason, String detail,
                                        String deviceFingerprint, Instant createdAt) {}
+
+    /**
+     * Period-bounded points totals. Used by the per-merchant / per-user /
+     * per-shop point reports. `netPoints = pointsIssued - pointsRedeemed`;
+     * computed server-side so the FE doesn't have to and can never disagree.
+     */
+    public record PointsReport(
+            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
+                    description = "Subject of the report: merchant / user / shop UUID depending on which endpoint produced it.")
+            UUID subjectId,
+            @Schema(example = "2026-05-01")
+            LocalDate from,
+            @Schema(example = "2026-05-31")
+            LocalDate to,
+            @Schema(example = "152340.0000",
+                    description = "Sum of positive `pointsDelta` rows (earn / accrual / adjustment-up).")
+            BigDecimal pointsIssued,
+            @Schema(example = "47820.0000",
+                    description = "Sum of negative `pointsDelta` rows, returned positive (spend / redeem / adjustment-down).")
+            BigDecimal pointsRedeemed,
+            @Schema(example = "104520.0000",
+                    description = "`pointsIssued - pointsRedeemed`. Can be negative.")
+            BigDecimal netPoints,
+            @Schema(example = "1872", description = "Number of POSTED transactions matching the filter.")
+            long transactionCount
+    ) {}
+
+    /** One row of the points-by-type report. */
+    public record PointsByTypeRow(
+            @Schema(example = "PURCHASE", description = "TransactionType.")
+            String type,
+            @Schema(example = "1842")
+            long count,
+            @Schema(example = "184200.0000")
+            BigDecimal pointsIssued,
+            @Schema(example = "0.0000")
+            BigDecimal pointsRedeemed
+    ) {}
+
+    /** One bucket of the daily time-series. */
+    public record PointsTimeSeriesPoint(
+            @Schema(example = "2026-05-04T00:00:00Z",
+                    description = "Bucket start (UTC midnight). Missing days within the range have a row with zeros so the FE can render a contiguous chart.")
+            Instant bucket,
+            @Schema(example = "5120.0000")
+            BigDecimal pointsIssued,
+            @Schema(example = "1240.0000")
+            BigDecimal pointsRedeemed,
+            @Schema(example = "73")
+            long transactionCount
+    ) {}
 }

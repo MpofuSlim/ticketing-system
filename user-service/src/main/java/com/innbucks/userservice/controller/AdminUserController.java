@@ -37,11 +37,15 @@ public class AdminUserController {
     @GetMapping
     @PreAuthorize("hasRole('SUPER_ADMIN')")
     @Operation(
-            summary = "List users filtered by active status",
-            description = "Returns all user accounts. " +
-                    "Pass `?active=true` for approved/active accounts, `?active=false` for pending/inactive accounts. " +
-                    "Omit the parameter to return all users regardless of status. " +
-                    "Requires **SUPER_ADMIN** role."
+            summary = "List system users (no customers)",
+            description = "Returns user accounts for the SUPER_ADMIN portal: every role **except CUSTOMER** " +
+                    "by default. Customers are the wallet-holding end-users of the super-app and are managed " +
+                    "via the customer-facing surface (`/auth/customer/**`), not the admin portal — listing " +
+                    "them here would drown the page in millions of rows.\n\n" +
+                    "Pass `?active=true` for approved/active accounts, `?active=false` for pending/inactive " +
+                    "accounts. Omit to return all status values.\n\n" +
+                    "Pass `?includeCustomers=true` to opt back in to the full population (e.g. for support " +
+                    "triage). Defaults to `false`. Requires **SUPER_ADMIN** role."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -69,18 +73,26 @@ public class AdminUserController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Caller is not a SUPER_ADMIN")
     })
     public ResponseEntity<ApiResult<List<UserResponseDTO>>> listUsers(
-            @RequestParam(name = "active", required = false) Boolean active) {
+            @RequestParam(name = "active", required = false) Boolean active,
+            @RequestParam(name = "includeCustomers", required = false, defaultValue = "false") boolean includeCustomers) {
 
-        List<User> users = (active != null)
-                ? userRepository.findByActive(active)
-                : userRepository.findAll();
+        List<User> users;
+        if (includeCustomers) {
+            users = (active != null) ? userRepository.findByActive(active) : userRepository.findAll();
+        } else {
+            users = (active != null)
+                    ? userRepository.findByActiveExcludingRole(active, User.Role.CUSTOMER)
+                    : userRepository.findAllExcludingRole(User.Role.CUSTOMER);
+        }
 
         List<UserResponseDTO> body = users.stream()
                 .map(UserResponseDTO::from)
                 .collect(Collectors.toList());
 
-        String msg = active == null ? "Users retrieved"
-                : (active ? "Active users retrieved" : "Inactive users retrieved");
+        String activeLabel = active == null ? "Users"
+                : (active ? "Active users" : "Inactive users");
+        String scopeLabel = includeCustomers ? "" : " (system, no customers)";
+        String msg = activeLabel + scopeLabel + " retrieved";
         log.info("{} count={}", msg, body.size());
         return ResponseEntity.ok(ApiResult.ok(msg, body));
     }

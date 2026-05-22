@@ -82,7 +82,7 @@ class PhoneKeyedWalletTest {
         Dtos.MerchantResponse mr = merchantService.create(t.getId(),
                 new Dtos.MerchantRequest("Cafe Pending", "F&B", "USD",
                         Merchant.BillingCycle.MONTHLY,
-                        new BigDecimal("0.001"), new BigDecimal("0.05"), new BigDecimal("0.10")));
+                        new BigDecimal("0.05"), new BigDecimal("0.10")));
 
         ruleAdminService.createRule(t.getId(), mr.id(),
                 new Dtos.RuleRequest(null, TransactionType.PURCHASE,
@@ -108,9 +108,10 @@ class PhoneKeyedWalletTest {
                 new Dtos.VoucherTemplateRequest(null, "Welcome 10",
                         VoucherTemplate.VoucherType.SINGLE_USE,
                         VoucherTemplate.ValueType.PERCENT,
-                        new BigDecimal("10"), "USD", null, 1, 30, null));
+                        "USD", null, 1, 30, null));
         var voucher = voucherService.issue(t.getId(),
-                new Dtos.IssueVoucherRequest(null, tpl.getId(), phone, "Pending Pat", null,
+                new Dtos.IssueVoucherRequest(null, tpl.getId(), new BigDecimal("10"),
+                        phone, "Pending Pat", null,
                         Voucher.DeliveryChannel.NONE, null, null, null));
         assertThat(voucher.code()).isNotBlank();
         // The voucher response snapshots its template's value (V7 migration).
@@ -161,7 +162,7 @@ class PhoneKeyedWalletTest {
         Dtos.MerchantResponse mr = merchantService.create(t.getId(),
                 new Dtos.MerchantRequest("AuthzCafe", "F&B", "USD",
                         Merchant.BillingCycle.MONTHLY,
-                        BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
+                        BigDecimal.ZERO, BigDecimal.ZERO));
         ruleAdminService.createRule(t.getId(), mr.id(),
                 new Dtos.RuleRequest(null, TransactionType.PURCHASE,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
@@ -195,7 +196,7 @@ class PhoneKeyedWalletTest {
                 new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_" + role));
         var auth = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
                 phoneNumber, null, authorities);
-        auth.setDetails(new CallerDetails(null, phoneNumber));
+        auth.setDetails(new CallerDetails(null, null, phoneNumber));
         var ctx = org.springframework.security.core.context.SecurityContextHolder.createEmptyContext();
         ctx.setAuthentication(auth);
         var previous = org.springframework.security.core.context.SecurityContextHolder.getContext();

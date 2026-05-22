@@ -26,22 +26,17 @@ public class VoucherTemplateService {
 
     public VoucherTemplate create(UUID tenantId, UUID merchantId, Dtos.VoucherTemplateRequest req) {
         if (merchantId != null) merchants.requireMerchant(tenantId, merchantId);
-        if (req.valueType() == VoucherTemplate.ValueType.AMOUNT && req.value() == null) {
-            throw LoyaltyException.badRequest("MISSING_VALUE", "AMOUNT vouchers require value");
-        }
-        if (req.valueType() == VoucherTemplate.ValueType.PERCENT && req.value() == null) {
-            throw LoyaltyException.badRequest("MISSING_VALUE", "PERCENT vouchers require value");
-        }
         if (req.valueType() == VoucherTemplate.ValueType.FREE_ITEM && (req.freeItemSku() == null || req.freeItemSku().isBlank())) {
             throw LoyaltyException.badRequest("MISSING_SKU", "FREE_ITEM vouchers require freeItemSku");
         }
+        // AMOUNT / PERCENT value-types no longer require a value here —
+        // each issuance picks its own face value at IssueVoucherRequest time.
         VoucherTemplate t = new VoucherTemplate();
         t.setTenantId(tenantId);
         t.setMerchantId(merchantId);
         t.setName(req.name());
         t.setType(req.type());
         t.setValueType(req.valueType());
-        t.setValue(req.value());
         if (req.currency() != null) t.setCurrency(req.currency());
         t.setFreeItemSku(req.freeItemSku());
         t.setUsageLimit(req.usageLimit());

@@ -103,7 +103,7 @@ public class QrService {
             transferService.transfer(tenantId, new Dtos.TransferRequest(
                     q.getSourceId(), req.userId(), null, points, "qr-transfer"));
             return new Dtos.TransactionResponse(null, TransactionType.TRANSFER, points,
-                    points, null, null, null, req.reference(), Instant.now());
+                    points, null, null, null, null, req.reference(), Instant.now());
         }
     }
 }

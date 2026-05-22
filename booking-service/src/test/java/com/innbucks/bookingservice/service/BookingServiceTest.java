@@ -112,9 +112,11 @@ class BookingServiceTest {
         // qrCode round-trips without mocking. Tests that don't care about
         // QRs simply ignore the field.
         // null loyalty/event providers — BookingService treats these as
-        // "loyalty not wired" and just confirms cash-only bookings.
+        // "loyalty not wired" and just confirms cash-only bookings. The
+        // applyLoyalty short-circuit means LoyaltyEarnRetryService is
+        // never invoked, so null is safe here.
         return new BookingService(bookingRepo, itemRepo, seatClient, eventPublisher,
-                new QrCodeGenerator(), null, null);
+                new QrCodeGenerator(), null, null, null);
     }
 
     @Test

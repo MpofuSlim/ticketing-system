@@ -1,11 +1,19 @@
-# Local dev orchestration. Builds each service from its Dockerfile, wires them
-# to a single Postgres instance (one database per service), and exposes each
-# port on localhost so you can curl them directly or hit everything through
-# the gateway on http://localhost:8080.
+# Compose spec used for BOTH local dev and EC2 prod.
 #
-#     docker compose up --build
-#     docker compose down            # stop
-#     docker compose down -v         # stop + wipe the Postgres volume
+#   Local dev:  docker compose up --build
+#                Compose builds each service from its Dockerfile and tags
+#                the result with the `image:` value below using whatever
+#                IMAGE_TAG resolves to (defaults to `dev`). Local laptop
+#                gets `ghcr.io/.../<service>:dev` images.
+#
+#   EC2 prod:   IMAGE_TAG=sha-<commit> docker compose pull
+#               IMAGE_TAG=sha-<commit> docker compose up -d --no-build
+#                EC2 never builds — it pulls the exact image GHCR
+#                published for that commit. `:dev` and `:latest` are
+#                local-convenience tags and MUST NOT be used in prod.
+#
+# Image tags are owned by the Release workflow (.github/workflows/release.yml).
+# Rollback: ssh in and run `~/superApp/scripts/deploy.sh <previous-sha>`.
 
 name: innbucks
 
@@ -77,7 +85,7 @@ services:
     build:
       context: .
       dockerfile: user-service/Dockerfile
-    image: ticketing-user-service:dev
+    image: ghcr.io/${GHCR_OWNER:-mpofuslim}/user-service:${IMAGE_TAG:-dev}
     container_name: innbucks-user-service
     restart: unless-stopped
     depends_on:
@@ -121,7 +129,7 @@ services:
     build:
       context: .
       dockerfile: event-service/Dockerfile
-    image: ticketing-event-service:dev
+    image: ghcr.io/${GHCR_OWNER:-mpofuslim}/event-service:${IMAGE_TAG:-dev}
     container_name: innbucks-event-service
     restart: unless-stopped
     depends_on:
@@ -155,7 +163,7 @@ services:
     build:
       context: .
       dockerfile: seat-service/Dockerfile
-    image: ticketing-seat-service:dev
+    image: ghcr.io/${GHCR_OWNER:-mpofuslim}/seat-service:${IMAGE_TAG:-dev}
     container_name: innbucks-seat-service
     restart: unless-stopped
     depends_on:
@@ -189,7 +197,7 @@ services:
     build:
       context: .
       dockerfile: booking-service/Dockerfile
-    image: ticketing-booking-service:dev
+    image: ghcr.io/${GHCR_OWNER:-mpofuslim}/booking-service:${IMAGE_TAG:-dev}
     container_name: innbucks-booking-service
     restart: unless-stopped
     depends_on:
@@ -237,7 +245,7 @@ services:
     build:
       context: .
       dockerfile: payment-service/Dockerfile
-    image: ticketing-payment-service:dev
+    image: ghcr.io/${GHCR_OWNER:-mpofuslim}/payment-service:${IMAGE_TAG:-dev}
     container_name: innbucks-payment-service
     restart: unless-stopped
     depends_on:
@@ -280,7 +288,7 @@ services:
     build:
       context: .
       dockerfile: loyalty-service/Dockerfile
-    image: ticketing-loyalty-service:dev
+    image: ghcr.io/${GHCR_OWNER:-mpofuslim}/loyalty-service:${IMAGE_TAG:-dev}
     container_name: innbucks-loyalty-service
     restart: unless-stopped
     depends_on:
@@ -313,7 +321,7 @@ services:
     build:
       context: .
       dockerfile: api-gateway/Dockerfile
-    image: ticketing-api-gateway:dev
+    image: ghcr.io/${GHCR_OWNER:-mpofuslim}/api-gateway:${IMAGE_TAG:-dev}
     container_name: innbucks-api-gateway
     restart: unless-stopped
     depends_on:

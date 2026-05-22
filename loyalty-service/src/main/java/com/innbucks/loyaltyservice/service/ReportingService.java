@@ -20,12 +20,17 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.time.LocalTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import com.innbucks.loyaltyservice.entity.LoyaltyTransaction;
+import com.innbucks.loyaltyservice.exception.LoyaltyException;
+import org.springframework.data.domain.PageRequest;
 
 @Service
 @Transactional(readOnly = true)
@@ -131,8 +136,7 @@ public class ReportingService {
                     ? LocalDate.now().plusWeeks(1).with(java.time.DayOfWeek.MONDAY)
                     : LocalDate.now().withDayOfMonth(1).plusMonths(1));
         BigDecimal estimatedInvoice = m == null ? BigDecimal.ZERO
-                : m.getFeePerPointIssued().multiply(pointsIssued)
-                    .add(m.getFeePerVoucherIssued().multiply(BigDecimal.valueOf(issued)))
+                : m.getFeePerVoucherIssued().multiply(BigDecimal.valueOf(issued))
                     .add(m.getFeePerVoucherRedeemed().multiply(BigDecimal.valueOf(redeemed)));
         return new Dtos.MerchantDashboard(merchantId, today, issued, redeemed,
                 pointsIssued, pointsRedeemed, fraudAlerts, nextInvoice, estimatedInvoice);
@@ -158,13 +162,173 @@ public class ReportingService {
                 .toList();
     }
 
-    public String csv(UUID tenantId, UUID merchantId, LocalDate from, LocalDate to) {
+    public Dtos.PointsReport pointsForMerchant(UUID tenantId, UUID merchantId, LocalDate from, LocalDate to) {
+        requireRange(from, to);
         Instant fromInstant = from.atStartOfDay().toInstant(ZoneOffset.UTC);
-        Instant toInstant = to.plusDays(1).atTime(LocalTime.MAX).toInstant(ZoneOffset.UTC);
-        StringBuilder sb = new StringBuilder("type,count\n");
-        transactionMix(tenantId, merchantId, from, to).forEach((k, v) ->
-                sb.append(k).append(',').append(v).append('\n'));
-        sb.append("# generated at ").append(Instant.now()).append(' ').append(fromInstant).append('-').append(toInstant);
+        Instant toInstant = to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
+        BigDecimal issued = transactions.sumPointsIssued(merchantId, fromInstant, toInstant);
+        BigDecimal redeemed = transactions.sumPointsRedeemed(merchantId, fromInstant, toInstant);
+        long count = transactions.countByMerchantIdAndCreatedAtBetween(merchantId, fromInstant, toInstant);
+        return new Dtos.PointsReport(merchantId, from, to, issued, redeemed,
+                issued.subtract(redeemed), count);
+    }
+
+    public Dtos.PointsReport pointsForUser(UUID userId, LocalDate from, LocalDate to) {
+        requireRange(from, to);
+        Instant fromInstant = from.atStartOfDay().toInstant(ZoneOffset.UTC);
+        Instant toInstant = to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
+        BigDecimal issued = transactions.sumPointsIssuedByUser(userId, fromInstant, toInstant);
+        BigDecimal redeemed = transactions.sumPointsRedeemedByUser(userId, fromInstant, toInstant);
+        long count = transactions.countByUserIdAndCreatedAtBetween(userId, fromInstant, toInstant);
+        return new Dtos.PointsReport(userId, from, to, issued, redeemed,
+                issued.subtract(redeemed), count);
+    }
+
+    public Dtos.PointsReport pointsForShop(UUID tenantId, UUID shopId, LocalDate from, LocalDate to) {
+        requireRange(from, to);
+        Instant fromInstant = from.atStartOfDay().toInstant(ZoneOffset.UTC);
+        Instant toInstant = to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
+        BigDecimal issued = transactions.sumPointsIssuedByShop(tenantId, shopId, fromInstant, toInstant);
+        BigDecimal redeemed = transactions.sumPointsRedeemedByShop(tenantId, shopId, fromInstant, toInstant);
+        long count = transactions.countByTenantIdAndShopIdAndCreatedAtBetween(tenantId, shopId, fromInstant, toInstant);
+        return new Dtos.PointsReport(shopId, from, to, issued, redeemed,
+                issued.subtract(redeemed), count);
+    }
+
+    public List<Dtos.PointsByTypeRow> pointsByType(UUID tenantId, UUID merchantId,
+                                                   LocalDate from, LocalDate to) {
+        requireRange(from, to);
+        Instant fromInstant = from.atStartOfDay().toInstant(ZoneOffset.UTC);
+        Instant toInstant = to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
+        List<Object[]> rows = transactions.sumPointsByType(tenantId, merchantId, fromInstant, toInstant);
+        List<Dtos.PointsByTypeRow> out = new ArrayList<>(rows.size());
+        for (Object[] r : rows) {
+            // Row shape: [TransactionType, long count, BigDecimal issued, BigDecimal redeemed].
+            out.add(new Dtos.PointsByTypeRow(
+                    String.valueOf(r[0]),
+                    ((Number) r[1]).longValue(),
+                    toBigDecimal(r[2]),
+                    toBigDecimal(r[3])));
+        }
+        return out;
+    }
+
+    public List<Dtos.PointsTimeSeriesPoint> pointsTimeSeries(UUID tenantId, UUID merchantId,
+                                                             LocalDate from, LocalDate to) {
+        requireRange(from, to);
+        Instant fromInstant = from.atStartOfDay().toInstant(ZoneOffset.UTC);
+        Instant toInstant = to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
+
+        // The query skips zero-activity days; we backfill so the FE always
+        // gets a contiguous series and can render a chart without holes.
+        Map<Instant, Dtos.PointsTimeSeriesPoint> byBucket = new LinkedHashMap<>();
+        for (Object[] r : transactions.dailyPointBuckets(tenantId, merchantId, fromInstant, toInstant)) {
+            // The native query returns the bucket as a java.sql.Timestamp under
+            // both Postgres and H2's PostgreSQL-compat mode; normalise to Instant.
+            Instant bucket = toInstantUtc(r[0]);
+            BigDecimal issued = toBigDecimal(r[1]);
+            BigDecimal redeemed = toBigDecimal(r[2]);
+            long count = ((Number) r[3]).longValue();
+            byBucket.put(bucket, new Dtos.PointsTimeSeriesPoint(bucket, issued, redeemed, count));
+        }
+
+        List<Dtos.PointsTimeSeriesPoint> series = new ArrayList<>();
+        for (LocalDate d = from; !d.isAfter(to); d = d.plusDays(1)) {
+            Instant dayStart = d.atStartOfDay().toInstant(ZoneOffset.UTC);
+            Dtos.PointsTimeSeriesPoint p = byBucket.get(dayStart);
+            series.add(p != null ? p
+                    : new Dtos.PointsTimeSeriesPoint(dayStart, BigDecimal.ZERO, BigDecimal.ZERO, 0));
+        }
+        return series;
+    }
+
+    /**
+     * Streams the actual transaction rows (id, createdAt, type, amount,
+     * pointsDelta, merchantId, shopId, userId, reference) as a CSV.
+     * Before the bugfix this method emitted the transaction-mix counts
+     * ("type,count" rows) which (a) contradicted the @Operation summary
+     * and (b) returned 6 rows regardless of how many transactions the
+     * range contained — useless for the "export my month's transactions"
+     * support flow it was supposed to power.
+     *
+     * <p>Pages through the DB at 500 rows at a time so a busy month
+     * doesn't materialise the full result set in memory.
+     */
+    public String csv(UUID tenantId, UUID merchantId, LocalDate from, LocalDate to) {
+        requireRange(from, to);
+        Instant fromInstant = from.atStartOfDay().toInstant(ZoneOffset.UTC);
+        Instant toInstant = to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
+
+        StringBuilder sb = new StringBuilder(
+                "id,createdAt,type,amount,pointsDelta,merchantId,shopId,userId,reference\n");
+
+        int pageSize = 500;
+        int pageNum = 0;
+        while (true) {
+            var page = (merchantId == null)
+                    ? transactions.findByTenantIdAndCreatedAtGreaterThanEqualAndCreatedAtLessThanOrderByCreatedAtAsc(
+                            tenantId, fromInstant, toInstant, PageRequest.of(pageNum, pageSize))
+                    : transactions.findByTenantIdAndMerchantIdAndCreatedAtGreaterThanEqualAndCreatedAtLessThanOrderByCreatedAtAsc(
+                            tenantId, merchantId, fromInstant, toInstant, PageRequest.of(pageNum, pageSize));
+            for (LoyaltyTransaction t : page.getContent()) {
+                sb.append(t.getId()).append(',')
+                        .append(t.getCreatedAt()).append(',')
+                        .append(t.getType()).append(',')
+                        .append(csvField(t.getAmount())).append(',')
+                        .append(csvField(t.getPointsDelta())).append(',')
+                        .append(t.getMerchantId() == null ? "" : t.getMerchantId()).append(',')
+                        .append(t.getShopId() == null ? "" : t.getShopId()).append(',')
+                        .append(t.getUserId()).append(',')
+                        .append(csvField(t.getReference()))
+                        .append('\n');
+            }
+            if (page.isLast()) break;
+            pageNum++;
+        }
         return sb.toString();
+    }
+
+    private static void requireRange(LocalDate from, LocalDate to) {
+        if (from == null || to == null) {
+            throw LoyaltyException.badRequest("RANGE_REQUIRED", "from and to are required");
+        }
+        if (from.isAfter(to)) {
+            throw LoyaltyException.badRequest("RANGE_INVERTED", "from must not be after to");
+        }
+    }
+
+    private static BigDecimal toBigDecimal(Object o) {
+        if (o == null) return BigDecimal.ZERO;
+        if (o instanceof BigDecimal bd) return bd;
+        if (o instanceof Number n) return BigDecimal.valueOf(n.doubleValue());
+        return new BigDecimal(o.toString());
+    }
+
+    private static Instant toInstantUtc(Object o) {
+        if (o instanceof Instant i) return i;
+        if (o instanceof java.sql.Timestamp ts) return ts.toInstant();
+        if (o instanceof java.util.Date d) return d.toInstant();
+        // Defensive default — at the time of writing only the three types
+        // above are produced by Hibernate for date_trunc; falls through to
+        // string parse as a last resort.
+        return Instant.parse(o.toString());
+    }
+
+    private static String csvField(Object o) {
+        if (o == null) return "";
+        String s = o.toString();
+        // Quote whenever the field contains a structural character so a
+        // comma in a reference (e.g. "POS-001,batch-A") doesn't shred the
+        // row, and inline quotes are escaped per RFC 4180 (`"` -> `""`).
+        if (s.indexOf(',') >= 0 || s.indexOf('"') >= 0
+                || s.indexOf('\n') >= 0 || s.indexOf('\r') >= 0) {
+            return '"' + s.replace("\"", "\"\"") + '"';
+        }
+        return s;
+    }
+
+    @SuppressWarnings("unused")
+    private static long bucketsBetween(LocalDate from, LocalDate to) {
+        return ChronoUnit.DAYS.between(from, to) + 1;
     }
 }

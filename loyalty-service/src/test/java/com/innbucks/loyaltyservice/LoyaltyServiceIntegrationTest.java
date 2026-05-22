@@ -75,7 +75,6 @@ class LoyaltyServiceIntegrationTest {
         Dtos.MerchantResponse mr = merchantService.create(t.getId(),
                 new Dtos.MerchantRequest("Cafe Westgate", "F&B", "USD",
                         Merchant.BillingCycle.MONTHLY,
-                        new BigDecimal("0.001"),
                         new BigDecimal("0.05"),
                         new BigDecimal("0.10")));
         ruleAdminService.createRule(t.getId(), mr.id(),
@@ -94,10 +93,11 @@ class LoyaltyServiceIntegrationTest {
                 new Dtos.VoucherTemplateRequest(null, "10% off",
                         VoucherTemplate.VoucherType.SINGLE_USE,
                         VoucherTemplate.ValueType.PERCENT,
-                        new BigDecimal("10"), "USD", null, 1, 30, null));
+                        "USD", null, 1, 30, null));
 
         var v = voucherService.issue(t.getId(),
-                new Dtos.IssueVoucherRequest(null, tpl.getId(), null, null, u.getId(),
+                new Dtos.IssueVoucherRequest(null, tpl.getId(), new BigDecimal("10"),
+                        null, null, u.getId(),
                         Voucher.DeliveryChannel.NONE, null, null, null));
 
         var redemption = voucherService.redeem(t.getId(), mr.id(),
@@ -120,7 +120,7 @@ class LoyaltyServiceIntegrationTest {
         Dtos.MerchantResponse mr = merchantService.create(t.getId(),
                 new Dtos.MerchantRequest("Mall Bulawayo", "Retail", "USD",
                         Merchant.BillingCycle.MONTHLY,
-                        BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
+                        BigDecimal.ZERO, BigDecimal.ZERO));
         ruleAdminService.createRule(t.getId(), mr.id(),
                 new Dtos.RuleRequest(null, TransactionType.PURCHASE,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
@@ -152,7 +152,7 @@ class LoyaltyServiceIntegrationTest {
         Dtos.MerchantResponse mr = merchantService.create(t.getId(),
                 new Dtos.MerchantRequest("Pump Mutare", "Fuel", "USD",
                         Merchant.BillingCycle.MONTHLY,
-                        BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO));
+                        BigDecimal.ZERO, BigDecimal.ZERO));
         ruleAdminService.createRule(t.getId(), mr.id(),
                 new Dtos.RuleRequest(null, TransactionType.QR_PAY,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
@@ -174,12 +174,17 @@ class LoyaltyServiceIntegrationTest {
 
     @Test
     @Transactional
-    void invoicingAggregatesFees() {
+    void invoicingSkipsZeroBillingPeriods() {
+        // After fee-per-point was removed (V11), a period with no voucher
+        // activity bills to zero. The service should NOT persist a $0.00
+        // invoice — the merchant's billing page would otherwise fill with
+        // phantom rows for every quiet month. Verified end-to-end: post a
+        // points-earning transaction (no fee on points), then call
+        // generate() and expect empty.
         Tenant t = saveTenant();
         Dtos.MerchantResponse mr = merchantService.create(t.getId(),
                 new Dtos.MerchantRequest("Pharmacy Gweru", "Health", "USD",
                         Merchant.BillingCycle.MONTHLY,
-                        new BigDecimal("0.01"),
                         new BigDecimal("1.00"),
                         new BigDecimal("0.50")));
         ruleAdminService.createRule(t.getId(), mr.id(),
@@ -194,9 +199,7 @@ class LoyaltyServiceIntegrationTest {
         var merchant = merchantService.requireMerchant(t.getId(), mr.id());
         var inv = invoicingService.generate(merchant,
                 LocalDate.now().minusDays(1), LocalDate.now().plusDays(1));
-        // 100 points * 0.01 fee/point = 1.00
-        assertThat(inv.getPointsIssued()).isEqualByComparingTo("100");
-        assertThat(inv.getTotalAmount()).isEqualByComparingTo("1.00");
+        assertThat(inv).isEmpty();
     }
 
     private Tenant saveTenant() {
@@ -219,7 +222,7 @@ class LoyaltyServiceIntegrationTest {
                 new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_" + role));
         var auth = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
                 phoneNumber, null, authorities);
-        auth.setDetails(new com.innbucks.loyaltyservice.security.CallerDetails(null, phoneNumber));
+        auth.setDetails(new com.innbucks.loyaltyservice.security.CallerDetails(null, null, phoneNumber));
         var ctx = org.springframework.security.core.context.SecurityContextHolder.createEmptyContext();
         ctx.setAuthentication(auth);
         var previous = org.springframework.security.core.context.SecurityContextHolder.getContext();

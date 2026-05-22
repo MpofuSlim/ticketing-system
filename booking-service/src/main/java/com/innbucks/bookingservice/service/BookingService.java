@@ -7,6 +7,7 @@ import com.innbucks.bookingservice.dto.*;
 import com.innbucks.bookingservice.entity.*;
 import com.innbucks.bookingservice.event.BookingDomainEvent;
 import com.innbucks.bookingservice.exception.TierRequirementException;
+import com.innbucks.bookingservice.loyalty.LoyaltyEarnRetryService;
 import com.innbucks.bookingservice.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -38,6 +39,7 @@ public class BookingService {
     // is only exercised by tests that opt in.
     private final ObjectProvider<LoyaltyServiceClient> loyaltyClientProvider;
     private final ObjectProvider<EventServiceClient> eventClientProvider;
+    private final LoyaltyEarnRetryService loyaltyEarnRetryService;
 
     // Fuzz tolerance for split-payment math: pointsToUse / redeemRate +
     // cashAmount must equal totalAmount within $0.01.
@@ -538,11 +540,24 @@ public class BookingService {
                         .reference(reference)
                         .build());
             } catch (Exception ex) {
-                // Earning is best-effort; never fail a paid booking because we
-                // couldn't credit points. The redeem (if any) already succeeded
-                // and is idempotent on retry.
-                log.warn("Loyalty earn failed bookingId={} cashAmount={} reason={}",
-                        booking.getId(), cashAmount, ex.getMessage());
+                // Earning is best-effort — we never fail a paid booking
+                // because we couldn't credit points. But losing the side-
+                // effect silently meant the customer paid and never got
+                // their points (only a log line, which nobody monitored).
+                //
+                // Now we persist a loyalty_earn_retry row inside the
+                // confirm transaction so a rolled-back confirm doesn't
+                // leave a stray retry. LoyaltyEarnRetryJob drains it on
+                // the next tick with exponential backoff; max-attempts
+                // exhaustion flips the row to `giving_up` and trips a
+                // Prometheus alert via the gauge it publishes.
+                loyaltyEarnRetryService.enqueue(
+                        booking.getId(),
+                        booking.getUserEmail(),
+                        booking.getTenantId(),
+                        cashAmount,
+                        reference,
+                        ex);
             }
         }
     }

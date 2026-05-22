@@ -1,0 +1,216 @@
+name: Release
+
+# One workflow, two jobs:
+#   build  — multi-service Docker matrix: build, Trivy-scan, push to GHCR.
+#            Runs on master, PRs (scan-only, no push, no deploy), tag releases,
+#            and manual dispatch.
+#   deploy — pulls the just-published images on the EC2 and brings the stack
+#            up. Needs the build job. Skipped for PRs.
+#
+# Image identity: every image is tagged with `:sha-<long-commit>` (40-char).
+# That's what the deploy step pulls — never `:latest`, so a half-finished
+# build can't accidentally roll forward and a `git revert` can't roll
+# backward to an older image with the same tag. `:latest` is published only
+# from master, for convenience (`docker pull ghcr.io/.../user-service` from
+# a laptop), and is NEVER what production runs.
+
+on:
+  push:
+    branches: [master]
+    tags:
+      - "v*"
+  pull_request:
+    paths:
+      - "**/Dockerfile"
+      - ".dockerignore"
+      - ".github/workflows/release.yml"
+      - "**/pom.xml"
+      - "mvnw"
+      - ".mvn/**"
+      - "docker-compose.yml"
+      - "scripts/**"
+  workflow_dispatch:
+
+concurrency:
+  # Builds for the same ref serialise; a new push cancels the old build.
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    name: Build, scan, push
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - api-gateway
+          - user-service
+          - event-service
+          - seat-service
+          - booking-service
+          - payment-service
+          - loyalty-service
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # metadata-action lowercases the owner automatically (GHCR
+          # requires lowercase paths even though GitHub usernames can be
+          # mixed-case).
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}
+          tags: |
+            # Production-deploy tag: every image gets one. github.sha is
+            # 40 chars; this is exactly what the deploy job pulls.
+            type=sha,format=long
+            # Convenience tag for laptop pulls — master only.
+            type=raw,value=latest,enable={{is_default_branch}}
+            # Version-release tag.
+            type=ref,event=tag
+            # PR scanning aid (e.g. pr-123) — not pushed because of the
+            # push-only-when-not-PR guard below.
+            type=ref,event=pr
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.service }}/Dockerfile
+          load: true
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,scope=${{ matrix.service }},mode=max
+
+      - name: Install Trivy
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sudo sh -s -- -b /usr/local/bin
+
+      - name: Scan image with Trivy
+        run: |
+          # Any tag the metadata action produced points at the same loaded
+          # image; pick the first.
+          IMAGE=$(echo "${{ steps.meta.outputs.tags }}" | head -n 1)
+          trivy image \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --vuln-type os,library \
+            --exit-code 1 \
+            --no-progress \
+            "$IMAGE"
+
+  deploy:
+    name: Deploy to EC2
+    # Wait for every service's image to land in GHCR before we pull on the
+    # EC2. fail-fast: false in the matrix means we could otherwise pull a
+    # half-built set.
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Don't deploy on PR builds, and don't deploy on tag pushes (tags are
+    # build-only — they advertise a versioned image for future promotion).
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        || github.event_name == 'workflow_dispatch'
+    concurrency:
+      # Two deploys overlapping would `docker pull` and `compose up` against
+      # the same EC2 at once. Serialise.
+      group: ec2-deploy
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout (for docker-compose.yml + scripts/)
+        uses: actions/checkout@v4
+
+      - name: Prepare SSH
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Sync compose + scripts to EC2
+        # We no longer sync the full source tree — the EC2 doesn't build
+        # anything. It only needs docker-compose.yml (the orchestration
+        # spec) and the deploy/rollback script. --delete cleans up any
+        # files removed since the last deploy. .env is excluded so the
+        # server's production secrets are never touched.
+        run: |
+          rsync -avz --delete \
+            --exclude='.env' \
+            --exclude='.DS_Store' \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
+            docker-compose.yml scripts/ \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/home/${{ secrets.EC2_USER }}/superApp/
+
+      - name: Pull pinned images + bring the stack up
+        # GHCR is private by default — log in with the workflow's
+        # GITHUB_TOKEN (read:packages scope is implicit). Token is masked
+        # in workflow logs by Actions.
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+            "GHCR_TOKEN='${{ secrets.GITHUB_TOKEN }}' \
+             GHCR_USER='${{ github.actor }}' \
+             IMAGE_TAG='sha-${{ github.sha }}' \
+             bash -s" <<'EOF'
+            set -euo pipefail
+
+            docker network inspect innbucks-shared >/dev/null 2>&1 \
+              || docker network create innbucks-shared
+
+            cd ~/superApp
+            if [ ! -f .env ]; then
+              echo "::error::.env missing on EC2 — create ~/superApp/.env first"
+              exit 1
+            fi
+
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+
+            export IMAGE_TAG
+            echo "Pulling images at tag $IMAGE_TAG ..."
+            docker compose --profile payments pull
+
+            echo "Restarting stack ..."
+            # --no-build ensures the EC2 NEVER builds; if a pull failed it
+            # will fail here rather than silently fall back to a local
+            # build. --wait blocks until every service is healthy, so the
+            # workflow only goes green when the stack is actually serving
+            # traffic.
+            docker compose --profile payments up -d --no-build --remove-orphans --wait
+
+            docker logout ghcr.io
+
+            echo
+            echo "Final state:"
+            docker compose --profile payments ps
+          EOF
+
+      - name: Wipe SSH key from the runner
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

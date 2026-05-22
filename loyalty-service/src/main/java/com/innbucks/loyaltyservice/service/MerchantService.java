@@ -11,7 +11,6 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 
@@ -32,7 +31,6 @@ public class MerchantService {
         m.setCategory(req.category());
         if (req.currency() != null) m.setCurrency(req.currency());
         if (req.billingCycle() != null) m.setBillingCycle(req.billingCycle());
-        if (req.feePerPointIssued() != null) m.setFeePerPointIssued(req.feePerPointIssued());
         if (req.feePerVoucherIssued() != null) m.setFeePerVoucherIssued(req.feePerVoucherIssued());
         if (req.feePerVoucherRedeemed() != null) m.setFeePerVoucherRedeemed(req.feePerVoucherRedeemed());
         m.setAdminEmail(callerEmail());
@@ -70,10 +68,6 @@ public class MerchantService {
         Merchant m = requireMerchant(tenantId, merchantId);
         m.setStatus(active ? Merchant.Status.ACTIVE : Merchant.Status.INACTIVE);
         return toResponse(m);
-    }
-
-    public BigDecimal feeForPoints(Merchant m, BigDecimal pointsIssued) {
-        return m.getFeePerPointIssued().multiply(pointsIssued);
     }
 
     public static Dtos.MerchantResponse toResponse(Merchant m) {

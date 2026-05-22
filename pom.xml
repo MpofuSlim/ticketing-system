@@ -23,7 +23,31 @@
 
     <properties>
         <java.version>17</java.version>
-        <spring.boot.version>4.0.5</spring.boot.version>
+        <!-- 4.0.6 patches two Spring Boot CVEs (CVE-2026-40976 CRITICAL: default-
+             web-security bypass; CVE-2026-40973 HIGH: ACE + session hijacking via
+             predictable session IDs), and its BOM brings spring-security to 7.0.5
+             and jackson-core to 3.1.1 — closing CVE-2026-22753/4 and
+             GHSA-2m67-wjpj-xhg9 transitively. The Boot BOM does NOT yet ship the
+             fixed Tomcat 11.0.22 or postgres 42.7.11, so those still need explicit
+             overrides below. -->
+        <spring.boot.version>4.0.6</spring.boot.version>
+        <!-- tomcat-embed-core 11.0.21 (pinned by Boot 4.0.6's BOM) has 6 CVEs:
+             CVE-2026-41293 (CRITICAL, input validation), CVE-2026-43512 (CRITICAL,
+             digest-auth bypass), CVE-2026-43515 (CRITICAL, multi-method authz),
+             CVE-2026-41284 (HIGH, DoS), CVE-2026-42498 (HIGH, WebSocket auth-header
+             leak), CVE-2026-43513 (HIGH, LockOutRealm case-sensitivity). 11.0.22
+             is the fix-line. Drop this override on the next Boot upgrade if the
+             BOM has caught up. -->
+        <tomcat.version>11.0.22</tomcat.version>
+        <!-- postgres JDBC 42.7.10 (pinned by Boot 4.0.6's BOM) has CVE-2026-42198
+             (HIGH): client-side DoS via malicious SCRAM-SHA-256 response. 42.7.11
+             fixes it. Drop on Boot upgrade once BOM catches up. -->
+        <postgresql.version>42.7.11</postgresql.version>
+        <!-- netty pulled in by api-gateway (Spring Cloud Gateway) and user-service.
+             4.2.12.Final has CVE-2026-42579 (HIGH, codec-dns). 4.2.13.Final fixes
+             it. Spring Boot's BOM uses ${netty.version} across every netty-*
+             artifact, so overriding the property here cascades cleanly. -->
+        <netty.version>4.2.13.Final</netty.version>
         <spring.cloud.version>2025.1.1</spring.cloud.version>
         <springdoc.version>3.0.3</springdoc.version>
         <testcontainers.version>1.21.3</testcontainers.version>
@@ -47,6 +71,64 @@
 
     <dependencyManagement>
         <dependencies>
+
+            <!-- CVE overrides declared BEFORE the BOM imports. We use the
+                 import-BOM pattern (not <parent>spring-boot-starter-parent),
+                 which means property overrides do NOT propagate into the
+                 imported BOM's property scope — Boot's BOM resolves
+                 ${tomcat.version} etc. in its own pom, not ours. The fix is
+                 to pre-declare the exact GA:V here; the first-declared
+                 version wins over the BOM's later entry.
+                 Drop these on the next Spring Boot upgrade if the BOM has
+                 caught up to the fixed versions. -->
+            <!-- bouncycastle 1.81 (transitive via jjwt-impl) has CVE-2026-5598
+                 (HIGH): private-key leakage via non-constant-time comparisons.
+                 1.84 fixes it. -->
+            <dependency>
+                <groupId>org.bouncycastle</groupId>
+                <artifactId>bcprov-jdk18on</artifactId>
+                <version>1.84</version>
+            </dependency>
+            <!-- commons-fileupload 1.5 (transitive via Spring's multipart support)
+                 has CVE-2025-48976 (HIGH): DoS via multipart form-data part-count
+                 amplification. 1.6.0 fixes it. -->
+            <dependency>
+                <groupId>commons-fileupload</groupId>
+                <artifactId>commons-fileupload</artifactId>
+                <version>1.6.0</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.apache.tomcat.embed</groupId>
+                <artifactId>tomcat-embed-core</artifactId>
+                <version>${tomcat.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.tomcat.embed</groupId>
+                <artifactId>tomcat-embed-el</artifactId>
+                <version>${tomcat.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.tomcat.embed</groupId>
+                <artifactId>tomcat-embed-websocket</artifactId>
+                <version>${tomcat.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.postgresql</groupId>
+                <artifactId>postgresql</artifactId>
+                <version>${postgresql.version}</version>
+            </dependency>
+            <!-- Netty pulled in via Spring Cloud Gateway (api-gateway) and Spring
+                 WebFlux DNS resolver in user-service. Pin the BOM rather than
+                 each artifact — Netty publishes a netty-bom that keeps every
+                 netty-* artifact in lockstep, so we don't have to enumerate them. -->
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-bom</artifactId>
+                <version>${netty.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
 
             <dependency>
                 <groupId>org.springframework.boot</groupId>

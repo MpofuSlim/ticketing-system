@@ -30,8 +30,8 @@ import java.util.UUID;
 @Tag(name = "Invoicing",
      description = "Per-merchant periodic billing. The daily InvoiceScheduler calls `/generate` for each " +
                    "active merchant; this controller exposes manual generation, listing, and mark-as-paid " +
-                   "for support flows. Total = (pointsIssued × feePerPointIssued) + " +
-                   "(vouchersIssued × feePerVoucherIssued) + (vouchersRedeemed × feePerVoucherRedeemed). " +
+                   "for support flows. Total = (vouchersIssued × feePerVoucherIssued) + " +
+                   "(vouchersRedeemed × feePerVoucherRedeemed). Loyalty points carry no per-point fee. " +
                    "Requires X-Tenant-Id.")
 public class InvoiceController {
 
@@ -134,7 +134,11 @@ public class InvoiceController {
             description = "Operator escape hatch — usually unnecessary because InvoiceScheduler runs nightly. " +
                           "Body: `{ merchantId, periodStart, periodEnd }` (ISO dates). Aggregates points " +
                           "issued + vouchers issued/redeemed within the period and applies the merchant's " +
-                          "fee schedule. Idempotent on (merchant, period).")
+                          "fee schedule. Idempotent on (merchant, period).\n\n" +
+                          "**No-op on zero billing**: if the merchant had no billable activity in the period " +
+                          "(no vouchers issued, no vouchers redeemed), no invoice is created and the response " +
+                          "is `200 OK` with `data: null` and an explanatory message. Keeps the merchant's " +
+                          "billing page free of `$0.00` placeholder invoices.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -161,6 +165,21 @@ public class InvoiceController {
                                         "status": "PENDING",
                                         "paidAt": null
                                       }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Nothing to bill — no invoice created",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "No billable activity", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "No billable activity in this period; no invoice created",
+                                      "data": null
                                     }
                                     """)
                     )
@@ -203,9 +222,11 @@ public class InvoiceController {
         LocalDate periodEnd = LocalDate.parse(body.get("periodEnd"));
         UUID tenantId = tenantContext.requireTenantId();
         var m = merchants.requireMerchant(tenantId, merchantId);
-        Dtos.InvoiceResponse data = InvoicingService.toResponse(invoicing.generate(m, periodStart, periodEnd));
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(ApiResult.created("Invoice generated successfully", data));
+        return invoicing.generate(m, periodStart, periodEnd)
+                .map(inv -> ResponseEntity.status(HttpStatus.CREATED)
+                        .body(ApiResult.created("Invoice generated successfully", InvoicingService.toResponse(inv))))
+                .orElseGet(() -> ResponseEntity.ok(ApiResult.<Dtos.InvoiceResponse>ok(
+                        "No billable activity in this period; no invoice created", null)));
     }
 
     @PostMapping("/{id}/pay")

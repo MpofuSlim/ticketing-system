@@ -14,7 +14,8 @@ import java.util.UUID;
         @Index(name = "idx_txn_tenant_merchant", columnList = "tenant_id,merchant_id"),
         @Index(name = "idx_txn_user", columnList = "user_id"),
         @Index(name = "idx_txn_reference", columnList = "reference"),
-        @Index(name = "idx_txn_created_at", columnList = "created_at")
+        @Index(name = "idx_txn_created_at", columnList = "created_at"),
+        @Index(name = "idx_txn_tenant_shop_created", columnList = "tenant_id,shop_id,created_at")
 })
 @Getter
 @Setter
@@ -30,6 +31,14 @@ public class LoyaltyTransaction {
 
     @Column(name = "merchant_id", nullable = false)
     private UUID merchantId;
+
+    // Shop (outlet) that produced this transaction. Nullable because some
+    // sources (manual ADJUSTMENT, P2P transfer, rule-engine accruals not
+    // tied to a checkout) have no shop attribution. Populated whenever
+    // the caller's JWT carries a shopId claim — i.e. SHOP_USER cashier
+    // ringing up a customer.
+    @Column(name = "shop_id")
+    private UUID shopId;
 
     @Column(name = "user_id", nullable = false)
     private UUID userId;

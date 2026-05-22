@@ -20,6 +20,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -68,9 +69,10 @@ public class VoucherService {
 
     public Dtos.VoucherResponse issue(UUID tenantId, Dtos.IssueVoucherRequest req) {
         VoucherTemplate tpl = templateService.require(tenantId, req.templateId());
+        BigDecimal value = requireValueIfNumeric(tpl, req.value());
         Voucher v = createFromTemplate(tenantId, tpl, null,
                 req.assignedUserId(), req.assigneePhone(), req.assigneeName(),
-                req.deliveryChannel(), req.campaignSource(),
+                req.deliveryChannel(), req.campaignSource(), value,
                 req.usesOverride(), req.validityDaysOverride());
         vouchers.save(v);
         notifications.deliver(v, v.getDeliveryChannel());
@@ -84,6 +86,7 @@ public class VoucherService {
 
     public List<Dtos.VoucherResponse> issueBulk(UUID tenantId, Dtos.BulkIssueRequest req) {
         VoucherTemplate tpl = templateService.require(tenantId, req.templateId());
+        BigDecimal value = requireValueIfNumeric(tpl, req.value());
         VoucherBatch batch = new VoucherBatch();
         batch.setTenantId(tenantId);
         batch.setTemplateId(tpl.getId());
@@ -95,7 +98,7 @@ public class VoucherService {
         for (int i = 0; i < req.quantity(); i++) {
             Voucher v = createFromTemplate(tenantId, tpl, batch.getId(),
                     null, null, null, req.deliveryChannel(),
-                    req.campaign(), null, null);
+                    req.campaign(), value, null, null);
             vouchers.save(v);
             result.add(toResponse(v));
         }
@@ -103,9 +106,28 @@ public class VoucherService {
         return result;
     }
 
+    /**
+     * AMOUNT and PERCENT vouchers are meaningless without a numeric value
+     * and we used to enforce this at template-create time. After the
+     * value-on-issuance refactor (V14), enforcement moves to the issue
+     * call site — the template only declares the *shape* of the value.
+     * FREE_ITEM / COMBO templates ignore the field entirely and pass
+     * null through.
+     */
+    private static BigDecimal requireValueIfNumeric(VoucherTemplate tpl, BigDecimal value) {
+        VoucherTemplate.ValueType vt = tpl.getValueType();
+        if ((vt == VoucherTemplate.ValueType.AMOUNT || vt == VoucherTemplate.ValueType.PERCENT)
+                && value == null) {
+            throw LoyaltyException.badRequest("MISSING_VALUE",
+                    vt.name() + " vouchers require value at issue time");
+        }
+        return value;
+    }
+
     private Voucher createFromTemplate(UUID tenantId, VoucherTemplate tpl, UUID batchId,
                                        UUID assignedUserId, String assigneePhone, String assigneeName,
                                        Voucher.DeliveryChannel channel, String campaign,
+                                       BigDecimal value,
                                        Integer usesOverride, Integer validityOverride) {
         if (assignedUserId != null) {
             LoyaltyUser u = users.findById(assignedUserId)
@@ -138,9 +160,15 @@ public class VoucherService {
         v.setAssigneeName(assigneeName);
         v.setDeliveryChannel(channel);
         v.setCampaignSource(campaign);
-        // Snapshot the template's value into the voucher (see V7 migration).
+        // Snapshot the caller-supplied value onto the voucher. The template
+        // dictates the *shape* (AMOUNT, PERCENT, FREE_ITEM, COMBO); the
+        // numeric value itself is set per issuance, so a "Coffee voucher"
+        // template can be issued at $5 or $10 without spinning up two
+        // templates. Once stamped here it's frozen — the original value at
+        // issuance time — so a later template edit won't retroactively
+        // change the worth of vouchers already in customers' hands.
         v.setValueType(tpl.getValueType());
-        v.setValue(tpl.getValue());
+        v.setValue(value);
         v.setCurrency(tpl.getCurrency());
         int uses = usesOverride != null ? usesOverride : tpl.getUsageLimit();
         v.setUsesRemaining(Math.max(1, uses));
@@ -267,10 +295,14 @@ public class VoucherService {
         }
 
         VoucherRedemption r = recordRedemption(v, merchantId, req, VoucherRedemption.Result.SUCCESS, null);
-        VoucherTemplate tpl = templateService.require(tenantId, v.getTemplateId());
         metrics.incVouchersRedeemed();
+        // Read value/valueType straight off the voucher — they were
+        // snapshotted at issue time and the template is no longer the
+        // source of truth for them.
         return new Dtos.RedemptionResponse(r.getId(), v.getId(), v.getStatus().name(),
-                v.getUsesRemaining(), tpl.getValue(), tpl.getValueType().name(), r.getRedeemedAt());
+                v.getUsesRemaining(), v.getValue(),
+                v.getValueType() == null ? null : v.getValueType().name(),
+                r.getRedeemedAt());
     }
 
     private VoucherRedemption recordRedemption(Voucher v, UUID merchantId, Dtos.RedeemVoucherRequest req,

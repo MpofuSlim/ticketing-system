@@ -339,6 +339,108 @@ public class TransactionController {
         return ResponseEntity.ok(ApiResult.ok("Transactions retrieved successfully", data));
     }
 
+    @GetMapping("/transactions/my-shop")
+    @Operation(summary = "Get this shop's transactions",
+            description = "Returns every loyalty transaction stamped with the caller's shopId, most " +
+                          "recent first. The shopId comes from the authenticated JWT (SHOP_USER and " +
+                          "SHOP_ADMIN tokens carry it); the FE never sends it. Used by the shop-staff " +
+                          "dashboard so a cashier sees only their own outlet's earn / redemption / " +
+                          "reversal feed, not the whole merchant chain's.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Transactions returned",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Paginated transactions", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Transactions retrieved successfully",
+                                      "data": {
+                                        "content": [
+                                          {
+                                            "id": "11111111-2222-3333-4444-555555555555",
+                                            "type": "PURCHASE",
+                                            "amount": 100.00,
+                                            "pointsDelta": 100.0000,
+                                            "balanceAfter": null,
+                                            "ruleId": "d6e2f4a5-4567-8901-bcde-f01234567890",
+                                            "campaignId": null,
+                                            "shopId": "c7d8e9f0-1234-5678-90ab-cdef12345678",
+                                            "reference": "POS-20260504-0001",
+                                            "createdAt": "2026-05-04T11:00:00Z"
+                                          },
+                                          {
+                                            "id": "22222222-3333-4444-5555-666666666666",
+                                            "type": "REDEMPTION",
+                                            "amount": null,
+                                            "pointsDelta": -500.0000,
+                                            "balanceAfter": null,
+                                            "ruleId": null,
+                                            "campaignId": null,
+                                            "shopId": "c7d8e9f0-1234-5678-90ab-cdef12345678",
+                                            "reference": "VOUCHER:VCH-AB12CD",
+                                            "createdAt": "2026-05-04T12:00:00Z"
+                                          }
+                                        ],
+                                        "page": 0,
+                                        "size": 20,
+                                        "totalElements": 2,
+                                        "totalPages": 1,
+                                        "first": true,
+                                        "last": true
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "Caller's JWT has no shopId — token isn't shop-staff",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "No shop scope", value = """
+                                    {
+                                      "code": "SHOP_REQUIRED",
+                                      "message": "caller's JWT has no shopId; endpoint is for SHOP_USER and SHOP_ADMIN only",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401",
+                    description = "Missing or invalid bearer token",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Unauthenticated", value = """
+                                    {
+                                      "code": "INVALID_TOKEN",
+                                      "message": "Token is invalid or expired",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
+    })
+    @PreAuthorize("hasAnyRole('SHOP_USER','SHOP_ADMIN','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<PageResponse<Dtos.TransactionResponse>>> myShop(
+            @ParameterObject Pageable pageable) {
+        UUID tenantId = tenantContext.requireTenantId();
+        UUID shopId = CallerDetails.currentShopId();
+        if (shopId == null) {
+            throw com.innbucks.loyaltyservice.exception.LoyaltyException.badRequest(
+                    "SHOP_REQUIRED",
+                    "caller's JWT has no shopId; endpoint is for SHOP_USER and SHOP_ADMIN only");
+        }
+        PageResponse<Dtos.TransactionResponse> data = PageResponse.from(
+                transactions.recentForShop(tenantId, shopId, pageable));
+        return ResponseEntity.ok(ApiResult.ok("Transactions retrieved successfully", data));
+    }
+
     @PostMapping("/transfer")
     @Operation(summary = "Transfer points between users (P2P)",
             description = "Moves points from `fromUserId` to `toUserId` atomically using canonical-order " +

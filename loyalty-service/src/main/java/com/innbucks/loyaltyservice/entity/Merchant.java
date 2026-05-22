@@ -41,9 +41,6 @@ public class Merchant {
     @Column(name = "billing_cycle", nullable = false, length = 20)
     private BillingCycle billingCycle = BillingCycle.MONTHLY;
 
-    @Column(name = "fee_per_point_issued", precision = 19, scale = 6)
-    private BigDecimal feePerPointIssued = BigDecimal.ZERO;
-
     @Column(name = "fee_per_voucher_issued", precision = 19, scale = 6)
     private BigDecimal feePerVoucherIssued = BigDecimal.ZERO;
 

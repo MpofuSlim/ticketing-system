@@ -5,7 +5,6 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 import lombok.Setter;
 
-import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
@@ -36,12 +35,14 @@ public class VoucherTemplate {
     @Column(nullable = false, length = 20)
     private VoucherType type = VoucherType.SINGLE_USE;
 
+    // The shape of the value (AMOUNT, PERCENT, FREE_ITEM, COMBO) is fixed
+    // on the template — it determines how a renderer interprets the
+    // numeric value the FE will send at issue time. The numeric value
+    // itself lives on the Voucher (issued instance), not here, so one
+    // "Coffee voucher" template can be issued at $5 or $10.
     @Enumerated(EnumType.STRING)
     @Column(name = "value_type", nullable = false, length = 20)
     private ValueType valueType = ValueType.AMOUNT;
-
-    @Column(name = "face_value", precision = 19, scale = 4)
-    private BigDecimal value;
 
     @Column(length = 8)
     private String currency = "USD";

@@ -5,6 +5,7 @@ import com.innbucks.bookingservice.event.BookingDomainEvent;
 import com.innbucks.bookingservice.repository.BookingRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -20,8 +21,10 @@ import java.util.List;
  * milliseconds (default 30s). With multiple replicas the same expired booking
  * may be processed twice; the {@link BookingRepository#findExpiredPending}
  * query plus the status check below make the second update a no-op
- * (idempotent). For high-replica production, wrap with ShedLock so only one
- * leader runs the tick — see <a href="https://github.com/lukas-krecan/ShedLock">ShedLock</a>.
+ * (idempotent). ShedLock now wraps the tick (see {@link com.innbucks.bookingservice.config.SchedulerLockConfig})
+ * so only one leader runs each tick — even though the work is idempotent,
+ * the duplicate query traffic + lock contention from N replicas hitting
+ * the same rows is wasteful.
  *
  * <p>The job intentionally does NOT call seat-service to release seat status
  * back to AVAILABLE; today seat-service's seats table is decoupled from
@@ -37,6 +40,9 @@ public class BookingExpirationService {
     private final ApplicationEventPublisher eventPublisher;
 
     @Scheduled(fixedDelayString = "${app.booking.expiration-poll-interval-ms:30000}")
+    @SchedulerLock(name = "BookingExpirationService.expirePending",
+            lockAtMostFor = "PT5M",
+            lockAtLeastFor = "PT15S")
     @Transactional
     public void expirePending() {
         LocalDateTime now = LocalDateTime.now();
