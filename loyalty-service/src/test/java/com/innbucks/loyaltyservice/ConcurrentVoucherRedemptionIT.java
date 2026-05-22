@@ -90,10 +90,11 @@ class ConcurrentVoucherRedemptionIT extends PostgresIntegrationTestBase {
                 new Dtos.VoucherTemplateRequest(null, "Race off",
                         VoucherTemplate.VoucherType.SINGLE_USE,
                         VoucherTemplate.ValueType.PERCENT,
-                        new BigDecimal("10"), "USD", null, 1, 30, null));
+                        "USD", null, 1, 30, null));
 
         var issued = voucherService.issue(tenantId,
-                new Dtos.IssueVoucherRequest(null, tpl.getId(), null, null, userId,
+                new Dtos.IssueVoucherRequest(null, tpl.getId(), new BigDecimal("10"),
+                        null, null, userId,
                         Voucher.DeliveryChannel.NONE, null, null, null));
         final String code = issued.code();
 

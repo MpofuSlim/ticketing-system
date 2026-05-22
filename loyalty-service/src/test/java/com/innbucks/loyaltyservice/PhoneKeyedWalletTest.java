@@ -108,9 +108,10 @@ class PhoneKeyedWalletTest {
                 new Dtos.VoucherTemplateRequest(null, "Welcome 10",
                         VoucherTemplate.VoucherType.SINGLE_USE,
                         VoucherTemplate.ValueType.PERCENT,
-                        new BigDecimal("10"), "USD", null, 1, 30, null));
+                        "USD", null, 1, 30, null));
         var voucher = voucherService.issue(t.getId(),
-                new Dtos.IssueVoucherRequest(null, tpl.getId(), phone, "Pending Pat", null,
+                new Dtos.IssueVoucherRequest(null, tpl.getId(), new BigDecimal("10"),
+                        phone, "Pending Pat", null,
                         Voucher.DeliveryChannel.NONE, null, null, null));
         assertThat(voucher.code()).isNotBlank();
         // The voucher response snapshots its template's value (V7 migration).

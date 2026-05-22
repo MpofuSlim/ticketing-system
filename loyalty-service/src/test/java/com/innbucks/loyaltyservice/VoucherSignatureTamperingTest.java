@@ -84,12 +84,13 @@ class VoucherSignatureTamperingTest {
                 new Dtos.VoucherTemplateRequest(null, "20% off",
                         VoucherTemplate.VoucherType.SINGLE_USE,
                         VoucherTemplate.ValueType.PERCENT,
-                        new BigDecimal("20"), "USD", null, 1, 30, null));
+                        "USD", null, 1, 30, null));
 
         // Issue a legitimate voucher. Its signature is computed correctly by
         // VoucherService.createFromTemplate.
         var issued = voucherService.issue(t.getId(),
-                new Dtos.IssueVoucherRequest(null, tpl.getId(), null, null, user.getId(),
+                new Dtos.IssueVoucherRequest(null, tpl.getId(), new BigDecimal("20"),
+                        null, null, user.getId(),
                         Voucher.DeliveryChannel.NONE, null, null, null));
 
         // Now reach into the DB and overwrite the signature with garbage —

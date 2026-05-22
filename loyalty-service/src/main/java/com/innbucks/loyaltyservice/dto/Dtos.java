@@ -216,10 +216,10 @@ public class Dtos {
             @NotBlank String name,
             @Schema(example = "SINGLE_USE", allowableValues = {"SINGLE_USE", "MULTI_USE", "FREE_ITEM"})
             @NotNull VoucherTemplate.VoucherType type,
-            @Schema(example = "AMOUNT", allowableValues = {"AMOUNT", "PERCENTAGE", "FREE_ITEM"})
+            @Schema(example = "AMOUNT", allowableValues = {"AMOUNT", "PERCENTAGE", "FREE_ITEM"},
+                    description = "Shape of the discount the template represents. The numeric value " +
+                                  "(e.g. $5, 10%) is supplied per issuance in IssueVoucherRequest.value.")
             @NotNull VoucherTemplate.ValueType valueType,
-            @Schema(example = "5.0000", nullable = true, description = "Discount value (amount or percentage).")
-            BigDecimal value,
             @Schema(example = "USD", nullable = true)
             String currency,
             @Schema(example = "COFFEE-001", nullable = true, description = "SKU of the free item (FREE_ITEM type only).")
@@ -245,6 +245,11 @@ public class Dtos {
             UUID merchantId,
             @Schema(example = "d6e2f4a5-4567-8901-bcde-f01234567890", description = "Template to issue from.")
             @NotNull UUID templateId,
+            @Schema(example = "5.0000", nullable = true,
+                    description = "Per-issuance face value (e.g. 5 for $5 off, 10 for 10% off). Required for " +
+                                  "AMOUNT and PERCENT value-types; ignored for FREE_ITEM / COMBO. The " +
+                                  "value is snapshotted onto the issued voucher and cannot be changed.")
+            BigDecimal value,
             @Schema(example = "+263771234567", nullable = true, description = "Recipient phone — used if assignedUserId is null.")
             String assigneePhone,
             @Schema(example = "Alice Moyo", nullable = true)
@@ -268,6 +273,10 @@ public class Dtos {
             UUID merchantId,
             @Schema(example = "d6e2f4a5-4567-8901-bcde-f01234567890")
             @NotNull UUID templateId,
+            @Schema(example = "5.0000", nullable = true,
+                    description = "Per-voucher face value applied to every voucher in the batch. Required " +
+                                  "for AMOUNT and PERCENT value-types; ignored for FREE_ITEM / COMBO.")
+            BigDecimal value,
             @Schema(example = "100", description = "Number of vouchers to generate.")
             @Min(1) int quantity,
             @Schema(example = "WINTER_PROMO_2026", nullable = true)

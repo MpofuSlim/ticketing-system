@@ -93,10 +93,11 @@ class LoyaltyServiceIntegrationTest {
                 new Dtos.VoucherTemplateRequest(null, "10% off",
                         VoucherTemplate.VoucherType.SINGLE_USE,
                         VoucherTemplate.ValueType.PERCENT,
-                        new BigDecimal("10"), "USD", null, 1, 30, null));
+                        "USD", null, 1, 30, null));
 
         var v = voucherService.issue(t.getId(),
-                new Dtos.IssueVoucherRequest(null, tpl.getId(), null, null, u.getId(),
+                new Dtos.IssueVoucherRequest(null, tpl.getId(), new BigDecimal("10"),
+                        null, null, u.getId(),
                         Voucher.DeliveryChannel.NONE, null, null, null));
 
         var redemption = voucherService.redeem(t.getId(), mr.id(),
