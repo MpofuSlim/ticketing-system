@@ -11,6 +11,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 
@@ -54,7 +55,7 @@ public class SeatLockReaper {
     )
     public void reap() {
         List<UUID> candidates = seatRepository.findExpiredLockIds(
-                LocalDateTime.now(),
+                LocalDateTime.now(ZoneOffset.UTC),
                 PageRequest.of(0, batchSize)
         );
         if (candidates.isEmpty()) {

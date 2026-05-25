@@ -14,6 +14,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 /**
@@ -82,7 +83,7 @@ public class OutboxEvent {
         if (this.id == null) {
             this.id = UUID.randomUUID();
         }
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         if (this.createdAt == null) {
             this.createdAt = now;
         }
@@ -97,7 +98,7 @@ public class OutboxEvent {
 
     @PreUpdate
     void onUpdate() {
-        this.updatedAt = LocalDateTime.now();
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     /** Lowercase to match the VARCHAR check-constraint values in V8. */

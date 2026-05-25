@@ -17,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -82,7 +83,7 @@ public class SeatCategoryAnalyticsService {
                 .totals(totals)
                 .categories(blocks)
                 .bookingServiceReachable(reachable)
-                .fetchedAt(LocalDateTime.now())
+                .fetchedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .build();
     }
 

@@ -17,6 +17,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -138,7 +139,7 @@ public class EventService {
             int size
     ) {
         Pageable pageable = PageRequest.of(page, size, Sort.by("dateTime").ascending());
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         log.debug("Fetching active upcoming events by province={} cutoff={} page={} size={}",
                 province, now, page, size);
 

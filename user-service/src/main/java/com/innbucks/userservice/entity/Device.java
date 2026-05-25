@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import lombok.*;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 
 @Entity
 @Table(name = "devices", uniqueConstraints = {
@@ -33,5 +34,5 @@ public class Device {
     private String pushToken;
 
     @Column(updatable = false)
-    private LocalDateTime registeredAt = LocalDateTime.now();
+    private LocalDateTime registeredAt = LocalDateTime.now(ZoneOffset.UTC);
 }

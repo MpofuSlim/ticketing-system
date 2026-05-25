@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 
 /**
  * Nightly job that flips active=false on every event whose scheduled dateTime
@@ -24,7 +25,7 @@ public class EventExpiryScheduler {
     @Scheduled(cron = "0 0 0 * * *")
     @Transactional
     public void expirePassedEvents() {
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         int count = eventRepository.deactivateExpiredEvents(now, now);
         if (count > 0) {
             log.info("Event expiry job: deactivated {} past event(s) at {}", count, now);
