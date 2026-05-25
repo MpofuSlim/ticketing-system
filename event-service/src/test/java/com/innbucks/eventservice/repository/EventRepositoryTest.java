@@ -14,9 +14,7 @@ import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-@SpringBootTest(properties = {
-        "spring.jpa.hibernate.ddl-auto=create-drop"
-})
+@SpringBootTest
 @ActiveProfiles("test")
 @Transactional
 class EventRepositoryTest {

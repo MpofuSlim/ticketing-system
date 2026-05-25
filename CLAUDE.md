@@ -49,6 +49,30 @@ Concretely:
   `ShopStaffController` (user-service) for the canonical shape — copy
   that style for new controllers.
 
+## Timestamps — store everything in UTC
+
+The user/booking/seat/event services map timestamps as `LocalDateTime`
+(loyalty/payment use `Instant`, which is always UTC). `LocalDateTime`
+carries no zone, so "what instant is this" depends on the JVM default
+timezone. To keep every service's timestamps comparable (and comparable
+with the `Instant`/`timestamptz` services), we pin UTC two ways:
+
+1. **Containers** — every Dockerfile's ENTRYPOINT passes
+   `-Duser.timezone=UTC`, so `LocalDateTime.now()` is UTC in
+   staging/prod regardless of host TZ.
+2. **Code** — call `LocalDateTime.now(ZoneOffset.UTC)`, never bare
+   `LocalDateTime.now()`. This keeps data correct even outside a
+   container (local dev on a non-UTC laptop, a stray `java -jar`).
+
+**Never write `LocalDateTime.now()` without the `ZoneOffset.UTC` arg.**
+A bare call on a non-UTC JVM silently stores local time into a
+zone-less column — the bug surfaces hours-off, days later.
+
+The proper long-term fix (LocalDateTime → Instant + `timestamptz`
+columns) is deferred: it changes the API wire format (`...T10:00:00`
+gains a `Z`), so it needs FE coordination. Until then, the UTC
+convention above keeps the dormant bug dormant.
+
 ## Active branch
 
 - `claude/add-loyalty-service` — the only working branch. PostgreSQL +

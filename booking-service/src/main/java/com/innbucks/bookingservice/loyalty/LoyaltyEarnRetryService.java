@@ -9,6 +9,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.UUID;
 
 /**
@@ -64,7 +65,7 @@ public class LoyaltyEarnRetryService {
                 .cashAmount(cashAmount)
                 .reference(reference)
                 .lastError(truncate(cause))
-                .nextAttemptAt(LocalDateTime.now())
+                .nextAttemptAt(LocalDateTime.now(ZoneOffset.UTC))
                 .status(LoyaltyEarnRetry.Status.pending)
                 .build();
         repository.save(row);
@@ -97,7 +98,7 @@ public class LoyaltyEarnRetryService {
             } else {
                 // Exponential backoff: 1m, 2m, 4m, 8m, 16m, 32m, 64m...
                 long delaySeconds = 60L * (1L << Math.min(row.getAttempts(), 10));
-                row.setNextAttemptAt(LocalDateTime.now().plusSeconds(delaySeconds));
+                row.setNextAttemptAt(LocalDateTime.now(ZoneOffset.UTC).plusSeconds(delaySeconds));
                 log.warn("Loyalty earn retry failed bookingId={} attempts={} nextAttemptAt={} reason={}",
                         row.getBookingId(), row.getAttempts(), row.getNextAttemptAt(), row.getLastError());
             }

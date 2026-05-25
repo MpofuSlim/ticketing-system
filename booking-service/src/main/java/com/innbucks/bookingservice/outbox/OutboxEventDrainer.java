@@ -10,6 +10,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 
 /**
@@ -65,7 +66,7 @@ public class OutboxEventDrainer {
             lockAtMostFor = "PT2M",
             lockAtLeastFor = "PT1S")
     public void drain() {
-        List<OutboxEvent> due = repository.findDue(LocalDateTime.now(), PageRequest.of(0, batchSize));
+        List<OutboxEvent> due = repository.findDue(LocalDateTime.now(ZoneOffset.UTC), PageRequest.of(0, batchSize));
         if (due.isEmpty()) {
             return;
         }

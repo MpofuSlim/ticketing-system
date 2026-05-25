@@ -2,9 +2,9 @@ spring:
   application:
     name: event-service
 
-  # Tests run on in-memory H2 (PostgreSQL compatibility mode) via
-  # src/test/resources/application-test.yaml + @ActiveProfiles("test"); the
-  # main runtime is PostgreSQL.
+  # Tests run on real PostgreSQL via Testcontainers (jdbc:tc: URL in
+  # src/test/resources/application-test.yaml + @ActiveProfiles("test"));
+  # the main runtime is PostgreSQL too. No H2 anywhere.
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/event_service}
     driver-class-name: ${DB_DRIVER:org.postgresql.Driver}

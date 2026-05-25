@@ -81,12 +81,6 @@
             <scope>runtime</scope>
         </dependency>
 
-        <!-- H2 is kept for tests only (in-memory, PostgreSQL compatibility mode). -->
-        <dependency>
-            <groupId>com.h2database</groupId>
-            <artifactId>h2</artifactId>
-            <scope>test</scope>
-        </dependency>
 
         <!-- ZXing for per-ticket QR code generation. core has the encoder;
              javase brings MatrixToImageWriter so we can render to PNG bytes. -->

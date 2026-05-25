@@ -12,6 +12,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 
 /**
@@ -79,7 +80,7 @@ public class LoyaltyEarnRetryJob {
             log.debug("LoyaltyServiceClient not available; skipping retry drain");
             return;
         }
-        List<LoyaltyEarnRetry> due = repository.findDue(LocalDateTime.now(), PageRequest.of(0, batchSize));
+        List<LoyaltyEarnRetry> due = repository.findDue(LocalDateTime.now(ZoneOffset.UTC), PageRequest.of(0, batchSize));
         if (due.isEmpty()) {
             log.debug("No loyalty_earn_retry rows due");
             return;

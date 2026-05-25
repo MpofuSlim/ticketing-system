@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import lombok.*;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 
 /**
  * An EVENT_ORGANIZER / MERCHANT_ADMIN's request to be granted access to an
@@ -41,7 +42,7 @@ public class ServiceRequest {
 
     @Column(name = "created_at", nullable = false, updatable = false)
     @Builder.Default
-    private LocalDateTime createdAt = LocalDateTime.now();
+    private LocalDateTime createdAt = LocalDateTime.now(ZoneOffset.UTC);
 
     @Column(name = "reviewed_at")
     private LocalDateTime reviewedAt;

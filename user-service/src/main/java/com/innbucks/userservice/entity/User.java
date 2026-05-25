@@ -4,6 +4,7 @@ import jakarta.persistence.*;
 import lombok.*;
 import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.Set;
@@ -67,7 +68,7 @@ public class User {
     private UUID loyaltyMerchantId;
 
     @Column(updatable = false)
-    private LocalDateTime createdAt = LocalDateTime.now();
+    private LocalDateTime createdAt = LocalDateTime.now(ZoneOffset.UTC);
 
     // Monotonically increasing per-user counter ("session epoch"). Every
     // access JWT carries the value at mint time; JwtFilter rejects tokens

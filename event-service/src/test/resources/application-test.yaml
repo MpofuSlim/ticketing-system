@@ -1,19 +1,23 @@
 spring:
+  # All tests run against a real PostgreSQL via Testcontainers — no H2.
+  # The jdbc:tc: URL makes Testcontainers' ContainerDatabaseDriver spin up
+  # a postgres:16-alpine container on first connect and tear it down at JVM
+  # exit; no @DynamicPropertySource or base class needed. Requires Docker
+  # (CI has it; local dev needs it running — tests fail fast without it).
   datasource:
-    url: jdbc:h2:mem:event_service_test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
-    driver-class-name: org.h2.Driver
-    username: sa
-    password:
+    url: jdbc:tc:postgresql:16-alpine:///event_service_test
+    driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
   jpa:
     hibernate:
-      ddl-auto: create-drop
+      # Match production: Flyway owns the schema, Hibernate only validates.
+      # Catches entity/migration drift that H2's create-drop used to mask.
+      ddl-auto: validate
     properties:
       hibernate:
-        dialect: org.hibernate.dialect.H2Dialect
-  # Flyway migrations are PostgreSQL-flavoured; Hibernate generates the
-  # schema against H2 in tests, so Flyway must be off here.
+        dialect: org.hibernate.dialect.PostgreSQLDialect
   flyway:
-    enabled: false
+    enabled: true
+    locations: classpath:db/migration
   cloud:
     discovery:
       enabled: false

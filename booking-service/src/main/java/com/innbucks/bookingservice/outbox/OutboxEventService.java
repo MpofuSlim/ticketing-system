@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 
 /**
  * Outbox-side counterpart to {@code BookingEventPublisher} (which is now
@@ -77,7 +78,7 @@ public class OutboxEventService {
                 .eventKey(key)
                 .eventClass(event.getClass().getName())
                 .payload(payload)
-                .nextAttemptAt(LocalDateTime.now())
+                .nextAttemptAt(LocalDateTime.now(ZoneOffset.UTC))
                 .status(OutboxEvent.Status.pending)
                 .build();
         return repository.save(row);
@@ -120,7 +121,7 @@ public class OutboxEventService {
                 // latency matters more than loyalty-earn — downstream
                 // consumers (notifications, analytics) want near-real-time.
                 long delaySeconds = 5L * (1L << Math.min(row.getAttempts(), 10));
-                row.setNextAttemptAt(LocalDateTime.now().plusSeconds(delaySeconds));
+                row.setNextAttemptAt(LocalDateTime.now(ZoneOffset.UTC).plusSeconds(delaySeconds));
                 log.warn("Outbox row publish failed id={} topic={} attempts={} nextAttemptAt={} reason={}",
                         row.getId(), row.getTopic(), row.getAttempts(),
                         row.getNextAttemptAt(), row.getLastError());

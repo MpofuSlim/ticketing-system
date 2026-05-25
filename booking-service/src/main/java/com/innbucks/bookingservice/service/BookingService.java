@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.ThreadLocalRandom;
@@ -143,7 +144,7 @@ public class BookingService {
         // Seats are held for holdTtlMinutes; if no /confirm (= payment) lands
         // by then, the expiration scheduler flips the booking to CANCELLED
         // so the seats are usable by other customers again.
-        LocalDateTime expiresAt = LocalDateTime.now().plusMinutes(holdTtlMinutes);
+        LocalDateTime expiresAt = LocalDateTime.now(ZoneOffset.UTC).plusMinutes(holdTtlMinutes);
 
         // Resolve the owning tenant once at booking creation so the loyalty
         // service can attribute earn/redeem at confirm time without another
@@ -442,7 +443,7 @@ public class BookingService {
         // Reject confirms that arrive after the seat hold has lapsed — the
         // expiration scheduler may not have run yet, but the lock is gone.
         if (booking.getExpiresAt() != null
-                && booking.getExpiresAt().isBefore(LocalDateTime.now())) {
+                && booking.getExpiresAt().isBefore(LocalDateTime.now(ZoneOffset.UTC))) {
             log.warn("Confirm rejected, hold expired bookingId={} expiredAt={}",
                     bookingId, booking.getExpiresAt());
             throw new RuntimeException(
@@ -675,7 +676,7 @@ public class BookingService {
     }
 
     private String generateConfirmationNumber() {
-        String date = LocalDateTime.now()
+        String date = LocalDateTime.now(ZoneOffset.UTC)
                 .format(DateTimeFormatter.ofPattern("yyyyMMdd"));
         String random = UUID.randomUUID()
                 .toString()
@@ -693,7 +694,7 @@ public class BookingService {
      * — 1 random uppercase letter
      */
     private String generateTicketNumber() {
-        String date = LocalDateTime.now()
+        String date = LocalDateTime.now(ZoneOffset.UTC)
                 .format(DateTimeFormatter.ofPattern("yyyyMMdd"));
 
         Random random = new Random();

@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 
 /**
@@ -45,7 +46,7 @@ public class BookingExpirationService {
             lockAtLeastFor = "PT15S")
     @Transactional
     public void expirePending() {
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         List<Booking> expired = bookingRepository.findExpiredPending(now);
         if (expired.isEmpty()) {
             return;

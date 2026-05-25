@@ -14,6 +14,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -81,7 +82,7 @@ public class SeatService {
                     return new RuntimeException("Seat not found");
                 });
 
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         // A LOCKED seat whose lockExpiresAt is in the past is stale (previous
         // owner's TTL elapsed before the reaper got to it). The category
         // counter was already decremented when the previous owner locked, so
@@ -210,7 +211,7 @@ public class SeatService {
         // this seat between candidate-discovery and now.
         if (seat.getStatus() != Seat.SeatStatus.LOCKED
                 || seat.getLockExpiresAt() == null
-                || seat.getLockExpiresAt().isAfter(LocalDateTime.now())) {
+                || seat.getLockExpiresAt().isAfter(LocalDateTime.now(ZoneOffset.UTC))) {
             return false;
         }
 

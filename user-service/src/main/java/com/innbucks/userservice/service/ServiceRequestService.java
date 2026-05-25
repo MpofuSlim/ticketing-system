@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
@@ -58,7 +59,7 @@ public class ServiceRequestService {
                 .service(service)
                 .reason(request.getReason().trim())
                 .status(ServiceRequest.Status.PENDING)
-                .createdAt(LocalDateTime.now())
+                .createdAt(LocalDateTime.now(ZoneOffset.UTC))
                 .build());
 
         log.info("Service request submitted id={} userId={} service={}", saved.getId(), user.getId(), service);
@@ -158,7 +159,7 @@ public class ServiceRequestService {
         userRepository.save(user);
 
         req.setStatus(ServiceRequest.Status.APPROVED);
-        req.setReviewedAt(LocalDateTime.now());
+        req.setReviewedAt(LocalDateTime.now(ZoneOffset.UTC));
         req.setReviewedBy(reviewer.getId());
         ServiceRequest saved = serviceRequestRepository.save(req);
 
