@@ -2,7 +2,7 @@
 # Build from repo root:
 #     docker build -f event-service/Dockerfile -t ticketing-event-service .
 
-FROM eclipse-temurin:21-jdk-alpine AS builder
+FROM eclipse-temurin:25-jdk-alpine AS builder
 WORKDIR /workspace
 
 COPY .mvn .mvn
@@ -24,7 +24,7 @@ COPY event-service/src event-service/src
 RUN ./mvnw -B -pl event-service -am -DskipTests package \
     && cp event-service/target/event-service-*.jar /workspace/app.jar
 
-FROM eclipse-temurin:21-jre-alpine AS runtime
+FROM eclipse-temurin:25-jre-alpine AS runtime
 # Pull in any apk security patches published since the base image was tagged.
 # Trivy fails the build on HIGH/CRITICAL CVEs (see .github/workflows/docker.yml),
 # and the floating eclipse-temurin:21-*-alpine tag isn't always rebuilt promptly.
