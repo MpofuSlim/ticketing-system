@@ -256,7 +256,7 @@ class AuthServiceTest {
         // MERCHANT_ADMIN — JwtUtil emits no name claims for staff roles.
         when(jwt.generateToken(eq("u@example.com"), eq(List.of("MERCHANT_ADMIN")),
                 eq(List.of("loyalty", "payments")), eq(4), eq(true), isNull(), isNull(), isNull(),
-                isNull(), isNull(), isNull(), anyLong())).thenReturn("tok");
+                isNull(), isNull(), isNull(), anyLong(), isNull())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("u@example.com"); req.setPassword("pw");
@@ -284,7 +284,7 @@ class AuthServiceTest {
         when(userRepo.findByEmail("admin@innbucks.co.zw")).thenReturn(Optional.of(user));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
         when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), isNull(), isNull(), isNull(),
-                any(), any(), any(), anyLong())).thenReturn("tok");
+                any(), any(), any(), anyLong(), isNull())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("admin@innbucks.co.zw"); req.setPassword("pw");
@@ -298,7 +298,7 @@ class AuthServiceTest {
         // Verify the JWT was issued with the expanded set covering every microservice.
         ArgumentCaptor<List<String>> servicesCaptor = ArgumentCaptor.forClass(List.class);
         verify(jwt).generateToken(any(), any(), servicesCaptor.capture(), anyInt(), anyBoolean(), isNull(), isNull(), isNull(),
-                any(), any(), any(), anyLong());
+                any(), any(), any(), anyLong(), isNull());
         List<String> services = servicesCaptor.getValue();
         assertTrue(services.contains("events"));
         assertTrue(services.contains("seats"));
@@ -325,7 +325,7 @@ class AuthServiceTest {
         when(encoder.matches("pw", "hashed")).thenReturn(true);
         when(jwt.generateToken(eq("0777000099"), eq(List.of("CUSTOMER")),
                 any(), eq(2), eq(false), eq("0777000099"), isNull(), isNull(),
-                any(), any(), any(), anyLong())).thenReturn("tok");
+                any(), any(), any(), anyLong(), isNull())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("0777000099"); req.setPassword("pw");
@@ -405,7 +405,7 @@ class AuthServiceTest {
         when(encoder.matches(any(), any())).thenReturn(true);
         when(jwt.generateToken(eq("u@example.com"), eq(List.of("CUSTOMER")),
                 any(), anyInt(), anyBoolean(), isNull(), isNull(), isNull(),
-                any(), any(), any(), anyLong())).thenReturn("tok");
+                any(), any(), any(), anyLong(), isNull())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("u@example.com"); req.setPassword("pw");
@@ -445,7 +445,7 @@ class AuthServiceTest {
         when(userRepo.findByEmail("u@example.com")).thenReturn(Optional.of(user));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
         when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong())).thenReturn("tok");
+                any(), any(), any(), anyLong(), isNull())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("u@example.com"); req.setPassword("pw");
@@ -462,7 +462,7 @@ class AuthServiceTest {
         // be rejected by JwtFilter on the next request.
         ArgumentCaptor<Long> versionCaptor = ArgumentCaptor.forClass(Long.class);
         verify(jwt).generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), versionCaptor.capture());
+                any(), any(), any(), versionCaptor.capture(), isNull());
         assertEquals(8L, versionCaptor.getValue());
     }
 
@@ -636,7 +636,7 @@ class AuthServiceTest {
         when(customerRepo.findByUserId(101L)).thenReturn(Optional.of(profile));
         when(encoder.matches("right", "hashed")).thenReturn(true);
         when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong())).thenReturn("tok");
+                any(), any(), any(), anyLong(), isNull())).thenReturn("tok");
 
         AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),
                 customerRepo, encoder, jwt).login(loginReq("right"), null, com.innbucks.userservice.service.AuditContext.none());
@@ -769,7 +769,7 @@ class AuthServiceTest {
         when(customerRepo.findByUserId(101L)).thenReturn(Optional.of(profile));
         when(encoder.matches("right", "hashed")).thenReturn(true);
         when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong())).thenReturn("tok");
+                any(), any(), any(), anyLong(), isNull())).thenReturn("tok");
 
         newService(userRepo, mock(TenantProfileRepository.class), customerRepo, encoder, jwt)
                 .login(loginReq("right"), null, com.innbucks.userservice.service.AuditContext.none());
