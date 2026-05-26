@@ -6,12 +6,13 @@ import java.util.Optional;
  * Keyed response cache for Idempotency-Key replay. Implementations are
  * expected to purge entries whose TTL has elapsed.
  *
- * <p>Payment-service currently ships only the in-memory implementation.
- * Once payment-service runs &gt; 1 replica, swap to a Redis-backed impl
- * (see booking-service's RedisIdempotencyStore for the reference shape)
- * so replays survive a load-balancer hitting a different pod than the
- * original POST. Per-pod in-memory cache is enough for single-instance
- * deployment; replays across pods are not guaranteed.
+ * <p>Two implementations ship: {@link InMemoryIdempotencyStore} (per-pod
+ * {@code ConcurrentHashMap}, the default — fine for single-instance dev and
+ * tests) and {@link RedisIdempotencyStore} (shared across pods, activated by
+ * {@code app.idempotency.store=redis}). Run the Redis store under more than one
+ * replica: with the in-memory store a load balancer routing a retry to a
+ * different pod — or a pod restart — would miss the cache and let the request
+ * execute a second time.
  */
 public interface IdempotencyStore {
 
