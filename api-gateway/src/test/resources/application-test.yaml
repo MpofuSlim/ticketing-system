@@ -1,0 +1,8 @@
+# Test profile for the gateway. The Eureka client is on the classpath now, but
+# @SpringBootTest must not try to register with / fetch from a registry. This
+# overlays the main application.yaml (the route table still loads underneath),
+# so GatewayRouteTableTest sees the real lb:// routes without any network I/O.
+spring:
+  cloud:
+    discovery:
+      enabled: false

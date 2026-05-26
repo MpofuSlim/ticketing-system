@@ -22,8 +22,29 @@ When adding a route:
   other authenticated routes (look at `user-admin-route` for the canonical
   shape) — except for `/auth/**`-style public endpoints that intentionally
   skip the rate limiter.
-- Use the existing `${SERVICE_URI:http://localhost:PORT}` env-var pattern
-  for the `uri:`.
+- Use the `lb://<service-name>` URI pattern for the `uri:` (e.g.
+  `lb://user-service`). The gateway resolves it from the Eureka registry via
+  Spring Cloud LoadBalancer. The old `${SERVICE_URI:http://localhost:PORT}`
+  env-var pattern was removed in the service-discovery migration.
+
+## Service discovery (Eureka)
+
+The fleet uses client-side service discovery. The `discovery-server` module is
+a standalone Netflix Eureka registry (port 8761); every other service is a
+Eureka **client** and resolves siblings **by name**, not by hardcoded URL:
+
+- The gateway routes target `lb://<service-name>`.
+- `booking-service`'s `@FeignClient(name = "...")` clients carry no `url`.
+- The `RestClient` / `RestTemplate` callers in payment/seat/loyalty/user/event
+  use a `@LoadBalanced` builder (see `LoadBalancedRestClientConfig` /
+  `HttpClientConfig`) and call `http://<service-name>`.
+
+So **do not** reintroduce explicit `http://host:port` inter-service URLs or
+`*_SERVICE_URL` / `*_SERVICE_URI` env vars. The only deliberately non-discovery
+client is the external **Oradian middleware** (not in our registry) — it keeps
+a plain `RestClient` + explicit URL. Tests disable discovery via
+`spring.cloud.discovery.enabled: false` in the `test` / `it` profiles; keep
+that when adding a new service so `@SpringBootTest` doesn't try to register.
 
 ## Swagger response examples
 

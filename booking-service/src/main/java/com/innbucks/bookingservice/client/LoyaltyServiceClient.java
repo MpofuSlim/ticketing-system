@@ -13,7 +13,6 @@ import org.springframework.web.bind.annotation.RequestBody;
 
 @FeignClient(
         name = "loyalty-service",
-        url = "${loyalty-service.url}",
         fallback = LoyaltyServiceClientFallback.class)
 public interface LoyaltyServiceClient {
 

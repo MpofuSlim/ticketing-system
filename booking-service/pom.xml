@@ -127,6 +127,15 @@
             <artifactId>spring-cloud-starter-openfeign</artifactId>
         </dependency>
 
+        <!-- Service discovery: registers with the Eureka registry
+             (discovery-server). The @FeignClient(name = "...") clients resolve
+             their target by service name through Spring Cloud LoadBalancer
+             (pulled in transitively) instead of a hardcoded url. -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+        </dependency>
+
         <!-- Circuit breaker + retry around Feign calls -->
         <dependency>
             <groupId>org.springframework.cloud</groupId>

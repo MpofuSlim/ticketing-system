@@ -1,0 +1,47 @@
+spring:
+  application:
+    name: discovery-server
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+server:
+  port: ${SERVER_PORT:8761}
+  shutdown: graceful
+
+eureka:
+  instance:
+    # In docker-compose / k8s this is overridden to the service name
+    # (e.g. discovery-server) so the self-zone URL below resolves on the
+    # shared network.
+    hostname: ${EUREKA_INSTANCE_HOSTNAME:localhost}
+  client:
+    # A standalone registry neither registers with itself nor fetches a
+    # registry from a peer. Flip these (and add peer defaultZones) only when
+    # running a multi-node Eureka cluster.
+    register-with-eureka: false
+    fetch-registry: false
+    service-url:
+      defaultZone: http://${eureka.instance.hostname}:${server.port}/eureka/
+  server:
+    # Dev / small-fleet friendly: evict dead instances promptly instead of
+    # holding stale registrations. In a large prod fleet set this true so a
+    # transient network partition doesn't trigger mass de-registration.
+    enable-self-preservation: ${EUREKA_SELF_PRESERVATION:false}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: when-authorized
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+logging:
+  pattern:
+    level: "%5p [${spring.application.name:-},%X{traceId:-},%X{spanId:-},%X{correlationId:-}]"

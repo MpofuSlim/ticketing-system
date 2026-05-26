@@ -8,7 +8,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 
 @FeignClient(
         name = "user-service",
-        url = "${user-service.url}",
         fallback = UserServiceClientFallback.class)
 public interface UserServiceClient {
 

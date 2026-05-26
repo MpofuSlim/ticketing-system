@@ -48,6 +48,7 @@ jobs:
       fail-fast: false
       matrix:
         service:
+          - discovery-server
           - api-gateway
           - user-service
           - event-service

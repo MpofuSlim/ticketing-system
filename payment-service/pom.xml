@@ -151,6 +151,16 @@
             <artifactId>spring-cloud-starter-openfeign</artifactId>
         </dependency>
 
+        <!-- Service discovery: registers with the Eureka registry
+             (discovery-server) and resolves ticketing siblings (booking-,
+             loyalty-service) by name via Spring Cloud LoadBalancer. The
+             external Oradian middleware is NOT in the registry and keeps its
+             explicit URL. -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+        </dependency>
+
         <!-- Resilience4j: retry-on-transient + circuit-breaker around the
              Oradian middleware client. Without this, a single TCP blip
              becomes a customer-facing 502 and a wasted FAILED ledger row;

@@ -6,6 +6,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.cloud.gateway.filter.FilterDefinition;
 import org.springframework.cloud.gateway.route.RouteDefinition;
 import org.springframework.cloud.gateway.route.RouteDefinitionLocator;
+import org.springframework.test.context.ActiveProfiles;
 
 import java.util.List;
 import java.util.Map;
@@ -34,6 +35,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * so this needs neither Redis nor Docker and runs in every environment.
  */
 @SpringBootTest
+@ActiveProfiles("test")
 class GatewayRouteTableTest {
 
     private static final List<String> EXPECTED_ROUTE_IDS = List.of(

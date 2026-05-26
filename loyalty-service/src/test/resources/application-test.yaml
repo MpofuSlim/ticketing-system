@@ -18,6 +18,12 @@ spring:
     enabled: true
     locations: classpath:db/migration
 
+  # The Eureka client is on the classpath now, but tests must not register
+  # with a registry; disabling discovery makes the Eureka auto-config back off.
+  cloud:
+    discovery:
+      enabled: false
+
 loyalty:
   voucher:
     secret: test-voucher-secret-test-voucher-secret-test-voucher-secret

@@ -30,6 +30,14 @@
             <artifactId>spring-boot-starter-data-redis</artifactId>
         </dependency>
 
+        <!-- Service discovery: registers with the Eureka registry
+             (discovery-server) and resolves siblings by name via Spring Cloud
+             LoadBalancer (pulled in transitively). -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+        </dependency>
+
         <!-- ShedLock: leader-elects @Scheduled jobs across replicas. Without
              this, every seat-service pod runs SeatLockReaper every minute,
              dumping batch-size duplicate findExpiredLockIds queries onto

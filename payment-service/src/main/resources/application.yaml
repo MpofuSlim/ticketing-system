@@ -54,7 +54,8 @@ spring:
 # from PENDING to CONFIRMED. Default targets host:8084 for local dev; docker-
 # compose overrides to http://booking-service:8084 inside the network.
 booking-service:
-  base-url: ${BOOKING_SERVICE_URL:http://localhost:8084}
+  # Resolved from the Eureka registry by name (the client is @LoadBalanced).
+  base-url: http://booking-service
   connect-timeout-ms: ${BOOKING_SERVICE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${BOOKING_SERVICE_READ_TIMEOUT_MS:5000}
 
@@ -63,7 +64,8 @@ booking-service:
 # Direct pod-to-pod (gateway blocks /loyalty/internal/**); the shared secret
 # below must match loyalty-service's innbucks.internal-api-token.
 loyalty-service:
-  base-url: ${LOYALTY_SERVICE_URL:http://localhost:8086}
+  # Resolved from the Eureka registry by name (the client is @LoadBalanced).
+  base-url: http://loyalty-service
   connect-timeout-ms: ${LOYALTY_SERVICE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${LOYALTY_SERVICE_READ_TIMEOUT_MS:5000}
 
@@ -182,6 +184,20 @@ server:
     include-stacktrace: never
     include-message: never
     include-binding-errors: never
+
+# Service discovery — register with the Eureka registry (discovery-server) and
+# resolve ticketing siblings (booking-, loyalty-service) by name. The external
+# Oradian middleware is NOT registered and keeps its explicit URL.
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_SERVER_URL:http://localhost:8761/eureka/}
+  instance:
+    # Register by IP — a container's own hostname isn't resolvable by its
+    # peers on the shared network. The unique instance-id keeps replicas
+    # from colliding in the registry.
+    prefer-ip-address: true
+    instance-id: ${spring.application.name}:${random.uuid}
 
 management:
   endpoints:

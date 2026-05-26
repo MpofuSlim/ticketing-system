@@ -14,7 +14,6 @@ import java.util.UUID;
 
 @FeignClient(
         name = "event-service",
-        url = "${event-service.url}",
         fallback = EventServiceClientFallback.class)
 public interface EventServiceClient {
 

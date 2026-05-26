@@ -59,7 +59,8 @@ jwt:
 # user's email (Merchant.admin_email), caches the result, and emits the merchantId
 # JWT claim. The shared secret must match loyalty-service's innbucks.internal-api-token.
 loyalty-service:
-  base-url: ${LOYALTY_SERVICE_URL:http://localhost:8086}
+  # Resolved from the Eureka registry by name (the client is @LoadBalanced).
+  base-url: http://loyalty-service
   connect-timeout-ms: ${LOYALTY_SERVICE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${LOYALTY_SERVICE_READ_TIMEOUT_MS:3000}
 
@@ -117,6 +118,20 @@ springdoc:
 server:
   port: 8081
   shutdown: graceful
+
+# Service discovery — register with the Eureka registry (discovery-server) and
+# resolve sibling services by name. EUREKA_SERVER_URL points at the registry;
+# the default targets a local standalone server for laptop dev.
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_SERVER_URL:http://localhost:8761/eureka/}
+  instance:
+    # Register by IP — a container's own hostname isn't resolvable by its
+    # peers on the shared network. The unique instance-id keeps replicas
+    # from colliding in the registry.
+    prefer-ip-address: true
+    instance-id: ${spring.application.name}:${random.uuid}
 
 management:
   endpoints:

@@ -81,6 +81,31 @@ services:
       retries: 20
       start_period: 30s
 
+  # Eureka service registry. Every service registers here on boot and resolves
+  # siblings by name; the api-gateway resolves its lb:// route targets the same
+  # way. Started first (others depend_on it healthy) so first registration
+  # succeeds promptly.
+  discovery-server:
+    build:
+      context: .
+      dockerfile: discovery-server/Dockerfile
+    image: ghcr.io/${GHCR_OWNER:-mpofuslim}/discovery-server:${IMAGE_TAG:-dev}
+    container_name: innbucks-discovery-server
+    restart: unless-stopped
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
+      # Self-zone hostname so the registry advertises itself on the shared
+      # network as discovery-server (not its container id).
+      EUREKA_INSTANCE_HOSTNAME: discovery-server
+    ports:
+      - "8761:8761"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8761/actuator/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+
   user-service:
     build:
       context: .
@@ -89,6 +114,8 @@ services:
     container_name: innbucks-user-service
     restart: unless-stopped
     depends_on:
+      discovery-server:
+        condition: service_healthy
       postgres:
         condition: service_healthy
     environment:
@@ -96,6 +123,7 @@ services:
       # sensitive secret still holds its `change-me-*` placeholder.
       # Override per-environment in .env to relax (e.g. `dev` for local).
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
+      EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
       DB_URL: jdbc:postgresql://postgres:5432/user_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
@@ -133,6 +161,8 @@ services:
     container_name: innbucks-event-service
     restart: unless-stopped
     depends_on:
+      discovery-server:
+        condition: service_healthy
       postgres:
         condition: service_healthy
     environment:
@@ -148,7 +178,7 @@ services:
       # Required from booking-service on PATCH /events/{id}/availability/consume.
       # Must match INTERNAL_API_TOKEN on the booking-service side.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
-      SEAT_SERVICE_BASE_URL: http://seat-service:8083
+      EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
     ports:
       - "8082:8082"
@@ -167,12 +197,15 @@ services:
     container_name: innbucks-seat-service
     restart: unless-stopped
     depends_on:
+      discovery-server:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
+      EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
       DB_URL: jdbc:postgresql://postgres:5432/seat_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
@@ -201,6 +234,8 @@ services:
     container_name: innbucks-booking-service
     restart: unless-stopped
     depends_on:
+      discovery-server:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
@@ -221,9 +256,7 @@ services:
       REDIS_PORT: "6379"
       IDEMPOTENCY_STORE: redis
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      SEAT_SERVICE_URL: http://seat-service:8083
-      LOYALTY_SERVICE_URL: http://loyalty-service:8086
-      EVENT_SERVICE_URL: http://event-service:8082
+      EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
       # Presented to event-service on the internal availability/consume call.
       # Must match INTERNAL_API_TOKEN on the event-service side.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
@@ -249,6 +282,8 @@ services:
     container_name: innbucks-payment-service
     restart: unless-stopped
     depends_on:
+      discovery-server:
+        condition: service_healthy
       booking-service:
         condition: service_healthy
       postgres:
@@ -264,7 +299,7 @@ services:
       # was the odd one out — letting it silently drift the staging DB.
       JPA_DDL_AUTO: validate
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
-      BOOKING_SERVICE_URL: http://booking-service:8084
+      EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
       # Oradian middleware lives in the sibling stack on the shared
       # innbucks-shared docker network — reachable by service name.
       # payment-service uses ORADIAN_MIDDLEWARE_URL (different env var
@@ -292,10 +327,13 @@ services:
     container_name: innbucks-loyalty-service
     restart: unless-stopped
     depends_on:
+      discovery-server:
+        condition: service_healthy
       postgres:
         condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
+      EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
       DB_URL: jdbc:postgresql://postgres:5432/loyalty_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
@@ -325,6 +363,8 @@ services:
     container_name: innbucks-api-gateway
     restart: unless-stopped
     depends_on:
+      discovery-server:
+        condition: service_healthy
       user-service:
         condition: service_healthy
       event-service:
@@ -339,12 +379,7 @@ services:
         condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
-      USER_SERVICE_URI: http://user-service:8081
-      EVENT_SERVICE_URI: http://event-service:8082
-      SEAT_SERVICE_URI: http://seat-service:8083
-      BOOKING_SERVICE_URI: http://booking-service:8084
-      PAYMENT_SERVICE_URI: http://payment-service:8085
-      LOYALTY_SERVICE_URI: http://loyalty-service:8086
+      EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
       # Redis backs the gateway's RequestRateLimiter token bucket store.
       REDIS_HOST: redis

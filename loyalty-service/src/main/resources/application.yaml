@@ -39,7 +39,8 @@ spring:
 # calls GET /auth/customer/tier to validate a phone number before lazily
 # creating its local LoyaltyUser projection — see UserService#findOrEnrol.
 user-service:
-  base-url: ${USER_SERVICE_URL:http://localhost:8081}
+  # Resolved from the Eureka registry by name (the client is @LoadBalanced).
+  base-url: http://user-service
   connect-timeout-ms: ${USER_SERVICE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${USER_SERVICE_READ_TIMEOUT_MS:5000}
 
@@ -75,6 +76,20 @@ springdoc:
 server:
   port: ${SERVER_PORT:8086}
   shutdown: graceful
+
+# Service discovery — register with the Eureka registry (discovery-server) and
+# resolve sibling services by name. EUREKA_SERVER_URL points at the registry;
+# the default targets a local standalone server for laptop dev.
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_SERVER_URL:http://localhost:8761/eureka/}
+  instance:
+    # Register by IP — a container's own hostname isn't resolvable by its
+    # peers on the shared network. The unique instance-id keeps replicas
+    # from colliding in the registry.
+    prefer-ip-address: true
+    instance-id: ${spring.application.name}:${random.uuid}
 
 management:
   endpoints:

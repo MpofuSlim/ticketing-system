@@ -56,8 +56,10 @@ spring:
 
   cloud:
     discovery:
-      # No Eureka or other discovery client wired; Feign uses explicit URLs.
-      enabled: false
+      # Eureka client is wired (see the eureka: block below); each
+      # @FeignClient(name = "...") resolves its target by service name through
+      # the registry instead of a hardcoded url.
+      enabled: true
     openfeign:
       # Wraps every Feign call in a Spring Cloud Circuit Breaker (Resilience4j
       # impl, configured below). Required for @FeignClient(fallback = ...) to
@@ -131,30 +133,17 @@ resilience4j:
           - java.io.IOException
           - org.springframework.web.client.ResourceAccessException
 
-seat-service:
-  # Explicit URL (no service discovery). docker-compose sets this to
-  # http://seat-service:8083 via SEAT_SERVICE_URL.
-  url: ${SEAT_SERVICE_URL:http://localhost:8083}
-
-# Used at /bookings/{id}/confirm to redeem and earn loyalty points, and at
-# booking creation to attach the owning tenantId to the booking. Both calls
-# are wrapped in Resilience4j circuit breakers (see below) so a loyalty
-# outage degrades gracefully: cash bookings still work, redeem fails fast.
-loyalty-service:
-  url: ${LOYALTY_SERVICE_URL:http://localhost:8086}
-
-event-service:
-  url: ${EVENT_SERVICE_URL:http://localhost:8082}
-
+# Inter-service targets are resolved from the Eureka registry by the name in
+# each @FeignClient(name = "..."), so no explicit URLs are configured here any
+# more. The loyalty / event / seat calls are still wrapped in Resilience4j
+# circuit breakers (see below) so an outage degrades gracefully: cash bookings
+# still work, redeem fails fast.
 innbucks:
   # Shared secret presented to event-service on the internal PATCH
   # /events/{id}/availability/consume call. Same env var as everywhere
   # else in the ticketing stack; ProductionSecretsGuard refuses the
   # `change-me-*` placeholder when SPRING_PROFILES_ACTIVE=prod.
   internal-api-token: ${INTERNAL_API_TOKEN:change-me-change-me-change-me-change-me}
-
-user-service:
-  url: ${USER_SERVICE_URL:http://localhost:8081}
 
 app:
   booking:
@@ -191,6 +180,20 @@ springdoc:
     path: /swagger-ui/index.html
   api-docs:
     path: /v3/api-docs
+
+# Service discovery — register with the Eureka registry (discovery-server) and
+# resolve sibling services by name. EUREKA_SERVER_URL points at the registry;
+# the default targets a local standalone server for laptop dev.
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_SERVER_URL:http://localhost:8761/eureka/}
+  instance:
+    # Register by IP — a container's own hostname isn't resolvable by its
+    # peers on the shared network. The unique instance-id keeps replicas
+    # from colliding in the registry.
+    prefer-ip-address: true
+    instance-id: ${spring.application.name}:${random.uuid}
 
 management:
   endpoints:
