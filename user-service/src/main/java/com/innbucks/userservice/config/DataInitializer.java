@@ -35,6 +35,7 @@ public class DataInitializer implements CommandLineRunner {
                     .roles(EnumSet.of(User.Role.SUPER_ADMIN))
                     .defaultServices(new LinkedHashSet<>(Services.ALL_BUNDLES))
                     .active(true)
+                    .approved(true)
                     .build();
             userRepository.save(admin);
             System.out.println("Super admin user created successfully.");
@@ -61,6 +62,10 @@ public class DataInitializer implements CommandLineRunner {
         }
         if (!existing.isActive()) {
             existing.setActive(true);
+            changed = true;
+        }
+        if (!existing.isApproved()) {
+            existing.setApproved(true);
             changed = true;
         }
         if (changed) {

@@ -25,6 +25,8 @@ public class TenantProfile {
     private String businessPhoneNumber;
     private String registrationNumber;
 
+    private String bpoNumber;
+
     private String metaDataFilePath;
 
     private int totalEvents = 0;

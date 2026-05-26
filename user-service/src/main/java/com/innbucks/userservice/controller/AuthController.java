@@ -46,40 +46,65 @@ public class AuthController {
     @PostMapping("/register")
     @SecurityRequirements()
     @Operation(summary = "Register system user",
-            description = "Creates a system-user account. The caller picks one or more `defaultServices` " +
-                    "(`ticketing`, `loyalty`); the server derives the role and the underlying " +
-                    "microservice access. `ticketing` -> EVENT_ORGANIZER (events/seats/bookings/payments). " +
-                    "`loyalty` -> MERCHANT_ADMIN (loyalty/payments). Picking both grants both. " +
-                    "Customers must use the tiered /auth/customer/register endpoints.")
+            description = "Submits a system-user account for approval. **No password is supplied here** — the " +
+                    "account is created inactive and pending SUPER_ADMIN approval. On approval (the first " +
+                    "activation via `PUT /admin/users/{id}/active`) the account is assigned the default password " +
+                    "`#Pass123` and flagged to change it on first login. " +
+                    "The caller picks one or more `defaultServices` (`ticketing`, `loyalty`); the server derives " +
+                    "the role and the underlying microservice access. `ticketing` -> EVENT_ORGANIZER " +
+                    "(events/seats/bookings/payments). `loyalty` -> MERCHANT_ADMIN (loyalty/payments). Picking " +
+                    "both grants both. When `isBusiness` is true, `businessName`, `businessAddress` and " +
+                    "`bpoNumber` are required. Customers must use the tiered /auth/customer/register endpoints.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
-                    description = "User registered",
+                    description = "Registration submitted, pending approval",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = AuthResponseDTO.class),
-                            examples = @ExampleObject(name = "User registered", value = """
+                            examples = @ExampleObject(name = "Pending approval", value = """
                                     {
                                       "code": "201 CREATED",
-                                      "message": "User registered successfully",
+                                      "message": "Registration submitted. Your account is pending approval by a SUPER_ADMIN.",
                                       "data": {
                                         "roles": ["EVENT_ORGANIZER"],
                                         "defaultServices": ["ticketing"],
                                         "email": "alice@innbucks.co.zw",
-                                        "mfaRequired": false
+                                        "mfaRequired": false,
+                                        "mustChangePassword": false
                                       }
                                     }
                                     """)
                     )
             ),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Validation failed or email already exists")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "Validation failed, or email / phone already registered",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Validation failed", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "Validation failed",
+                                      "data": {
+                                        "email": "Email is required",
+                                        "businessNameValid": "businessName is required for a business account"
+                                      }
+                                    }
+                                    """),
+                            @ExampleObject(name = "Already registered", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "Email already registered",
+                                      "data": null
+                                    }
+                                    """)
+                    }))
     })
     public ResponseEntity<ApiResult<AuthResponseDTO>> register(@Valid @RequestBody RegisterRequestDTO request) {
         log.info("Received registration request email={}", request.getEmail());
         AuthResponseDTO response = authService.register(request);
-        log.info("Successfully registered user email={}", request.getEmail());
+        log.info("Registration submitted, pending approval email={}", request.getEmail());
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(ApiResult.created("User registered successfully", response));
+                .body(ApiResult.created("Registration submitted. Your account is pending approval by a SUPER_ADMIN.", response));
     }
 
     @PostMapping("/login")
