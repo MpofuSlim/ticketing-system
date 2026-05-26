@@ -8,6 +8,7 @@ WORKDIR /workspace
 COPY .mvn .mvn
 COPY mvnw pom.xml ./
 RUN chmod +x mvnw
+RUN for i in 1 2 3; do ./mvnw -B -ntp -version && break || sleep 15; done
 
 # Copy every module's pom so the Maven reactor can resolve; sources come later.
 COPY discovery-server/pom.xml discovery-server/
