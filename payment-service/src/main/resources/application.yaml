@@ -9,7 +9,7 @@ spring:
     password: ${DB_PASSWORD}
     hikari:
       pool-name: payment-service-pool
-      maximum-pool-size: ${DB_POOL_MAX:10}
+      maximum-pool-size: ${DB_POOL_MAX:20}
       minimum-idle: ${DB_POOL_MIN:2}
       connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:5000}
       idle-timeout: ${DB_IDLE_TIMEOUT_MS:600000}
