@@ -3,6 +3,8 @@ package com.innbucks.loyaltyservice.config;
 import org.springframework.cloud.client.loadbalancer.LoadBalanced;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
+import org.springframework.context.annotation.Scope;
 import org.springframework.web.client.RestClient;
 
 /**
@@ -13,6 +15,22 @@ import org.springframework.web.client.RestClient;
  */
 @Configuration
 public class LoadBalancedRestClientConfig {
+
+    /**
+     * The plain (non-load-balanced) builder, kept @Primary so anything that
+     * autowires a RestClient.Builder by type gets this one — crucially the
+     * Eureka client's own RestClient transport, which talks to the registry at
+     * a fixed URL. If Eureka picked up the @LoadBalanced builder it would try to
+     * resolve the registry host ("localhost") as a service id, which fails with
+     * BeanCurrentlyInCreationException + "No instances available for localhost".
+     * Prototype-scoped to mirror Spring Boot's auto-configured builder.
+     */
+    @Bean
+    @Primary
+    @Scope("prototype")
+    public RestClient.Builder restClientBuilder() {
+        return RestClient.builder();
+    }
 
     @Bean
     @LoadBalanced
