@@ -8,6 +8,7 @@ WORKDIR /workspace
 COPY .mvn .mvn
 COPY mvnw pom.xml ./
 RUN chmod +x mvnw
+RUN for i in 1 2 3; do ./mvnw -B -ntp -version && break || sleep 15; done
 
 COPY api-gateway/pom.xml api-gateway/
 COPY user-service/pom.xml user-service/
