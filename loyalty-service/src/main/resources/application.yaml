@@ -67,6 +67,18 @@ loyalty:
 innbucks:
   internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
 
+# External WhatsApp notification gateway used to deliver vouchers (WHATSAPP
+# delivery channel). Third-party service, not in the Eureka registry, so a
+# plain RestClient with an explicit URL. base-url default is a dev ngrok tunnel
+# — override WHATSAPP_GATEWAY_URL per environment (ngrok URLs rotate). api-key
+# is a secret: set WHATSAPP_API_KEY (ProductionSecretsGuard rejects the
+# change-me placeholder under prod).
+whatsapp:
+  base-url: ${WHATSAPP_GATEWAY_URL:https://maximum-implicitly-treefrog.ngrok-free.app}
+  api-key: ${WHATSAPP_API_KEY:change-me-whatsapp-api-key}
+  connect-timeout-ms: ${WHATSAPP_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${WHATSAPP_READ_TIMEOUT_MS:10000}
+
 springdoc:
   swagger-ui:
     path: /swagger-ui/index.html

@@ -30,7 +30,8 @@ public class ProductionSecretsGuard {
             "jwt.secret",
             "innbucks.internal-api-token",
             "loyalty.voucher.secret",
-            "loyalty.qr.secret"
+            "loyalty.qr.secret",
+            "whatsapp.api-key"
     );
 
     private static final String PLACEHOLDER_MARKER = "change-me";
@@ -55,7 +56,7 @@ public class ProductionSecretsGuard {
                     "Refusing to start under 'prod' profile: the following secrets " +
                     "still have placeholder defaults containing '" + PLACEHOLDER_MARKER +
                     "': " + offenders + ". Override them via env vars (JWT_SECRET, " +
-                    "INTERNAL_API_TOKEN, LOYALTY_VOUCHER_SECRET, LOYALTY_QR_SECRET) " +
+                    "INTERNAL_API_TOKEN, LOYALTY_VOUCHER_SECRET, LOYALTY_QR_SECRET, WHATSAPP_API_KEY) " +
                     "before booting in production."
             );
         }
