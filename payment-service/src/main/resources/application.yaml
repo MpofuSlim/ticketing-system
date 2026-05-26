@@ -83,6 +83,19 @@ oradian-middleware:
   connect-timeout-ms: ${ORADIAN_MIDDLEWARE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${ORADIAN_MIDDLEWARE_READ_TIMEOUT_MS:10000}
 
+# External WhatsApp notification gateway — sends the customer a payment
+# confirmation after a transaction commits SUCCEEDED (see
+# PaymentNotificationListener). Third-party service, not in Eureka, so a plain
+# RestClient with an explicit URL. base-url default is a dev ngrok tunnel —
+# override WHATSAPP_GATEWAY_URL per environment (ngrok URLs rotate). api-key is
+# a secret: set WHATSAPP_API_KEY (ProductionSecretsGuard rejects the change-me
+# placeholder under prod).
+whatsapp:
+  base-url: ${WHATSAPP_GATEWAY_URL:https://maximum-implicitly-treefrog.ngrok-free.app}
+  api-key: ${WHATSAPP_API_KEY:change-me-whatsapp-api-key}
+  connect-timeout-ms: ${WHATSAPP_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${WHATSAPP_READ_TIMEOUT_MS:10000}
+
 innbucks:
   internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
   # Velocity caps on POST /payments/transfer + /payments/withdraw.
