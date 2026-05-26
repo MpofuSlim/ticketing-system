@@ -308,6 +308,11 @@ services:
       # (caller is ticketing's other services). Must equal the
       # INTERNAL_API_TOKEN the callers send.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
+      # HMAC keys for voucher codes and QR tokens. ProductionSecretsGuard
+      # refuses to boot under the prod profile if either still holds its
+      # change-me default, so these are required (fail-fast like above).
+      LOYALTY_VOUCHER_SECRET: ${LOYALTY_VOUCHER_SECRET:?set LOYALTY_VOUCHER_SECRET in .env (see .env.example)}
+      LOYALTY_QR_SECRET: ${LOYALTY_QR_SECRET:?set LOYALTY_QR_SECRET in .env (see .env.example)}
     ports:
       - "8086:8086"
     healthcheck:
