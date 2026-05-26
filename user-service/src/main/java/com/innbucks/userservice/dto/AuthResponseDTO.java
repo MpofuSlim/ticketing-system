@@ -48,6 +48,12 @@ public class AuthResponseDTO {
             example = "false")
     private boolean mfaRequired;
 
+    @Schema(description = "True when the user must change their password before continuing. Set after a " +
+            "SUPER_ADMIN approves the account and the default password (#Pass123) is assigned; the client " +
+            "should route the user to a change-password screen. Cleared once the password is changed.",
+            example = "false")
+    private boolean mustChangePassword;
+
     @Schema(description = "Customer registration tier (1..4). Present only for CUSTOMER accounts; null for system users.",
             example = "2",
             nullable = true)

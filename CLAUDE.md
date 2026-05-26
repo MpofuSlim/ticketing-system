@@ -73,11 +73,15 @@ columns) is deferred: it changes the API wire format (`...T10:00:00`
 gains a `Z`), so it needs FE coordination. Until then, the UTC
 convention above keeps the dormant bug dormant.
 
-## Active branch
+## Branching
 
-- `claude/add-loyalty-service` — the only working branch. PostgreSQL +
-  Flyway. Schema changes go in `src/main/resources/db/migration/V<N>__*.sql`.
+New work goes on a **`feature/<short-kebab-description>`** branch cut from the
+latest `master`, where the suffix names the feature being added (e.g.
+`feature/api-gateway-route-tests`). One feature per branch; push with
+`git push -u origin <branch>` and open a **draft** PR.
 
-The previous `claude/add-loyalty-service-h2` sibling (H2 file-based,
-Flyway disabled, `ddl-auto=update`) has been deleted. Commits no longer
-need to be cherry-picked anywhere; develop, commit, push once.
+Schema changes go in `src/main/resources/db/migration/V<N>__*.sql`
+(PostgreSQL + Flyway, `ddl-auto: validate` on every data service). The
+loyalty platform landed via `claude/add-loyalty-service` (merged in #91) and
+the old H2 sibling branch was deleted — the legacy `claude/*` branch names
+are history; use `feature/*` from now on.

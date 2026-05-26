@@ -5,6 +5,7 @@ import com.innbucks.userservice.exception.NotFoundException;
 import com.innbucks.userservice.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -25,19 +26,37 @@ import org.springframework.transaction.annotation.Transactional;
 @RequiredArgsConstructor
 public class UserAdminService {
 
+    // Shared default assigned to a system user when their account is approved.
+    // The user is forced to change it on first login (must_change_password).
+    private static final String DEFAULT_PASSWORD = "#Pass123";
+
     private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
 
     @Transactional
     public User setActive(Long id, boolean active) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new NotFoundException("User not found: " + id));
 
-        // Idempotent — admin tools that retry the call should see the same
-        // outcome without flipping state. No DB write needed when nothing
-        // changed.
-        if (user.isActive() == active) {
+        // The first activation of an account is its approval: registration left
+        // only an unusable placeholder password, so assign the default now and
+        // force a change on first login. The `approved` flag makes this a
+        // one-shot — a later deactivate/reactivate must never reset a password
+        // the user has since changed.
+        boolean firstApproval = active && !user.isApproved();
+
+        // Idempotent: a retried call sees the same outcome without a write, but
+        // must never short-circuit a still-pending first approval.
+        if (user.isActive() == active && !firstApproval) {
             log.info("setActive no-op userId={} active={}", id, active);
             return user;
+        }
+
+        if (firstApproval) {
+            user.setPassword(passwordEncoder.encode(DEFAULT_PASSWORD));
+            user.setMustChangePassword(true);
+            user.setApproved(true);
+            log.info("User approved, default password assigned userId={}", id);
         }
 
         user.setActive(active);

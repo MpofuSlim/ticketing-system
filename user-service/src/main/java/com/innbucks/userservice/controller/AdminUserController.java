@@ -101,9 +101,10 @@ public class AdminUserController {
     @PreAuthorize("hasRole('SUPER_ADMIN')")
     @Operation(
             summary = "Activate or deactivate a user",
-            description = "Sets the `active` flag on the specified user account. " +
-                    "Only an active user can log in. " +
-                    "Requires **SUPER_ADMIN** role."
+            description = "Sets the `active` flag on the specified user account. Only an active user can log in. " +
+                    "**The first activation of a newly-registered system user is its approval**: the account is " +
+                    "assigned the default password `#Pass123` and flagged to change it on first login. Subsequent " +
+                    "deactivate/reactivate toggles never reset the password. Requires **SUPER_ADMIN** role."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(

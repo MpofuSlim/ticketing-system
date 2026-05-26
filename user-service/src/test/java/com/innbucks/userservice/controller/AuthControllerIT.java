@@ -5,6 +5,7 @@ import com.innbucks.userservice.client.OradianClient;
 import com.innbucks.userservice.client.OradianCustomerResponse;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.repository.UserRepository;
+import com.innbucks.userservice.service.UserAdminService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -34,6 +35,7 @@ class AuthControllerIT {
     @Autowired MockMvc mockMvc;
     @Autowired ObjectMapper objectMapper;
     @Autowired UserRepository userRepository;
+    @Autowired UserAdminService userAdminService;
 
     // Tier-2 registration mirrors the customer into Oradian via this client;
     // hitting a real Oradian instance from a test is neither possible nor
@@ -52,10 +54,14 @@ class AuthControllerIT {
         when(oradianClient.createCustomer(any(), any())).thenReturn(fake);
     }
 
-    private void activate(String email) {
+    // Approval == first activation: assigns the default password (#Pass123) and
+    // flags must-change, exactly as PUT /admin/users/{id}/active does. A
+    // registered account has no usable password until this runs.
+    private static final String DEFAULT_PASSWORD = "#Pass123";
+
+    private void approve(String email) {
         User u = userRepository.findByEmail(email).orElseThrow();
-        u.setActive(true);
-        userRepository.save(u);
+        userAdminService.setActive(u.getId(), true);
     }
 
     private RegisterPayload baseSystemPayload(String email, String phone, String bundle) {
@@ -65,7 +71,7 @@ class AuthControllerIT {
         payload.lastName = "Mpofu";
         payload.phoneNumber = phone;
         payload.email = email;
-        payload.password = "password123";
+        payload.country = "Zimbabwe";
         payload.defaultServices = List.of(bundle);
         return payload;
     }
@@ -93,11 +99,11 @@ class AuthControllerIT {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(register)))
                 .andExpect(status().isCreated());
-        activate("user1@example.com");
+        approve("user1@example.com");
 
         LoginPayload login = new LoginPayload();
         login.identifier = "user1@example.com";
-        login.password = "password123";
+        login.password = DEFAULT_PASSWORD;
 
         mockMvc.perform(post("/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -139,11 +145,11 @@ class AuthControllerIT {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(register)))
                 .andExpect(status().isCreated());
-        activate("user3@example.com");
+        approve("user3@example.com");
 
         LoginPayload login = new LoginPayload();
         login.identifier = "user3@example.com";
-        login.password = "password123";
+        login.password = DEFAULT_PASSWORD;
         String loginBody = mockMvc.perform(post("/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(login)))
@@ -272,7 +278,7 @@ class AuthControllerIT {
         public String lastName;
         public String phoneNumber;
         public String email;
-        public String password;
+        public String country;
         public List<String> defaultServices;
     }
 
