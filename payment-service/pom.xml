@@ -161,6 +161,14 @@
             <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
         </dependency>
 
+        <!-- Caffeine backs Spring Cloud LoadBalancer's service-instance cache
+             (better eviction than the default map). Auto-detected on the
+             classpath; no config needed. -->
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
+
         <!-- Resilience4j: retry-on-transient + circuit-breaker around the
              Oradian middleware client. Without this, a single TCP blip
              becomes a customer-facing 502 and a wasted FAILED ledger row;

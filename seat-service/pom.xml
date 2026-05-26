@@ -38,6 +38,14 @@
             <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
         </dependency>
 
+        <!-- Caffeine backs Spring Cloud LoadBalancer's service-instance cache
+             (better eviction than the default map). Auto-detected on the
+             classpath; no config needed. -->
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
+
         <!-- ShedLock: leader-elects @Scheduled jobs across replicas. Without
              this, every seat-service pod runs SeatLockReaper every minute,
              dumping batch-size duplicate findExpiredLockIds queries onto
