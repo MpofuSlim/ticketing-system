@@ -64,7 +64,8 @@ app:
 # discovery. Failures are tolerated — analytics still returns category + seat
 # stats, with bookingServiceReachable=false in the payload.
 booking-service:
-  base-url: ${BOOKING_SERVICE_URL:http://localhost:8084}
+  # Resolved from the Eureka registry by name (the client is @LoadBalanced).
+  base-url: http://booking-service
   connect-timeout-ms: ${BOOKING_SERVICE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${BOOKING_SERVICE_READ_TIMEOUT_MS:5000}
 
@@ -72,7 +73,8 @@ booking-service:
 # always matches the system of record (instead of trusting the JWT's possibly
 # stale tier claim).
 user-service:
-  base-url: ${USER_SERVICE_URL:http://localhost:8081}
+  # Resolved from the Eureka registry by name (the client is @LoadBalanced).
+  base-url: http://user-service
   connect-timeout-ms: ${USER_SERVICE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${USER_SERVICE_READ_TIMEOUT_MS:5000}
 
@@ -89,6 +91,20 @@ springdoc:
     path: /swagger-ui/index.html
   api-docs:
     path: /v3/api-docs
+
+# Service discovery — register with the Eureka registry (discovery-server) and
+# resolve sibling services by name. EUREKA_SERVER_URL points at the registry;
+# the default targets a local standalone server for laptop dev.
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_SERVER_URL:http://localhost:8761/eureka/}
+  instance:
+    # Register by IP — a container's own hostname isn't resolvable by its
+    # peers on the shared network. The unique instance-id keeps replicas
+    # from colliding in the registry.
+    prefer-ip-address: true
+    instance-id: ${spring.application.name}:${random.uuid}
 
 management:
   endpoints:

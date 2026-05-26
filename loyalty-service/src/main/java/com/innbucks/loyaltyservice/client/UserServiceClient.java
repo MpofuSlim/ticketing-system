@@ -7,6 +7,7 @@ import com.innbucks.loyaltyservice.dto.CustomerTierResponseDTO;
 import com.innbucks.loyaltyservice.dto.UserServiceApiResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cloud.client.loadbalancer.LoadBalanced;
 import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -25,14 +26,18 @@ public class UserServiceClient {
     private final ObjectMapper objectMapper;
 
     public UserServiceClient(
-            @Value("${user-service.base-url:http://localhost:8081}") String baseUrl,
+            @LoadBalanced RestClient.Builder loadBalancedRestClientBuilder,
+            @Value("${user-service.base-url:http://user-service}") String baseUrl,
             @Value("${user-service.connect-timeout-ms:2000}") int connectTimeoutMs,
             @Value("${user-service.read-timeout-ms:5000}") int readTimeoutMs,
             ObjectMapper objectMapper) {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(connectTimeoutMs);
         factory.setReadTimeout(readTimeoutMs);
-        this.restClient = RestClient.builder()
+        // Clone the load-balanced builder so "user-service" resolves through
+        // Eureka; clone() preserves the LB interceptor alongside our per-client
+        // request factory and correlation-id interceptor.
+        this.restClient = loadBalancedRestClientBuilder.clone()
                 .baseUrl(baseUrl)
                 .requestFactory(factory)
                 .requestInterceptor(new CorrelationIdPropagatingInterceptor())

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.innbucks.userservice.config.CorrelationIdPropagatingInterceptor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cloud.client.loadbalancer.LoadBalanced;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.HttpClientErrorException;
@@ -24,14 +25,18 @@ public class LoyaltyServiceClient {
     private final RestClient http;
     private final String internalToken;
 
-    public LoyaltyServiceClient(@Value("${loyalty-service.base-url:http://localhost:8086}") String baseUrl,
+    public LoyaltyServiceClient(@LoadBalanced RestClient.Builder loadBalancedRestClientBuilder,
+                                @Value("${loyalty-service.base-url:http://loyalty-service}") String baseUrl,
                                 @Value("${loyalty-service.connect-timeout-ms:2000}") int connectTimeoutMs,
                                 @Value("${loyalty-service.read-timeout-ms:3000}") int readTimeoutMs,
                                 @Value("${innbucks.internal-api-token:}") String internalToken) {
         var requestFactory = new org.springframework.http.client.SimpleClientHttpRequestFactory();
         requestFactory.setConnectTimeout(Duration.ofMillis(connectTimeoutMs));
         requestFactory.setReadTimeout(Duration.ofMillis(readTimeoutMs));
-        this.http = RestClient.builder()
+        // Clone the load-balanced builder so "loyalty-service" resolves through
+        // Eureka; clone() preserves the LB interceptor alongside our per-client
+        // request factory and correlation-id interceptor.
+        this.http = loadBalancedRestClientBuilder.clone()
                 .baseUrl(baseUrl)
                 .requestFactory(requestFactory)
                 .requestInterceptor(new CorrelationIdPropagatingInterceptor())

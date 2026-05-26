@@ -11,6 +11,7 @@
     <description>Innbucks Online Ticketing System</description>
 
     <modules>
+        <module>discovery-server</module>
         <module>api-gateway</module>
         <module>user-service</module>
         <module>event-service</module>

@@ -13,7 +13,6 @@ import java.util.UUID;
 
 @FeignClient(
         name = "seat-service",
-        url = "${seat-service.url}",
         fallback = SeatServiceClientFallback.class)
 public interface SeatServiceClient {
 

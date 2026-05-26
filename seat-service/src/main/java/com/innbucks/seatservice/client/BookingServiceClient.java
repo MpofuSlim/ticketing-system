@@ -7,6 +7,7 @@ import com.innbucks.seatservice.dto.ApiResult;
 import com.innbucks.seatservice.dto.CategoryBookingDTO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cloud.client.loadbalancer.LoadBalanced;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.ResourceAccessException;
@@ -32,11 +33,15 @@ public class BookingServiceClient {
     private final ObjectMapper objectMapper;
 
     public BookingServiceClient(
-            @Value("${booking-service.base-url:http://localhost:8084}") String baseUrl,
+            @LoadBalanced RestClient.Builder loadBalancedRestClientBuilder,
+            @Value("${booking-service.base-url:http://booking-service}") String baseUrl,
             @Value("${booking-service.connect-timeout-ms:2000}") int connectTimeoutMs,
             @Value("${booking-service.read-timeout-ms:5000}") int readTimeoutMs,
             ObjectMapper objectMapper) {
-        this.restClient = RestClient.builder()
+        // Clone the load-balanced builder so "booking-service" resolves through
+        // Eureka; clone() preserves the LB interceptor alongside our per-client
+        // request factory and correlation-id interceptor.
+        this.restClient = loadBalancedRestClientBuilder.clone()
                 .baseUrl(baseUrl)
                 .requestFactory(buildRequestFactory(connectTimeoutMs, readTimeoutMs))
                 .requestInterceptor(new CorrelationIdPropagatingInterceptor())

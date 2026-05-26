@@ -22,12 +22,12 @@ spring:
           # /auth lives in user-service (OTP throttling, etc.).
           routes:
             - id: user-auth-route
-              uri: ${USER_SERVICE_URI:http://localhost:8081}
+              uri: lb://user-service
               predicates:
                 - Path=/auth/**
 
             - id: user-admin-route
-              uri: ${USER_SERVICE_URI:http://localhost:8081}
+              uri: lb://user-service
               predicates:
                 - Path=/admin/**
               filters:
@@ -41,7 +41,7 @@ spring:
             # Self-service endpoints under /users/me/** (e.g. service requests).
             # Authenticated; rate-limited like the rest of user-service.
             - id: user-self-route
-              uri: ${USER_SERVICE_URI:http://localhost:8081}
+              uri: lb://user-service
               predicates:
                 - Path=/users/**
               filters:
@@ -68,7 +68,7 @@ spring:
                 - Path=/events/*/availability/**
 
             - id: event-service-route
-              uri: ${EVENT_SERVICE_URI:http://localhost:8082}
+              uri: lb://event-service
               predicates:
                 - Path=/events/**
               filters:
@@ -80,7 +80,7 @@ spring:
                     key-resolver: "#{@gatewayKeyResolver}"
 
             - id: seat-service-seat-route
-              uri: ${SEAT_SERVICE_URI:http://localhost:8083}
+              uri: lb://seat-service
               predicates:
                 - Path=/seats/**
               filters:
@@ -91,7 +91,7 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
             - id: seat-service-category-route
-              uri: ${SEAT_SERVICE_URI:http://localhost:8083}
+              uri: lb://seat-service
               predicates:
                 - Path=/seat-categories/**
               filters:
@@ -103,7 +103,7 @@ spring:
                     key-resolver: "#{@gatewayKeyResolver}"
 
             - id: booking-service-route
-              uri: ${BOOKING_SERVICE_URI:http://localhost:8084}
+              uri: lb://booking-service
               predicates:
                 - Path=/bookings/**
               filters:
@@ -130,7 +130,7 @@ spring:
             # 100 burst used by /events, /bookings, /seats etc. matches
             # the FE's actual read-traffic profile.
             - id: payment-service-read-route
-              uri: ${PAYMENT_SERVICE_URI:http://localhost:8085}
+              uri: lb://payment-service
               predicates:
                 - Path=/payments/**
                 - Method=GET
@@ -150,7 +150,7 @@ spring:
             # velocity service inside payment-service (per-account daily
             # cap) is the second line of defence.
             - id: payment-service-write-route
-              uri: ${PAYMENT_SERVICE_URI:http://localhost:8085}
+              uri: lb://payment-service
               predicates:
                 - Path=/payments/**
                 - Method=POST,PUT,PATCH,DELETE
@@ -178,7 +178,7 @@ spring:
                 - Path=/loyalty/internal/**
 
             - id: loyalty-service-route
-              uri: ${LOYALTY_SERVICE_URI:http://localhost:8086}
+              uri: lb://loyalty-service
               predicates:
                 - Path=/loyalty/**
               filters:
@@ -202,7 +202,7 @@ spring:
             # possible. The RequestRateLimiter is retained as defence in
             # depth against api-docs scraping.
             - id: user-service-proxy-route
-              uri: ${USER_SERVICE_URI:http://localhost:8081}
+              uri: lb://user-service
               predicates:
                 - Path=/user-service/v3/api-docs,/user-service/v3/api-docs/**
               filters:
@@ -215,7 +215,7 @@ spring:
                     key-resolver: "#{@gatewayKeyResolver}"
 
             - id: event-service-proxy-route
-              uri: ${EVENT_SERVICE_URI:http://localhost:8082}
+              uri: lb://event-service
               predicates:
                 - Path=/event-service/v3/api-docs,/event-service/v3/api-docs/**
               filters:
@@ -228,7 +228,7 @@ spring:
                     key-resolver: "#{@gatewayKeyResolver}"
 
             - id: seat-service-proxy-route
-              uri: ${SEAT_SERVICE_URI:http://localhost:8083}
+              uri: lb://seat-service
               predicates:
                 - Path=/seat-service/v3/api-docs,/seat-service/v3/api-docs/**
               filters:
@@ -241,7 +241,7 @@ spring:
                     key-resolver: "#{@gatewayKeyResolver}"
 
             - id: booking-service-proxy-route
-              uri: ${BOOKING_SERVICE_URI:http://localhost:8084}
+              uri: lb://booking-service
               predicates:
                 - Path=/booking-service/v3/api-docs,/booking-service/v3/api-docs/**
               filters:
@@ -254,7 +254,7 @@ spring:
                     key-resolver: "#{@gatewayKeyResolver}"
 
             - id: payment-service-proxy-route
-              uri: ${PAYMENT_SERVICE_URI:http://localhost:8085}
+              uri: lb://payment-service
               predicates:
                 - Path=/payment-service/v3/api-docs,/payment-service/v3/api-docs/**
               filters:
@@ -267,7 +267,7 @@ spring:
                     key-resolver: "#{@gatewayKeyResolver}"
 
             - id: loyalty-service-proxy-route
-              uri: ${LOYALTY_SERVICE_URI:http://localhost:8086}
+              uri: lb://loyalty-service
               predicates:
                 - Path=/loyalty-service/v3/api-docs,/loyalty-service/v3/api-docs/**
               filters:
@@ -309,6 +309,18 @@ spring:
 server:
   port: ${SERVER_PORT:8080}
   shutdown: graceful
+
+# Service discovery — the gateway joins the Eureka registry (discovery-server)
+# so the lb://<service-name> route URIs below resolve to live instances.
+# EUREKA_SERVER_URL points at the registry; the default targets a local
+# standalone server for laptop dev.
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_SERVER_URL:http://localhost:8761/eureka/}
+  instance:
+    prefer-ip-address: true
+    instance-id: ${spring.application.name}:${random.uuid}
 
 management:
   endpoints:

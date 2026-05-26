@@ -22,6 +22,12 @@ spring:
     baseline-version: 0
     locations: classpath:db/migration
 
+  # The Eureka client is on the classpath now, but tests must not register
+  # with a registry; disabling discovery makes the Eureka auto-config back off.
+  cloud:
+    discovery:
+      enabled: false
+
 # JWT verifier secret — payment-service only validates tokens, never mints
 # them. The value matches user-service's it-profile placeholder so an end-
 # to-end IT spanning both services can pass tokens directly.

@@ -6,6 +6,7 @@ import innbucks.paymentservice.config.CorrelationIdPropagatingInterceptor;
 import innbucks.paymentservice.dto.ApiResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cloud.client.loadbalancer.LoadBalanced;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -37,7 +38,8 @@ public class BookingServiceClient {
     private final String internalToken;
 
     public BookingServiceClient(
-            @Value("${booking-service.base-url:http://localhost:8084}") String baseUrl,
+            @LoadBalanced RestClient.Builder loadBalancedRestClientBuilder,
+            @Value("${booking-service.base-url:http://booking-service}") String baseUrl,
             @Value("${booking-service.connect-timeout-ms:2000}") int connectMs,
             @Value("${booking-service.read-timeout-ms:5000}") int readMs,
             @Value("${innbucks.internal-api-token:}") String internalToken,
@@ -52,7 +54,10 @@ public class BookingServiceClient {
                 .build();
         JdkClientHttpRequestFactory rf = new JdkClientHttpRequestFactory(httpClient);
         rf.setReadTimeout(Duration.ofMillis(readMs));
-        this.restClient = RestClient.builder()
+        // Clone the load-balanced builder so "booking-service" resolves through
+        // Eureka; clone() keeps the LB interceptor while letting us set a
+        // per-client request factory (JDK HttpClient — needed for PATCH).
+        this.restClient = loadBalancedRestClientBuilder.clone()
                 .baseUrl(baseUrl)
                 .requestFactory(rf)
                 .requestInterceptor(new CorrelationIdPropagatingInterceptor())

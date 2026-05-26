@@ -7,6 +7,7 @@ import com.innbucks.seatservice.dto.ApiResult;
 import com.innbucks.seatservice.dto.EventLookupDTO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cloud.client.loadbalancer.LoadBalanced;
 import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.ResourceAccessException;
@@ -30,11 +31,15 @@ public class EventServiceClient {
     private final ObjectMapper objectMapper;
 
     public EventServiceClient(
-            @Value("${event-service.base-url:http://localhost:8082}") String baseUrl,
+            @LoadBalanced RestClient.Builder loadBalancedRestClientBuilder,
+            @Value("${event-service.base-url:http://event-service}") String baseUrl,
             @Value("${event-service.connect-timeout-ms:2000}") int connectTimeoutMs,
             @Value("${event-service.read-timeout-ms:5000}") int readTimeoutMs,
             ObjectMapper objectMapper) {
-        this.restClient = RestClient.builder()
+        // Clone the load-balanced builder so "event-service" resolves through
+        // Eureka; clone() preserves the LB interceptor alongside our per-client
+        // request factory and correlation-id interceptor.
+        this.restClient = loadBalancedRestClientBuilder.clone()
                 .baseUrl(baseUrl)
                 .requestFactory(buildRequestFactory(connectTimeoutMs, readTimeoutMs))
                 .requestInterceptor(new CorrelationIdPropagatingInterceptor())

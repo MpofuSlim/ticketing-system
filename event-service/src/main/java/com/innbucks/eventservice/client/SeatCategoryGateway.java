@@ -36,7 +36,7 @@ public class SeatCategoryGateway {
     public SeatCategoryGateway(
             RestTemplate restTemplate,
             CircuitBreakerFactory<?, ?> circuitBreakerFactory,
-            @Value("${seat-service.base-url:http://localhost:8083}") String seatServiceBaseUrl) {
+            @Value("${seat-service.base-url:http://seat-service}") String seatServiceBaseUrl) {
         this.restTemplate = restTemplate;
         this.circuitBreaker = circuitBreakerFactory.create("seatCategories");
         this.seatServiceBaseUrl = seatServiceBaseUrl;

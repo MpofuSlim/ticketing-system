@@ -66,11 +66,15 @@ springdoc:
   api-docs:
     path: /v3/api-docs
 
+# Resolved from the Eureka registry by service name via the @LoadBalanced
+# RestTemplate (see HttpClientConfig). No host:port is configured here any
+# more. (The booking default was previously a wrong localhost:8082 —
+# event-service's own port — which discovery now sidesteps entirely.)
 seat-service:
-  base-url: ${SEAT_SERVICE_BASE_URL:http://localhost:8083}
+  base-url: http://seat-service
 
 booking-service:
-  base-url: ${BOOKING_SERVICE_BASE_URL:http://localhost:8082}
+  base-url: http://booking-service
 
 # Circuit breaker + retry around outbound calls.
 #  - seatCategories: SeatCategoryGateway (fallback = empty category list).
@@ -114,6 +118,20 @@ resilience4j:
         retry-exceptions:
           - org.springframework.web.client.ResourceAccessException
           - java.io.IOException
+
+# Service discovery — register with the Eureka registry (discovery-server) and
+# resolve sibling services by name. EUREKA_SERVER_URL points at the registry;
+# the default targets a local standalone server for laptop dev.
+eureka:
+  client:
+    service-url:
+      defaultZone: ${EUREKA_SERVER_URL:http://localhost:8761/eureka/}
+  instance:
+    # Register by IP — a container's own hostname isn't resolvable by its
+    # peers on the shared network. The unique instance-id keeps replicas
+    # from colliding in the registry.
+    prefer-ip-address: true
+    instance-id: ${spring.application.name}:${random.uuid}
 
 management:
   endpoints:

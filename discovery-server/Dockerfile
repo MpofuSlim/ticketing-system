@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # Build from repo root:
-#     docker build -f user-service/Dockerfile -t ticketing-user-service .
+#     docker build -f discovery-server/Dockerfile -t ticketing-discovery-server .
 
 FROM eclipse-temurin:21-jdk-alpine AS builder
 WORKDIR /workspace
@@ -10,26 +10,24 @@ COPY mvnw pom.xml ./
 RUN chmod +x mvnw
 
 # Copy every module's pom so the Maven reactor can resolve; sources come later.
+COPY discovery-server/pom.xml discovery-server/
 COPY api-gateway/pom.xml api-gateway/
 COPY user-service/pom.xml user-service/
 COPY event-service/pom.xml event-service/
 COPY seat-service/pom.xml seat-service/
 COPY booking-service/pom.xml booking-service/
 COPY payment-service/pom.xml payment-service/
-COPY discovery-server/pom.xml discovery-server/
 COPY loyalty-service/pom.xml loyalty-service/
 
 # Warm the dependency cache. Layer survives until a pom changes.
-RUN ./mvnw -B -pl user-service -am -DskipTests dependency:go-offline || true
+RUN ./mvnw -B -pl discovery-server -am -DskipTests dependency:go-offline || true
 
-COPY user-service/src user-service/src
-RUN ./mvnw -B -pl user-service -am -DskipTests package \
-    && cp user-service/target/user-service-*.jar /workspace/app.jar
+COPY discovery-server/src discovery-server/src
+RUN ./mvnw -B -pl discovery-server -am -DskipTests package \
+    && cp discovery-server/target/discovery-server-*.jar /workspace/app.jar
 
 FROM eclipse-temurin:21-jre-alpine AS runtime
 # Pull in any apk security patches published since the base image was tagged.
-# Trivy fails the build on HIGH/CRITICAL CVEs (see .github/workflows/docker.yml),
-# and the floating eclipse-temurin:21-*-alpine tag isn't always rebuilt promptly.
 RUN apk --no-cache upgrade \
  && addgroup -S app && adduser -S -G app app
 WORKDIR /app
@@ -37,14 +35,11 @@ USER app
 
 COPY --from=builder --chown=app:app /workspace/app.jar /app/app.jar
 
-EXPOSE 8081
+EXPOSE 8761
 
-# k8s-style probe: hits actuator/health from inside the container. Spring Boot
-# returns 200 + {"status":"UP"} once the context is fully refreshed; before
-# that, hits to /actuator/health return 503 and the orchestrator holds traffic.
-# start-period gives the JVM + Flyway + Hibernate enough time to come up before
-# failures start counting against retries.
+# The registry's own readiness: Spring Boot returns 200 once the Eureka server
+# context is up and accepting registrations.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=60s --retries=3 \
-    CMD wget --quiet --tries=1 --spider http://localhost:8081/actuator/health || exit 1
+    CMD wget --quiet --tries=1 --spider http://localhost:8761/actuator/health || exit 1
 
 ENTRYPOINT ["java", "-Duser.timezone=UTC", "-jar", "/app/app.jar"]

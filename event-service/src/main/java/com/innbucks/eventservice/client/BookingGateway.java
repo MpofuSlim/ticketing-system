@@ -38,7 +38,7 @@ public class BookingGateway {
             RestTemplate restTemplate,
             CircuitBreakerFactory<?, ?> circuitBreakerFactory,
             ObjectMapper objectMapper,
-            @Value("${booking-service.base-url:http://localhost:8082}") String bookingServiceBaseUrl) {
+            @Value("${booking-service.base-url:http://booking-service}") String bookingServiceBaseUrl) {
         this.restTemplate = restTemplate;
         this.circuitBreaker = circuitBreakerFactory.create("bookingActiveCounts");
         this.objectMapper = objectMapper;
