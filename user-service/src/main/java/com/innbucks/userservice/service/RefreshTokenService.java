@@ -104,7 +104,10 @@ public class RefreshTokenService {
         // family-revoke side effect as replay detection above.
         if (row.getDeviceIdHash() != null) {
             String requestHash = hashOrNull(deviceId);
-            if (requestHash == null || !row.getDeviceIdHash().equals(requestHash)) {
+            // getDeviceIdHash() is non-null here (guarded above) and
+            // String.equals(null) is false, so a null requestHash already
+            // fails this check — no explicit null guard needed.
+            if (!row.getDeviceIdHash().equals(requestHash)) {
                 int killed = refreshTokenRepository.revokeFamily(row.getFamilyId(), Instant.now());
                 log.warn("Refresh-token device mismatch familyId={} rowsRevoked={} hasHeader={}",
                         row.getFamilyId(), killed, requestHash != null);

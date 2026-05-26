@@ -28,12 +28,20 @@ import java.util.List;
 @Configuration
 public class WebConfig implements WebMvcConfigurer {
 
-    // Comma-separated; Spring binds String -> List<String> automatically.
+    // Constructor-injected (not @Value field injection) so the assignment is
+    // visible to static analysis — field injection left Qodana thinking the
+    // list was "queried but never populated" since it can't see the
+    // reflective write. Constructor injection is also the Spring-recommended
+    // style: the bean can't exist in a half-built state.
+    //
     // setAllowedOriginPatterns is what makes the list compatible with
     // allowCredentials=true (a plain '*' would be rejected by the browser
     // when credentials are in play).
-    @Value("${cors.allowed-origins:*}")
-    private List<String> allowedOrigins;
+    private final List<String> allowedOrigins;
+
+    public WebConfig(@Value("${cors.allowed-origins:*}") List<String> allowedOrigins) {
+        this.allowedOrigins = allowedOrigins;
+    }
 
     @Override
     public void addCorsMappings(CorsRegistry registry) {

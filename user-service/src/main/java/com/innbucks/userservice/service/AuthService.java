@@ -98,40 +98,48 @@ public class AuthService {
             throw new RuntimeException("Phone number already registered");
         }
 
+        // No password is collected at registration. Store an unguessable
+        // placeholder so the NOT NULL column is satisfied and the account
+        // cannot be logged into; the real default password (#Pass123) is
+        // assigned by UserAdminService when a SUPER_ADMIN approves (first
+        // activates) the account. Created inactive + unapproved by default.
         User user = User.builder()
                 .firstName(request.getFirstName())
                 .middleName(request.getMiddleName())
                 .lastName(request.getLastName())
                 .phoneNumber(request.getPhoneNumber())
                 .email(request.getEmail())
-                .password(passwordEncoder.encode(request.getPassword()))
+                .country(request.getCountry())
+                .password(passwordEncoder.encode("!PENDING-" + java.util.UUID.randomUUID()))
                 .roles(roles)
                 .defaultServices(bundles)
+                .business(request.isBusiness())
                 .mfaEnabled(false)
                 .build();
 
         userRepository.save(user);
-        log.info("User entity saved email={} userId={} roles={} bundles={}",
-                user.getEmail(), user.getId(), roles, bundles);
+        log.info("User entity saved (pending approval) email={} userId={} roles={} bundles={} isBusiness={}",
+                user.getEmail(), user.getId(), roles, bundles, request.isBusiness());
 
-        if (roles.contains(User.Role.EVENT_ORGANIZER) || roles.contains(User.Role.MERCHANT_ADMIN)) {
-            log.info("Roles include business role, creating tenant profile userId={}", user.getId());
+        if (request.isBusiness()) {
+            log.info("Business account, creating tenant profile userId={}", user.getId());
             TenantProfile profile = TenantProfile.builder()
                     .user(user)
                     .businessName(request.getBusinessName())
                     .businessAddress(request.getBusinessAddress())
-                    .businessPhoneNumber(request.getBusinessContactNumber())
+                    .bpoNumber(request.getBpoNumber())
                     .build();
             tenantProfileRepository.save(profile);
             log.info("Tenant profile saved userId={}", user.getId());
         }
 
-        log.info("Registration complete email={} roles={} bundles={}", user.getEmail(), roles, bundles);
+        log.info("Registration complete (pending approval) email={} roles={} bundles={}", user.getEmail(), roles, bundles);
         return AuthResponseDTO.builder()
                 .email(user.getEmail())
                 .roles(roleNames(user.getRoles()))
                 .defaultServices(new ArrayList<>(bundles))
                 .mfaRequired(false)
+                .mustChangePassword(false)
                 .build();
     }
 
@@ -313,6 +321,7 @@ public class AuthService {
         }
 
         user.setPassword(passwordEncoder.encode(request.getNewPassword()));
+        user.setMustChangePassword(false);
         userRepository.save(user);
         log.info("Password changed userId={} subject={}", user.getId(), subject);
         auditService.recordSuccess(
@@ -436,7 +445,7 @@ public class AuthService {
 
         String newToken = jwtUtil.generateToken(subject, roleNames, new ArrayList<>(microservices),
                 tier, verified, user.getPhoneNumber(), loyaltyMerchantId, loyaltyShopId,
-                firstName, middleName, lastName, user.getTokenVersion());
+                firstName, middleName, lastName, user.getTokenVersion(), user.getCountry());
 
         return AuthResponseDTO.builder()
                 .token(newToken)
@@ -445,6 +454,7 @@ public class AuthService {
                 .roles(roleNames)
                 .defaultServices(bundles)
                 .mfaRequired(false)
+                .mustChangePassword(user.isMustChangePassword())
                 .tier(tier)
                 .verified(verified)
                 .build();

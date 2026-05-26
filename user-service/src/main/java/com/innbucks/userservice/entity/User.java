@@ -36,6 +36,8 @@ public class User {
     @Column(unique = true)
     private String email;
 
+    private String country;
+
     @Column(nullable = false)
     private String password;
 
@@ -57,6 +59,23 @@ public class User {
 
     @Column(nullable = false)
     private boolean active = false;
+
+    // Business-account flag, set at registration. When true the account has a
+    // TenantProfile carrying businessName / businessAddress / bpoNumber.
+    @Column(name = "is_business", nullable = false)
+    private boolean business;
+
+    // Approval gate. Registration creates the account unapproved with an
+    // unusable placeholder password; the first SUPER_ADMIN activation approves
+    // it and assigns the default password. Guards a later activation toggle
+    // from overwriting a password the user has since changed.
+    @Column(nullable = false)
+    private boolean approved;
+
+    // Forces a password change on next login — set when the default password is
+    // assigned at approval, cleared by /auth/change-password.
+    @Column(name = "must_change_password", nullable = false)
+    private boolean mustChangePassword;
 
     // Loyalty scope for shop staff. SHOP_ADMIN and SHOP_USER tokens carry these
     // as JWT claims so loyalty-service can scope shop-level operations without
