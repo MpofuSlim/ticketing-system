@@ -136,6 +136,14 @@
             <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
         </dependency>
 
+        <!-- Caffeine backs Spring Cloud LoadBalancer's service-instance cache
+             (better eviction than the default map). Auto-detected on the
+             classpath; no config needed. -->
+        <dependency>
+            <groupId>com.github.ben-manes.caffeine</groupId>
+            <artifactId>caffeine</artifactId>
+        </dependency>
+
         <!-- Circuit breaker + retry around Feign calls -->
         <dependency>
             <groupId>org.springframework.cloud</groupId>
