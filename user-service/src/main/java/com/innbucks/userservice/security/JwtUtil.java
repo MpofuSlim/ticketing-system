@@ -71,7 +71,7 @@ public class JwtUtil {
                                 int tier, boolean verified, String phoneNumber,
                                 UUID merchantId, UUID shopId,
                                 String firstName, String middleName, String lastName,
-                                long tokenVersion) {
+                                long tokenVersion, String country) {
         List<String> roleList = roles == null ? List.of()
                 : roles.stream().filter(r -> r != null && !r.isBlank()).collect(Collectors.toList());
         List<String> serviceList = defaultServices == null ? List.of()
@@ -88,6 +88,9 @@ public class JwtUtil {
                 // how a new login revokes the previous device's session
                 // without a per-token denylist entry.
                 .claim("tokenVersion", tokenVersion);
+        if (country != null && !country.isBlank()) {
+            builder.claim("country", country);
+        }
         if (phoneNumber != null && !phoneNumber.isBlank()) {
             builder.claim("phoneNumber", phoneNumber);
         }
@@ -120,26 +123,20 @@ public class JwtUtil {
                 .compact();
     }
 
-    /**
-     * Legacy 11-arg overload (no {@code tokenVersion}). Kept so existing
-     * tests that mint synthetic tokens don't break; defaults the version
-     * to 0 to match the {@code users.token_version DEFAULT 0} column.
-     * Production code (AuthService) calls the 12-arg form directly with
-     * the User row's current value.
-     */
     public String generateToken(String email, Collection<String> roles, Collection<String> defaultServices,
                                 int tier, boolean verified, String phoneNumber,
                                 UUID merchantId, UUID shopId,
-                                String firstName, String middleName, String lastName) {
+                                String firstName, String middleName, String lastName,
+                                long tokenVersion) {
         return generateToken(email, roles, defaultServices, tier, verified, phoneNumber,
-                merchantId, shopId, firstName, middleName, lastName, 0L);
+                merchantId, shopId, firstName, middleName, lastName, tokenVersion, null);
     }
 
     public String generateToken(String email, Collection<String> roles, Collection<String> defaultServices,
                                 int tier, boolean verified, String phoneNumber,
                                 UUID merchantId, UUID shopId) {
         return generateToken(email, roles, defaultServices, tier, verified, phoneNumber,
-                merchantId, shopId, null, null, null);
+                merchantId, shopId, null, null, null, 0L, null);
     }
 
     public String generateToken(String email, Collection<String> roles, Collection<String> defaultServices,
@@ -154,7 +151,7 @@ public class JwtUtil {
 
     // Convenience overload for single-role callers (kept for tests).
     public String generateToken(String email, String role, int tier, boolean verified, String phoneNumber) {
-        return generateToken(email, role == null ? List.of() : List.of(role), List.of(), tier, verified, phoneNumber, null);
+        return generateToken(email, role == null ? List.of() : List.of(role), List.of(), tier, verified, phoneNumber, null, null);
     }
 
     public String generateToken(String email, String role, int tier, boolean verified) {
@@ -237,6 +234,10 @@ public class JwtUtil {
 
     public String extractPhoneNumber(String token) {
         return getClaims(token).get("phoneNumber", String.class);
+    }
+
+    public String extractCountry(String token) {
+        return getClaims(token).get("country", String.class);
     }
 
     public UUID extractMerchantId(String token) {

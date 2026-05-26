@@ -445,7 +445,7 @@ public class AuthService {
 
         String newToken = jwtUtil.generateToken(subject, roleNames, new ArrayList<>(microservices),
                 tier, verified, user.getPhoneNumber(), loyaltyMerchantId, loyaltyShopId,
-                firstName, middleName, lastName, user.getTokenVersion());
+                firstName, middleName, lastName, user.getTokenVersion(), user.getCountry());
 
         return AuthResponseDTO.builder()
                 .token(newToken)
