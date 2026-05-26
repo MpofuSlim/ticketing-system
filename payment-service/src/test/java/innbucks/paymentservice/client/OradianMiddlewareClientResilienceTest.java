@@ -20,6 +20,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
+import static org.springframework.test.web.client.match.MockRestRequestMatchers.header;
 import static org.springframework.test.web.client.match.MockRestRequestMatchers.requestTo;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withServerError;
 import static org.springframework.test.web.client.response.MockRestResponseCreators.withStatus;
@@ -37,6 +38,9 @@ import static org.springframework.test.web.client.response.MockRestResponseCreat
  * by {@code MockRestServiceServer.bindTo(builder)}. Test-only seam.
  */
 class OradianMiddlewareClientResilienceTest {
+
+    /** Stable per-transfer Idempotency-Key; every retry attempt must carry this exact value. */
+    private static final String IDEMPOTENCY_KEY = "idem-key-abc-123";
 
     /** A RetryConfig that fires only on the transient subclass — same as application.yaml. */
     private static RetryConfig retryConfigForTests(int maxAttempts) {
@@ -94,18 +98,24 @@ class OradianMiddlewareClientResilienceTest {
         CircuitBreakerRegistry breakers = CircuitBreakerRegistry.of(openCircuitConfig());
         Wired w = wired(retries, breakers);
 
-        // First two attempts: 503 (transient). Third: success.
+        // First two attempts: 503 (transient). Third: success. Every attempt
+        // MUST carry the SAME Idempotency-Key — that's what makes retrying a
+        // money move safe: if attempt 1 actually reached Oradian and moved the
+        // money before timing out, the retry replays the cached response rather
+        // than transferring again.
         w.server.expect(ExpectedCount.times(2),
                         requestTo("http://oradian.test/internal/transfers/deposit"))
+                .andExpect(header("Idempotency-Key", IDEMPOTENCY_KEY))
                 .andRespond(withServerError().contentType(APPLICATION_JSON)
                         .body("{\"detail\":\"upstream temporarily down\"}"));
         w.server.expect(ExpectedCount.once(),
                         requestTo("http://oradian.test/internal/transfers/deposit"))
+                .andExpect(header("Idempotency-Key", IDEMPOTENCY_KEY))
                 .andRespond(withSuccess(
                         "{\"transactionID\":\"1155\",\"referenceNumber\":\"ref-1\"}",
                         APPLICATION_JSON));
 
-        DepositTransferResponse response = w.client.submitDepositTransfer(depositRequest());
+        DepositTransferResponse response = w.client.submitDepositTransfer(depositRequest(), IDEMPOTENCY_KEY);
 
         assertEquals("1155", response.getTransactionID(),
                 "Retry must have recovered from the first two 503s and surfaced the eventual 200");
@@ -126,6 +136,7 @@ class OradianMiddlewareClientResilienceTest {
         AtomicInteger upstreamHits = new AtomicInteger();
         w.server.expect(ExpectedCount.once(),
                         requestTo("http://oradian.test/internal/transfers/deposit"))
+                .andExpect(header("Idempotency-Key", IDEMPOTENCY_KEY))
                 .andRespond(req -> {
                     upstreamHits.incrementAndGet();
                     return withStatus(org.springframework.http.HttpStatus.UNPROCESSABLE_ENTITY)
@@ -135,7 +146,7 @@ class OradianMiddlewareClientResilienceTest {
                 });
 
         OradianMiddlewareException ex = assertThrows(OradianMiddlewareException.class,
-                () -> w.client.submitDepositTransfer(depositRequest()));
+                () -> w.client.submitDepositTransfer(depositRequest(), IDEMPOTENCY_KEY));
 
         assertEquals(422, ex.getStatusCode());
         assertTrue(ex.getMessage().contains("Insufficient funds"));
@@ -156,11 +167,12 @@ class OradianMiddlewareClientResilienceTest {
         // upstream's status code intact.
         w.server.expect(ExpectedCount.times(3),
                         requestTo("http://oradian.test/internal/transfers/deposit"))
+                .andExpect(header("Idempotency-Key", IDEMPOTENCY_KEY))
                 .andRespond(withStatus(org.springframework.http.HttpStatus.BAD_GATEWAY)
                         .contentType(APPLICATION_JSON).body("{}"));
 
         OradianMiddlewareException ex = assertThrows(OradianMiddlewareException.class,
-                () -> w.client.submitDepositTransfer(depositRequest()));
+                () -> w.client.submitDepositTransfer(depositRequest(), IDEMPOTENCY_KEY));
 
         assertEquals(502, ex.getStatusCode());
         assertInstanceOf(OradianMiddlewareTransientException.class, ex,

@@ -62,6 +62,8 @@ import java.util.function.Supplier;
 public class OradianMiddlewareClient {
 
     private static final String RESILIENCE_INSTANCE_NAME = "oradian-middleware";
+    /** Required by the middleware's /internal/transfers/** endpoints for replay dedup. */
+    private static final String IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
 
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
@@ -93,12 +95,23 @@ public class OradianMiddlewareClient {
         this.circuitBreaker = circuitBreakerRegistry.circuitBreaker(RESILIENCE_INSTANCE_NAME);
     }
 
-    public DepositTransferResponse submitDepositTransfer(DepositTransferRequest request) {
-        return execute(() -> doSubmitDepositTransfer(request));
+    /**
+     * Submit a deposit-account transfer. {@code idempotencyKey} is forwarded as
+     * the middleware's required {@code Idempotency-Key} header and MUST be
+     * stable for the logical transfer (callers pass the transaction's own key).
+     * That stability is what makes the Resilience4j retry safe: a read-timeout
+     * after Oradian already moved the money triggers a retry that carries the
+     * SAME key, so the middleware replays the cached response (Oradian's
+     * {@code checkDuplicates} is the further backstop) instead of transferring
+     * a second time.
+     */
+    public DepositTransferResponse submitDepositTransfer(DepositTransferRequest request, String idempotencyKey) {
+        return execute(() -> doSubmitDepositTransfer(request, idempotencyKey));
     }
 
-    public WithdrawalResponse submitWithdrawal(WithdrawalRequest request) {
-        return execute(() -> doSubmitWithdrawal(request));
+    /** Submit a withdrawal. See {@link #submitDepositTransfer} for the {@code idempotencyKey} contract. */
+    public WithdrawalResponse submitWithdrawal(WithdrawalRequest request, String idempotencyKey) {
+        return execute(() -> doSubmitWithdrawal(request, idempotencyKey));
     }
 
     public List<DepositAccount> getDepositsForMsisdn(String msisdn) {
@@ -114,11 +127,12 @@ public class OradianMiddlewareClient {
     //  the Retry instance can act on its retry-exceptions config.
     // ------------------------------------------------------------------
 
-    private DepositTransferResponse doSubmitDepositTransfer(DepositTransferRequest request) {
+    private DepositTransferResponse doSubmitDepositTransfer(DepositTransferRequest request, String idempotencyKey) {
         try {
             DepositTransferResponse response = restClient.post()
                     .uri("/internal/transfers/deposit")
                     .header("X-Internal-Token", internalToken)
+                    .header(IDEMPOTENCY_KEY_HEADER, idempotencyKey)
                     .header("Content-Type", "application/json")
                     .body(request)
                     .retrieve()
@@ -153,11 +167,12 @@ public class OradianMiddlewareClient {
         }
     }
 
-    private WithdrawalResponse doSubmitWithdrawal(WithdrawalRequest request) {
+    private WithdrawalResponse doSubmitWithdrawal(WithdrawalRequest request, String idempotencyKey) {
         try {
             WithdrawalResponse response = restClient.post()
                     .uri("/internal/transfers/withdraw")
                     .header("X-Internal-Token", internalToken)
+                    .header(IDEMPOTENCY_KEY_HEADER, idempotencyKey)
                     .header("Content-Type", "application/json")
                     .body(request)
                     .retrieve()

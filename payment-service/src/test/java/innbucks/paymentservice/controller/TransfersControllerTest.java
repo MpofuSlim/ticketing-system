@@ -123,7 +123,7 @@ class TransfersControllerTest {
                 .referenceNumber("1234567980123")
                 .transactionDate(LocalDate.now())
                 .build();
-        when(oradian.submitDepositTransfer(any(DepositTransferRequest.class))).thenReturn(upstream);
+        when(oradian.submitDepositTransfer(any(DepositTransferRequest.class), any())).thenReturn(upstream);
 
         ResponseEntity<ApiResult<DepositTransferResponse>> resp =
                 new TransfersController(jwt, oradian, stubbedTxService(), stubbedLimitService(), stubbedTxRepo())
@@ -132,7 +132,7 @@ class TransfersControllerTest {
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertNotNull(resp.getBody());
         assertEquals("1155", resp.getBody().getData().getTransactionID());
-        verify(oradian).submitDepositTransfer(any(DepositTransferRequest.class));
+        verify(oradian).submitDepositTransfer(any(DepositTransferRequest.class), any());
     }
 
     @Test
@@ -150,7 +150,7 @@ class TransfersControllerTest {
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
                 .thenReturn(List.of(ownedAccount(OWNED_ACCOUNT)));
-        when(oradian.submitDepositTransfer(any(DepositTransferRequest.class)))
+        when(oradian.submitDepositTransfer(any(DepositTransferRequest.class), any()))
                 .thenReturn(DepositTransferResponse.builder().transactionID("ok").build());
 
         DepositTransferRequest body = DepositTransferRequest.builder()
@@ -163,7 +163,7 @@ class TransfersControllerTest {
                 .transfer(bearerRequest(VALID_TOKEN), body);
 
         ArgumentCaptor<DepositTransferRequest> forwarded = ArgumentCaptor.forClass(DepositTransferRequest.class);
-        verify(oradian).submitDepositTransfer(forwarded.capture());
+        verify(oradian).submitDepositTransfer(forwarded.capture(), any());
         assertEquals("", forwarded.getValue().getNotes(),
                 "notes must be coerced from null to \"\" before forwarding");
     }
@@ -178,7 +178,7 @@ class TransfersControllerTest {
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
                 .thenReturn(List.of(ownedAccount(OWNED_ACCOUNT)));
-        when(oradian.submitDepositTransfer(any(DepositTransferRequest.class)))
+        when(oradian.submitDepositTransfer(any(DepositTransferRequest.class), any()))
                 .thenReturn(DepositTransferResponse.builder().transactionID("ok").build());
 
         DepositTransferRequest body = DepositTransferRequest.builder()
@@ -192,7 +192,7 @@ class TransfersControllerTest {
                 .transfer(bearerRequest(VALID_TOKEN), body);
 
         ArgumentCaptor<DepositTransferRequest> forwarded = ArgumentCaptor.forClass(DepositTransferRequest.class);
-        verify(oradian).submitDepositTransfer(forwarded.capture());
+        verify(oradian).submitDepositTransfer(forwarded.capture(), any());
         assertEquals("School fees", forwarded.getValue().getNotes());
     }
 
@@ -211,7 +211,7 @@ class TransfersControllerTest {
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
                 .thenReturn(List.of(ownedAccount(OWNED_ACCOUNT)));
-        when(oradian.submitDepositTransfer(any(DepositTransferRequest.class)))
+        when(oradian.submitDepositTransfer(any(DepositTransferRequest.class), any()))
                 .thenReturn(DepositTransferResponse.builder().transactionID("ok").build());
 
         DepositTransferRequest body = request(OWNED_ACCOUNT);
@@ -223,7 +223,7 @@ class TransfersControllerTest {
         LocalDate after = LocalDate.now();
 
         ArgumentCaptor<DepositTransferRequest> forwarded = ArgumentCaptor.forClass(DepositTransferRequest.class);
-        verify(oradian).submitDepositTransfer(forwarded.capture());
+        verify(oradian).submitDepositTransfer(forwarded.capture(), any());
         LocalDate stamped = forwarded.getValue().getTransactionDate();
         assertNotNull(stamped, "transactionDate must be stamped by the controller");
         assertNotEquals(LocalDate.of(1999, 1, 1), stamped, "attacker-supplied date must be overwritten");
@@ -319,7 +319,7 @@ class TransfersControllerTest {
         assertEquals("fromAccountId does not belong to the authenticated customer",
                 resp.getBody().getMessage());
         verify(oradian).getDepositsForMsisdn(eq(CUSTOMER_PHONE));
-        verify(oradian, never()).submitDepositTransfer(any());
+        verify(oradian, never()).submitDepositTransfer(any(), any());
     }
 
     @Test
@@ -337,7 +337,7 @@ class TransfersControllerTest {
                         .transfer(bearerRequest(VALID_TOKEN), request(OWNED_ACCOUNT));
 
         assertEquals(HttpStatus.FORBIDDEN, resp.getStatusCode());
-        verify(oradian, never()).submitDepositTransfer(any());
+        verify(oradian, never()).submitDepositTransfer(any(), any());
     }
 
     @Test
@@ -360,7 +360,7 @@ class TransfersControllerTest {
                         .transfer(bearerRequest(VALID_TOKEN), request(""));
 
         assertEquals(HttpStatus.FORBIDDEN, resp.getStatusCode());
-        verify(oradian, never()).submitDepositTransfer(any());
+        verify(oradian, never()).submitDepositTransfer(any(), any());
     }
 
     // ----- /payments/withdraw -----
@@ -397,7 +397,7 @@ class TransfersControllerTest {
                 .commandID("210")
                 .referenceNumber("1234567890123")
                 .build();
-        when(oradian.submitWithdrawal(any(WithdrawalRequest.class))).thenReturn(upstream);
+        when(oradian.submitWithdrawal(any(WithdrawalRequest.class), any())).thenReturn(upstream);
 
         ResponseEntity<ApiResult<WithdrawalResponse>> resp =
                 new TransfersController(jwt, oradian, stubbedTxService(), stubbedLimitService(), stubbedTxRepo())
@@ -407,7 +407,7 @@ class TransfersControllerTest {
         assertEquals("1151", resp.getBody().getData().getTransactionID());
 
         ArgumentCaptor<WithdrawalRequest> forwarded = ArgumentCaptor.forClass(WithdrawalRequest.class);
-        verify(oradian).submitWithdrawal(forwarded.capture());
+        verify(oradian).submitWithdrawal(forwarded.capture(), any());
         WithdrawalRequest sent = forwarded.getValue();
         assertEquals("MobileBanking", sent.getTransactionBranchID(),
                 "transactionBranchID must be hardcoded to MobileBanking");
@@ -483,7 +483,7 @@ class TransfersControllerTest {
         assertEquals("accountID does not belong to the authenticated customer",
                 resp.getBody().getMessage());
         verify(oradian).getDepositsForMsisdn(eq(CUSTOMER_PHONE));
-        verify(oradian, never()).submitWithdrawal(any());
+        verify(oradian, never()).submitWithdrawal(any(), any());
     }
 
     @Test
@@ -499,7 +499,7 @@ class TransfersControllerTest {
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
                 .thenReturn(List.of(ownedAccount(OWNED_ACCOUNT)));
-        when(oradian.submitWithdrawal(any(WithdrawalRequest.class)))
+        when(oradian.submitWithdrawal(any(WithdrawalRequest.class), any()))
                 .thenReturn(WithdrawalResponse.builder().transactionID("ok").build());
 
         WithdrawalRequest body = withdrawalRequest(OWNED_ACCOUNT);
@@ -511,7 +511,7 @@ class TransfersControllerTest {
                 .withdraw(bearerRequest(VALID_TOKEN), body);
 
         ArgumentCaptor<WithdrawalRequest> forwarded = ArgumentCaptor.forClass(WithdrawalRequest.class);
-        verify(oradian).submitWithdrawal(forwarded.capture());
+        verify(oradian).submitWithdrawal(forwarded.capture(), any());
         WithdrawalRequest sent = forwarded.getValue();
         assertNotEquals(LocalDate.of(1999, 1, 1), sent.getTransactionDate(),
                 "attacker-supplied transactionDate must be overwritten");
@@ -531,7 +531,7 @@ class TransfersControllerTest {
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
                 .thenReturn(List.of(ownedAccount(OWNED_ACCOUNT)));
-        when(oradian.submitWithdrawal(any(WithdrawalRequest.class)))
+        when(oradian.submitWithdrawal(any(WithdrawalRequest.class), any()))
                 .thenReturn(WithdrawalResponse.builder().transactionID("ok").build());
 
         WithdrawalRequest body = WithdrawalRequest.builder()
@@ -544,7 +544,7 @@ class TransfersControllerTest {
                 .withdraw(bearerRequest(VALID_TOKEN), body);
 
         ArgumentCaptor<WithdrawalRequest> forwarded = ArgumentCaptor.forClass(WithdrawalRequest.class);
-        verify(oradian).submitWithdrawal(forwarded.capture());
+        verify(oradian).submitWithdrawal(forwarded.capture(), any());
         assertEquals("", forwarded.getValue().getNotes());
     }
 
@@ -560,7 +560,7 @@ class TransfersControllerTest {
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
                 .thenReturn(List.of(ownedAccount(OWNED_ACCOUNT)));
-        when(oradian.submitDepositTransfer(any(DepositTransferRequest.class)))
+        when(oradian.submitDepositTransfer(any(DepositTransferRequest.class), any()))
                 .thenReturn(DepositTransferResponse.builder()
                         .transactionID("oradian-1155")
                         .referenceNumber("ref-9999")
@@ -599,7 +599,7 @@ class TransfersControllerTest {
                 .thenReturn(List.of(ownedAccount(OWNED_ACCOUNT)));
         OradianMiddlewareException upstream =
                 new OradianMiddlewareException("Insufficient funds", 422);
-        when(oradian.submitDepositTransfer(any(DepositTransferRequest.class)))
+        when(oradian.submitDepositTransfer(any(DepositTransferRequest.class), any()))
                 .thenThrow(upstream);
 
         TransactionService txService = stubbedTxService();
@@ -627,7 +627,7 @@ class TransfersControllerTest {
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
                 .thenReturn(List.of(ownedAccount(OWNED_ACCOUNT)));
-        when(oradian.submitWithdrawal(any(WithdrawalRequest.class)))
+        when(oradian.submitWithdrawal(any(WithdrawalRequest.class), any()))
                 .thenReturn(WithdrawalResponse.builder()
                         .transactionID("oradian-2233")
                         .referenceNumber("ref-7777")
@@ -664,7 +664,7 @@ class TransfersControllerTest {
                 .thenReturn(List.of(ownedAccount(OWNED_ACCOUNT)));
         OradianMiddlewareException upstream =
                 new OradianMiddlewareException("Account suspended", 422);
-        when(oradian.submitWithdrawal(any(WithdrawalRequest.class))).thenThrow(upstream);
+        when(oradian.submitWithdrawal(any(WithdrawalRequest.class), any())).thenThrow(upstream);
 
         TransactionService txService = stubbedTxService();
 
@@ -699,7 +699,7 @@ class TransfersControllerTest {
         assertTrue(ex.getMessage().contains("greater than zero"));
         // Pre-Oradian validation; nothing must hit the ledger or upstream.
         verify(txService, never()).openPending(any());
-        verify(oradian, never()).submitDepositTransfer(any());
+        verify(oradian, never()).submitDepositTransfer(any(), any());
     }
 
     @Test
@@ -722,7 +722,7 @@ class TransfersControllerTest {
                         .transfer(bearerRequest(VALID_TOKEN), body));
         assertTrue(ex.getMessage().contains("valid decimal"));
         verify(txService, never()).openPending(any());
-        verify(oradian, never()).submitDepositTransfer(any());
+        verify(oradian, never()).submitDepositTransfer(any(), any());
     }
 
     @Test
@@ -757,7 +757,7 @@ class TransfersControllerTest {
         OradianMiddlewareClient oradian = mock(OradianMiddlewareClient.class);
         when(oradian.getDepositsForMsisdn(CUSTOMER_PHONE))
                 .thenReturn(List.of(ownedAccount(OWNED_ACCOUNT)));
-        when(oradian.submitDepositTransfer(any(DepositTransferRequest.class)))
+        when(oradian.submitDepositTransfer(any(DepositTransferRequest.class), any()))
                 .thenReturn(DepositTransferResponse.builder().transactionID("ok").build());
 
         TransactionService txService = stubbedTxService();
@@ -773,6 +773,14 @@ class TransfersControllerTest {
         verify(txService).openPending(pending.capture());
         assertEquals("idem-abc-123", pending.getValue().getIdempotencyKey(),
                 "ledger row must carry the FE's Idempotency-Key for later replay/dedup audit");
+
+        // ...and the controller must forward that same key to Oradian, so a
+        // Resilience4j retry (or an FE re-tap) dedups upstream instead of
+        // moving the money twice.
+        ArgumentCaptor<String> forwardedKey = ArgumentCaptor.forClass(String.class);
+        verify(oradian).submitDepositTransfer(any(DepositTransferRequest.class), forwardedKey.capture());
+        assertEquals("idem-abc-123", forwardedKey.getValue(),
+                "controller must forward the FE Idempotency-Key to the Oradian transfer call");
     }
 
     // ----- KYC tier + account status gates -----
@@ -840,7 +848,7 @@ class TransfersControllerTest {
         assertEquals(HttpStatus.FORBIDDEN, resp.getStatusCode());
         assertTrue(resp.getBody().getMessage().contains("Frozen"),
                 "message should leak the upstream status so the FE can render \"account frozen\" UX");
-        verify(oradian, never()).submitDepositTransfer(any());
+        verify(oradian, never()).submitDepositTransfer(any(), any());
     }
 
     @Test
@@ -890,7 +898,7 @@ class TransfersControllerTest {
         // signal) AND must NOT have called Oradian (no real-money side
         // effect from a policy violation).
         verify(txService, never()).openPending(any());
-        verify(oradian, never()).submitDepositTransfer(any());
+        verify(oradian, never()).submitDepositTransfer(any(), any());
     }
 
     @Test
@@ -916,7 +924,7 @@ class TransfersControllerTest {
         assertTrue(ex.getMessage().contains("Per-transaction limit exceeded"));
 
         verify(txService, never()).openPending(any());
-        verify(oradian, never()).submitWithdrawal(any());
+        verify(oradian, never()).submitWithdrawal(any(), any());
     }
 
     @Test
@@ -936,7 +944,7 @@ class TransfersControllerTest {
 
         assertEquals(HttpStatus.FORBIDDEN, resp.getStatusCode());
         assertTrue(resp.getBody().getMessage().contains("Closed"));
-        verify(oradian, never()).submitWithdrawal(any());
+        verify(oradian, never()).submitWithdrawal(any(), any());
     }
 
     // ----- GET /payments/transactions (history endpoint) -----

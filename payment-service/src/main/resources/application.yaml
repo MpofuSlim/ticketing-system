@@ -127,6 +127,16 @@ payment-service:
       partitions: ${PAYMENT_TX_TOPIC_PARTITIONS:3}
       replicas: ${PAYMENT_TX_TOPIC_REPLICAS:1}
 
+# Idempotency-Key replay cache backing store.
+#   redis  — shared across pods; an Idempotency-Key replay is honored even when
+#            the retry lands on a different replica or after a restart. Set in
+#            docker-compose for staging/prod (reuses the velocity-counter Redis).
+#   memory — per-pod ConcurrentHashMap; only safe for single-instance dev/tests.
+# Defaults to memory so local dev and tests need no Redis.
+app:
+  idempotency:
+    store: ${IDEMPOTENCY_STORE:memory}
+
 # Verify-only JWT secret. payment-service does NOT mint tokens — user-service
 # is the issuer. This must match user-service's jwt.secret exactly; tokens
 # signed by user-service are validated here for the authenticated

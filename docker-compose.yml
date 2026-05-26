@@ -293,6 +293,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod}
       DB_URL: jdbc:postgresql://postgres:5432/payment_service
@@ -304,6 +306,14 @@ services:
       # was the odd one out — letting it silently drift the staging DB.
       JPA_DDL_AUTO: validate
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
+      # Redis backs the velocity counter (TransferLimitService) AND the
+      # cross-pod Idempotency-Key replay cache (IDEMPOTENCY_STORE=redis).
+      # Without it the counter fails closed — rejecting every transfer — and
+      # idempotency would be per-pod, so a retry landing on another replica
+      # could execute a second real transfer.
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      IDEMPOTENCY_STORE: redis
       EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
       # Oradian middleware lives in the sibling stack on the shared
       # innbucks-shared docker network — reachable by service name.
