@@ -1,5 +1,6 @@
 package com.innbucks.userservice.service;
 
+import com.innbucks.userservice.client.WhatsAppNotificationClient;
 import com.innbucks.userservice.entity.CustomerProfile;
 import com.innbucks.userservice.entity.Otp;
 import com.innbucks.userservice.entity.OtpRetryAttempt;
@@ -16,6 +17,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.EnumSet;
@@ -25,8 +27,7 @@ import java.util.EnumSet;
 @Slf4j
 public class OtpService {
 
-    // Dev placeholder — real SMS delivery wiring will replace this.
-    static final String FIXED_OTP = "000000";
+    private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     static final Duration OTP_TTL = Duration.ofMinutes(5);
     static final Duration RETRY_WINDOW = Duration.ofMinutes(10);
@@ -40,6 +41,7 @@ public class OtpService {
     private final CustomerProfileRepository customerProfileRepository;
     private final PendingRegistrationRepository pendingRegistrationRepository;
     private final com.innbucks.userservice.integration.LoyaltyServiceClient loyaltyServiceClient;
+    private final WhatsAppNotificationClient whatsAppNotificationClient;
 
     /**
      * Send an OTP with rate-limit enforcement. Used by the public /auth/otp/request endpoint
@@ -49,8 +51,9 @@ public class OtpService {
     public void sendOtp(String phoneNumber) {
         Instant now = Instant.now();
         enforceRetryQuota(phoneNumber, now);
-        replaceOtp(phoneNumber, now);
-        dispatch(phoneNumber, FIXED_OTP);
+        String code = generateCode();
+        replaceOtp(phoneNumber, now, code);
+        dispatch(phoneNumber, code);
     }
 
     /**
@@ -125,12 +128,12 @@ public class OtpService {
         retryRepository.save(attempt);
     }
 
-    private void replaceOtp(String phoneNumber, Instant now) {
+    private void replaceOtp(String phoneNumber, Instant now, String code) {
         otpRepository.deleteByPhoneNumber(phoneNumber);
         otpRepository.flush();
         Otp otp = Otp.builder()
                 .phoneNumber(phoneNumber)
-                .code(FIXED_OTP)
+                .code(code)
                 .expiresAt(now.plus(OTP_TTL))
                 .createdAt(now)
                 .failedAttempts(0)
@@ -138,9 +141,21 @@ public class OtpService {
         otpRepository.save(otp);
     }
 
+    private static String generateCode() {
+        // Cryptographically-strong 6-digit code, zero-padded (000000–999999).
+        return String.format("%06d", SECURE_RANDOM.nextInt(1_000_000));
+    }
+
     private void dispatch(String phoneNumber, String code) {
-        // Stub delivery — log as if it were an SMS gateway call.
-        log.info("[OTP] phone={} code={} (dev fixed OTP; replace with SMS provider)", phoneNumber, code);
+        // Deliver via the WhatsApp gateway. Runs inside the @Transactional
+        // sendOtp boundary on purpose: if delivery fails, the persisted OTP and
+        // the retry-counter increment roll back, so the customer can retry
+        // cleanly with no phantom code left behind. Never log the code itself.
+        String message = "Your InnBucks verification code is " + code
+                + ". It expires in " + OTP_TTL.toMinutes()
+                + " minutes. Do not share this code with anyone.";
+        whatsAppNotificationClient.sendCustomNotification(phoneNumber, message);
+        log.info("[OTP] dispatched to phone={}", phoneNumber);
     }
 
     /**

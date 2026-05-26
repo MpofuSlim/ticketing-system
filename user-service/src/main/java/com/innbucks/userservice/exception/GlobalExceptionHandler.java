@@ -1,5 +1,6 @@
 package com.innbucks.userservice.exception;
 
+import com.innbucks.userservice.client.NotificationDeliveryException;
 import com.innbucks.userservice.client.OradianClientException;
 import com.innbucks.userservice.dto.ApiResult;
 import lombok.extern.slf4j.Slf4j;
@@ -62,6 +63,16 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(OradianClientException.class)
     public ResponseEntity<ApiResult<Void>> handleOradian(OradianClientException ex) {
         log.warn("Oradian middleware call failed: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
+                .body(ApiResult.error(HttpStatus.BAD_GATEWAY, ex.getMessage()));
+    }
+
+    // WhatsApp notification gateway failures (OTP / approval delivery). 502 so
+    // the client knows delivery failed — and, for OTP, that the rolled-back
+    // request can simply be retried.
+    @ExceptionHandler(NotificationDeliveryException.class)
+    public ResponseEntity<ApiResult<Void>> handleNotificationDelivery(NotificationDeliveryException ex) {
+        log.warn("Notification delivery failed: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
                 .body(ApiResult.error(HttpStatus.BAD_GATEWAY, ex.getMessage()));
     }
