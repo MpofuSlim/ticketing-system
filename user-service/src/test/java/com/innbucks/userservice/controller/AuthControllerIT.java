@@ -3,7 +3,9 @@ package com.innbucks.userservice.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.innbucks.userservice.client.OradianClient;
 import com.innbucks.userservice.client.OradianCustomerResponse;
+import com.innbucks.userservice.client.WhatsAppNotificationClient;
 import com.innbucks.userservice.entity.User;
+import com.innbucks.userservice.repository.OtpRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.service.UserAdminService;
 import org.junit.jupiter.api.BeforeEach;
@@ -36,6 +38,7 @@ class AuthControllerIT {
     @Autowired ObjectMapper objectMapper;
     @Autowired UserRepository userRepository;
     @Autowired UserAdminService userAdminService;
+    @Autowired OtpRepository otpRepository;
 
     // Tier-2 registration mirrors the customer into Oradian via this client;
     // hitting a real Oradian instance from a test is neither possible nor
@@ -44,6 +47,12 @@ class AuthControllerIT {
     // 502s — which is what was masking this test as "passing" until Failsafe
     // started actually running it.
     @MockitoBean OradianClient oradianClient;
+
+    // OTP delivery now goes through the external WhatsApp gateway; stub it so
+    // the customer-register flow makes no real network call. The OTP is still
+    // generated + persisted, so the tier-2 test reads the real code back from
+    // OtpRepository to verify.
+    @MockitoBean WhatsAppNotificationClient whatsAppNotificationClient;
 
     @BeforeEach
     void stubOradianSuccess() {
@@ -209,8 +218,11 @@ class AuthControllerIT {
                         .content(objectMapper.writeValueAsString(tier1)))
                 .andExpect(status().isCreated());
 
-        // Verify OTP (dev fixed code = 000000) — materialises the User + Tier-1 profile.
-        Map<String, String> verify = Map.of("phoneNumber", phone, "code", "000000");
+        // OTP is now a random 6-digit code (delivered via the mocked WhatsApp
+        // gateway). Read the persisted code and verify with it to materialise
+        // the User + Tier-1 profile.
+        String code = otpRepository.findByPhoneNumber(phone).orElseThrow().getCode();
+        Map<String, String> verify = Map.of("phoneNumber", phone, "code", code);
         mockMvc.perform(post("/auth/otp/verify")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(verify)))

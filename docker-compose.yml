@@ -144,6 +144,11 @@ services:
       # Shared secret between ticketing's own services (loyalty webhooks).
       # Separate concern from ORADIAN_INTERNAL_TOKEN; can be a different value.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
+      # External WhatsApp notification gateway (OTP + approval delivery).
+      # Override the URL per environment (the application.yaml default is a dev
+      # ngrok tunnel that rotates); the api key is a required secret.
+      WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-https://maximum-implicitly-treefrog.ngrok-free.app}
+      WHATSAPP_API_KEY: ${WHATSAPP_API_KEY:?set WHATSAPP_API_KEY in .env}
     ports:
       - "8081:8081"
     healthcheck:

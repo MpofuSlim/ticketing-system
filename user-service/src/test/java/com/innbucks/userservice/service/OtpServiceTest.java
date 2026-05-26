@@ -1,5 +1,6 @@
 package com.innbucks.userservice.service;
 
+import com.innbucks.userservice.client.WhatsAppNotificationClient;
 import com.innbucks.userservice.entity.CustomerProfile;
 import com.innbucks.userservice.entity.Otp;
 import com.innbucks.userservice.entity.OtpRetryAttempt;
@@ -30,27 +31,45 @@ class OtpServiceTest {
                                   UserRepository userRepo,
                                   CustomerProfileRepository profileRepo,
                                   PendingRegistrationRepository pendingRepo) {
+        return newService(otpRepo, retryRepo, userRepo, profileRepo, pendingRepo,
+                mock(WhatsAppNotificationClient.class));
+    }
+
+    private OtpService newService(OtpRepository otpRepo,
+                                  OtpRetryAttemptRepository retryRepo,
+                                  UserRepository userRepo,
+                                  CustomerProfileRepository profileRepo,
+                                  PendingRegistrationRepository pendingRepo,
+                                  WhatsAppNotificationClient whatsApp) {
         // LoyaltyServiceClient.promoteUserByPhone is fired post-OTP-verify but
         // the call is best-effort and never affects assertions in these tests,
         // so a noop mock is fine.
         return new OtpService(otpRepo, retryRepo, userRepo, profileRepo, pendingRepo,
-                mock(LoyaltyServiceClient.class));
+                mock(LoyaltyServiceClient.class), whatsApp);
     }
 
     @Test
-    void sendOtp_replacesExistingAndPersistsFixedCode() {
+    void sendOtp_replacesExistingAndPersistsRandomSixDigitCode() {
         OtpRepository otpRepo = mock(OtpRepository.class);
         OtpRetryAttemptRepository retryRepo = mock(OtpRetryAttemptRepository.class);
         when(retryRepo.findByPhoneNumber(anyString())).thenReturn(Optional.empty());
+        WhatsAppNotificationClient whatsApp = mock(WhatsAppNotificationClient.class);
 
-        newService(otpRepo, retryRepo, mock(UserRepository.class), mock(CustomerProfileRepository.class), mock(PendingRegistrationRepository.class))
+        newService(otpRepo, retryRepo, mock(UserRepository.class), mock(CustomerProfileRepository.class), mock(PendingRegistrationRepository.class), whatsApp)
                 .sendOtp("+263771234567");
 
         verify(otpRepo).deleteByPhoneNumber("+263771234567");
         ArgumentCaptor<Otp> saved = ArgumentCaptor.forClass(Otp.class);
         verify(otpRepo).save(saved.capture());
-        assertEquals("000000", saved.getValue().getCode());
+        String code = saved.getValue().getCode();
+        assertTrue(code.matches("\\d{6}"), "OTP should be a 6-digit code, was: " + code);
         assertEquals("+263771234567", saved.getValue().getPhoneNumber());
+
+        // The exact code that was persisted is delivered to the same phone.
+        ArgumentCaptor<String> message = ArgumentCaptor.forClass(String.class);
+        verify(whatsApp).sendCustomNotification(eq("+263771234567"), message.capture());
+        assertTrue(message.getValue().contains(code),
+                "WhatsApp message should carry the generated OTP code");
     }
 
     @Test
