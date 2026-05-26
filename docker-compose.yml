@@ -125,6 +125,10 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
+      # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
+      # external OTel collector (none is bundled in this stack) to export spans.
+      TRACING_ENABLED: ${TRACING_ENABLED:-false}
+      OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
       # Self-zone hostname so the registry advertises itself on the shared
       # network as discovery-server (not its container id).
       EUREKA_INSTANCE_HOSTNAME: discovery-server
@@ -157,6 +161,10 @@ services:
       # Override per-environment in .env to relax (e.g. `dev` for local).
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
+      # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
+      # external OTel collector (none is bundled in this stack) to export spans.
+      TRACING_ENABLED: ${TRACING_ENABLED:-false}
+      OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
       EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
       DB_URL: jdbc:postgresql://postgres:5432/user_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
@@ -209,6 +217,10 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
+      # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
+      # external OTel collector (none is bundled in this stack) to export spans.
+      TRACING_ENABLED: ${TRACING_ENABLED:-false}
+      OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
       DB_URL: jdbc:postgresql://postgres:5432/event_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
@@ -250,6 +262,10 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
+      # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
+      # external OTel collector (none is bundled in this stack) to export spans.
+      TRACING_ENABLED: ${TRACING_ENABLED:-false}
+      OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
       EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
       DB_URL: jdbc:postgresql://postgres:5432/seat_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
@@ -292,6 +308,10 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
+      # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
+      # external OTel collector (none is bundled in this stack) to export spans.
+      TRACING_ENABLED: ${TRACING_ENABLED:-false}
+      OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
       DB_URL: jdbc:postgresql://postgres:5432/booking_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
@@ -343,6 +363,10 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
+      # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
+      # external OTel collector (none is bundled in this stack) to export spans.
+      TRACING_ENABLED: ${TRACING_ENABLED:-false}
+      OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
       DB_URL: jdbc:postgresql://postgres:5432/payment_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
@@ -402,6 +426,10 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
+      # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
+      # external OTel collector (none is bundled in this stack) to export spans.
+      TRACING_ENABLED: ${TRACING_ENABLED:-false}
+      OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
       EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
       DB_URL: jdbc:postgresql://postgres:5432/loyalty_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
@@ -451,6 +479,10 @@ services:
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
+      # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
+      # external OTel collector (none is bundled in this stack) to export spans.
+      TRACING_ENABLED: ${TRACING_ENABLED:-false}
+      OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
       EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
       # Redis backs the gateway's RequestRateLimiter token bucket store.
