@@ -34,7 +34,8 @@ public class ProductionSecretsGuard {
     private static final List<String> SECRETS_TO_CHECK = List.of(
             "innbucks.internal-api-token",
             "oradian-middleware.internal-token",
-            "jwt.secret"
+            "jwt.secret",
+            "whatsapp.api-key"
     );
 
     private static final String PLACEHOLDER_MARKER = "change-me";
@@ -59,7 +60,7 @@ public class ProductionSecretsGuard {
                     "Refusing to start under 'prod' profile: the following secrets " +
                     "still have placeholder defaults containing '" + PLACEHOLDER_MARKER +
                     "': " + offenders + ". Override them via env vars " +
-                    "(INTERNAL_API_TOKEN, ORADIAN_INTERNAL_TOKEN, JWT_SECRET) before booting in production."
+                    "(INTERNAL_API_TOKEN, ORADIAN_INTERNAL_TOKEN, JWT_SECRET, WHATSAPP_API_KEY) before booting in production."
             );
         }
         log.info("ProductionSecretsGuard verified {} secret(s); none carry placeholder defaults.",
