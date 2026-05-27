@@ -1,0 +1,34 @@
+spring:
+  application:
+    name: innbucks-core-gateway
+
+server:
+  # Own port; override per host (avoid clashing with whatever else runs there).
+  port: ${SERVER_PORT:8088}
+
+# InnBucks core Eureka cluster (5-node HA), as supplied by the platform team.
+# This spike only FETCHES the registry — register-with-eureka is false so it
+# does NOT add itself to the InnBucks registry while we're just validating
+# reachability + discovery of veengu-integration. Flip EUREKA_REGISTER=true
+# later if/when InnBucks services need to call back into the adapter.
+#
+# If their Eureka turns out to require HTTP Basic auth, set creds in the URLs:
+#   http://USER:PASS@13.245.148.112:8761/eureka/,...  (via INNBUCKS_EUREKA_ZONES)
+eureka:
+  client:
+    service-url:
+      defaultZone: ${INNBUCKS_EUREKA_ZONES:http://13.245.148.112:8761/eureka/,http://13.246.83.218:8761/eureka/,http://13.245.140.176:8761/eureka/,http://3.9.50.61:8761/eureka/,http://34.253.166.104:8761/eureka/}
+    register-with-eureka: ${EUREKA_REGISTER:false}
+    fetch-registry: true
+    # Fail fast-ish if the cluster is unreachable, so logs show the problem
+    # instead of hanging on long default timeouts.
+    eureka-server-connect-timeout-seconds: ${EUREKA_CONNECT_TIMEOUT:5}
+    eureka-server-read-timeout-seconds: ${EUREKA_READ_TIMEOUT:5}
+  instance:
+    prefer-ip-address: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info

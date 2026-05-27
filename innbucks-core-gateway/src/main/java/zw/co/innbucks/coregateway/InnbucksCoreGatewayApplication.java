@@ -1,0 +1,12 @@
+package zw.co.innbucks.coregateway;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class InnbucksCoreGatewayApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(InnbucksCoreGatewayApplication.class, args);
+    }
+}
