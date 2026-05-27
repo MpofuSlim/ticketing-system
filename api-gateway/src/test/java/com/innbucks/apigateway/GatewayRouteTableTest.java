@@ -24,8 +24,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  *     publicly reachable again);
  *   - /payments/** is split by HTTP method into differently-sized rate-limit
  *     buckets (the write verbs get the tight money-path limit);
- *   - /auth/** deliberately carries NO rate limiter so logins survive a Redis
- *     outage, while every other authenticated route must keep one;
+ *   - the /auth/** catch-all deliberately carries NO rate limiter so logins
+ *     survive a Redis outage, while the abuse-prone /auth sub-routes (customer
+ *     lookup/registration) and every other authenticated route keep one — and
+ *     those sub-routes must be matched BEFORE the catch-all;
  *   - the api-docs proxies are scoped to /v3/api-docs ONLY — a historical /**
  *     here let callers tunnel past edge-deny and the limiter.
  * A missing/renamed route is the "added an endpoint, forgot the gateway route
@@ -39,6 +41,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class GatewayRouteTableTest {
 
     private static final List<String> EXPECTED_ROUTE_IDS = List.of(
+            "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
             "user-auth-route", "user-admin-route", "user-self-route",
             "event-availability-deny", "event-service-route",
             "seat-service-seat-route", "seat-service-category-route",
@@ -61,6 +64,7 @@ class GatewayRouteTableTest {
             "loyalty-service-route", "/loyalty/**");
 
     private static final List<String> RATE_LIMITED_ROUTES = List.of(
+            "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
             "user-admin-route", "user-self-route", "event-service-route",
             "seat-service-seat-route", "seat-service-category-route",
             "booking-service-route", "payment-service-read-route",
@@ -142,6 +146,31 @@ class GatewayRouteTableTest {
                 .doesNotContain("RequestRateLimiter");
         RATE_LIMITED_ROUTES.forEach(id ->
                 assertThat(filterNames(id)).as("rate limiter on %s", id).contains("RequestRateLimiter"));
+    }
+
+    @Test
+    void authSensitiveSubRoutesPrecedeTheAuthCatchAll() {
+        List<String> order = orderedIds();
+        int catchAll = order.indexOf("user-auth-route");
+        List.of("auth-customer-lookup-route", "auth-customer-route", "auth-register-route")
+                .forEach(id -> assertThat(order.indexOf(id))
+                        .as("%s must match before the /auth/** catch-all", id)
+                        .isBetween(0, catchAll - 1));
+        // /auth/customer/send-money/** is a subset of /auth/customer/** — it
+        // must be listed first or the broader route would swallow it.
+        assertThat(order.indexOf("auth-customer-lookup-route"))
+                .as("send-money lookup must precede the broader /auth/customer/**")
+                .isLessThan(order.indexOf("auth-customer-route"));
+    }
+
+    @Test
+    void authSensitiveSubRoutesTargetTheirPaths() {
+        assertThat(predicateArgs("auth-customer-lookup-route", "Path"))
+                .containsExactly("/auth/customer/send-money/**");
+        assertThat(predicateArgs("auth-customer-route", "Path"))
+                .containsExactly("/auth/customer/**");
+        assertThat(predicateArgs("auth-register-route", "Path"))
+                .containsExactly("/auth/register");
     }
 
     @Test

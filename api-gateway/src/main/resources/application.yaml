@@ -16,12 +16,62 @@ spring:
     gateway:
       server:
         webflux:
-          # Rate limiter applied to authenticated routes only. /auth is
-          # intentionally excluded so logins still work when Redis is
-          # unreachable (Redis-backed RequestRateLimiter fails closed
-          # with 403 on connection errors). Brute-force protection for
-          # /auth lives in user-service (OTP throttling, etc.).
+          # The /auth/** catch-all (user-auth-route, declared last in this group)
+          # intentionally skips the rate limiter so logins still work when Redis
+          # is unreachable (the Redis-backed RequestRateLimiter fails closed with
+          # 403 on connection errors). Brute-force protection for login/refresh/
+          # OTP lives in user-service (LoginRateLimiter + account lockout + OTP
+          # throttling). A few abuse-prone /auth endpoints are the exception:
+          # they get their own rate-limited routes declared BEFORE the catch-all
+          # (SCG matches the first listed route that fits). These fail closed on
+          # a Redis outage, an acceptable trade for registration/lookup paths
+          # while login stays on the limiter-free catch-all.
           routes:
+            # Customer account lookup by phone. Authenticated, but one valid
+            # token could otherwise walk the phone space to harvest who is a
+            # registered customer and their send-money details — tightest bucket.
+            - id: auth-customer-lookup-route
+              uri: lb://user-service
+              predicates:
+                - Path=/auth/customer/send-money/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${AUTH_LOOKUP_RATE_LIMIT_REPLENISH_PER_SECOND:5}
+                    redis-rate-limiter.burstCapacity: ${AUTH_LOOKUP_RATE_LIMIT_BURST_CAPACITY:10}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
+
+            # Remaining customer endpoints: tiered registration + deposit/tier
+            # reads (some proxy to the external Oradian middleware). Moderate
+            # bucket — ample for normal app use, capped against scripted abuse.
+            - id: auth-customer-route
+              uri: lb://user-service
+              predicates:
+                - Path=/auth/customer/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${AUTH_CUSTOMER_RATE_LIMIT_REPLENISH_PER_SECOND:20}
+                    redis-rate-limiter.burstCapacity: ${AUTH_CUSTOMER_RATE_LIMIT_BURST_CAPACITY:40}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
+
+            # System-user (organizer/merchant) registration. Unauthenticated and
+            # rare per real client; a tight per-IP bucket curbs signup spam and
+            # email/phone enumeration via the "already registered" response.
+            - id: auth-register-route
+              uri: lb://user-service
+              predicates:
+                - Path=/auth/register
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${AUTH_REGISTER_RATE_LIMIT_REPLENISH_PER_SECOND:1}
+                    redis-rate-limiter.burstCapacity: ${AUTH_REGISTER_RATE_LIMIT_BURST_CAPACITY:5}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
+
             - id: user-auth-route
               uri: lb://user-service
               predicates:
@@ -306,6 +356,14 @@ spring:
                 allowedHeaders: "*"
                 allowCredentials: true
                 maxAge: 3600
+
+# Number of trusted reverse proxies in front of the gateway. The per-IP
+# rate-limit key reads the client address from X-Forwarded-For at this depth
+# (default 1 = a single ingress/LB). MUST be set to 0 when the gateway is
+# directly internet-exposed with no trusted proxy, otherwise a client could
+# forge X-Forwarded-For to mint unlimited rate-limit buckets.
+gateway:
+  trusted-proxy-count: ${GATEWAY_TRUSTED_PROXY_COUNT:1}
 
 server:
   port: ${SERVER_PORT:8080}
