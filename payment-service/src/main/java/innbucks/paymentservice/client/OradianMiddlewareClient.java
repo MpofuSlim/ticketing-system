@@ -64,6 +64,14 @@ public class OradianMiddlewareClient {
     private static final String RESILIENCE_INSTANCE_NAME = "oradian-middleware";
     /** Required by the middleware's /internal/transfers/** endpoints for replay dedup. */
     private static final String IDEMPOTENCY_KEY_HEADER = "Idempotency-Key";
+    /**
+     * Required by the middleware's /internal/transfers/** endpoints: the phone
+     * of the account owner. The middleware re-verifies the source account
+     * belongs to this customer (defence-in-depth ownership check) before
+     * calling Oradian. We forward the JWT's phoneNumber claim — the same value
+     * we already used for the local deposits-ownership lookup.
+     */
+    private static final String OWNER_MSISDN_HEADER = "X-Owner-Msisdn";
 
     private final RestClient restClient;
     private final ObjectMapper objectMapper;
@@ -105,13 +113,15 @@ public class OradianMiddlewareClient {
      * {@code checkDuplicates} is the further backstop) instead of transferring
      * a second time.
      */
-    public DepositTransferResponse submitDepositTransfer(DepositTransferRequest request, String idempotencyKey) {
-        return execute(() -> doSubmitDepositTransfer(request, idempotencyKey));
+    public DepositTransferResponse submitDepositTransfer(
+            DepositTransferRequest request, String idempotencyKey, String ownerMsisdn) {
+        return execute(() -> doSubmitDepositTransfer(request, idempotencyKey, ownerMsisdn));
     }
 
     /** Submit a withdrawal. See {@link #submitDepositTransfer} for the {@code idempotencyKey} contract. */
-    public WithdrawalResponse submitWithdrawal(WithdrawalRequest request, String idempotencyKey) {
-        return execute(() -> doSubmitWithdrawal(request, idempotencyKey));
+    public WithdrawalResponse submitWithdrawal(
+            WithdrawalRequest request, String idempotencyKey, String ownerMsisdn) {
+        return execute(() -> doSubmitWithdrawal(request, idempotencyKey, ownerMsisdn));
     }
 
     public List<DepositAccount> getDepositsForMsisdn(String msisdn) {
@@ -127,12 +137,14 @@ public class OradianMiddlewareClient {
     //  the Retry instance can act on its retry-exceptions config.
     // ------------------------------------------------------------------
 
-    private DepositTransferResponse doSubmitDepositTransfer(DepositTransferRequest request, String idempotencyKey) {
+    private DepositTransferResponse doSubmitDepositTransfer(
+            DepositTransferRequest request, String idempotencyKey, String ownerMsisdn) {
         try {
             DepositTransferResponse response = restClient.post()
                     .uri("/internal/transfers/deposit")
                     .header("X-Internal-Token", internalToken)
                     .header(IDEMPOTENCY_KEY_HEADER, idempotencyKey)
+                    .header(OWNER_MSISDN_HEADER, ownerMsisdn)
                     .header("Content-Type", "application/json")
                     .body(request)
                     .retrieve()
@@ -167,12 +179,14 @@ public class OradianMiddlewareClient {
         }
     }
 
-    private WithdrawalResponse doSubmitWithdrawal(WithdrawalRequest request, String idempotencyKey) {
+    private WithdrawalResponse doSubmitWithdrawal(
+            WithdrawalRequest request, String idempotencyKey, String ownerMsisdn) {
         try {
             WithdrawalResponse response = restClient.post()
                     .uri("/internal/transfers/withdraw")
                     .header("X-Internal-Token", internalToken)
                     .header(IDEMPOTENCY_KEY_HEADER, idempotencyKey)
+                    .header(OWNER_MSISDN_HEADER, ownerMsisdn)
                     .header("Content-Type", "application/json")
                     .body(request)
                     .retrieve()

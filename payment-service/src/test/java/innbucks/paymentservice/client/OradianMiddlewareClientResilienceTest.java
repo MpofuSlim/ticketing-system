@@ -115,7 +115,7 @@ class OradianMiddlewareClientResilienceTest {
                         "{\"transactionID\":\"1155\",\"referenceNumber\":\"ref-1\"}",
                         APPLICATION_JSON));
 
-        DepositTransferResponse response = w.client.submitDepositTransfer(depositRequest(), IDEMPOTENCY_KEY);
+        DepositTransferResponse response = w.client.submitDepositTransfer(depositRequest(), IDEMPOTENCY_KEY, "+254712345678");
 
         assertEquals("1155", response.getTransactionID(),
                 "Retry must have recovered from the first two 503s and surfaced the eventual 200");
@@ -146,7 +146,7 @@ class OradianMiddlewareClientResilienceTest {
                 });
 
         OradianMiddlewareException ex = assertThrows(OradianMiddlewareException.class,
-                () -> w.client.submitDepositTransfer(depositRequest(), IDEMPOTENCY_KEY));
+                () -> w.client.submitDepositTransfer(depositRequest(), IDEMPOTENCY_KEY, "+254712345678"));
 
         assertEquals(422, ex.getStatusCode());
         assertTrue(ex.getMessage().contains("Insufficient funds"));
@@ -172,7 +172,7 @@ class OradianMiddlewareClientResilienceTest {
                         .contentType(APPLICATION_JSON).body("{}"));
 
         OradianMiddlewareException ex = assertThrows(OradianMiddlewareException.class,
-                () -> w.client.submitDepositTransfer(depositRequest(), IDEMPOTENCY_KEY));
+                () -> w.client.submitDepositTransfer(depositRequest(), IDEMPOTENCY_KEY, "+254712345678"));
 
         assertEquals(502, ex.getStatusCode());
         assertInstanceOf(OradianMiddlewareTransientException.class, ex,

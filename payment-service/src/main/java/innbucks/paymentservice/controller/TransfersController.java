@@ -377,7 +377,8 @@ public class TransfersController {
 
         DepositTransferResponse response;
         try {
-            response = oradianMiddlewareClient.submitDepositTransfer(request, ledger.getIdempotencyKey());
+            response = oradianMiddlewareClient.submitDepositTransfer(
+                    request, ledger.getIdempotencyKey(), phoneNumber);
         } catch (OradianMiddlewareException ex) {
             // Best-effort: log + carry on if markFailed itself throws so the
             // original Oradian failure is what surfaces to the caller. A
@@ -674,7 +675,8 @@ public class TransfersController {
 
         WithdrawalResponse response;
         try {
-            response = oradianMiddlewareClient.submitWithdrawal(request, ledger.getIdempotencyKey());
+            response = oradianMiddlewareClient.submitWithdrawal(
+                    request, ledger.getIdempotencyKey(), phoneNumber);
         } catch (OradianMiddlewareException ex) {
             try {
                 transactionService.markFailed(ledger.getId(), ex);
