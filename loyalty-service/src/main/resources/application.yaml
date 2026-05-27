@@ -124,9 +124,9 @@ logging:
 
 cors:
   # Comma-separated list of allowed origin patterns. Default whitelists the
-  # production frontend (innvents.vercel.app), Vercel preview deploys, and
+  # production frontend (innvents.vercel.app), and
   # any localhost port for dev. Override in prod via CORS_ALLOWED_ORIGINS.
-  allowed-origins: ${CORS_ALLOWED_ORIGINS:https://innvents.vercel.app,https://innbucks-ticketing.vercel.app,https://*.vercel.app,http://localhost:[*]}
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:https://innvents.vercel.app,https://innbucks-ticketing.vercel.app,http://localhost:[*]}
 
 # Match the JWT secret used by user-service (and the other microservices) so
 # loyalty-service can verify tokens minted at /auth/login.

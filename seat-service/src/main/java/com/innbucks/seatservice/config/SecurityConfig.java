@@ -72,9 +72,11 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        // Patterns (not literal origins) so wildcards in `cors.allowed-origins`
-        // — e.g. https://*.vercel.app — work alongside allowCredentials=true,
+        // Patterns (not literal origins) so a port-wildcard in `cors.allowed-origins`
+        // — e.g. http://localhost:[*] — works alongside allowCredentials=true,
         // which would otherwise reject any wildcard via setAllowedOrigins.
+        // NB: do NOT add a host wildcard like https://*.vercel.app here — with
+        // credentials it trusts every attacker-controlled subdomain. Use exact origins.
         config.setAllowedOriginPatterns(allowedOrigins);
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
