@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- Standalone deployable on the InnBucks-core stack (Spring Boot 3.2.4 /
+         Spring Cloud 2023.0.1) — deliberately NOT a module of the Boot-4
+         ticketing reactor, so the innbucks.co.zw:core jar (and VeenguClient)
+         can later be consumed natively without version-skew hacks. This is the
+         connectivity spike: it only proves the adapter can reach the InnBucks
+         Eureka cluster and discover veengu-integration. -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.2.4</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>zw.co.innbucks</groupId>
+    <artifactId>innbucks-core-gateway</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+    <name>innbucks-core-gateway</name>
+    <description>Ticketing &lt;-&gt; InnBucks-core discovery adapter (connectivity spike)</description>
+
+    <properties>
+        <java.version>17</java.version>
+        <spring-cloud.version>2023.0.1</spring-cloud.version>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <!-- Eureka CLIENT only — the spike fetches the InnBucks registry to
+             discover veengu-integration. No innbucks.co.zw:core dependency yet
+             (that needs GitHub Packages auth + comes in milestone 2 with the
+             real VeenguClient call). -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+        </dependency>
+    </dependencies>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.cloud</groupId>
+                <artifactId>spring-cloud-dependencies</artifactId>
+                <version>${spring-cloud.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
