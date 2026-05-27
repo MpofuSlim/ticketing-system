@@ -175,6 +175,11 @@ services:
       FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       JWT_EXPIRATION_MS: 86400000
+      # First-run super-admin bootstrap. Leave UNSET to skip seeding — under the
+      # prod profile the service refuses to create a known-credential admin
+      # (the old hardcoded default was a backdoor). Set a strong, unique value
+      # to bootstrap the first admin; it is forced to change password on first login.
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
       # Oradian middleware lives in the sibling stack on the shared
       # innbucks-shared docker network — reachable by service name.
