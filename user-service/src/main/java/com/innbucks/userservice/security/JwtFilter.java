@@ -129,6 +129,13 @@ public class JwtFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
+        // send-money/details returns a recipient's deposit-account identifiers and
+        // MUST be authenticated (the sender is logged in), so it cannot ride the
+        // blanket /auth skip — process the JWT here so SecurityConfig can enforce
+        // .authenticated() on it (audit H1).
+        if (path.startsWith("/auth/customer/send-money/details")) {
+            return false;
+        }
         return EXCLUDED_PATHS.stream().anyMatch(path::startsWith);
     }
 }

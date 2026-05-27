@@ -46,6 +46,11 @@ public class SecurityConfig {
                         // Preflight must be allowed unauthenticated, otherwise the
                         // browser's CORS check fails before the real request runs.
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
+                        // Account-ID lookup for send-money MUST be an authenticated
+                        // sender. More specific than the /auth/** permitAll below, so
+                        // it must come first. Closes the unauthenticated PII / Oradian
+                        // account-ID enumeration (audit H1).
+                        .requestMatchers(HttpMethod.GET, "/auth/customer/send-money/details/**").authenticated()
                         // Public auth endpoints
                         .requestMatchers("/auth/**").permitAll()
                         // Swagger UI
