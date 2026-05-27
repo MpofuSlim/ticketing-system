@@ -56,7 +56,7 @@ class EventRepositoryPostgresIT extends PostgresIntegrationTestBase {
 
     @Test
     void findAllActiveOnly_nullVenue_doesNotTriggerLowerBytea() {
-        Page<Event> page = eventRepository.findAllActiveOnly(null, null, null, PageRequest.of(0, 10));
+        Page<Event> page = eventRepository.findAllActiveOnly(null, null, null, null, PageRequest.of(0, 10));
         assertThat(page.getTotalElements()).isGreaterThanOrEqualTo(0);
     }
 
@@ -68,7 +68,7 @@ class EventRepositoryPostgresIT extends PostgresIntegrationTestBase {
 
     @Test
     void findByTenantIdActiveOnly_nullVenue_doesNotTriggerLowerBytea() {
-        Page<Event> page = eventRepository.findByTenantIdActiveOnly("t1", null, null, null, PageRequest.of(0, 10));
+        Page<Event> page = eventRepository.findByTenantIdActiveOnly("t1", null, null, null, null, PageRequest.of(0, 10));
         assertThat(page.getTotalElements()).isGreaterThanOrEqualTo(0);
     }
 

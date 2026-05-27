@@ -4,6 +4,7 @@ import com.innbucks.eventservice.client.BookingGateway;
 import com.innbucks.eventservice.client.SeatCategoryGateway;
 import com.innbucks.eventservice.dto.*;
 import com.innbucks.eventservice.entity.Event;
+import com.innbucks.eventservice.entity.EventCategory;
 import com.innbucks.eventservice.entity.Location;
 import com.innbucks.eventservice.mapper.EventMapper;
 import com.innbucks.eventservice.repository.EventRepository;
@@ -56,14 +57,19 @@ public class EventService {
             LocalDateTime from,
             LocalDateTime to,
             String venue,
+            String country,
+            EventCategory category,
             int page,
             int size,
             String sortBy
     ) {
         Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
-        log.debug("Fetching active=true events from={} to={} venue={} page={} size={} sortBy={}",
-                from, to, venue, page, size, sortBy);
-        return enrichWithAvailability(eventRepository.findAllActiveOnly(from, to, venue, pageable));
+        log.debug("Fetching active=true events from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
+                from, to, venue, country, category, page, size, sortBy);
+        Page<Event> events = category == null
+                ? eventRepository.findAllActiveOnly(from, to, venue, country, pageable)
+                : eventRepository.findAllActiveOnlyByCategory(from, to, venue, country, category, pageable);
+        return enrichWithAvailability(events);
     }
 
     /**
@@ -97,15 +103,19 @@ public class EventService {
             LocalDateTime from,
             LocalDateTime to,
             String venue,
+            String country,
+            EventCategory category,
             int page,
             int size,
             String sortBy
     ) {
         Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
-        log.debug("Fetching active events for tenantId={} from={} to={} venue={} page={} size={} sortBy={}",
-                tenantId, from, to, venue, page, size, sortBy);
-        return enrichWithAvailability(
-                eventRepository.findByTenantIdActiveOnly(tenantId, from, to, venue, pageable));
+        log.debug("Fetching active events for tenantId={} from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
+                tenantId, from, to, venue, country, category, page, size, sortBy);
+        Page<Event> events = category == null
+                ? eventRepository.findByTenantIdActiveOnly(tenantId, from, to, venue, country, pageable)
+                : eventRepository.findByTenantIdActiveOnlyByCategory(tenantId, from, to, venue, country, category, pageable);
+        return enrichWithAvailability(events);
     }
 
     public EventResponseDTO getEventById(UUID eventId) {

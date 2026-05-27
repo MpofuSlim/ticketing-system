@@ -1,6 +1,7 @@
 package com.innbucks.eventservice.controller;
 
 import com.innbucks.eventservice.dto.*;
+import com.innbucks.eventservice.entity.EventCategory;
 import com.innbucks.eventservice.security.JwtFilter;
 import com.innbucks.eventservice.service.EventService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -240,7 +241,9 @@ public class EventController {
                     (or it is flipped by a future scheduler), so this endpoint excludes
                     those while `GET /events` still includes them.
 
-                    Filtering and sorting follow the same rules as `GET /events`.
+                    Filtering and sorting follow the same rules as `GET /events`, plus:
+                    - **country** — exact match, case-insensitive (e.g. `Zimbabwe`).
+                    - **category** — one of BOOKS, COMEDY, HALF_MARATHON, MARATHON, CONCERT, SPORT.
                     """
     )
     @ApiResponses({
@@ -319,6 +322,12 @@ public class EventController {
             @Parameter(description = "Venue substring filter (case-insensitive)")
             @RequestParam(required = false) String venue,
 
+            @Parameter(description = "Country filter (exact match, case-insensitive), e.g. Zimbabwe")
+            @RequestParam(required = false) String country,
+
+            @Parameter(description = "Category filter (BOOKS, COMEDY, HALF_MARATHON, MARATHON, CONCERT, SPORT)")
+            @RequestParam(required = false) EventCategory category,
+
             @Parameter(description = "Zero-based page index")
             @RequestParam(defaultValue = "0")   int page,
 
@@ -333,13 +342,13 @@ public class EventController {
         Page<EventResponseDTO> result;
         if (isOrganizerOnly(authentication)) {
             String tenantId = authentication.getName();
-            log.debug("Listing active events (organizer scope) tenantId={} from={} to={} venue={} page={} size={} sortBy={}",
-                    tenantId, from, to, venue, page, size, sortBy);
-            result = eventService.getMyActiveEvents(tenantId, fromDateTime, toDateTime, venue, page, size, sortBy);
+            log.debug("Listing active events (organizer scope) tenantId={} from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
+                    tenantId, from, to, venue, country, category, page, size, sortBy);
+            result = eventService.getMyActiveEvents(tenantId, fromDateTime, toDateTime, venue, country, category, page, size, sortBy);
         } else {
-            log.debug("Listing active events (public scope) from={} to={} venue={} page={} size={} sortBy={}",
-                    from, to, venue, page, size, sortBy);
-            result = eventService.getActiveOnlyEvents(fromDateTime, toDateTime, venue, page, size, sortBy);
+            log.debug("Listing active events (public scope) from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
+                    from, to, venue, country, category, page, size, sortBy);
+            result = eventService.getActiveOnlyEvents(fromDateTime, toDateTime, venue, country, category, page, size, sortBy);
         }
         if (result.isEmpty()) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
