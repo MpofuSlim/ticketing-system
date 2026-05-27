@@ -707,7 +707,6 @@ public class AuthController {
     }
 
     @GetMapping("/customer/send-money/details/{customerPhoneNumber}")
-    @SecurityRequirements()
     @Operation(summary = "Get a customer's send-money details by phone",
             description = """
                     Returns the recipient customer's deposit-account identifiers
