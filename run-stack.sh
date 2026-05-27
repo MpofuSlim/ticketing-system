@@ -29,12 +29,15 @@ SLIM="discovery-server user-service event-service api-gateway"
 case "${1:-up}" in
   up)
     docker compose pull
-    docker compose up -d
+    docker compose up -d --no-build      # --no-build: pull images, never invoke buildx
     docker compose ps
     echo "Gateway -> http://localhost:8080   (./run-stack.sh logs <service> to tail)"
     ;;
   slim)
-    docker compose up -d $SLIM      # pulls the 4 app images + their postgres/redis deps
+    # Pull the app images first; without this, `up` would BUILD them (the
+    # compose services carry a build: section), which needs buildx >= 0.17.
+    docker compose pull $SLIM
+    docker compose up -d --no-build $SLIM   # postgres/redis deps pulled automatically
     docker compose ps
     echo "Slim stack up (discovery, user, event, gateway). Gateway -> http://localhost:8080"
     ;;
@@ -43,7 +46,7 @@ case "${1:-up}" in
     docker compose ps
     ;;
   down)    docker compose down ;;
-  restart) docker compose down; docker compose pull; docker compose up -d; docker compose ps ;;
+  restart) docker compose down; docker compose pull; docker compose up -d --no-build; docker compose ps ;;
   ps)      docker compose ps ;;
   logs)    shift || true; docker compose logs -f "$@" ;;
   *) echo "usage: $0 {up|slim|build|down|restart|ps|logs [service]}"; exit 1 ;;
