@@ -81,8 +81,13 @@ services:
   # Kafka in single-node KRaft mode (no Zookeeper). Used by booking-service
   # to publish domain events. Listeners: container traffic on port 9092,
   # host machine on 29092 (for poking with kafkacat / IDE consumers).
+  #
+  # Uses the official apache/kafka image: Bitnami removed their public
+  # versioned tags from Docker Hub (Aug 2025 catalog change), so
+  # bitnami/kafka:3.7 no longer resolves. The official image uses KAFKA_*
+  # env vars (no _CFG_ infix) and stores data under /var/lib/kafka/data.
   kafka:
-    image: bitnami/kafka:3.7
+    image: apache/kafka:3.7.1
     container_name: innbucks-kafka
     restart: unless-stopped
     mem_limit: 1536m
@@ -90,20 +95,19 @@ services:
     ports:
       - "127.0.0.1:29092:29092"
     environment:
-      KAFKA_CFG_NODE_ID: "1"
-      KAFKA_CFG_PROCESS_ROLES: "controller,broker"
-      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
-      KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:29092"
-      KAFKA_CFG_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092"
-      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT"
-      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
-      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
-      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
-      ALLOW_PLAINTEXT_LISTENER: "yes"
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: "controller,broker"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:29092"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     volumes:
-      - kafka_data:/bitnami/kafka
+      - kafka_data:/var/lib/kafka/data
     healthcheck:
-      test: ["CMD-SHELL", "/opt/bitnami/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1"]
       interval: 10s
       timeout: 5s
       retries: 20
