@@ -1,7 +1,7 @@
 package com.innbucks.eventservice.controller;
 
 import com.innbucks.eventservice.dto.*;
-import com.innbucks.eventservice.entity.Province;
+import com.innbucks.eventservice.security.JwtFilter;
 import com.innbucks.eventservice.service.EventService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -64,7 +64,7 @@ public class EventController {
                     - **from/to** are interpreted as calendar dates (`yyyy-MM-dd`).
                     - Internally they map to `[from at start-of-day .. to at end-of-day]` using the server's local timezone.
                     - **venue** matches case-insensitive substring (`LIKE %venue%`).
-                    Sorting uses the persisted field name `dateTime` by default (internal storage is `LocalDateTime`).
+                    Sorting uses the persisted field name `startDateTime` by default (internal storage is `LocalDateTime`).
                     """
     )
     @ApiResponses({
@@ -87,10 +87,10 @@ public class EventController {
                                             "title": "Summer Concert",
                                             "description": "Open-air summer concert featuring local headliners.",
                                             "venue": "Harare Gardens",
-                                            "province": "HRE",
+                                            "country": "Zimbabwe", "category": "CONCERT",
                                             "location": { "latitude": -17.8252, "longitude": 31.0335 },
                                             "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
-                                            "dateTime": "2026-06-15T19:00:00",
+                                            "startDateTime": "2026-06-15T19:00:00", "endDateTime": "2026-06-15T22:00:00",
                                             "totalCapacity": 500,
                                             "availableTickets": 420,
                                             "active": true,
@@ -151,7 +151,7 @@ public class EventController {
             @RequestParam(defaultValue = "10")  int size,
 
             @Parameter(description = "Sort field name (must match an entity property), ascending")
-            @RequestParam(defaultValue = "dateTime") String sortBy
+            @RequestParam(defaultValue = "startDateTime") String sortBy
     ) {
         LocalDateTime fromDateTime = from == null ? null : from.atStartOfDay();
         LocalDateTime toDateTime = to == null ? null : to.atTime(LocalTime.MAX);
@@ -218,7 +218,7 @@ public class EventController {
             @RequestParam(defaultValue = "10") int size,
 
             @Parameter(description = "Sort field name (must match an entity property), ascending")
-            @RequestParam(defaultValue = "dateTime") String sortBy
+            @RequestParam(defaultValue = "startDateTime") String sortBy
     ) {
         String tenantId = authentication.getName();
         LocalDateTime fromDateTime = from == null ? null : from.atStartOfDay();
@@ -263,10 +263,10 @@ public class EventController {
                                             "title": "Summer Concert",
                                             "description": "Open-air summer concert featuring local headliners.",
                                             "venue": "Harare Gardens",
-                                            "province": "HRE",
+                                            "country": "Zimbabwe", "category": "CONCERT",
                                             "location": { "latitude": -17.8252, "longitude": 31.0335 },
                                             "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
-                                            "dateTime": "2026-06-15T19:00:00",
+                                            "startDateTime": "2026-06-15T19:00:00", "endDateTime": "2026-06-15T22:00:00",
                                             "totalCapacity": 500,
                                             "availableTickets": 420,
                                             "active": true,
@@ -326,7 +326,7 @@ public class EventController {
             @RequestParam(defaultValue = "10")  int size,
 
             @Parameter(description = "Sort field name (must match an entity property), ascending")
-            @RequestParam(defaultValue = "dateTime") String sortBy
+            @RequestParam(defaultValue = "startDateTime") String sortBy
     ) {
         LocalDateTime fromDateTime = from == null ? null : from.atStartOfDay();
         LocalDateTime toDateTime = to == null ? null : to.atTime(LocalTime.MAX);
@@ -378,10 +378,10 @@ public class EventController {
                                         "title": "Summer Concert",
                                         "description": "Open-air summer concert featuring local headliners.",
                                         "venue": "Harare Gardens",
-                                        "province": "HRE",
+                                        "country": "Zimbabwe", "category": "CONCERT",
                                         "location": { "latitude": -17.8252, "longitude": 31.0335 },
                                         "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
-                                        "dateTime": "2026-06-15T19:00:00",
+                                        "startDateTime": "2026-06-15T19:00:00", "endDateTime": "2026-06-15T22:00:00",
                                         "totalCapacity": 500,
                                         "availableTickets": 420,
                                         "active": true,
@@ -421,23 +421,24 @@ public class EventController {
         return ResponseEntity.ok(ApiResult.ok("Event retrieved successfully", eventService.getEventById(id)));
     }
 
-    @GetMapping("/by-province")
+    @GetMapping("/by-country")
     @SecurityRequirements()
     @Operation(
-            summary = "List active events by province",
+            summary = "List active events by country",
             description = """
-                    Returns a paginated list of non-deleted events for a specific province,
-                    ordered by `dateTime` ascending so the soonest-starting event is first.
+                    Returns a paginated list of non-deleted events for a specific country,
+                    ordered by `startDateTime` ascending so the soonest-starting event is first.
+                    Country match is case-insensitive.
                     """
     )
     @ApiResponses({
             @ApiResponse(
                     responseCode = "200",
-                    description = "Paged list of events for the province, earliest first",
+                    description = "Paged list of events for the country, earliest first",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = EventResponseDTO.class),
-                            examples = @ExampleObject(name = "Events by province", value = """
+                            examples = @ExampleObject(name = "Events by country", value = """
                                     {
                                       "code": "200 OK",
                                       "message": "Events retrieved successfully",
@@ -450,10 +451,10 @@ public class EventController {
                                             "title": "Summer Concert",
                                             "description": "Open-air summer concert featuring local headliners.",
                                             "venue": "Harare Gardens",
-                                            "province": "HRE",
+                                            "country": "Zimbabwe", "category": "CONCERT",
                                             "location": { "latitude": -17.8252, "longitude": 31.0335 },
                                             "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
-                                            "dateTime": "2026-06-15T19:00:00",
+                                            "startDateTime": "2026-06-15T19:00:00", "endDateTime": "2026-06-15T22:00:00",
                                             "totalCapacity": 500,
                                             "availableTickets": 420,
                                             "active": true,
@@ -484,9 +485,9 @@ public class EventController {
                     )
             )
     })
-    public ResponseEntity<ApiResult<Page<EventResponseDTO>>> getEventsByProvince(
-            @Parameter(description = "Province code, e.g. HRE")
-            @RequestParam Province province,
+    public ResponseEntity<ApiResult<Page<EventResponseDTO>>> getEventsByCountry(
+            @Parameter(description = "Country name, e.g. Zimbabwe (case-insensitive)")
+            @RequestParam String country,
 
             @Parameter(description = "Zero-based page index")
             @RequestParam(defaultValue = "0") int page,
@@ -494,8 +495,8 @@ public class EventController {
             @Parameter(description = "Page size")
             @RequestParam(defaultValue = "10") int size
     ) {
-        log.debug("GET /events/by-province province={} page={} size={}", province, page, size);
-        Page<EventResponseDTO> result = eventService.getEventsByProvince(province, page, size);
+        log.debug("GET /events/by-country country={} page={} size={}", country, page, size);
+        Page<EventResponseDTO> result = eventService.getEventsByCountry(country, page, size);
         if (result.isEmpty()) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
                     .body(ApiResult.error(HttpStatus.NOT_FOUND, "Not found"));
@@ -540,10 +541,10 @@ public class EventController {
                                             "title": "Summer Concert",
                                             "description": "Open-air summer concert featuring local headliners.",
                                             "venue": "Harare Gardens",
-                                            "province": "HRE",
+                                            "country": "Zimbabwe", "category": "CONCERT",
                                             "location": { "latitude": -17.8252, "longitude": 31.0335 },
                                             "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
-                                            "dateTime": "2026-06-15T19:00:00",
+                                            "startDateTime": "2026-06-15T19:00:00", "endDateTime": "2026-06-15T22:00:00",
                                             "totalCapacity": 500,
                                             "availableTickets": 420,
                                             "active": true,
@@ -586,7 +587,7 @@ public class EventController {
             @RequestParam(defaultValue = "10") int size,
 
             @Parameter(description = "Sort field name (must match an entity property), ascending")
-            @RequestParam(defaultValue = "dateTime") String sortBy
+            @RequestParam(defaultValue = "startDateTime") String sortBy
     ) {
         if (q == null || q.isBlank()) {
             return ResponseEntity.badRequest()
@@ -604,14 +605,17 @@ public class EventController {
             description = """
                     Creates a new event for the authenticated **EVENT_ORGANIZER** or **ADMIN**.
 
-                    The authenticated principal (`Authentication#getName()`) becomes the owning `tenantId`.
+                    The authenticated principal (`Authentication#getName()`) becomes the owning `tenantId`,
+                    and the event's `country` is taken from the caller's JWT `country` claim — it is not
+                    part of the request body.
 
                     The request is `multipart/form-data` with two parts:
-                    - `event` — JSON body matching `CreateEventRequest` (title, description, venue, province, location, dateTime, totalCapacity).
+                    - `event` — JSON body matching `CreateEventRequest` (title, description, venue, category, location, startDateTime, endDateTime, totalCapacity).
                     - `eventBanner` — optional image file (JPEG/PNG/GIF/WEBP, max 5 MB).
 
                     Validation:
-                    - `dateTime` must be **in the future**.
+                    - `startDateTime` and `endDateTime` must be **in the future**, and `endDateTime` must be **after** `startDateTime`.
+                    - `category` is required (one of BOOKS, COMEDY, HALF_MARATHON, MARATHON, CONCERT, SPORT).
                     - `location.latitude` ∈ [-90, 90]; `location.longitude` ∈ [-180, 180].
                     """,
             requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
@@ -643,10 +647,10 @@ public class EventController {
                                         "title": "Summer Concert",
                                         "description": "Open-air summer concert featuring local headliners.",
                                         "venue": "Harare Gardens",
-                                        "province": "HRE",
+                                        "country": "Zimbabwe", "category": "CONCERT",
                                         "location": { "latitude": -17.8252, "longitude": 31.0335 },
                                         "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
-                                        "dateTime": "2026-06-15T19:00:00",
+                                        "startDateTime": "2026-06-15T19:00:00", "endDateTime": "2026-06-15T22:00:00",
                                         "totalCapacity": 500,
                                         "availableTickets": 500,
                                         "active": false,
@@ -666,13 +670,14 @@ public class EventController {
     public ResponseEntity<ApiResult<EventResponseDTO>> createEvent(
             @Valid @RequestPart("event") CreateEventRequestDTO request,
             @RequestPart(value = "eventBanner", required = false) MultipartFile eventBanner,
+            @RequestAttribute(name = JwtFilter.COUNTRY_ATTRIBUTE, required = false) String country,
             Authentication authentication
     ) {
         String tenantId = authentication.getName();
-        log.info("Creating event tenantId={} title={} venue={} hasBanner={}",
-                tenantId, request.getTitle(), request.getVenue(),
+        log.info("Creating event tenantId={} country={} title={} venue={} hasBanner={}",
+                tenantId, country, request.getTitle(), request.getVenue(),
                 eventBanner != null && !eventBanner.isEmpty());
-        EventResponseDTO created = eventService.createEvent(tenantId, request, eventBanner);
+        EventResponseDTO created = eventService.createEvent(tenantId, country, request, eventBanner);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Event created successfully", created));
     }
@@ -743,10 +748,10 @@ public class EventController {
                                         "title": "Summer Concert (Updated)",
                                         "description": "Open-air summer concert featuring local headliners.",
                                         "venue": "Harare Gardens",
-                                        "province": "HRE",
+                                        "country": "Zimbabwe", "category": "CONCERT",
                                         "location": { "latitude": -17.8252, "longitude": 31.0335 },
                                         "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
-                                        "dateTime": "2026-06-15T19:00:00",
+                                        "startDateTime": "2026-06-15T19:00:00", "endDateTime": "2026-06-15T22:00:00",
                                         "totalCapacity": 600,
                                         "availableTickets": 520,
                                         "active": true,
@@ -794,7 +799,7 @@ public class EventController {
                     Newly created events start with `active=false`; the owning
                     **EVENT_ORGANIZER** calls this endpoint once the event
                     is ready to be surfaced via `GET /events/active` and
-                    `GET /events/by-province`.
+                    `GET /events/by-country`.
                     """
     )
     @ApiResponses({
@@ -815,10 +820,10 @@ public class EventController {
                                         "title": "Summer Concert",
                                         "description": "Open-air summer concert featuring local headliners.",
                                         "venue": "Harare Gardens",
-                                        "province": "HRE",
+                                        "country": "Zimbabwe", "category": "CONCERT",
                                         "location": { "latitude": -17.8252, "longitude": 31.0335 },
                                         "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
-                                        "dateTime": "2026-06-15T19:00:00",
+                                        "startDateTime": "2026-06-15T19:00:00", "endDateTime": "2026-06-15T22:00:00",
                                         "totalCapacity": 500,
                                         "availableTickets": 500,
                                         "active": true,

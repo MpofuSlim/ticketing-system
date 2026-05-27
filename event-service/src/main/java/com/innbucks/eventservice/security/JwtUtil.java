@@ -54,6 +54,11 @@ public class JwtUtil {
         return getClaims(token).get("verified", Boolean.class);
     }
 
+    /** The user's registered country, carried as a JWT claim by user-service. */
+    public String extractCountry(String token) {
+        return getClaims(token).get("country", String.class);
+    }
+
     public boolean isTokenValid(String token) {
         try {
             getClaims(token);

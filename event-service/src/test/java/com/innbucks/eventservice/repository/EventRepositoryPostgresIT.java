@@ -1,7 +1,7 @@
 package com.innbucks.eventservice.repository;
 
 import com.innbucks.eventservice.entity.Event;
-import com.innbucks.eventservice.entity.Province;
+import com.innbucks.eventservice.entity.EventCategory;
 import com.innbucks.eventservice.testsupport.PostgresIntegrationTestBase;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -39,8 +39,10 @@ class EventRepositoryPostgresIT extends PostgresIntegrationTestBase {
                 .tenantId("t1")
                 .title("Open Air Concert")
                 .venue("HICC")
-                .province(Province.HRE)
-                .dateTime(LocalDateTime.of(2030, 6, 1, 18, 0))
+                .country("Zimbabwe")
+                .category(EventCategory.CONCERT)
+                .startDateTime(LocalDateTime.of(2030, 6, 1, 18, 0))
+                .endDateTime(LocalDateTime.of(2030, 6, 1, 20, 0))
                 .totalCapacity(500)
                 .availableTickets(500)
                 .active(true)
@@ -76,8 +78,10 @@ class EventRepositoryPostgresIT extends PostgresIntegrationTestBase {
                 .tenantId("t2")
                 .title("Jazz Night")
                 .venue("Reps Theatre")
-                .province(Province.HRE)
-                .dateTime(LocalDateTime.of(2030, 7, 1, 20, 0))
+                .country("Zimbabwe")
+                .category(EventCategory.CONCERT)
+                .startDateTime(LocalDateTime.of(2030, 7, 1, 20, 0))
+                .endDateTime(LocalDateTime.of(2030, 7, 1, 22, 0))
                 .totalCapacity(200)
                 .availableTickets(200)
                 .active(true)

@@ -1,6 +1,6 @@
 package com.innbucks.eventservice.dto;
 
-import com.innbucks.eventservice.entity.Province;
+import com.innbucks.eventservice.entity.EventCategory;
 import io.swagger.v3.oas.annotations.media.Schema;
 import lombok.*;
 import java.time.LocalDateTime;
@@ -17,7 +17,7 @@ public class EventResponseDTO {
     @Schema(description = "Stable identifier for the event.")
     private UUID eventId;
 
-    @Schema(example = "1", description = "1-based position of this event within the current /events/by-province response page. Not stored; null on other endpoints.")
+    @Schema(example = "1", description = "1-based position of this event within the current /events/by-country response page. Not stored; null on other endpoints.")
     private Integer eventNo;
 
     @Schema(description = "Owning tenant identifier (typically the JWT subject/username).")
@@ -32,8 +32,11 @@ public class EventResponseDTO {
     @Schema(example = "Harare Gardens")
     private String venue;
 
-    @Schema(example = "HRE", description = "Province code where the event is hosted.")
-    private Province province;
+    @Schema(example = "Zimbabwe", description = "Country the event belongs to, derived from the organizer's JWT at creation.")
+    private String country;
+
+    @Schema(example = "CONCERT", description = "Category of the event.")
+    private EventCategory category;
 
     @Schema(description = "Geographic coordinates of the venue (latitude/longitude in decimal degrees).")
     private LocationDTO location;
@@ -48,7 +51,13 @@ public class EventResponseDTO {
             example = "2026-06-15T19:00:00",
             description = "Event start timestamp (`yyyy-MM-ddTHH:mm:ss`) — full ISO-8601 datetime including the start time."
     )
-    private LocalDateTime dateTime;
+    private LocalDateTime startDateTime;
+
+    @Schema(
+            example = "2026-06-15T22:00:00",
+            description = "Event end timestamp (`yyyy-MM-ddTHH:mm:ss`) — full ISO-8601 datetime including the end time."
+    )
+    private LocalDateTime endDateTime;
 
     @Schema(description = "Maximum venue capacity.")
     private Integer totalCapacity;

@@ -1,7 +1,7 @@
 package com.innbucks.eventservice.repository;
 
 import com.innbucks.eventservice.entity.Event;
-import com.innbucks.eventservice.entity.Province;
+import com.innbucks.eventservice.entity.EventCategory;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -27,8 +27,10 @@ class EventRepositoryTest {
                 .tenantId("a1")
                 .title("E1")
                 .venue("Harare Gardens")
-                .province(Province.HRE)
-                .dateTime(LocalDateTime.of(2030, 1, 10, 10, 0))
+                .country("Zimbabwe")
+                .category(EventCategory.CONCERT)
+                .startDateTime(LocalDateTime.of(2030, 1, 10, 10, 0))
+                .endDateTime(LocalDateTime.of(2030, 1, 10, 12, 0))
                 .totalCapacity(10)
                 .availableTickets(10)
                 .deleted(false)
@@ -38,8 +40,10 @@ class EventRepositoryTest {
                 .tenantId("a1")
                 .title("E2")
                 .venue("Bulawayo Hall")
-                .province(Province.BYO)
-                .dateTime(LocalDateTime.of(2030, 1, 12, 10, 0))
+                .country("Zimbabwe")
+                .category(EventCategory.CONCERT)
+                .startDateTime(LocalDateTime.of(2030, 1, 12, 10, 0))
+                .endDateTime(LocalDateTime.of(2030, 1, 12, 12, 0))
                 .totalCapacity(10)
                 .availableTickets(10)
                 .deleted(false)
@@ -49,8 +53,10 @@ class EventRepositoryTest {
                 .tenantId("a1")
                 .title("Deleted")
                 .venue("Harare Gardens")
-                .province(Province.HRE)
-                .dateTime(LocalDateTime.of(2030, 1, 11, 10, 0))
+                .country("Zimbabwe")
+                .category(EventCategory.CONCERT)
+                .startDateTime(LocalDateTime.of(2030, 1, 11, 10, 0))
+                .endDateTime(LocalDateTime.of(2030, 1, 11, 12, 0))
                 .totalCapacity(10)
                 .availableTickets(10)
                 .deleted(true)
