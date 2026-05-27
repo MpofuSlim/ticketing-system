@@ -67,7 +67,7 @@ services:
     restart: unless-stopped
     mem_limit: 256m
     mem_reservation: 128m
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}"]
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
@@ -279,6 +279,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}
       LOCK_STORE: redis
     ports:
       - "127.0.0.1:8083:8083"
@@ -324,6 +325,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}
       IDEMPOTENCY_STORE: redis
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
@@ -387,6 +389,7 @@ services:
       # could execute a second real transfer.
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}
       IDEMPOTENCY_STORE: redis
       EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
       # Oradian middleware lives in the sibling stack on the shared
@@ -492,6 +495,7 @@ services:
       # Redis backs the gateway's RequestRateLimiter token bucket store.
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}
       RATE_LIMIT_REPLENISH_PER_SECOND: ${RATE_LIMIT_REPLENISH_PER_SECOND:-50}
       RATE_LIMIT_BURST_CAPACITY: ${RATE_LIMIT_BURST_CAPACITY:-100}
     ports:

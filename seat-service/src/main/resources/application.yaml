@@ -34,6 +34,7 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
       # Redis is used for distributed seat-locks only; we don't have any
       # @RedisHash-annotated entities. Without this flag Spring Data Redis
       # tries to classify every Repository<> bean (SeatRepository, etc.) as
