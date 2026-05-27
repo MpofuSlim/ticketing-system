@@ -251,6 +251,47 @@ class EventControllerTest {
                 .andExpect(jsonPath("$.data.content[2].eventNo", is(3)));
     }
 
+    @Test
+    void getActiveEvents_filtersByCountryAndCategory() throws Exception {
+        eventRepository.save(eventBuilder().title("ZW Concert")
+                .country("Zimbabwe").category(EventCategory.CONCERT)
+                .startDateTime(LocalDateTime.now().plusDays(3))
+                .endDateTime(LocalDateTime.now().plusDays(3).plusHours(2))
+                .build());
+        eventRepository.save(eventBuilder().title("ZW Marathon")
+                .country("Zimbabwe").category(EventCategory.MARATHON)
+                .startDateTime(LocalDateTime.now().plusDays(4))
+                .endDateTime(LocalDateTime.now().plusDays(4).plusHours(2))
+                .build());
+        eventRepository.save(eventBuilder().title("ZM Concert")
+                .country("Zambia").category(EventCategory.CONCERT)
+                .startDateTime(LocalDateTime.now().plusDays(5))
+                .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2))
+                .build());
+
+        // Country filter only (case-insensitive) → the two Zimbabwe events.
+        mockMvc.perform(get("/events/active").param("country", "zimbabwe")
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content", hasSize(2)));
+
+        // Category filter only → the two CONCERT events.
+        mockMvc.perform(get("/events/active").param("category", "CONCERT")
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content", hasSize(2)));
+
+        // Both filters together → only the Zimbabwe concert.
+        mockMvc.perform(get("/events/active")
+                        .param("country", "Zimbabwe").param("category", "CONCERT")
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content", hasSize(1)))
+                .andExpect(jsonPath("$.data.content[0].title", is("ZW Concert")))
+                .andExpect(jsonPath("$.data.content[0].country", is("Zimbabwe")))
+                .andExpect(jsonPath("$.data.content[0].category", is("CONCERT")));
+    }
+
     private static Event.EventBuilder eventBuilder() {
         return Event.builder()
                 .tenantId("tenant-1")

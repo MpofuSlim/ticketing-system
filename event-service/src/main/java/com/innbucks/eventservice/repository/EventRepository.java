@@ -1,6 +1,7 @@
 package com.innbucks.eventservice.repository;
 
 import com.innbucks.eventservice.entity.Event;
+import com.innbucks.eventservice.entity.EventCategory;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -49,11 +50,38 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
         AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
         AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
         AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
+        AND (CAST(:country AS string) IS NULL OR LOWER(e.country) = LOWER(CAST(:country AS string)))
     """)
     Page<Event> findAllActiveOnly(
             @Param("from") LocalDateTime from,
             @Param("to") LocalDateTime to,
             @Param("venue") String venue,
+            @Param("country") String country,
+            Pageable pageable
+    );
+
+    // Same as findAllActiveOnly but additionally filters by category. Split into
+    // its own method (rather than an optional :category IS NULL guard) so the
+    // enum bind is never null — a null enum param can't be type-inferred by the
+    // Postgres planner ("could not determine data type of parameter"), the same
+    // failure mode the :venue/:from CASTs guard against. Callers invoke this
+    // only when a category filter is actually supplied.
+    @Query("""
+        SELECT e FROM Event e
+        WHERE e.deleted = false
+        AND e.active = true
+        AND e.category = :category
+        AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
+        AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
+        AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
+        AND (CAST(:country AS string) IS NULL OR LOWER(e.country) = LOWER(CAST(:country AS string)))
+    """)
+    Page<Event> findAllActiveOnlyByCategory(
+            @Param("from") LocalDateTime from,
+            @Param("to") LocalDateTime to,
+            @Param("venue") String venue,
+            @Param("country") String country,
+            @Param("category") EventCategory category,
             Pageable pageable
     );
 
@@ -88,12 +116,37 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
         AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
         AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
         AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
+        AND (CAST(:country AS string) IS NULL OR LOWER(e.country) = LOWER(CAST(:country AS string)))
     """)
     Page<Event> findByTenantIdActiveOnly(
             @Param("tenantId") String tenantId,
             @Param("from") LocalDateTime from,
             @Param("to") LocalDateTime to,
             @Param("venue") String venue,
+            @Param("country") String country,
+            Pageable pageable
+    );
+
+    // Category-filtered counterpart of findByTenantIdActiveOnly. Separate method
+    // so the enum bind is always non-null (see findAllActiveOnlyByCategory).
+    @Query("""
+        SELECT e FROM Event e
+        WHERE e.deleted = false
+        AND e.active = true
+        AND e.tenantId = :tenantId
+        AND e.category = :category
+        AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
+        AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
+        AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
+        AND (CAST(:country AS string) IS NULL OR LOWER(e.country) = LOWER(CAST(:country AS string)))
+    """)
+    Page<Event> findByTenantIdActiveOnlyByCategory(
+            @Param("tenantId") String tenantId,
+            @Param("from") LocalDateTime from,
+            @Param("to") LocalDateTime to,
+            @Param("venue") String venue,
+            @Param("country") String country,
+            @Param("category") EventCategory category,
             Pageable pageable
     );
 
