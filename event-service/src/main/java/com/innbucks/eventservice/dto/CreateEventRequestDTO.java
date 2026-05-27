@@ -1,8 +1,9 @@
 package com.innbucks.eventservice.dto;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.innbucks.eventservice.config.FlexibleLocalDateTimeDeserializer;
-import com.innbucks.eventservice.entity.Province;
+import com.innbucks.eventservice.entity.EventCategory;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
@@ -10,7 +11,8 @@ import lombok.Data;
 import java.time.LocalDateTime;
 
 @Data
-@Schema(name = "CreateEventRequest", description = "Payload for creating a new event.")
+@Schema(name = "CreateEventRequest", description = "Payload for creating a new event. The event's country is not "
+        + "supplied here — it is derived from the authenticated organizer's JWT `country` claim.")
 public class CreateEventRequestDTO {
 
     @Schema(example = "Summer Concert")
@@ -25,12 +27,12 @@ public class CreateEventRequestDTO {
     private String venue;
 
     @Schema(
-            example = "HRE",
-            allowableValues = {"HRE", "BYO", "MID", "MNL", "MCT", "MET", "MWT", "MSV", "MTN", "MTS"},
-            description = "Province code where the event is hosted."
+            example = "CONCERT",
+            allowableValues = {"BOOKS", "COMEDY", "HALF_MARATHON", "MARATHON", "CONCERT", "SPORT"},
+            description = "Category of the event."
     )
-    @NotNull(message = "Province is required")
-    private Province province;
+    @NotNull(message = "Category is required")
+    private EventCategory category;
 
     @Schema(description = "Geographic coordinates of the venue (latitude/longitude in decimal degrees).")
     @NotNull(message = "Location is required")
@@ -45,13 +47,32 @@ public class CreateEventRequestDTO {
                     a date-only value is rejected.
                     """
     )
-    @NotNull(message = "Date and time is required")
-    @Future(message = "Event date must be in the future")
+    @NotNull(message = "Start date and time is required")
+    @Future(message = "Event start must be in the future")
     @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
-    private LocalDateTime dateTime;
+    private LocalDateTime startDateTime;
+
+    @Schema(
+            example = "2026-06-15T22:00:00",
+            description = """
+                    Event end timestamp (`yyyy-MM-ddTHH:mm:ss`). Must be strictly **after** `startDateTime`.
+                    Send the full ISO-8601 datetime including the time portion.
+                    """
+    )
+    @NotNull(message = "End date and time is required")
+    @Future(message = "Event end must be in the future")
+    @JsonDeserialize(using = FlexibleLocalDateTimeDeserializer.class)
+    private LocalDateTime endDateTime;
 
     @Schema(description = "Maximum venue capacity.")
     @NotNull(message = "Total capacity is required")
     @Min(value = 1, message = "Capacity must be at least 1")
     private Integer totalCapacity;
+
+    @AssertTrue(message = "endDateTime must be after startDateTime")
+    @JsonIgnore
+    @Schema(hidden = true)
+    public boolean isEndAfterStart() {
+        return startDateTime == null || endDateTime == null || endDateTime.isAfter(startDateTime);
+    }
 }

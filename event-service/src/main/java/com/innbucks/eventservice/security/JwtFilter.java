@@ -21,6 +21,11 @@ public class JwtFilter extends OncePerRequestFilter {
 
     private final JwtUtil jwtUtil;
 
+    // Request attribute the country claim is stashed under so controllers can
+    // read it via @RequestAttribute without re-parsing the token. Only set
+    // when a valid Bearer token carrying a `country` claim is present.
+    public static final String COUNTRY_ATTRIBUTE = "jwtCountry";
+
     private static final List<String> EXCLUDED_PATHS = List.of(
             "/swagger-ui",
             "/v3/api-docs",
@@ -64,6 +69,10 @@ public class JwtFilter extends OncePerRequestFilter {
             List<String> services = jwtUtil.extractServices(token);
             Integer tier = jwtUtil.extractTier(token);
             Boolean verified = jwtUtil.extractVerified(token);
+            String country = jwtUtil.extractCountry(token);
+            if (country != null && !country.isBlank()) {
+                request.setAttribute(COUNTRY_ATTRIBUTE, country);
+            }
 
             List<SimpleGrantedAuthority> authorities = new ArrayList<>();
             for (String role : roles) {

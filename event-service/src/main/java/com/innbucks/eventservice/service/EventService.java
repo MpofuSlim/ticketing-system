@@ -5,7 +5,6 @@ import com.innbucks.eventservice.client.SeatCategoryGateway;
 import com.innbucks.eventservice.dto.*;
 import com.innbucks.eventservice.entity.Event;
 import com.innbucks.eventservice.entity.Location;
-import com.innbucks.eventservice.entity.Province;
 import com.innbucks.eventservice.mapper.EventMapper;
 import com.innbucks.eventservice.repository.EventRepository;
 import lombok.RequiredArgsConstructor;
@@ -133,19 +132,19 @@ public class EventService {
                 eventRepository.searchByKeyword(q == null ? "" : q.trim(), pageable));
     }
 
-    public Page<EventResponseDTO> getEventsByProvince(
-            Province province,
+    public Page<EventResponseDTO> getEventsByCountry(
+            String country,
             int page,
             int size
     ) {
-        Pageable pageable = PageRequest.of(page, size, Sort.by("dateTime").ascending());
+        Pageable pageable = PageRequest.of(page, size, Sort.by("startDateTime").ascending());
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
-        log.debug("Fetching active upcoming events by province={} cutoff={} page={} size={}",
-                province, now, page, size);
+        log.debug("Fetching active upcoming events by country={} cutoff={} page={} size={}",
+                country, now, page, size);
 
         Page<Event> entities = eventRepository
-                .findByProvinceAndDeletedFalseAndActiveTrueAndDateTimeGreaterThanEqual(
-                        province, now, pageable);
+                .findByCountryIgnoreCaseAndDeletedFalseAndActiveTrueAndStartDateTimeGreaterThanEqual(
+                        country, now, pageable);
 
         Map<UUID, Long> activeCounts = bookingGateway.activeCountsByEventIds(
                 entities.getContent().stream().map(Event::getEventId).toList());
@@ -194,20 +193,28 @@ public class EventService {
         return counts == null ? java.util.Collections.emptyMap() : counts;
     }
 
-    public EventResponseDTO createEvent(String tenantId, CreateEventRequestDTO request) {
-        return createEvent(tenantId, request, null);
+    public EventResponseDTO createEvent(String tenantId, String country, CreateEventRequestDTO request) {
+        return createEvent(tenantId, country, request, null);
     }
 
     @Transactional
-    public EventResponseDTO createEvent(String tenantId, CreateEventRequestDTO request, MultipartFile eventBanner) {
-        log.info("Creating event tenantId={} title={} venue={} dateTime={} capacity={} hasBanner={}",
-                tenantId, request.getTitle(), request.getVenue(), request.getDateTime(), request.getTotalCapacity(),
+    public EventResponseDTO createEvent(String tenantId, String country, CreateEventRequestDTO request, MultipartFile eventBanner) {
+        log.info("Creating event tenantId={} country={} title={} venue={} startDateTime={} capacity={} hasBanner={}",
+                tenantId, country, request.getTitle(), request.getVenue(), request.getStartDateTime(), request.getTotalCapacity(),
                 eventBanner != null && !eventBanner.isEmpty());
 
-        if (eventRepository.existsByTenantIdAndTitleAndVenueAndDateTimeAndDeletedFalse(
-                tenantId, request.getTitle(), request.getVenue(), request.getDateTime())) {
-            log.warn("Event create rejected, duplicate tenantId={} title={} venue={} dateTime={}",
-                    tenantId, request.getTitle(), request.getVenue(), request.getDateTime());
+        // Country is stamped from the organizer's JWT, never the request body.
+        // A token minted before country was captured won't carry the claim;
+        // reject rather than persist an event with no country.
+        if (country == null || country.isBlank()) {
+            log.warn("Event create rejected, missing country claim on token tenantId={}", tenantId);
+            throw new RuntimeException("Country is required but was not present in your token");
+        }
+
+        if (eventRepository.existsByTenantIdAndTitleAndVenueAndStartDateTimeAndDeletedFalse(
+                tenantId, request.getTitle(), request.getVenue(), request.getStartDateTime())) {
+            log.warn("Event create rejected, duplicate tenantId={} title={} venue={} startDateTime={}",
+                    tenantId, request.getTitle(), request.getVenue(), request.getStartDateTime());
             throw new RuntimeException("An event with the same title, venue and date already exists");
         }
 
@@ -216,9 +223,11 @@ public class EventService {
                 .title(request.getTitle())
                 .description(request.getDescription())
                 .venue(request.getVenue())
-                .province(request.getProvince())
+                .country(country)
+                .category(request.getCategory())
                 .location(toLocation(request.getLocation()))
-                .dateTime(request.getDateTime())
+                .startDateTime(request.getStartDateTime())
+                .endDateTime(request.getEndDateTime())
                 .totalCapacity(request.getTotalCapacity())
                 .availableTickets(request.getTotalCapacity())
                 .deleted(false)
@@ -273,9 +282,9 @@ public class EventService {
 
     @Transactional
     public EventResponseDTO updateEvent(String tenantId, String role, UUID eventId, UpdateEventRequestDTO request) {
-        log.info("Updating event eventId={} tenantId={} role={} req.title={} req.venue={} req.dateTime={} req.totalCapacity={}",
+        log.info("Updating event eventId={} tenantId={} role={} req.title={} req.venue={} req.startDateTime={} req.endDateTime={} req.totalCapacity={}",
                 eventId, tenantId, role,
-                request.getTitle(), request.getVenue(), request.getDateTime(), request.getTotalCapacity());
+                request.getTitle(), request.getVenue(), request.getStartDateTime(), request.getEndDateTime(), request.getTotalCapacity());
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
                 .orElseThrow(() -> {
                     log.warn("Update failed, event not found eventId={} tenantId={}", eventId, tenantId);
@@ -294,9 +303,17 @@ public class EventService {
         if (request.getTitle() != null)        event.setTitle(request.getTitle());
         if (request.getDescription() != null)  event.setDescription(request.getDescription());
         if (request.getVenue() != null)        event.setVenue(request.getVenue());
-        if (request.getProvince() != null)     event.setProvince(request.getProvince());
+        if (request.getCategory() != null)     event.setCategory(request.getCategory());
         if (request.getLocation() != null)     event.setLocation(toLocation(request.getLocation()));
-        if (request.getDateTime() != null)     event.setDateTime(request.getDateTime());
+        if (request.getStartDateTime() != null) event.setStartDateTime(request.getStartDateTime());
+        if (request.getEndDateTime() != null)   event.setEndDateTime(request.getEndDateTime());
+        // Guard the merged result: a single-sided update (only start or only
+        // end) could still invert the order against the stored value, which
+        // the request-level @AssertTrue can't catch.
+        if (event.getStartDateTime() != null && event.getEndDateTime() != null
+                && !event.getEndDateTime().isAfter(event.getStartDateTime())) {
+            throw new RuntimeException("endDateTime must be after startDateTime");
+        }
         if (request.getTotalCapacity() != null) {
             int diff = request.getTotalCapacity() - event.getTotalCapacity();
             event.setTotalCapacity(request.getTotalCapacity());
@@ -304,8 +321,8 @@ public class EventService {
         }
 
         Event saved = eventRepository.save(event);
-        log.info("Event updated eventId={} tenantId={} title={} venue={} dateTime={}",
-                eventId, tenantId, saved.getTitle(), saved.getVenue(), saved.getDateTime());
+        log.info("Event updated eventId={} tenantId={} title={} venue={} startDateTime={} endDateTime={}",
+                eventId, tenantId, saved.getTitle(), saved.getVenue(), saved.getStartDateTime(), saved.getEndDateTime());
         return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
     }
 

@@ -12,7 +12,7 @@ import java.util.UUID;
         name = "events",
         uniqueConstraints = @UniqueConstraint(
                 name = "uk_events_natural_key",
-                columnNames = {"tenant_id", "title", "venue", "date_time"}
+                columnNames = {"tenant_id", "title", "venue", "start_date_time"}
         )
 )
 @Data
@@ -37,15 +37,24 @@ public class Event {
     @Column(nullable = false)
     private String venue;
 
+    // Country the event belongs to. Not chosen per-event in the request — it is
+    // stamped from the creating organizer's JWT `country` claim so events are
+    // categorized by the organizer's registered country.
+    @Column(nullable = false)
+    private String country;
+
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 3)
-    private Province province;
+    @Column(nullable = false, length = 20)
+    private EventCategory category;
 
     @Embedded
     private Location location;
 
-    @Column(nullable = false)
-    private LocalDateTime dateTime;
+    @Column(name = "start_date_time", nullable = false)
+    private LocalDateTime startDateTime;
+
+    @Column(name = "end_date_time", nullable = false)
+    private LocalDateTime endDateTime;
 
     @Column(nullable = false)
     private Integer totalCapacity;

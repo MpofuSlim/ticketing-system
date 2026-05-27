@@ -6,7 +6,7 @@ import com.innbucks.eventservice.dto.CreateEventRequestDTO;
 import com.innbucks.eventservice.dto.EventResponseDTO;
 import com.innbucks.eventservice.dto.UpdateEventRequestDTO;
 import com.innbucks.eventservice.entity.Event;
-import com.innbucks.eventservice.entity.Province;
+import com.innbucks.eventservice.entity.EventCategory;
 import com.innbucks.eventservice.mapper.EventMapper;
 import com.innbucks.eventservice.repository.EventRepository;
 import org.junit.jupiter.api.Test;
@@ -36,8 +36,10 @@ class EventServiceTest {
                 .tenantId("owner-tenant")
                 .title("Old")
                 .venue("Venue")
-                .province(Province.HRE)
-                .dateTime(LocalDateTime.now().plusDays(5))
+                .country("Zimbabwe")
+                .category(EventCategory.CONCERT)
+                .startDateTime(LocalDateTime.now().plusDays(5))
+                .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2))
                 .totalCapacity(100)
                 .availableTickets(100)
                 .deleted(false)
@@ -65,8 +67,10 @@ class EventServiceTest {
                 .tenantId("tenant-1")
                 .title("Old")
                 .venue("Venue")
-                .province(Province.HRE)
-                .dateTime(LocalDateTime.now().plusDays(5))
+                .country("Zimbabwe")
+                .category(EventCategory.CONCERT)
+                .startDateTime(LocalDateTime.now().plusDays(5))
+                .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2))
                 .totalCapacity(100)
                 .availableTickets(60)
                 .deleted(false)
@@ -97,20 +101,42 @@ class EventServiceTest {
 
         CreateEventRequestDTO req = new CreateEventRequestDTO();
         req.setTitle("Concert"); req.setDescription("desc"); req.setVenue("Venue");
-        req.setProvince(Province.HRE); req.setDateTime(LocalDateTime.now().plusDays(10));
+        req.setCategory(EventCategory.CONCERT);
+        req.setStartDateTime(LocalDateTime.now().plusDays(10));
+        req.setEndDateTime(LocalDateTime.now().plusDays(10).plusHours(2));
         req.setTotalCapacity(200);
-        when(repo.existsByTenantIdAndTitleAndVenueAndDateTimeAndDeletedFalse(
+        when(repo.existsByTenantIdAndTitleAndVenueAndStartDateTimeAndDeletedFalse(
                 any(), any(), any(), any())).thenReturn(false);
         when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        service.createEvent("tenant-9", req);
+        service.createEvent("tenant-9", "Zimbabwe", req);
 
         ArgumentCaptor<Event> saved = ArgumentCaptor.forClass(Event.class);
         verify(repo).save(saved.capture());
         assertEquals("tenant-9", saved.getValue().getTenantId());
+        assertEquals("Zimbabwe", saved.getValue().getCountry());
+        assertEquals(EventCategory.CONCERT, saved.getValue().getCategory());
         assertEquals(200, saved.getValue().getTotalCapacity());
         assertEquals(200, saved.getValue().getAvailableTickets());
         assertFalse(saved.getValue().isDeleted());
+    }
+
+    @Test
+    void createEvent_rejectsWhenCountryMissingFromToken() {
+        EventRepository repo = mock(EventRepository.class);
+        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class));
+
+        CreateEventRequestDTO req = new CreateEventRequestDTO();
+        req.setTitle("Concert"); req.setVenue("Venue");
+        req.setCategory(EventCategory.CONCERT);
+        req.setStartDateTime(LocalDateTime.now().plusDays(10));
+        req.setEndDateTime(LocalDateTime.now().plusDays(10).plusHours(2));
+        req.setTotalCapacity(100);
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> service.createEvent("tenant-1", "  ", req));
+        assertTrue(ex.getMessage().toLowerCase().contains("country"));
+        verify(repo, never()).save(any());
     }
 
     @Test
@@ -121,13 +147,14 @@ class EventServiceTest {
         LocalDateTime when = LocalDateTime.now().plusDays(10);
         CreateEventRequestDTO req = new CreateEventRequestDTO();
         req.setTitle("Concert"); req.setVenue("Harare Gardens");
-        req.setProvince(Province.HRE); req.setDateTime(when); req.setTotalCapacity(100);
+        req.setCategory(EventCategory.CONCERT);
+        req.setStartDateTime(when); req.setEndDateTime(when.plusHours(2)); req.setTotalCapacity(100);
 
-        when(repo.existsByTenantIdAndTitleAndVenueAndDateTimeAndDeletedFalse(
+        when(repo.existsByTenantIdAndTitleAndVenueAndStartDateTimeAndDeletedFalse(
                 "tenant-1", "Concert", "Harare Gardens", when)).thenReturn(true);
 
         RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> service.createEvent("tenant-1", req));
+                () -> service.createEvent("tenant-1", "Zimbabwe", req));
         assertTrue(ex.getMessage().toLowerCase().contains("already exists"));
         verify(repo, never()).save(any());
     }
@@ -141,7 +168,9 @@ class EventServiceTest {
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder()
                 .eventId(eventId).tenantId("owner").title("Old").venue("V")
-                .province(Province.HRE).dateTime(LocalDateTime.now().plusDays(5))
+                .country("Zimbabwe").category(EventCategory.CONCERT)
+                .startDateTime(LocalDateTime.now().plusDays(5))
+                .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2))
                 .totalCapacity(100).availableTickets(100).deleted(false).build();
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
         when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -161,8 +190,9 @@ class EventServiceTest {
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder().eventId(eventId).tenantId("owner-tenant")
-                .title("T").venue("V").province(Province.HRE)
-                .dateTime(LocalDateTime.now().plusDays(5))
+                .title("T").venue("V").country("Zimbabwe").category(EventCategory.CONCERT)
+                .startDateTime(LocalDateTime.now().plusDays(5))
+                .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2))
                 .totalCapacity(1).availableTickets(1).deleted(false).build();
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
 
@@ -179,8 +209,9 @@ class EventServiceTest {
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder().eventId(eventId).tenantId("owner-tenant")
-                .title("T").venue("V").province(Province.HRE)
-                .dateTime(LocalDateTime.now().plusDays(5))
+                .title("T").venue("V").country("Zimbabwe").category(EventCategory.CONCERT)
+                .startDateTime(LocalDateTime.now().plusDays(5))
+                .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2))
                 .totalCapacity(1).availableTickets(1).deleted(false).build();
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
 
@@ -210,8 +241,9 @@ class EventServiceTest {
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder().eventId(eventId).tenantId("a").title("T")
-                .venue("V").province(Province.HRE)
-                .dateTime(LocalDateTime.now().plusDays(1))
+                .venue("V").country("Zimbabwe").category(EventCategory.CONCERT)
+                .startDateTime(LocalDateTime.now().plusDays(1))
+                .endDateTime(LocalDateTime.now().plusDays(1).plusHours(2))
                 .totalCapacity(100).availableTickets(100).deleted(false).build();
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
         when(seats.fetchForEvent(eventId)).thenReturn(Collections.emptyList());
@@ -235,8 +267,9 @@ class EventServiceTest {
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder().eventId(eventId).tenantId("a").title("T")
-                .venue("V").province(Province.HRE)
-                .dateTime(LocalDateTime.now().plusDays(1))
+                .venue("V").country("Zimbabwe").category(EventCategory.CONCERT)
+                .startDateTime(LocalDateTime.now().plusDays(1))
+                .endDateTime(LocalDateTime.now().plusDays(1).plusHours(2))
                 .totalCapacity(5).availableTickets(5).deleted(false).build();
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
         EventResponseDTO dto = new EventResponseDTO();

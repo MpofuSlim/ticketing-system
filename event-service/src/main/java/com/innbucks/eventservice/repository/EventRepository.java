@@ -1,7 +1,6 @@
 package com.innbucks.eventservice.repository;
 
 import com.innbucks.eventservice.entity.Event;
-import com.innbucks.eventservice.entity.Province;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -31,8 +30,8 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     @Query("""
         SELECT e FROM Event e
         WHERE e.deleted = false
-        AND (CAST(:from AS timestamp) IS NULL OR e.dateTime >= :from)
-        AND (CAST(:to AS timestamp) IS NULL OR e.dateTime <= :to)
+        AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
+        AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
         AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
     """)
     Page<Event> findAllActive(
@@ -47,8 +46,8 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
         SELECT e FROM Event e
         WHERE e.deleted = false
         AND e.active = true
-        AND (CAST(:from AS timestamp) IS NULL OR e.dateTime >= :from)
-        AND (CAST(:to AS timestamp) IS NULL OR e.dateTime <= :to)
+        AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
+        AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
         AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
     """)
     Page<Event> findAllActiveOnly(
@@ -67,8 +66,8 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
         SELECT e FROM Event e
         WHERE e.deleted = false
         AND e.tenantId = :tenantId
-        AND (CAST(:from AS timestamp) IS NULL OR e.dateTime >= :from)
-        AND (CAST(:to AS timestamp) IS NULL OR e.dateTime <= :to)
+        AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
+        AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
         AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
     """)
     Page<Event> findByTenantId(
@@ -86,8 +85,8 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
         WHERE e.deleted = false
         AND e.active = true
         AND e.tenantId = :tenantId
-        AND (CAST(:from AS timestamp) IS NULL OR e.dateTime >= :from)
-        AND (CAST(:to AS timestamp) IS NULL OR e.dateTime <= :to)
+        AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
+        AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
         AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
     """)
     Page<Event> findByTenantIdActiveOnly(
@@ -98,18 +97,18 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
             Pageable pageable
     );
 
-    Page<Event> findByProvinceAndDeletedFalse(Province province, Pageable pageable);
-
-    // Upcoming events in a province: non-deleted, tenant-active, and scheduled
-    // at or after the supplied cutoff (usually "now"). Used by /events/by-province.
-    Page<Event> findByProvinceAndDeletedFalseAndActiveTrueAndDateTimeGreaterThanEqual(
-            Province province, LocalDateTime cutoff, Pageable pageable
+    // Upcoming events in a country: non-deleted, tenant-active, and starting
+    // at or after the supplied cutoff (usually "now"). Country match is
+    // case-insensitive since it's free text carried over from the JWT claim.
+    // Used by /events/by-country.
+    Page<Event> findByCountryIgnoreCaseAndDeletedFalseAndActiveTrueAndStartDateTimeGreaterThanEqual(
+            String country, LocalDateTime cutoff, Pageable pageable
     );
 
     // Detects an already-created event by the same tenant with identical title,
     // venue, and scheduled dateTime. Used as a duplicate-create guard.
-    boolean existsByTenantIdAndTitleAndVenueAndDateTimeAndDeletedFalse(
-            String tenantId, String title, String venue, LocalDateTime dateTime
+    boolean existsByTenantIdAndTitleAndVenueAndStartDateTimeAndDeletedFalse(
+            String tenantId, String title, String venue, LocalDateTime startDateTime
     );
 
     // Free-text search across title, description and venue. Case-insensitive
@@ -129,15 +128,17 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     """)
     Page<Event> searchByKeyword(@Param("q") String q, Pageable pageable);
 
-    // Bulk-expires events whose scheduled dateTime is before the given cutoff
-    // and are still flagged active=true. Used by the nightly expiry scheduler.
+    // Bulk-expires events whose end time is before the given cutoff and are
+    // still flagged active=true. Used by the nightly expiry scheduler — an
+    // event stays active until it has actually ended (endDateTime), not when
+    // it starts.
     @Modifying
     @Query("""
         UPDATE Event e
         SET e.active = false, e.updatedAt = :now
         WHERE e.deleted = false
         AND e.active = true
-        AND e.dateTime < :cutoff
+        AND e.endDateTime < :cutoff
     """)
     int deactivateExpiredEvents(@Param("cutoff") LocalDateTime cutoff,
                                 @Param("now") LocalDateTime now);

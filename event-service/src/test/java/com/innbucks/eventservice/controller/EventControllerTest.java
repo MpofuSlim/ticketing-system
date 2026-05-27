@@ -4,7 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.innbucks.eventservice.dto.CreateEventRequestDTO;
 import com.innbucks.eventservice.dto.LocationDTO;
 import com.innbucks.eventservice.entity.Event;
-import com.innbucks.eventservice.entity.Province;
+import com.innbucks.eventservice.entity.EventCategory;
 import com.innbucks.eventservice.repository.EventRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -47,8 +47,10 @@ class EventControllerTest {
                 .title("Test Event")
                 .description("desc")
                 .venue("Harare")
-                .province(Province.HRE)
-                .dateTime(LocalDateTime.of(2030, 4, 18, 10, 30))
+                .country("Zimbabwe")
+                .category(EventCategory.CONCERT)
+                .startDateTime(LocalDateTime.of(2030, 4, 18, 10, 30))
+                .endDateTime(LocalDateTime.of(2030, 4, 18, 12, 30))
                 .totalCapacity(100)
                 .availableTickets(100)
                 .deleted(false)
@@ -60,14 +62,17 @@ class EventControllerTest {
                 .andExpect(jsonPath("$.code", is("200 OK")))
                 .andExpect(jsonPath("$.data.content", hasSize(greaterThanOrEqualTo(1))))
                 .andExpect(jsonPath("$.data.content[0].eventId", is(saved.getEventId().toString())))
-                .andExpect(jsonPath("$.data.content[0].dateTime", is("2030-04-18T10:30:00"))); // LocalDateTime in response
+                .andExpect(jsonPath("$.data.content[0].country", is("Zimbabwe")))
+                .andExpect(jsonPath("$.data.content[0].category", is("CONCERT")))
+                .andExpect(jsonPath("$.data.content[0].startDateTime", is("2030-04-18T10:30:00")))
+                .andExpect(jsonPath("$.data.content[0].endDateTime", is("2030-04-18T12:30:00")));
     }
 
     @Test
     void createEvent_requiresAuthentication() throws Exception {
         MockMultipartFile eventPart = new MockMultipartFile(
                 "event", "event.json", MediaType.APPLICATION_JSON_VALUE,
-                objectMapper.writeValueAsBytes(sampleRequest("Concert", Province.BYO)));
+                objectMapper.writeValueAsBytes(sampleRequest("Concert", EventCategory.CONCERT)));
 
         mockMvc.perform(multipart("/events").file(eventPart))
                 .andExpect(status().isUnauthorized());
@@ -78,13 +83,18 @@ class EventControllerTest {
     void createEvent_withTenantRole_createsEvent() throws Exception {
         MockMultipartFile eventPart = new MockMultipartFile(
                 "event", "event.json", MediaType.APPLICATION_JSON_VALUE,
-                objectMapper.writeValueAsBytes(sampleRequest("Concert", Province.BYO)));
+                objectMapper.writeValueAsBytes(sampleRequest("Concert", EventCategory.COMEDY)));
 
-        mockMvc.perform(multipart("/events").file(eventPart))
+        // @WithMockUser bypasses JwtFilter, so the country normally stamped from
+        // the token is injected here as the request attribute the controller reads.
+        mockMvc.perform(multipart("/events").file(eventPart)
+                        .requestAttr("jwtCountry", "Zimbabwe"))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.code", is("201 CREATED")))
                 .andExpect(jsonPath("$.data.tenantId", is("tenant-99")))
                 .andExpect(jsonPath("$.data.title", is("Concert")))
+                .andExpect(jsonPath("$.data.country", is("Zimbabwe")))
+                .andExpect(jsonPath("$.data.category", is("COMEDY")))
                 .andExpect(jsonPath("$.data.availableTickets", is(50)))
                 .andExpect(jsonPath("$.data.location.latitude", is(-17.8252)))
                 .andExpect(jsonPath("$.data.location.longitude", is(31.0335)))
@@ -93,10 +103,23 @@ class EventControllerTest {
 
     @Test
     @WithMockUser(username = "tenant-99", roles = "EVENT_ORGANIZER")
+    void createEvent_withoutCountryClaim_isRejected() throws Exception {
+        MockMultipartFile eventPart = new MockMultipartFile(
+                "event", "event.json", MediaType.APPLICATION_JSON_VALUE,
+                objectMapper.writeValueAsBytes(sampleRequest("No Country Concert", EventCategory.SPORT)));
+
+        // No jwtCountry attribute → controller has no country to stamp → 400.
+        mockMvc.perform(multipart("/events").file(eventPart))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message", containsStringIgnoringCase("country")));
+    }
+
+    @Test
+    @WithMockUser(username = "tenant-99", roles = "EVENT_ORGANIZER")
     void createEvent_withBanner_storesBytesAndReturnsBannerUrl() throws Exception {
         MockMultipartFile eventPart = new MockMultipartFile(
                 "event", "event.json", MediaType.APPLICATION_JSON_VALUE,
-                objectMapper.writeValueAsBytes(sampleRequest("Concert With Banner", Province.HRE)));
+                objectMapper.writeValueAsBytes(sampleRequest("Concert With Banner", EventCategory.CONCERT)));
 
         // ~200 KB payload — guards against the column-type regression where
         // Hibernate generated a 32 KB varbinary on H2 and truncated real images.
@@ -106,7 +129,8 @@ class EventControllerTest {
         MockMultipartFile bannerPart = new MockMultipartFile(
                 "eventBanner", "banner.png", MediaType.IMAGE_PNG_VALUE, pngBytes);
 
-        String body = mockMvc.perform(multipart("/events").file(eventPart).file(bannerPart))
+        String body = mockMvc.perform(multipart("/events").file(eventPart).file(bannerPart)
+                        .requestAttr("jwtCountry", "Zimbabwe"))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.data.bannerUrl", containsString("/banner")))
                 .andReturn().getResponse().getContentAsString();
@@ -131,14 +155,17 @@ class EventControllerTest {
                 .title("Original Title")
                 .description("Original")
                 .venue("Old Venue")
-                .province(Province.HRE)
-                .dateTime(LocalDateTime.of(2030, 1, 1, 10, 0))
+                .country("Zimbabwe")
+                .category(EventCategory.CONCERT)
+                .startDateTime(LocalDateTime.of(2030, 1, 1, 10, 0))
+                .endDateTime(LocalDateTime.of(2030, 1, 1, 12, 0))
                 .totalCapacity(100)
                 .availableTickets(100)
                 .deleted(false)
                 .build());
 
-        String body = "{\"title\":\"Updated Title\",\"venue\":\"New Venue\",\"dateTime\":\"2031-06-15T19:00:00.000Z\"}";
+        String body = "{\"title\":\"Updated Title\",\"venue\":\"New Venue\","
+                + "\"startDateTime\":\"2031-06-15T19:00:00.000Z\",\"endDateTime\":\"2031-06-15T22:00:00.000Z\"}";
 
         mockMvc.perform(put("/events/" + saved.getEventId())
                         .contentType(MediaType.APPLICATION_JSON)
@@ -146,66 +173,72 @@ class EventControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.title", is("Updated Title")))
                 .andExpect(jsonPath("$.data.venue", is("New Venue")))
-                .andExpect(jsonPath("$.data.dateTime", is("2031-06-15T19:00:00")));
+                .andExpect(jsonPath("$.data.startDateTime", is("2031-06-15T19:00:00")))
+                .andExpect(jsonPath("$.data.endDateTime", is("2031-06-15T22:00:00")));
 
         Event reloaded = eventRepository.findById(saved.getEventId()).orElseThrow();
         org.junit.jupiter.api.Assertions.assertEquals("Updated Title", reloaded.getTitle());
         org.junit.jupiter.api.Assertions.assertEquals("New Venue", reloaded.getVenue());
         org.junit.jupiter.api.Assertions.assertEquals(
-                LocalDateTime.of(2031, 6, 15, 19, 0), reloaded.getDateTime());
+                LocalDateTime.of(2031, 6, 15, 19, 0), reloaded.getStartDateTime());
+        org.junit.jupiter.api.Assertions.assertEquals(
+                LocalDateTime.of(2031, 6, 15, 22, 0), reloaded.getEndDateTime());
     }
 
-    private static CreateEventRequestDTO sampleRequest(String title, Province province) {
+    private static CreateEventRequestDTO sampleRequest(String title, EventCategory category) {
         CreateEventRequestDTO req = new CreateEventRequestDTO();
         req.setTitle(title);
         req.setDescription("desc");
         req.setVenue("Bulawayo");
-        req.setProvince(province);
+        req.setCategory(category);
         req.setLocation(LocationDTO.builder().latitude(-17.8252).longitude(31.0335).build());
-        req.setDateTime(LocalDateTime.now().plusDays(10));
+        req.setStartDateTime(LocalDateTime.now().plusDays(10));
+        req.setEndDateTime(LocalDateTime.now().plusDays(10).plusHours(3));
         req.setTotalCapacity(50);
         return req;
     }
 
     @Test
-    void getEventsByProvince_onlyReturnsActiveUpcomingEvents_numberedFromOne() throws Exception {
+    void getEventsByCountry_onlyReturnsActiveUpcomingEvents_numberedFromOne() throws Exception {
         eventRepository.save(eventBuilder()
                 .title("Third")
-                .province(Province.HRE)
-                .dateTime(LocalDateTime.now().plusDays(30))
+                .startDateTime(LocalDateTime.now().plusDays(30))
+                .endDateTime(LocalDateTime.now().plusDays(30).plusHours(2))
                 .build());
         eventRepository.save(eventBuilder()
                 .title("First")
-                .province(Province.HRE)
-                .dateTime(LocalDateTime.now().plusDays(10))
+                .startDateTime(LocalDateTime.now().plusDays(10))
+                .endDateTime(LocalDateTime.now().plusDays(10).plusHours(2))
                 .build());
         eventRepository.save(eventBuilder()
                 .title("Second")
-                .province(Province.HRE)
-                .dateTime(LocalDateTime.now().plusDays(20))
+                .startDateTime(LocalDateTime.now().plusDays(20))
+                .endDateTime(LocalDateTime.now().plusDays(20).plusHours(2))
                 .build());
 
         eventRepository.save(eventBuilder()
                 .title("Past")
-                .province(Province.HRE)
-                .dateTime(LocalDateTime.now().minusDays(1))
+                .startDateTime(LocalDateTime.now().minusDays(1))
+                .endDateTime(LocalDateTime.now().minusDays(1).plusHours(2))
                 .build());
 
         eventRepository.save(eventBuilder()
                 .title("Inactive")
-                .province(Province.HRE)
-                .dateTime(LocalDateTime.now().plusDays(15))
+                .startDateTime(LocalDateTime.now().plusDays(15))
+                .endDateTime(LocalDateTime.now().plusDays(15).plusHours(2))
                 .active(false)
                 .build());
 
         eventRepository.save(eventBuilder()
-                .title("Other province")
-                .province(Province.BYO)
-                .dateTime(LocalDateTime.now().plusDays(5))
+                .title("Other country")
+                .country("Zambia")
+                .startDateTime(LocalDateTime.now().plusDays(5))
+                .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2))
                 .build());
 
-        mockMvc.perform(get("/events/by-province")
-                        .param("province", "HRE")
+        // Lowercase param exercises the case-insensitive country match.
+        mockMvc.perform(get("/events/by-country")
+                        .param("country", "zimbabwe")
                         .accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code", is("200 OK")))
@@ -223,6 +256,8 @@ class EventControllerTest {
                 .tenantId("tenant-1")
                 .description("desc")
                 .venue("Venue")
+                .country("Zimbabwe")
+                .category(EventCategory.CONCERT)
                 .totalCapacity(100)
                 .availableTickets(100)
                 .deleted(false)
@@ -237,8 +272,8 @@ class EventControllerTest {
     void consumeAvailability_withoutInternalToken_returns401_andDoesNotMutate() throws Exception {
         Event saved = eventRepository.save(eventBuilder()
                 .title("Concert")
-                .province(Province.HRE)
-                .dateTime(LocalDateTime.now().plusDays(7))
+                .startDateTime(LocalDateTime.now().plusDays(7))
+                .endDateTime(LocalDateTime.now().plusDays(7).plusHours(2))
                 .totalCapacity(100)
                 .availableTickets(100)
                 .build());
@@ -256,8 +291,8 @@ class EventControllerTest {
     void consumeAvailability_withWrongInternalToken_returns401_andDoesNotMutate() throws Exception {
         Event saved = eventRepository.save(eventBuilder()
                 .title("Concert")
-                .province(Province.HRE)
-                .dateTime(LocalDateTime.now().plusDays(7))
+                .startDateTime(LocalDateTime.now().plusDays(7))
+                .endDateTime(LocalDateTime.now().plusDays(7).plusHours(2))
                 .totalCapacity(100)
                 .availableTickets(100)
                 .build());
@@ -275,8 +310,8 @@ class EventControllerTest {
     void consumeAvailability_withValidInternalToken_returns200_andDecrements() throws Exception {
         Event saved = eventRepository.save(eventBuilder()
                 .title("Concert")
-                .province(Province.HRE)
-                .dateTime(LocalDateTime.now().plusDays(7))
+                .startDateTime(LocalDateTime.now().plusDays(7))
+                .endDateTime(LocalDateTime.now().plusDays(7).plusHours(2))
                 .totalCapacity(100)
                 .availableTickets(100)
                 .build());
