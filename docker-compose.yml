@@ -67,7 +67,7 @@ services:
     restart: unless-stopped
     mem_limit: 256m
     mem_reservation: 128m
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}"]
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
@@ -132,6 +132,11 @@ services:
       # Self-zone hostname so the registry advertises itself on the shared
       # network as discovery-server (not its container id).
       EUREKA_INSTANCE_HOSTNAME: discovery-server
+      # Registry Basic-auth credential (enforced under the prod profile). Clients
+      # embed it in their eureka defaultZone URL, so use a URL-safe value
+      # (openssl rand -hex 24) — '@' / ':' / '/' would break URL parsing.
+      EUREKA_USERNAME: ${EUREKA_USERNAME:-eureka}
+      EUREKA_PASSWORD: ${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}
     ports:
       - "127.0.0.1:8761:8761"
     healthcheck:
@@ -148,6 +153,8 @@ services:
     image: ghcr.io/${GHCR_OWNER:-mpofuslim}/user-service:${IMAGE_TAG:-dev}
     container_name: innbucks-user-service
     restart: unless-stopped
+    # internal (DB/Redis/Eureka/siblings) + shared (only to reach oradian-middleware:8090).
+    networks: ["default", "shared"]
     mem_limit: 768m
     mem_reservation: 512m
     depends_on:
@@ -165,7 +172,7 @@ services:
       # external OTel collector (none is bundled in this stack) to export spans.
       TRACING_ENABLED: ${TRACING_ENABLED:-false}
       OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
-      EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
+      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/
       DB_URL: jdbc:postgresql://postgres:5432/user_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
@@ -237,7 +244,7 @@ services:
       # Required from booking-service on PATCH /events/{id}/availability/consume.
       # Must match INTERNAL_API_TOKEN on the booking-service side.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
-      EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
+      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
     ports:
       - "127.0.0.1:8082:8082"
@@ -271,7 +278,7 @@ services:
       # external OTel collector (none is bundled in this stack) to export spans.
       TRACING_ENABLED: ${TRACING_ENABLED:-false}
       OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
-      EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
+      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/
       DB_URL: jdbc:postgresql://postgres:5432/seat_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
@@ -282,6 +289,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}
       LOCK_STORE: redis
     ports:
       - "127.0.0.1:8083:8083"
@@ -327,9 +335,10 @@ services:
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}
       IDEMPOTENCY_STORE: redis
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
+      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/
       # Presented to event-service on the internal availability/consume call.
       # Must match INTERNAL_API_TOKEN on the event-service side.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
@@ -354,6 +363,8 @@ services:
     image: ghcr.io/${GHCR_OWNER:-mpofuslim}/payment-service:${IMAGE_TAG:-dev}
     container_name: innbucks-payment-service
     restart: unless-stopped
+    # internal (DB/Redis/Eureka/siblings) + shared (only to reach oradian-middleware:8090).
+    networks: ["default", "shared"]
     mem_limit: 768m
     mem_reservation: 512m
     depends_on:
@@ -388,8 +399,9 @@ services:
       # could execute a second real transfer.
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}
       IDEMPOTENCY_STORE: redis
-      EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
+      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/
       # Oradian middleware lives in the sibling stack on the shared
       # innbucks-shared docker network — reachable by service name.
       # payment-service uses ORADIAN_MIDDLEWARE_URL (different env var
@@ -435,7 +447,7 @@ services:
       # external OTel collector (none is bundled in this stack) to export spans.
       TRACING_ENABLED: ${TRACING_ENABLED:-false}
       OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
-      EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
+      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/
       DB_URL: jdbc:postgresql://postgres:5432/loyalty_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
@@ -488,11 +500,12 @@ services:
       # external OTel collector (none is bundled in this stack) to export spans.
       TRACING_ENABLED: ${TRACING_ENABLED:-false}
       OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
-      EUREKA_SERVER_URL: http://discovery-server:8761/eureka/
+      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
       # Redis backs the gateway's RequestRateLimiter token bucket store.
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}
       RATE_LIMIT_REPLENISH_PER_SECOND: ${RATE_LIMIT_REPLENISH_PER_SECOND:-50}
       RATE_LIMIT_BURST_CAPACITY: ${RATE_LIMIT_BURST_CAPACITY:-100}
     ports:
@@ -516,6 +529,17 @@ volumes:
 # container itself). The deploy workflow creates this network on the
 # EC2 if missing — idempotent.
 networks:
+  # Ticketing-internal network — NOT shared with the OradianMiddleware stack.
+  # Postgres / Redis / Kafka / Eureka and every service live here. It is a normal
+  # bridge (egress allowed, so services can still reach the external WhatsApp
+  # gateway), but the OradianMiddleware stack — and anything else on
+  # innbucks-shared — can no longer reach the data / registry tier (audit CR-2/H1/H2).
   default:
+    name: innbucks-internal
+    driver: bridge
+  # Cross-stack bridge. ONLY user-service + payment-service join this, so they
+  # can reach the Oradian middleware (oradian-middleware:8090). The middleware
+  # joins it from its own stack; the deploy workflow creates it if missing.
+  shared:
     name: innbucks-shared
     external: true

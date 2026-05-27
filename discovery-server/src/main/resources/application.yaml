@@ -1,6 +1,12 @@
 spring:
   application:
     name: discovery-server
+  # Registry Basic-auth credential (enforced only under the prod profile — see
+  # SecurityConfig). Clients pass these in their eureka defaultZone URL.
+  security:
+    user:
+      name: ${EUREKA_USERNAME:eureka}
+      password: ${EUREKA_PASSWORD:}
   lifecycle:
     timeout-per-shutdown-phase: 30s
 
