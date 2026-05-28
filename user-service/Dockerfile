@@ -24,7 +24,7 @@ COPY loyalty-service/pom.xml loyalty-service/
 RUN ./mvnw -B -pl user-service -am -DskipTests dependency:go-offline || true
 
 COPY user-service/src user-service/src
-RUN ./mvnw -B -pl user-service -am -DskipTests package \
+RUN ./mvnw -B -pl user-service -am -DskipTests package spring-boot:repackage \
     && cp user-service/target/user-service-*.jar /workspace/app.jar
 
 FROM eclipse-temurin:21-jre-alpine AS runtime

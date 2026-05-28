@@ -22,7 +22,7 @@ COPY loyalty-service/pom.xml loyalty-service/
 RUN ./mvnw -B -pl booking-service -am -DskipTests dependency:go-offline || true
 
 COPY booking-service/src booking-service/src
-RUN ./mvnw -B -pl booking-service -am -DskipTests package \
+RUN ./mvnw -B -pl booking-service -am -DskipTests package spring-boot:repackage \
     && cp booking-service/target/booking-service-*.jar /workspace/app.jar
 
 FROM eclipse-temurin:21-jre-alpine AS runtime

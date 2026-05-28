@@ -22,7 +22,7 @@ COPY loyalty-service/pom.xml loyalty-service/
 RUN ./mvnw -B -pl payment-service -am -DskipTests dependency:go-offline || true
 
 COPY payment-service/src payment-service/src
-RUN ./mvnw -B -pl payment-service -am -DskipTests package \
+RUN ./mvnw -B -pl payment-service -am -DskipTests package spring-boot:repackage \
     && cp payment-service/target/payment-service-*.jar /workspace/app.jar
 
 FROM eclipse-temurin:21-jre-alpine AS runtime

@@ -24,7 +24,7 @@ COPY loyalty-service/pom.xml loyalty-service/
 RUN ./mvnw -B -pl discovery-server -am -DskipTests dependency:go-offline || true
 
 COPY discovery-server/src discovery-server/src
-RUN ./mvnw -B -pl discovery-server -am -DskipTests package \
+RUN ./mvnw -B -pl discovery-server -am -DskipTests package spring-boot:repackage \
     && cp discovery-server/target/discovery-server-*.jar /workspace/app.jar
 
 FROM eclipse-temurin:21-jre-alpine AS runtime
