@@ -283,8 +283,10 @@ class AuthServiceTest {
                 .active(true).build();
         when(userRepo.findByEmail("admin@innbucks.co.zw")).thenReturn(Optional.of(user));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
+        // This superadmin has no stored country, so the JWT country claim
+        // defaults to Zimbabwe (see login_superAdminWithoutCountry_* below).
         when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), isNull(), isNull(), isNull(),
-                any(), any(), any(), anyLong(), isNull())).thenReturn("tok");
+                any(), any(), any(), anyLong(), eq("Zimbabwe"))).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("admin@innbucks.co.zw"); req.setPassword("pw");
@@ -298,13 +300,76 @@ class AuthServiceTest {
         // Verify the JWT was issued with the expanded set covering every microservice.
         ArgumentCaptor<List<String>> servicesCaptor = ArgumentCaptor.forClass(List.class);
         verify(jwt).generateToken(any(), any(), servicesCaptor.capture(), anyInt(), anyBoolean(), isNull(), isNull(), isNull(),
-                any(), any(), any(), anyLong(), isNull());
+                any(), any(), any(), anyLong(), eq("Zimbabwe"));
         List<String> services = servicesCaptor.getValue();
         assertTrue(services.contains("events"));
         assertTrue(services.contains("seats"));
         assertTrue(services.contains("bookings"));
         assertTrue(services.contains("payments"));
         assertTrue(services.contains("loyalty"));
+    }
+
+    @Test
+    void login_superAdminWithoutCountry_defaultsCountryClaimToZimbabwe() {
+        // admin@innbucks.co.zw is seeded with no country. event-service's
+        // createEvent rejects a token that carries no country claim, so the
+        // superadmin must default to Zimbabwe rather than mint a country-less
+        // token that fails downstream.
+        UserRepository userRepo = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        User user = User.builder()
+                .id(1L)
+                .email("admin@innbucks.co.zw").password("hashed")
+                .roles(EnumSet.of(User.Role.SUPER_ADMIN))
+                .active(true).build(); // no country stored
+        when(userRepo.findByEmail("admin@innbucks.co.zw")).thenReturn(Optional.of(user));
+        when(encoder.matches("pw", "hashed")).thenReturn(true);
+        when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+                any(), any(), any(), anyLong(), any())).thenReturn("tok");
+
+        LoginRequestDTO req = new LoginRequestDTO();
+        req.setIdentifier("admin@innbucks.co.zw"); req.setPassword("pw");
+
+        newService(userRepo, mock(TenantProfileRepository.class), encoder, jwt)
+                .login(req, null, com.innbucks.userservice.service.AuditContext.none());
+
+        ArgumentCaptor<String> countryCaptor = ArgumentCaptor.forClass(String.class);
+        verify(jwt).generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+                any(), any(), any(), anyLong(), countryCaptor.capture());
+        assertEquals("Zimbabwe", countryCaptor.getValue(),
+                "SUPER_ADMIN with no stored country must default the JWT country claim to Zimbabwe");
+    }
+
+    @Test
+    void login_superAdminWithExplicitCountry_keepsItsOwnCountry() {
+        // The default only fills a gap — a superadmin that already carries a
+        // country keeps it; we don't clobber real data with the fallback.
+        UserRepository userRepo = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        User user = User.builder()
+                .id(2L)
+                .email("admin-ke@innbucks.co.ke").password("hashed")
+                .roles(EnumSet.of(User.Role.SUPER_ADMIN))
+                .country("Kenya")
+                .active(true).build();
+        when(userRepo.findByEmail("admin-ke@innbucks.co.ke")).thenReturn(Optional.of(user));
+        when(encoder.matches("pw", "hashed")).thenReturn(true);
+        when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+                any(), any(), any(), anyLong(), any())).thenReturn("tok");
+
+        LoginRequestDTO req = new LoginRequestDTO();
+        req.setIdentifier("admin-ke@innbucks.co.ke"); req.setPassword("pw");
+
+        newService(userRepo, mock(TenantProfileRepository.class), encoder, jwt)
+                .login(req, null, com.innbucks.userservice.service.AuditContext.none());
+
+        ArgumentCaptor<String> countryCaptor = ArgumentCaptor.forClass(String.class);
+        verify(jwt).generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+                any(), any(), any(), anyLong(), countryCaptor.capture());
+        assertEquals("Kenya", countryCaptor.getValue(),
+                "An explicit country on a SUPER_ADMIN must NOT be overridden by the Zimbabwe default");
     }
 
     @Test
