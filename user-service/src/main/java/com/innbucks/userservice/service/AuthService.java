@@ -41,6 +41,13 @@ public class AuthService {
     @Value("${innbucks.account-lockout.duration-minutes:30}")
     private int lockoutDurationMinutes;
 
+    // SUPER_ADMIN accounts are seeded without a country, but downstream
+    // services (e.g. event-service createEvent) reject a token that carries
+    // no country claim. Default superadmins to Zimbabwe. Scoped to
+    // SUPER_ADMIN only — for any other role a blank country is a real data
+    // gap we don't want to silently paper over.
+    private static final String DEFAULT_SUPER_ADMIN_COUNTRY = "Zimbabwe";
+
     /**
      * Raised by {@link #login} when the resolved account has an active
      * lockout (see {@link User#getLockedUntil()}). Carries the deadline
@@ -443,9 +450,14 @@ public class AuthService {
             loyaltyMerchantId = user.getLoyaltyMerchantId();
         }
 
+        String country = user.getCountry();
+        if ((country == null || country.isBlank()) && user.hasRole(User.Role.SUPER_ADMIN)) {
+            country = DEFAULT_SUPER_ADMIN_COUNTRY;
+        }
+
         String newToken = jwtUtil.generateToken(subject, roleNames, new ArrayList<>(microservices),
                 tier, verified, user.getPhoneNumber(), loyaltyMerchantId, loyaltyShopId,
-                firstName, middleName, lastName, user.getTokenVersion(), user.getCountry());
+                firstName, middleName, lastName, user.getTokenVersion(), country);
 
         return AuthResponseDTO.builder()
                 .token(newToken)
