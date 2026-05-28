@@ -217,10 +217,18 @@ eureka:
     service-url:
       defaultZone: ${EUREKA_SERVER_URL:http://localhost:8761/eureka/}
   instance:
-    # Register by IP — a container's own hostname isn't resolvable by its
-    # peers on the shared network. The unique instance-id keeps replicas
-    # from colliding in the registry.
-    prefer-ip-address: true
+    # Eureka registration host. On a single host (laptop dev) the default
+    # prefer-ip-address registers a reachable IP, so local dev is unchanged.
+    # In docker-compose this service is dual-homed (default + shared networks)
+    # and so has two container IPs; registering one fixed IP leaves it
+    # unreachable from peers on the OTHER network (e.g. booking/seat/loyalty on
+    # `default` can't reach a shared-network IP). So compose sets
+    # EUREKA_PREFER_IP_ADDRESS=false + EUREKA_INSTANCE_HOSTNAME=<service-name>:
+    # we register by the compose service name and Docker's embedded DNS resolves
+    # it to the correct per-network IP for whichever caller looks it up. The
+    # unique instance-id keeps replicas from colliding in the registry.
+    prefer-ip-address: ${EUREKA_PREFER_IP_ADDRESS:true}
+    hostname: ${EUREKA_INSTANCE_HOSTNAME:localhost}
     instance-id: ${spring.application.name}:${random.uuid}
 
 management:

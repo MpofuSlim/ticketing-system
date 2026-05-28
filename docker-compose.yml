@@ -177,6 +177,11 @@ services:
       TRACING_ENABLED: ${TRACING_ENABLED:-false}
       OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
       EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/
+      # Dual-homed (default + shared) -> register by service name, not a single
+      # fixed IP, so Docker DNS resolves it per-network for every caller. See
+      # the eureka.instance comment in user-service application.yaml.
+      EUREKA_PREFER_IP_ADDRESS: "false"
+      EUREKA_INSTANCE_HOSTNAME: user-service
       DB_URL: jdbc:postgresql://postgres:5432/user_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
@@ -409,6 +414,11 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}
       IDEMPOTENCY_STORE: redis
       EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/
+      # Dual-homed (default + shared) -> register by service name, not a single
+      # fixed IP, so Docker DNS resolves it per-network for every caller. See
+      # the eureka.instance comment in payment-service application.yaml.
+      EUREKA_PREFER_IP_ADDRESS: "false"
+      EUREKA_INSTANCE_HOSTNAME: payment-service
       # Oradian middleware lives in the sibling stack on the shared
       # innbucks-shared docker network — reachable by service name.
       # payment-service uses ORADIAN_MIDDLEWARE_URL (different env var
