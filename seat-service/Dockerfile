@@ -22,7 +22,7 @@ COPY loyalty-service/pom.xml loyalty-service/
 RUN ./mvnw -B -pl seat-service -am -DskipTests dependency:go-offline || true
 
 COPY seat-service/src seat-service/src
-RUN ./mvnw -B -pl seat-service -am -DskipTests package \
+RUN ./mvnw -B -pl seat-service -am -DskipTests package spring-boot:repackage \
     && cp seat-service/target/seat-service-*.jar /workspace/app.jar
 
 FROM eclipse-temurin:21-jre-alpine AS runtime

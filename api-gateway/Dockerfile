@@ -22,7 +22,7 @@ COPY loyalty-service/pom.xml loyalty-service/
 RUN ./mvnw -B -pl api-gateway -am -DskipTests dependency:go-offline || true
 
 COPY api-gateway/src api-gateway/src
-RUN ./mvnw -B -pl api-gateway -am -DskipTests package \
+RUN ./mvnw -B -pl api-gateway -am -DskipTests package spring-boot:repackage \
     && cp api-gateway/target/api-gateway-*.jar /workspace/app.jar
 
 FROM eclipse-temurin:21-jre-alpine AS runtime
