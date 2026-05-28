@@ -269,6 +269,21 @@
                             </exclude>
                         </excludes>
                     </configuration>
+                    <!-- Bind repackage so `mvn package` produces an executable
+                         fat jar for every service module. This project imports
+                         the Spring Boot BOM rather than using
+                         spring-boot-starter-parent, so the repackage goal is
+                         NOT auto-bound — without this, `package` yields a thin
+                         jar with no Main-Class and the Docker images fail at
+                         runtime with "no main manifest attribute". -->
+                    <executions>
+                        <execution>
+                            <id>repackage</id>
+                            <goals>
+                                <goal>repackage</goal>
+                            </goals>
+                        </execution>
+                    </executions>
                 </plugin>
             </plugins>
         </pluginManagement>
