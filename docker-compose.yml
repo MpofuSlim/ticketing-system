@@ -467,6 +467,11 @@ services:
       # (caller is ticketing's other services). Must equal the
       # INTERNAL_API_TOKEN the callers send.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
+      # Loyalty voucher/QR signing secrets. The prod profile's
+      # ProductionSecretsGuard refuses to boot while these hold their
+      # change-me placeholder defaults, so they must be supplied here.
+      LOYALTY_VOUCHER_SECRET: ${LOYALTY_VOUCHER_SECRET:?set LOYALTY_VOUCHER_SECRET in .env (see .env.example)}
+      LOYALTY_QR_SECRET: ${LOYALTY_QR_SECRET:?set LOYALTY_QR_SECRET in .env (see .env.example)}
     ports:
       - "127.0.0.1:8086:8086"
     healthcheck:
@@ -483,20 +488,18 @@ services:
     image: ghcr.io/${GHCR_OWNER:-mpofuslim}/api-gateway:${IMAGE_TAG:-dev}
     container_name: innbucks-api-gateway
     restart: unless-stopped
+    # Also join `shared`: user-service / payment-service are dual-homed and
+    # advertise their shared-network IP to Eureka, so the gateway must be on
+    # `shared` to route to them (otherwise /auth/** etc. time out connecting).
+    networks: ["default", "shared"]
     mem_limit: 768m
     mem_reservation: 512m
+    # The gateway only needs the registry + its rate-limit store to boot; it
+    # resolves backends dynamically via Eureka (lb://) and returns 503 for any
+    # not-yet-registered service. Depending on every backend's health let a
+    # single unhealthy backend (e.g. loyalty) block the whole entry point.
     depends_on:
       discovery-server:
-        condition: service_healthy
-      user-service:
-        condition: service_healthy
-      event-service:
-        condition: service_healthy
-      seat-service:
-        condition: service_healthy
-      booking-service:
-        condition: service_healthy
-      loyalty-service:
         condition: service_healthy
       redis:
         condition: service_healthy
