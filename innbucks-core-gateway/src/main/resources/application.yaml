@@ -1,6 +1,13 @@
 spring:
   application:
     name: innbucks-core-gateway
+  # core puts JPA on the classpath; the adapter has no database, so exclude the
+  # datasource/JPA auto-config that would otherwise fail the context at startup.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration
+      - org.springframework.boot.autoconfigure.orm.jpa.HibernateJpaAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.jpa.JpaRepositoriesAutoConfiguration
 
 server:
   # Own port; override per host (avoid clashing with whatever else runs there).
