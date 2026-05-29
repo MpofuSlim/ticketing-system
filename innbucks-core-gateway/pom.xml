@@ -36,13 +36,23 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
-        <!-- Eureka CLIENT only — the spike fetches the InnBucks registry to
-             discover veengu-integration. No innbucks.co.zw:core dependency yet
-             (that needs GitHub Packages auth + comes in milestone 2 with the
-             real VeenguClient call). -->
+        <!-- Eureka client: discovers veengu-integration in the InnBucks registry. -->
         <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
+        </dependency>
+        <!-- InnBucks core: carries VeenguClient + TransactionDto. Jetty is excluded
+             so the adapter keeps the Tomcat it already gets from starter-web. -->
+        <dependency>
+            <groupId>innbucks.co.zw</groupId>
+            <artifactId>core</artifactId>
+            <version>1.2.8-SNAPSHOT</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.springframework.boot</groupId>
+                    <artifactId>spring-boot-starter-jetty</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
     </dependencies>
 
