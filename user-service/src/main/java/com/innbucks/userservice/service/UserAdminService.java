@@ -1,5 +1,6 @@
 package com.innbucks.userservice.service;
 
+import com.innbucks.userservice.client.SmsNotificationClient;
 import com.innbucks.userservice.client.WhatsAppNotificationClient;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.exception.NotFoundException;
@@ -34,6 +35,7 @@ public class UserAdminService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final WhatsAppNotificationClient whatsAppNotificationClient;
+    private final SmsNotificationClient smsNotificationClient;
 
     @Transactional
     public User setActive(Long id, boolean active) {
@@ -72,10 +74,10 @@ public class UserAdminService {
     }
 
     /**
-     * WhatsApp the freshly-approved user their first-time password. Best-effort:
-     * a gateway failure must NOT block the approval — the account is already
-     * approved and the password set, so an operator can resend (or the user can
-     * use forgot-password). Never logs the password.
+     * Notify the freshly-approved user of their first-time password. Best-effort:
+     * a delivery failure must NOT block the approval — the account is already
+     * approved and the password set. Tries SMS first (InnBucks messenger),
+     * falls back to WhatsApp if SMS is unavailable. Never logs the password.
      */
     private void notifyApproval(User user) {
         String phone = user.getPhoneNumber();
@@ -88,8 +90,15 @@ public class UserAdminService {
                 + DEFAULT_PASSWORD
                 + ". Please log in and change it immediately.";
         try {
+            smsNotificationClient.sendSms(phone, message, "APPROVAL-" + user.getId());
+            log.info("Approval SMS sent userId={}", user.getId());
+            return;
+        } catch (RuntimeException smsEx) {
+            log.warn("Approval SMS failed userId={}, trying WhatsApp: {}", user.getId(), smsEx.getMessage());
+        }
+        try {
             whatsAppNotificationClient.sendCustomNotification(phone, message);
-            log.info("Approval notification sent userId={}", user.getId());
+            log.info("Approval WhatsApp notification sent userId={}", user.getId());
         } catch (RuntimeException ex) {
             log.warn("Approval notification failed userId={} (account still approved): {}",
                     user.getId(), ex.getMessage());
