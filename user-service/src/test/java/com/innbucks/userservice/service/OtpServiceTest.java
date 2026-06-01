@@ -1,5 +1,7 @@
 package com.innbucks.userservice.service;
 
+import com.innbucks.userservice.client.NotificationDeliveryException;
+import com.innbucks.userservice.client.SmsNotificationClient;
 import com.innbucks.userservice.client.WhatsAppNotificationClient;
 import com.innbucks.userservice.entity.CustomerProfile;
 import com.innbucks.userservice.entity.Otp;
@@ -21,6 +23,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -32,7 +35,7 @@ class OtpServiceTest {
                                   CustomerProfileRepository profileRepo,
                                   PendingRegistrationRepository pendingRepo) {
         return newService(otpRepo, retryRepo, userRepo, profileRepo, pendingRepo,
-                mock(WhatsAppNotificationClient.class));
+                mock(WhatsAppNotificationClient.class), mock(SmsNotificationClient.class));
     }
 
     private OtpService newService(OtpRepository otpRepo,
@@ -40,12 +43,13 @@ class OtpServiceTest {
                                   UserRepository userRepo,
                                   CustomerProfileRepository profileRepo,
                                   PendingRegistrationRepository pendingRepo,
-                                  WhatsAppNotificationClient whatsApp) {
+                                  WhatsAppNotificationClient whatsApp,
+                                  SmsNotificationClient sms) {
         // LoyaltyServiceClient.promoteUserByPhone is fired post-OTP-verify but
         // the call is best-effort and never affects assertions in these tests,
         // so a noop mock is fine.
         return new OtpService(otpRepo, retryRepo, userRepo, profileRepo, pendingRepo,
-                mock(LoyaltyServiceClient.class), whatsApp);
+                mock(LoyaltyServiceClient.class), whatsApp, sms);
     }
 
     @Test
@@ -54,8 +58,9 @@ class OtpServiceTest {
         OtpRetryAttemptRepository retryRepo = mock(OtpRetryAttemptRepository.class);
         when(retryRepo.findByPhoneNumber(anyString())).thenReturn(Optional.empty());
         WhatsAppNotificationClient whatsApp = mock(WhatsAppNotificationClient.class);
+        SmsNotificationClient sms = mock(SmsNotificationClient.class);
 
-        newService(otpRepo, retryRepo, mock(UserRepository.class), mock(CustomerProfileRepository.class), mock(PendingRegistrationRepository.class), whatsApp)
+        newService(otpRepo, retryRepo, mock(UserRepository.class), mock(CustomerProfileRepository.class), mock(PendingRegistrationRepository.class), whatsApp, sms)
                 .sendOtp("+263771234567");
 
         verify(otpRepo).deleteByPhoneNumber("+263771234567");
@@ -65,11 +70,33 @@ class OtpServiceTest {
         assertTrue(code.matches("\\d{6}"), "OTP should be a 6-digit code, was: " + code);
         assertEquals("+263771234567", saved.getValue().getPhoneNumber());
 
-        // The exact code that was persisted is delivered to the same phone.
+        // SMS is the primary channel: the exact persisted code is delivered to
+        // the same phone, and the WhatsApp fallback is NOT touched on success.
         ArgumentCaptor<String> message = ArgumentCaptor.forClass(String.class);
-        verify(whatsApp).sendCustomNotification(eq("+263771234567"), message.capture());
+        verify(sms).sendSms(eq("+263771234567"), message.capture(), anyString());
         assertTrue(message.getValue().contains(code),
-                "WhatsApp message should carry the generated OTP code");
+                "SMS message should carry the generated OTP code");
+        verifyNoInteractions(whatsApp);
+    }
+
+    @Test
+    void sendOtp_fallsBackToWhatsAppWhenSmsFails() {
+        OtpRepository otpRepo = mock(OtpRepository.class);
+        OtpRetryAttemptRepository retryRepo = mock(OtpRetryAttemptRepository.class);
+        when(retryRepo.findByPhoneNumber(anyString())).thenReturn(Optional.empty());
+        WhatsAppNotificationClient whatsApp = mock(WhatsAppNotificationClient.class);
+        SmsNotificationClient sms = mock(SmsNotificationClient.class);
+        doThrow(new NotificationDeliveryException("SMS gateway down"))
+                .when(sms).sendSms(anyString(), anyString(), anyString());
+
+        newService(otpRepo, retryRepo, mock(UserRepository.class), mock(CustomerProfileRepository.class), mock(PendingRegistrationRepository.class), whatsApp, sms)
+                .sendOtp("+263771234567");
+
+        // SMS failed, so the OTP is delivered via the WhatsApp fallback, still
+        // carrying the exact persisted code.
+        ArgumentCaptor<Otp> saved = ArgumentCaptor.forClass(Otp.class);
+        verify(otpRepo).save(saved.capture());
+        verify(whatsApp).sendCustomNotification(eq("+263771234567"), contains(saved.getValue().getCode()));
     }
 
     @Test
