@@ -31,7 +31,7 @@ case "${1:-up}" in
     docker compose pull
     docker compose up -d --no-build      # --no-build: pull images, never invoke buildx
     docker compose ps
-    echo "Gateway -> http://localhost:8080   (./run-stack.sh logs <service> to tail)"
+    echo "Gateway -> http://localhost:18080   (./run-stack.sh logs <service> to tail)"
     ;;
   slim)
     # Pull the app images first; without this, `up` would BUILD them (the
@@ -39,7 +39,7 @@ case "${1:-up}" in
     docker compose pull $SLIM
     docker compose up -d --no-build $SLIM   # postgres/redis deps pulled automatically
     docker compose ps
-    echo "Slim stack up (discovery, user, event, gateway). Gateway -> http://localhost:8080"
+    echo "Slim stack up (discovery, user, event, gateway). Gateway -> http://localhost:18080"
     ;;
   build)
     docker compose up -d --build

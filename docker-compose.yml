@@ -29,7 +29,7 @@
 #     ~8GB; raise a service if you see it OOMKilled, lower them for a smaller box.
 #
 # Port exposure (staging hardening):
-#   Only the api-gateway (8080) publishes on all interfaces — it is the single
+#   Only the api-gateway (18080) publishes on all interfaces — it is the single
 #   public entry point. Every other published port is bound to 127.0.0.1, so the
 #   services, Postgres, Redis and Kafka are reachable only from the EC2 host
 #   itself (host-local debugging) and over the shared docker network — never from
@@ -142,7 +142,7 @@ services:
       EUREKA_USERNAME: ${EUREKA_USERNAME:-eureka}
       EUREKA_PASSWORD: ${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}
     ports:
-      - "127.0.0.1:8761:8761"
+      - "127.0.0.1:18761:8761"
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8761/actuator/health"]
       interval: 10s
@@ -529,7 +529,7 @@ services:
       RATE_LIMIT_REPLENISH_PER_SECOND: ${RATE_LIMIT_REPLENISH_PER_SECOND:-50}
       RATE_LIMIT_BURST_CAPACITY: ${RATE_LIMIT_BURST_CAPACITY:-100}
     ports:
-      - "8080:8080"
+      - "18080:8080"
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/actuator/health"]
       interval: 10s
