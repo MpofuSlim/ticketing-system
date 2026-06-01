@@ -2,20 +2,24 @@ package zw.co.innbucks.coregateway;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import zw.co.innbucks.core.dto.messenger.NotificationDto;
 import zw.co.innbucks.core.rest.client.MessengerClient;
 
 /**
- * Thin async wrapper around {@link MessengerClient}.
+ * Synchronous wrapper around {@link MessengerClient}.
  *
- * <p>OpenFeign ignores {@code @Async} on the Feign interface itself — calling
- * {@code messengerClient.sendNotification()} directly is always synchronous.
- * Wrapping it here with {@code @Async} lets the HTTP caller get an immediate
- * 202 Accepted while the Feign call runs on a background thread. Failures are
- * logged but not re-thrown; delivery failures must be handled by the upstream
- * caller (retry, fallback channel, alerting).
+ * <p>messenger-interface uses a submit-then-reconcile model: the POST confirms
+ * the notification was ACCEPTED into its queue (NotificationDto.status starts
+ * PENDING/QUEUED); actual handset delivery happens asynchronously on its side
+ * and is reconciled later via the status / upstreamReference fields.
+ *
+ * <p>We call it SYNCHRONOUSLY on purpose so the submission outcome propagates
+ * back to the HTTP caller: a failure (messenger-interface down or rejecting)
+ * must reach the ticketing caller so it can fall back to another channel
+ * (user-service falls back to WhatsApp for OTPs/approvals). OpenFeign does not
+ * honour the {@code @Async} on the core client interface anyway, so this call
+ * blocks until messenger-interface responds.
  */
 @Service
 class MessengerService {
@@ -28,15 +32,10 @@ class MessengerService {
         this.messengerClient = messengerClient;
     }
 
-    @Async
+    /** Submit the notification; throws on a non-2xx or connectivity failure. */
     void send(NotificationDto notification) {
-        try {
-            messengerClient.sendNotification(notification);
-            log.info("[messenger] SMS dispatched reference={} destination={}",
-                    notification.getReference(), notification.getDestination());
-        } catch (Exception e) {
-            log.error("[messenger] SMS dispatch failed reference={} destination={} error={}",
-                    notification.getReference(), notification.getDestination(), e.getMessage(), e);
-        }
+        messengerClient.sendNotification(notification);
+        log.info("[messenger] SMS submitted reference={} destination={}",
+                notification.getReference(), notification.getDestination());
     }
 }

@@ -37,8 +37,10 @@ public class SmsNotificationClient {
 
     /**
      * Dispatch an SMS to {@code destination} (E.164, e.g. {@code +263771234567}).
-     * The adapter returns 202 Accepted and delivers asynchronously; this method
-     * returns once the adapter has accepted the request.
+     * The adapter submits synchronously to messenger-interface and returns 200
+     * once the notification is accepted into its queue; a non-2xx (502/503) or a
+     * connectivity failure becomes a {@link NotificationDeliveryException} so the
+     * caller can fall back to another channel (WhatsApp).
      */
     public void sendSms(String destination, String message, String reference) {
         if (destination == null || destination.isBlank()) {
