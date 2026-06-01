@@ -210,6 +210,11 @@ services:
       # Shared secret between ticketing's own services (loyalty webhooks).
       # Separate concern from ORADIAN_INTERNAL_TOKEN; can be a different value.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
+      # InnBucks core gateway adapter (SMS via messenger-interface, payments via
+      # veengu-integration). Host-resident jar on port 8088 — Docker containers
+      # reach it via the EC2 private IP. Override INNBUCKS_GATEWAY_URL in .env
+      # if the host IP differs (e.g. 172.17.0.1 on Docker-Desktop setups).
+      INNBUCKS_GATEWAY_URL: ${INNBUCKS_GATEWAY_URL:-http://10.0.155.69:8088}
       # External WhatsApp notification gateway (OTP + approval delivery).
       # Override the URL per environment (the application.yaml default is a dev
       # ngrok tunnel that rotates); the api key is a required secret.

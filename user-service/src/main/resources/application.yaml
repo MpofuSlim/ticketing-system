@@ -74,6 +74,16 @@ oradian:
   connect-timeout-ms: ${ORADIAN_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${ORADIAN_READ_TIMEOUT_MS:10000}
 
+# InnBucks core gateway adapter — host-resident service that routes SMS via
+# messenger-interface and payments via veengu-integration. Not in the ticketing
+# Eureka, so it uses a plain RestClient with an explicit URL (same pattern as
+# the oradian block above). Override INNBUCKS_GATEWAY_URL per environment
+# (Docker containers on the same host can reach it via the host IP).
+innbucks-gateway:
+  base-url: ${INNBUCKS_GATEWAY_URL:http://localhost:8088}
+  connect-timeout-ms: ${INNBUCKS_GATEWAY_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${INNBUCKS_GATEWAY_READ_TIMEOUT_MS:10000}
+
 # External WhatsApp notification gateway used to deliver OTPs and system-user
 # approval (first-time password) messages. It is a third-party service (not in
 # the Eureka registry), so a plain RestClient with an explicit URL. The

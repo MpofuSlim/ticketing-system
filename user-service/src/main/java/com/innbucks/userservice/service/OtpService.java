@@ -1,5 +1,7 @@
 package com.innbucks.userservice.service;
 
+import com.innbucks.userservice.client.NotificationDeliveryException;
+import com.innbucks.userservice.client.SmsNotificationClient;
 import com.innbucks.userservice.client.WhatsAppNotificationClient;
 import com.innbucks.userservice.entity.CustomerProfile;
 import com.innbucks.userservice.entity.Otp;
@@ -42,6 +44,7 @@ public class OtpService {
     private final PendingRegistrationRepository pendingRegistrationRepository;
     private final com.innbucks.userservice.integration.LoyaltyServiceClient loyaltyServiceClient;
     private final WhatsAppNotificationClient whatsAppNotificationClient;
+    private final SmsNotificationClient smsNotificationClient;
 
     /**
      * Send an OTP with rate-limit enforcement. Used by the public /auth/otp/request endpoint
@@ -147,15 +150,21 @@ public class OtpService {
     }
 
     private void dispatch(String phoneNumber, String code) {
-        // Deliver via the WhatsApp gateway. Runs inside the @Transactional
-        // sendOtp boundary on purpose: if delivery fails, the persisted OTP and
-        // the retry-counter increment roll back, so the customer can retry
-        // cleanly with no phantom code left behind. Never log the code itself.
+        // Runs inside the @Transactional sendOtp boundary: if delivery fails,
+        // the persisted OTP and retry-counter roll back for a clean retry.
+        // Never log the code itself.
         String message = "Your InnBucks verification code is " + code
                 + ". It expires in " + OTP_TTL.toMinutes()
                 + " minutes. Do not share this code with anyone.";
-        whatsAppNotificationClient.sendCustomNotification(phoneNumber, message);
-        log.info("[OTP] dispatched to phone={}", phoneNumber);
+        try {
+            smsNotificationClient.sendSms(phoneNumber, message, "OTP-" + System.currentTimeMillis());
+            log.info("[OTP] dispatched via SMS to phone={}", phoneNumber);
+        } catch (NotificationDeliveryException smsEx) {
+            log.warn("[OTP] SMS delivery failed for phone={}, falling back to WhatsApp: {}",
+                    phoneNumber, smsEx.getMessage());
+            whatsAppNotificationClient.sendCustomNotification(phoneNumber, message);
+            log.info("[OTP] dispatched via WhatsApp fallback to phone={}", phoneNumber);
+        }
     }
 
     /**
