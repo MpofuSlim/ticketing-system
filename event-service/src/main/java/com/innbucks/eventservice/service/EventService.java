@@ -365,6 +365,35 @@ public class EventService {
         return event.getAvailableTickets();
     }
 
+    // Internal: called by booking-service when a confirmed booking is
+    // reversed (admin refund, no-show, real-payment failure compensation)
+    // so the seats it consumed return to the available pool. Returns the
+    // new availableTickets value. Clamped to totalCapacity at the SQL
+    // level — a buggy or replayed release can't push available above the
+    // event's seat count. Callers should guard against double-release with
+    // a per-booking idempotency flag (see Booking.availability_released);
+    // hitting an over-cap clamp throws here so the caller knows to inspect.
+    @Transactional
+    public int releaseAvailability(UUID eventId, int count) {
+        if (count <= 0) {
+            throw new RuntimeException("count must be positive");
+        }
+        log.info("Releasing availability eventId={} count={}", eventId, count);
+        int updated = eventRepository.releaseAvailableTickets(eventId, count);
+        if (updated == 0) {
+            Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
+                    .orElseThrow(() -> new RuntimeException("Event not found"));
+            throw new RuntimeException("Cannot release " + count + " ticket(s): would exceed totalCapacity"
+                    + " available=" + event.getAvailableTickets()
+                    + " total=" + event.getTotalCapacity());
+        }
+        Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
+                .orElseThrow(() -> new RuntimeException("Event not found"));
+        log.info("Availability released eventId={} count={} remaining={}",
+                eventId, count, event.getAvailableTickets());
+        return event.getAvailableTickets();
+    }
+
     @Transactional
     public EventResponseDTO activateEvent(String tenantId, String role, UUID eventId) {
         log.info("Activating event eventId={} tenantId={} role={}", eventId, tenantId, role);
