@@ -1,0 +1,129 @@
+name: Rollback
+
+# One-click rollback. Pin the stack to ANY previously-built image SHA in GHCR
+# without needing SSH into the EC2. Same path the release workflow's deploy
+# job uses (rsync compose + scripts → ssh → docker compose pull/up --wait),
+# but the IMAGE_TAG is the operator-supplied SHA instead of github.sha.
+#
+# WHY THIS EXISTS:
+#   Until this workflow existed, rollback was "ssh in and run scripts/deploy.sh
+#   sha-XYZ manually" — fine in a pinch but no audit trail, no concurrency
+#   guard against an in-flight release, and depended on every operator having
+#   the EC2 SSH key. Going through Actions gives us a logged run, the same
+#   `ec2-deploy` concurrency group as release.yml (no overlap with a deploy
+#   that's currently rolling forward), and the GHCR + EC2 secrets live ONLY
+#   in repo secrets, not on individual laptops.
+#
+# WHEN TO USE THIS vs RE-DEPLOYING MASTER:
+#   - If master is broken and you want to pin to the previously-good SHA
+#     right now → use this workflow (faster than reverting + waiting for CI).
+#   - If you can wait for CI on a `git revert` PR → prefer the revert path
+#     because it leaves master and the deployed stack in sync.
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: "Full 40-char commit SHA to roll back to (image will be pulled at tag sha-<this>). Must exist in GHCR — i.e. a previously-built master commit."
+        required: true
+        type: string
+      confirm:
+        description: 'Type "rollback" to confirm. Guards against accidental clicks.'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  # SAME group as release.yml's deploy job. A rollback while a release is
+  # mid-flight (or vice-versa) would have the two pulling competing image
+  # tags into the same compose stack — serialise.
+  group: ec2-deploy
+  cancel-in-progress: false
+
+jobs:
+  rollback:
+    name: Roll back EC2 to sha-${{ inputs.target_sha }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Validate inputs
+        run: |
+          if [ "${{ inputs.confirm }}" != "rollback" ]; then
+            echo "::error::Confirmation phrase did not match 'rollback'. Aborting."
+            exit 1
+          fi
+          if ! [[ "${{ inputs.target_sha }}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::target_sha must be a 40-character hex commit SHA, got: ${{ inputs.target_sha }}"
+            exit 1
+          fi
+          echo "Rolling back to sha-${{ inputs.target_sha }}"
+
+      - name: Checkout (for docker-compose.yml + scripts/)
+        # Important: checkout the SAME commit we're rolling back TO so the
+        # compose file + scripts shipped to the EC2 match the image set
+        # being pulled. Rolling back code but leaving today's compose layout
+        # in place is how you get "the image works but the env var it needs
+        # was added two releases ago" foot-guns.
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_sha }}
+
+      - name: Prepare SSH
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Sync compose + scripts to EC2
+        run: |
+          rsync -avz --delete \
+            --exclude='.env' \
+            --exclude='.DS_Store' \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
+            docker-compose.yml scripts/ \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/home/${{ secrets.EC2_USER }}/superApp/
+
+      - name: Pull pinned images + bring the stack up
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+            "GHCR_TOKEN='${{ secrets.GITHUB_TOKEN }}' \
+             GHCR_USER='${{ github.actor }}' \
+             IMAGE_TAG='sha-${{ inputs.target_sha }}' \
+             bash -s" <<'EOF'
+            set -euo pipefail
+
+            docker network inspect innbucks-shared >/dev/null 2>&1 \
+              || docker network create innbucks-shared
+
+            cd ~/superApp
+            if [ ! -f .env ]; then
+              echo "::error::.env missing on EC2 — create ~/superApp/.env first"
+              exit 1
+            fi
+
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+
+            export IMAGE_TAG
+            echo "Pulling images at tag $IMAGE_TAG ..."
+            docker compose --profile payments pull
+
+            echo "Restarting stack ..."
+            docker compose --profile payments up -d --no-build --remove-orphans --wait
+
+            docker logout ghcr.io
+
+            echo
+            echo "Final state (rolled back to $IMAGE_TAG):"
+            docker compose --profile payments ps
+          EOF
+
+      - name: Wipe SSH key from the runner
+        if: always()
+        run: rm -f ~/.ssh/deploy_key

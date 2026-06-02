@@ -27,6 +27,32 @@ When adding a route:
   Spring Cloud LoadBalancer. The old `${SERVICE_URI:http://localhost:PORT}`
   env-var pattern was removed in the service-discovery migration.
 
+## Internal endpoints — three files must agree
+
+**An internal-only endpoint (e.g. `/events/*/availability/consume`,
+`/loyalty/internal/**`, `/users/internal/**`) is only correct when ALL THREE
+of these line up — adding one without the others is the recipe for either
+silent 401s, an accidentally-public endpoint, or a defence-in-depth gap.**
+
+1. **The controller** declares the mapping AND enforces the shared secret
+   (`X-Internal-Token`) with a constant-time compare. Example: `EventController`'s
+   `authorizedInternal()` helper, mirrored in `loyalty-service` and elsewhere.
+2. **The service's `SecurityConfig`** has a `.requestMatchers(HttpMethod.X, "/path/...")
+   .permitAll()` for the exact same path. Without this, Spring Security's
+   `.anyRequest().authenticated()` 401s the call before the controller's token
+   check ever runs — and CI catches it with cryptic "expected 200 was 401"
+   failures (see PR #145's first build).
+3. **The gateway's `application.yaml`** has an `*-internal-deny` /
+   `event-availability-deny` route that forwards the path to
+   `forward:/__edge_deny__`, BEFORE the catch-all service route, so the
+   endpoint is unreachable from the public internet even though the
+   controller would reject an unauthenticated call anyway.
+
+Test assertions for these endpoints should use `.isBadRequest()` or
+`.isUnauthorized()` (specific code) — never `.is4xxClientError()`, which
+silently passes for a Spring-Security 401 even when the controller never
+ran. That's how #145's test missed the SecurityConfig gap in local dev.
+
 ## Service discovery (Eureka)
 
 The fleet uses client-side service discovery. The `discovery-server` module is
