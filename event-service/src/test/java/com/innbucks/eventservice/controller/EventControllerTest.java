@@ -486,7 +486,7 @@ class EventControllerTest {
         mockMvc.perform(patch("/events/{id}/availability/release", saved.getEventId())
                         .param("count", "5")
                         .header("X-Internal-Token", VALID_INTERNAL_TOKEN))
-                .andExpect(status().is4xxClientError());
+                .andExpect(status().isBadRequest());
 
         Event reloaded = eventRepository.findById(saved.getEventId()).orElseThrow();
         org.junit.jupiter.api.Assertions.assertEquals(100, reloaded.getAvailableTickets());
