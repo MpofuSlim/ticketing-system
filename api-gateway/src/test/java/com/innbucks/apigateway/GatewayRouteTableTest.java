@@ -42,7 +42,7 @@ class GatewayRouteTableTest {
 
     private static final List<String> EXPECTED_ROUTE_IDS = List.of(
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
-            "user-auth-route", "user-admin-route", "user-self-route",
+            "user-auth-route", "user-admin-route", "user-internal-deny", "user-self-route",
             "event-availability-deny", "event-service-route",
             "seat-service-seat-route", "seat-service-category-route",
             "booking-service-route",
@@ -129,14 +129,19 @@ class GatewayRouteTableTest {
         assertThat(order.indexOf("loyalty-internal-deny"))
                 .as("loyalty-internal-deny must match before /loyalty/**")
                 .isBetween(0, order.indexOf("loyalty-service-route") - 1);
+        assertThat(order.indexOf("user-internal-deny"))
+                .as("user-internal-deny must match before /users/**")
+                .isBetween(0, order.indexOf("user-self-route") - 1);
     }
 
     @Test
     void edgeDenyRoutesForwardToTheDenyHandler() {
         assertThat(route("event-availability-deny").getUri()).hasToString("forward:/__edge_deny__");
         assertThat(route("loyalty-internal-deny").getUri()).hasToString("forward:/__edge_deny__");
+        assertThat(route("user-internal-deny").getUri()).hasToString("forward:/__edge_deny__");
         assertThat(predicateArgs("event-availability-deny", "Path")).containsExactly("/events/*/availability/**");
         assertThat(predicateArgs("loyalty-internal-deny", "Path")).containsExactly("/loyalty/internal/**");
+        assertThat(predicateArgs("user-internal-deny", "Path")).containsExactly("/users/internal/**");
     }
 
     @Test
