@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -32,18 +33,21 @@ public interface UserRepository extends JpaRepository<User, Long> {
     List<User> findByActiveExcludingRole(@Param("active") boolean active, @Param("role") User.Role role);
 
     /**
-     * Users carrying the supplied role. Backs the SUPER_ADMIN
-     * {@code GET /admin/users/merchants} listing (role=MERCHANT_ADMIN) and is
-     * generic enough to extend to other role-scoped admin views. Uses
-     * {@code MEMBER OF} — the JPA-standard way to test membership in an
-     * {@link jakarta.persistence.ElementCollection} without dropping to
-     * native SQL.
+     * Users carrying ANY of the supplied roles. Backs the SUPER_ADMIN
+     * {@code GET /admin/users/merchants} listing (MERCHANT_ADMIN +
+     * EVENT_ORGANIZER) and is generic enough to extend to other
+     * role-scoped admin views. Joins the {@code roles}
+     * {@link jakarta.persistence.ElementCollection} and matches with
+     * {@code IN} — the JPA-standard way to test membership without
+     * dropping to native SQL. {@code DISTINCT} collapses the duplicate
+     * rows a user with more than one of the requested roles would
+     * otherwise produce.
      */
-    @Query("SELECT u FROM User u WHERE :role MEMBER OF u.roles")
-    List<User> findByRole(@Param("role") User.Role role);
+    @Query("SELECT DISTINCT u FROM User u JOIN u.roles r WHERE r IN :roles")
+    List<User> findByAnyRole(@Param("roles") Collection<User.Role> roles);
 
-    @Query("SELECT u FROM User u WHERE u.active = :active AND :role MEMBER OF u.roles")
-    List<User> findByActiveAndRole(@Param("active") boolean active, @Param("role") User.Role role);
+    @Query("SELECT DISTINCT u FROM User u JOIN u.roles r WHERE u.active = :active AND r IN :roles")
+    List<User> findByActiveAndAnyRole(@Param("active") boolean active, @Param("roles") Collection<User.Role> roles);
 
     /**
      * Project-only lookup for the token_version column. JwtFilter calls this

@@ -100,22 +100,24 @@ public class AdminUserController {
     @GetMapping("/merchants")
     @PreAuthorize("hasRole('SUPER_ADMIN')")
     @Operation(
-            summary = "List MERCHANT_ADMIN users (merchants)",
-            description = "Returns user accounts carrying the **MERCHANT_ADMIN** role — the people " +
-                    "who own/administer a merchant on the platform. SHOP_ADMIN / SHOP_USER staff " +
-                    "are scoped to a single shop and are not included here; use `GET /admin/users` " +
-                    "for the full system-user listing.\n\n" +
-                    "Pass `?active=true` for approved/active merchant admins, `?active=false` for " +
+            summary = "List merchant admins and event organizers",
+            description = "Returns user accounts carrying the **MERCHANT_ADMIN** role (people who " +
+                    "own/administer a merchant on the platform) **or** the **EVENT_ORGANIZER** role " +
+                    "(people who run ticketed events) — the two top-level business roles. A user " +
+                    "enrolled in both bundles holds both roles and appears once. SHOP_ADMIN / " +
+                    "SHOP_USER staff are scoped to a single shop and are not included here; use " +
+                    "`GET /admin/users` for the full system-user listing.\n\n" +
+                    "Pass `?active=true` for approved/active accounts, `?active=false` for " +
                     "pending/inactive ones. Omit to return all status values. Requires **SUPER_ADMIN** role."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "200", description = "Merchant admins retrieved",
+                    responseCode = "200", description = "Merchant admins and event organizers retrieved",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     {
                                       "code": "200 OK",
-                                      "message": "Merchant admins retrieved",
+                                      "message": "Merchant admins & event organizers retrieved",
                                       "data": [
                                         {
                                           "id": 7,
@@ -127,6 +129,17 @@ public class AdminUserController {
                                           "defaultServices": ["loyalty"],
                                           "active": true,
                                           "createdAt": "2026-02-10T09:15:00"
+                                        },
+                                        {
+                                          "id": 9,
+                                          "firstName": "Rumbi",
+                                          "lastName": "Moyo",
+                                          "email": "rumbi@showtime.co.zw",
+                                          "phoneNumber": "+263772999000",
+                                          "roles": ["EVENT_ORGANIZER"],
+                                          "defaultServices": ["ticketing"],
+                                          "active": true,
+                                          "createdAt": "2026-02-12T11:30:00"
                                         }
                                       ]
                                     }
@@ -136,16 +149,20 @@ public class AdminUserController {
     public ResponseEntity<ApiResult<List<UserResponseDTO>>> listMerchants(
             @RequestParam(name = "active", required = false) Boolean active) {
 
+        var businessRoles = java.util.EnumSet.of(
+                User.Role.MERCHANT_ADMIN, User.Role.EVENT_ORGANIZER);
+
         List<User> users = (active != null)
-                ? userRepository.findByActiveAndRole(active, User.Role.MERCHANT_ADMIN)
-                : userRepository.findByRole(User.Role.MERCHANT_ADMIN);
+                ? userRepository.findByActiveAndAnyRole(active, businessRoles)
+                : userRepository.findByAnyRole(businessRoles);
 
         List<UserResponseDTO> body = users.stream()
                 .map(UserResponseDTO::from)
                 .collect(Collectors.toList());
 
-        String msg = (active == null ? "Merchant admins"
-                : (active ? "Active merchant admins" : "Inactive merchant admins"))
+        String msg = (active == null ? "Merchant admins & event organizers"
+                : (active ? "Active merchant admins & event organizers"
+                          : "Inactive merchant admins & event organizers"))
                 + " retrieved";
         log.info("GET /admin/users/merchants -> {} count={}", msg, body.size());
         return ResponseEntity.ok(ApiResult.ok(msg, body));
