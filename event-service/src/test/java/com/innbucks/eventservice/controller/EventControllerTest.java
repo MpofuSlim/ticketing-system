@@ -367,4 +367,64 @@ class EventControllerTest {
         Event reloaded = eventRepository.findById(saved.getEventId()).orElseThrow();
         org.junit.jupiter.api.Assertions.assertEquals(95, reloaded.getAvailableTickets());
     }
+
+    // ---- GET /events/by-tenant (SUPER_ADMIN-only listing of a given tenant's events) ----
+
+    @Test
+    @WithMockUser(username = "admin@innbucks.co.zw", roles = "SUPER_ADMIN")
+    void getEventsByTenant_asSuperAdmin_returnsOnlyThatTenantsEvents() throws Exception {
+        eventRepository.save(eventBuilder().tenantId("tenant-A").title("A Concert")
+                .startDateTime(LocalDateTime.now().plusDays(5))
+                .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2)).build());
+        eventRepository.save(eventBuilder().tenantId("tenant-A").title("A Marathon")
+                .startDateTime(LocalDateTime.now().plusDays(6))
+                .endDateTime(LocalDateTime.now().plusDays(6).plusHours(2)).build());
+        eventRepository.save(eventBuilder().tenantId("tenant-B").title("B Concert")
+                .startDateTime(LocalDateTime.now().plusDays(7))
+                .endDateTime(LocalDateTime.now().plusDays(7).plusHours(2)).build());
+
+        mockMvc.perform(get("/events/by-tenant").param("tenantId", "tenant-A")
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code", is("200 OK")))
+                .andExpect(jsonPath("$.data.content", hasSize(2)))
+                .andExpect(jsonPath("$.data.content[*].tenantId", everyItem(is("tenant-A"))));
+    }
+
+    @Test
+    @WithMockUser(username = "admin@innbucks.co.zw", roles = "SUPER_ADMIN")
+    void getEventsByTenant_unknownTenant_returnsEmptyPage() throws Exception {
+        eventRepository.save(eventBuilder().tenantId("tenant-A").title("A Concert")
+                .startDateTime(LocalDateTime.now().plusDays(5))
+                .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2)).build());
+
+        mockMvc.perform(get("/events/by-tenant").param("tenantId", "ghost-tenant")
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.content", hasSize(0)));
+    }
+
+    @Test
+    @WithMockUser(username = "admin@innbucks.co.zw", roles = "SUPER_ADMIN")
+    void getEventsByTenant_blankTenantId_returns400() throws Exception {
+        mockMvc.perform(get("/events/by-tenant").param("tenantId", "   ")
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message", containsStringIgnoringCase("tenantId")));
+    }
+
+    @Test
+    @WithMockUser(username = "tenant-99", roles = "EVENT_ORGANIZER")
+    void getEventsByTenant_asEventOrganizer_isForbidden() throws Exception {
+        mockMvc.perform(get("/events/by-tenant").param("tenantId", "tenant-A")
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void getEventsByTenant_unauthenticated_isDenied() throws Exception {
+        mockMvc.perform(get("/events/by-tenant").param("tenantId", "tenant-A")
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().is4xxClientError());
+    }
 }

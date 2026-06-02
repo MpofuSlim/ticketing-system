@@ -231,6 +231,126 @@ public class EventController {
         return ResponseEntity.ok(ApiResult.ok("Events retrieved successfully", result));
     }
 
+    @GetMapping("/by-tenant")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @Operation(
+            summary = "List a specific tenant's events (SUPER_ADMIN only)",
+            description = """
+                    Returns a paginated list of **non-deleted** events owned by the
+                    supplied `tenantId` (the organizer's identifier), including both
+                    `active=true` and `active=false` events.
+
+                    Restricted to **SUPER_ADMIN**. This is the platform-wide tool for
+                    inspecting *any* organizer's events by id — unlike `GET /events/my`,
+                    which is always scoped to the caller's own `tenantId`.
+
+                    Filters and sorting follow the same rules as `GET /events`:
+                    - **from/to** are calendar dates (`yyyy-MM-dd`), mapped to
+                      `[from start-of-day .. to end-of-day]`.
+                    - **venue** matches a case-insensitive substring.
+
+                    A `tenantId` with no events (or an unknown one) returns **200** with
+                    an empty `content` array — not a 404.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Paged list of the tenant's events (may be empty)",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = EventResponseDTO.class),
+                            examples = @ExampleObject(name = "Tenant events page", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Events retrieved successfully",
+                                      "data": {
+                                        "content": [
+                                          {
+                                            "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                            "eventNo": null,
+                                            "tenantId": "tenant-001",
+                                            "title": "Summer Concert",
+                                            "description": "Open-air summer concert featuring local headliners.",
+                                            "venue": "Harare Gardens",
+                                            "country": "Zimbabwe", "category": "CONCERT",
+                                            "location": { "latitude": -17.8252, "longitude": 31.0335 },
+                                            "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+                                            "startDateTime": "2026-06-15T19:00:00", "endDateTime": "2026-06-15T22:00:00",
+                                            "totalCapacity": 500,
+                                            "availableTickets": 420,
+                                            "active": true,
+                                            "createdAt": "2026-04-25T08:00:00",
+                                            "updatedAt": "2026-05-02T15:00:00",
+                                            "seatCategories": []
+                                          }
+                                        ],
+                                        "pageable": {
+                                          "pageNumber": 0,
+                                          "pageSize": 10,
+                                          "sort": { "sorted": true, "unsorted": false, "empty": false },
+                                          "offset": 0,
+                                          "paged": true,
+                                          "unpaged": false
+                                        },
+                                        "totalElements": 1,
+                                        "totalPages": 1,
+                                        "last": true,
+                                        "first": true,
+                                        "size": 10,
+                                        "number": 0,
+                                        "numberOfElements": 1,
+                                        "empty": false
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @ApiResponse(responseCode = "400", description = "Missing or blank tenantId",
+                    content = @Content(schema = @Schema(example = "{\"code\":\"400 BAD_REQUEST\",\"message\":\"tenantId is required\",\"data\":null}"))),
+            @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @ApiResponse(responseCode = "403", description = "Authenticated but lacks SUPER_ADMIN")
+    })
+    public ResponseEntity<ApiResult<Page<EventResponseDTO>>> getEventsByTenant(
+            @Parameter(description = "Owning organizer id (tenantId) whose events to list", required = true)
+            @RequestParam String tenantId,
+
+            @Parameter(description = "Inclusive lower bound date for events (maps to start of day)")
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+
+            @Parameter(description = "Inclusive upper bound date for events (maps to end of day)")
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+
+            @Parameter(description = "Venue substring filter (case-insensitive)")
+            @RequestParam(required = false) String venue,
+
+            @Parameter(description = "Zero-based page index")
+            @RequestParam(defaultValue = "0") int page,
+
+            @Parameter(description = "Page size")
+            @RequestParam(defaultValue = "10") int size,
+
+            @Parameter(description = "Sort field name (must match an entity property), ascending")
+            @RequestParam(defaultValue = "startDateTime") String sortBy
+    ) {
+        if (tenantId == null || tenantId.isBlank()) {
+            return ResponseEntity.badRequest()
+                    .body(ApiResult.error(HttpStatus.BAD_REQUEST, "tenantId is required"));
+        }
+        LocalDateTime fromDateTime = from == null ? null : from.atStartOfDay();
+        LocalDateTime toDateTime = to == null ? null : to.atTime(LocalTime.MAX);
+        log.info("GET /events/by-tenant tenantId={} from={} to={} venue={} page={} size={}",
+                tenantId, from, to, venue, page, size);
+        // Reuses the same tenant-scoped query as GET /events/my, but with an
+        // explicitly supplied tenantId instead of the caller's own — gated to
+        // SUPER_ADMIN so only platform admins can list another tenant's events.
+        Page<EventResponseDTO> result = eventService.getMyEvents(
+                tenantId, fromDateTime, toDateTime, venue, page, size, sortBy);
+        return ResponseEntity.ok(ApiResult.ok("Events retrieved successfully", result));
+    }
+
     @GetMapping("/active")
     @SecurityRequirements()
     @Operation(
