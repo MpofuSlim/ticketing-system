@@ -72,6 +72,42 @@ a plain `RestClient` + explicit URL. Tests disable discovery via
 `spring.cloud.discovery.enabled: false` in the `test` / `it` profiles; keep
 that when adding a new service so `@SpringBootTest` doesn't try to register.
 
+## External-service contract tests (WireMock)
+
+**Every client that calls an external HTTP service (Oradian middleware, the
+WhatsApp gateway, the InnBucks core adapter, etc.) MUST have a WireMock-driven
+contract test that pins one assertion per response shape we've observed in
+production.** This is the test that fails the build when an upstream service
+quietly reshapes its envelope, so a regression surfaces at PR time instead of
+at 2am in prod.
+
+Canonical example: `user-service/src/test/.../client/SmsNotificationClientContractTest.java`.
+
+Shape to follow:
+
+- **Pure JUnit + WireMock, no `@SpringBootTest`** — keeps each case under a
+  second and surgical to the wire contract. Construct the production
+  `RestClient` / `Feign` client with the same shape its config bean produces,
+  just pointed at WireMock's port.
+- **One test per recorded response shape**: the happy 2xx, every distinct
+  non-2xx error envelope you've actually seen, AND a connect-refused / fault
+  case (point a separate client at a known-closed port; do not stop/restart
+  the shared WireMock — the second start gets a different dynamic port and
+  breaks other tests).
+- **Verify the wire contract too**, not just the client behaviour. Use
+  `wireMock.verify(postRequestedFor(...)
+      .withRequestBody(matchingJsonPath("$.field", equalTo("value"))))`
+  so a change in the OUTBOUND payload shape (renamed field, missing header)
+  also fails the test.
+- **Cover the client's guard rails**: blank inputs, null defaults that get
+  auto-generated (e.g. our `TKT-SMS-<uuid>` reference auto-fill) must be
+  asserted with `wireMock.verify(0, postRequestedFor(...))` so a regression
+  that drops the guard and starts hitting the network shows up.
+- Use the standalone classifier:
+  `<dependency><groupId>org.wiremock</groupId><artifactId>wiremock-standalone</artifactId>...`
+  — pulls a self-contained shaded jar so the test deps don't fight with the
+  project's Jetty/Jackson versions.
+
 ## Swagger response examples
 
 **Every endpoint you add or modify MUST have meaningful `@ApiResponses` with
