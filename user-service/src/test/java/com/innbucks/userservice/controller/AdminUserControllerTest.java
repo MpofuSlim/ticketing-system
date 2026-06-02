@@ -186,11 +186,11 @@ class AdminUserControllerTest {
         assertThat(responseBody).doesNotContain("\"payments\"");
     }
 
-    // ---- GET /admin/users/merchants (SUPER_ADMIN-only MERCHANT_ADMIN listing) ----
+    // ---- GET /admin/users/merchants (SUPER_ADMIN-only MERCHANT_ADMIN + EVENT_ORGANIZER listing) ----
 
     @Test
     @WithMockUser(roles = "SUPER_ADMIN")
-    void listMerchants_returnsOnlyMerchantAdmins() throws Exception {
+    void listMerchants_returnsMerchantAdminsAndEventOrganizers() throws Exception {
         User merchant = User.builder()
                 .firstName("Tendai").lastName("Ncube")
                 .email("tendai@acme-merch.co.zw").phoneNumber("+263772345678")
@@ -202,7 +202,7 @@ class AdminUserControllerTest {
         userRepository.save(merchant);
 
         User organizer = User.builder()
-                .firstName("Other").lastName("Person")
+                .firstName("Rumbi").lastName("Moyo")
                 .email("organizer@example.com").phoneNumber("+263770000001")
                 .password(passwordEncoder.encode("Password123"))
                 .roles(EnumSet.of(User.Role.EVENT_ORGANIZER))
@@ -211,21 +211,45 @@ class AdminUserControllerTest {
                 .build();
         userRepository.save(organizer);
 
+        // Holds both business roles — must appear exactly once.
+        User both = User.builder()
+                .firstName("Kuda").lastName("Dube")
+                .email("both@example.com").phoneNumber("+263770000009")
+                .password(passwordEncoder.encode("Password123"))
+                .roles(EnumSet.of(User.Role.EVENT_ORGANIZER, User.Role.MERCHANT_ADMIN))
+                .defaultServices(new LinkedHashSet<>(List.of("ticketing", "loyalty")))
+                .active(true)
+                .build();
+        userRepository.save(both);
+
+        // Shop-level staff must NOT appear.
+        User shopAdmin = User.builder()
+                .firstName("Shop").lastName("Admin")
+                .email("shop-admin@example.com").phoneNumber("+263770000004")
+                .password(passwordEncoder.encode("Password123"))
+                .roles(EnumSet.of(User.Role.SHOP_ADMIN))
+                .active(true)
+                .build();
+        userRepository.save(shopAdmin);
+
         String body = mockMvc.perform(get("/admin/users/merchants")
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
-        // The merchant must be there.
+        // Both business roles are included now.
         assertThat(body).contains("tendai@acme-merch.co.zw");
-        assertThat(body).contains("\"MERCHANT_ADMIN\"");
-        // The EVENT_ORGANIZER-only user must NOT appear.
-        assertThat(body).doesNotContain("organizer@example.com");
+        assertThat(body).contains("organizer@example.com");
+        assertThat(body).contains("both@example.com");
+        // The dual-role user appears exactly once (no duplicate from the JOIN).
+        assertThat(body.split("both@example.com", -1).length - 1).isEqualTo(1);
+        // Shop-level staff are still excluded.
+        assertThat(body).doesNotContain("shop-admin@example.com");
     }
 
     @Test
     @WithMockUser(roles = "SUPER_ADMIN")
-    void listMerchants_withActiveFalse_returnsOnlyInactiveMerchantAdmins() throws Exception {
+    void listMerchants_withActiveFalse_returnsOnlyInactiveAccounts() throws Exception {
         User activeMerchant = User.builder()
                 .firstName("Active").lastName("Merchant")
                 .email("active-merch@example.com").phoneNumber("+263770000002")
@@ -246,12 +270,24 @@ class AdminUserControllerTest {
                 .build();
         userRepository.save(pendingMerchant);
 
+        // Inactive event organizer must also surface under active=false.
+        User pendingOrganizer = User.builder()
+                .firstName("Pending").lastName("Organizer")
+                .email("pending-organizer@example.com").phoneNumber("+263770000005")
+                .password(passwordEncoder.encode("Password123"))
+                .roles(EnumSet.of(User.Role.EVENT_ORGANIZER))
+                .defaultServices(new LinkedHashSet<>(List.of("ticketing")))
+                .active(false)
+                .build();
+        userRepository.save(pendingOrganizer);
+
         String body = mockMvc.perform(get("/admin/users/merchants?active=false")
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
                 .andReturn().getResponse().getContentAsString();
 
         assertThat(body).contains("pending-merch@example.com");
+        assertThat(body).contains("pending-organizer@example.com");
         assertThat(body).doesNotContain("active-merch@example.com");
     }
 
