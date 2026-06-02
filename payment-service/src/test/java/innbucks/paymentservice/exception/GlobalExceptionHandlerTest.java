@@ -1,5 +1,7 @@
 package innbucks.paymentservice.exception;
 
+import innbucks.paymentservice.client.BookingServiceClient;
+import innbucks.paymentservice.client.LoyaltyServiceClient;
 import innbucks.paymentservice.dto.ApiResult;
 import innbucks.paymentservice.dto.ShopCheckoutRequest;
 import org.junit.jupiter.api.Test;
@@ -70,6 +72,60 @@ class GlobalExceptionHandlerTest {
         assertEquals("internal error", resp.getBody().getMessage());
         assertNull(resp.getBody().getData());
         assertTrue(!resp.getBody().getMessage().contains("NullPointerException"));
+    }
+
+    // ---- audit #9 — typed-exception handlers for downstream-client failures ----
+
+    @Test
+    void loyaltyCheckoutException_preservesUpstream4xxStatus() {
+        // A 422 "insufficient points" from loyalty-service must surface as 422
+        // to our client, not a generic 500. Old behaviour (fall-through to
+        // catch-all) would have hidden this in the 5xx bucket.
+        ResponseEntity<ApiResult<Void>> resp = handler.handle(
+                new LoyaltyServiceClient.LoyaltyCheckoutException("Insufficient points", 422));
+        assertEquals(422, resp.getStatusCode().value());
+        assertTrue(resp.getBody().getCode().startsWith("422 "),
+                "code starts with status int; reason phrase is HttpStatus-version-dependent");
+        assertEquals("Insufficient points", resp.getBody().getMessage());
+    }
+
+    @Test
+    void loyaltyCheckoutException_preservesUpstream503Status() {
+        // The "Unable to reach loyalty-service" path carries 503 — that must
+        // come through to the client unchanged so LBs / clients can react.
+        ResponseEntity<ApiResult<Void>> resp = handler.handle(
+                new LoyaltyServiceClient.LoyaltyCheckoutException("Unable to reach loyalty-service", 503));
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, resp.getStatusCode());
+        assertEquals("Unable to reach loyalty-service", resp.getBody().getMessage());
+    }
+
+    @Test
+    void loyaltyCheckoutException_unrecognisedStatusCodeFallsBackTo502() {
+        // Synthetic / unknown codes (e.g. 0 from a connect-refused with no
+        // HTTP semantics) must not crash HttpStatus.resolve — fall back to
+        // 502 as the canonical "upstream is having a moment" code.
+        ResponseEntity<ApiResult<Void>> resp = handler.handle(
+                new LoyaltyServiceClient.LoyaltyCheckoutException("weird", 0));
+        assertEquals(HttpStatus.BAD_GATEWAY, resp.getStatusCode());
+    }
+
+    @Test
+    void bookingConfirmationException_preservesUpstream4xxStatus() {
+        // booking-service returns 400 for "Seat hold expired" / "Only PENDING
+        // bookings can be confirmed" — those must reach our client as 400, not
+        // 500. Used by /payments to surface the actual reason confirm failed.
+        ResponseEntity<ApiResult<Void>> resp = handler.handle(
+                new BookingServiceClient.BookingConfirmationException("Seat hold expired", 400));
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
+        assertEquals("Seat hold expired", resp.getBody().getMessage());
+    }
+
+    @Test
+    void bookingConfirmationException_503OnUnreachable_isPreserved() {
+        ResponseEntity<ApiResult<Void>> resp = handler.handle(
+                new BookingServiceClient.BookingConfirmationException(
+                        "Unable to reach booking-service to confirm the booking", 503));
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, resp.getStatusCode());
     }
 
     // Dummy controller-method signature so MethodParameter has something to

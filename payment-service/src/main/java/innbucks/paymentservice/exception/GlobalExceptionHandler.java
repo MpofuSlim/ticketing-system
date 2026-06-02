@@ -1,5 +1,7 @@
 package innbucks.paymentservice.exception;
 
+import innbucks.paymentservice.client.BookingServiceClient;
+import innbucks.paymentservice.client.LoyaltyServiceClient;
 import innbucks.paymentservice.client.OradianMiddlewareException;
 import innbucks.paymentservice.dto.ApiResult;
 import lombok.extern.slf4j.Slf4j;
@@ -81,6 +83,48 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(status).body(ApiResult.<Void>builder()
                 .code(status.value() + " " + status.name())
                 .message(ex.getMessage() == null ? "oradian middleware error" : ex.getMessage())
+                .data(null)
+                .build());
+    }
+
+    /**
+     * Outbound failures from {@link LoyaltyServiceClient} (shop-checkout flow).
+     * Same shape as the Oradian handler — preserve loyalty-service's upstream
+     * status (a 4xx insufficient-points stays a 4xx; a 503-on-unreachable stays
+     * 503), fall back to 502 for unknown / synthetic codes. Without this the
+     * exception would fall through to the catch-all and surface as a generic
+     * 500 — which (a) lies to the client about which side broke and (b) hides
+     * a 4xx business rejection in the 5xx bucket where on-call would mis-triage.
+     */
+    @ExceptionHandler(LoyaltyServiceClient.LoyaltyCheckoutException.class)
+    public ResponseEntity<ApiResult<Void>> handle(LoyaltyServiceClient.LoyaltyCheckoutException ex) {
+        HttpStatus status = HttpStatus.resolve(ex.getStatusCode());
+        if (status == null) status = HttpStatus.BAD_GATEWAY;
+        log.warn("loyalty shop-checkout failed status={} message={}",
+                status.value(), ex.getMessage());
+        return ResponseEntity.status(status).body(ApiResult.<Void>builder()
+                .code(status.value() + " " + status.name())
+                .message(ex.getMessage() == null ? "loyalty checkout error" : ex.getMessage())
+                .data(null)
+                .build());
+    }
+
+    /**
+     * Outbound failures from {@link BookingServiceClient#confirmBooking} —
+     * "Booking not found", "Seat hold expired", "Only PENDING bookings can be
+     * confirmed", etc. Same envelope pattern: preserve booking-service's
+     * upstream status so a 4xx ("hold expired") doesn't get misreported as a
+     * 5xx server error, fall back to 502 for connectivity.
+     */
+    @ExceptionHandler(BookingServiceClient.BookingConfirmationException.class)
+    public ResponseEntity<ApiResult<Void>> handle(BookingServiceClient.BookingConfirmationException ex) {
+        HttpStatus status = HttpStatus.resolve(ex.getStatusCode());
+        if (status == null) status = HttpStatus.BAD_GATEWAY;
+        log.warn("booking confirm failed status={} message={}",
+                status.value(), ex.getMessage());
+        return ResponseEntity.status(status).body(ApiResult.<Void>builder()
+                .code(status.value() + " " + status.name())
+                .message(ex.getMessage() == null ? "booking confirm error" : ex.getMessage())
                 .data(null)
                 .build());
     }
