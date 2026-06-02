@@ -71,19 +71,54 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(body);
     }
 
+    @ExceptionHandler(NotFoundException.class)
+    public ResponseEntity<ApiResult<Void>> handleNotFound(NotFoundException ex) {
+        log.warn("NotFound: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ApiResult.error(HttpStatus.NOT_FOUND, ex.getMessage()));
+    }
+
+    @ExceptionHandler(BookingConflictException.class)
+    public ResponseEntity<ApiResult<Void>> handleBookingConflict(BookingConflictException ex) {
+        log.warn("BookingConflict: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResult.error(HttpStatus.CONFLICT, ex.getMessage()));
+    }
+
+    @ExceptionHandler(BadRequestException.class)
+    public ResponseEntity<ApiResult<Void>> handleBadRequest(BadRequestException ex) {
+        log.warn("BadRequest: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResult.error(HttpStatus.BAD_REQUEST, ex.getMessage()));
+    }
+
+    @ExceptionHandler(DependencyUnavailableException.class)
+    public ResponseEntity<ApiResult<Void>> handleDependencyUnavailable(DependencyUnavailableException ex) {
+        log.warn("Dependency unavailable: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(ApiResult.error(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage()));
+    }
+
+    /**
+     * Catch-all for any RuntimeException that did NOT match a typed handler
+     * above. Audit item #9: previously this returned 400 with the exception's
+     * raw message, which (a) misclassified genuine server bugs like a
+     * DataIntegrityViolationException as client errors and (b) leaked
+     * internal exception detail to whoever called the API. Now returns 500
+     * with a generic message; the real cause is logged at ERROR with a stack
+     * trace so operators can still debug, but the client never sees it.
+     *
+     * <p>If you're hitting this handler from a legitimate 4xx case, that's
+     * the signal to introduce a typed exception ({@link BadRequestException},
+     * {@link BookingConflictException}, {@link NotFoundException},
+     * {@link DependencyUnavailableException}) at the throw site rather than
+     * widening this fallback.
+     */
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<ApiResult<Void>> handleRuntime(RuntimeException ex) {
-        log.warn("RuntimeException: {}", ex.getMessage());
-        String msg = ex.getMessage() == null ? "" : ex.getMessage().toLowerCase();
-        HttpStatus status;
-        if (msg.contains("not found")) {
-            status = HttpStatus.NOT_FOUND;
-        } else if (msg.contains("access denied")) {
-            status = HttpStatus.FORBIDDEN;
-        } else {
-            status = HttpStatus.BAD_REQUEST;
-        }
-        return ResponseEntity.status(status)
-                .body(ApiResult.error(status, ex.getMessage()));
+        log.error("Unhandled RuntimeException — returning 500 to client", ex);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ApiResult.error(HttpStatus.INTERNAL_SERVER_ERROR,
+                        "An unexpected error occurred. Please try again."));
     }
 }

@@ -27,4 +27,59 @@ class GlobalExceptionHandlerTest {
         assertEquals(2, body.getData().getRequiredTier());
         assertEquals(1, body.getData().getCurrentTier());
     }
+
+    // ---- audit #9 — typed-exception status-code mapping ----
+
+    @Test
+    void handleNotFound_returns404WithMessage() {
+        ResponseEntity<ApiResult<Void>> resp = new GlobalExceptionHandler()
+                .handleNotFound(new NotFoundException("Seat xyz not found"));
+        assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
+        assertNotNull(resp.getBody());
+        assertEquals("Seat xyz not found", resp.getBody().getMessage());
+    }
+
+    @Test
+    void handleBookingConflict_returns409WithMessage() {
+        ResponseEntity<ApiResult<Void>> resp = new GlobalExceptionHandler()
+                .handleBookingConflict(new BookingConflictException("Booking is already cancelled"));
+        assertEquals(HttpStatus.CONFLICT, resp.getStatusCode());
+        assertNotNull(resp.getBody());
+        assertEquals("Booking is already cancelled", resp.getBody().getMessage());
+    }
+
+    @Test
+    void handleBadRequest_returns400WithMessage() {
+        ResponseEntity<ApiResult<Void>> resp = new GlobalExceptionHandler()
+                .handleBadRequest(new BadRequestException("Category does not belong to event"));
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
+        assertNotNull(resp.getBody());
+        assertEquals("Category does not belong to event", resp.getBody().getMessage());
+    }
+
+    @Test
+    void handleDependencyUnavailable_returns503WithMessage() {
+        ResponseEntity<ApiResult<Void>> resp = new GlobalExceptionHandler()
+                .handleDependencyUnavailable(new DependencyUnavailableException("event-service down"));
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, resp.getStatusCode());
+        assertNotNull(resp.getBody());
+        assertEquals("event-service down", resp.getBody().getMessage());
+    }
+
+    @Test
+    void handleRuntime_returns500WithSanitisedMessage_andDoesNotLeakInternals() {
+        // Audit #9 main fix: a bare RuntimeException (e.g. a DB integrity error
+        // bubbling up) used to be returned to the client as 400 with the raw
+        // exception message. Now it must:
+        //   (a) return 500 (it's a server error, not a client error)
+        //   (b) NOT leak the internal message — generic "unexpected error"
+        ResponseEntity<ApiResult<Void>> resp = new GlobalExceptionHandler()
+                .handleRuntime(new RuntimeException("ERROR: duplicate key value violates unique constraint \"users_email_key\""));
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, resp.getStatusCode());
+        assertNotNull(resp.getBody());
+        // Generic message — internal details NEVER reach the client.
+        assertEquals("An unexpected error occurred. Please try again.", resp.getBody().getMessage());
+        assertFalse(resp.getBody().getMessage().toLowerCase().contains("duplicate"));
+        assertFalse(resp.getBody().getMessage().toLowerCase().contains("constraint"));
+    }
 }
