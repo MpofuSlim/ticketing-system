@@ -47,9 +47,13 @@ spring:
 
 app:
   lock:
-    # Set to "redis" for shared, cross-replica locks. Defaults to in-memory so
-    # local dev and tests work without a running Redis.
-    store: ${LOCK_STORE:memory}
+    # Default redis: seat locks are distributed state, and the in-memory
+    # alternative silently breaks on the first horizontal scale (each pod
+    # holds its own ConcurrentHashMap, so two customers can grab the same
+    # seat). Set LOCK_STORE=memory for bare-jar local runs without a Redis;
+    # the `test` and `it` profiles already pin store: memory (and `it`
+    # excludes Spring Data Redis autoconfig), so no test needs a Redis.
+    store: ${LOCK_STORE:redis}
   # SeatLockReaper sweeps LOCKED seats whose lock_expires_at has elapsed and
   # returns them to inventory. Without this, any seat whose Redis TTL expires
   # before the user confirmed/released is permanently stuck.
