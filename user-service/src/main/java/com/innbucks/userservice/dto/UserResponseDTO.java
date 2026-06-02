@@ -1,5 +1,6 @@
 package com.innbucks.userservice.dto;
 
+import com.innbucks.userservice.entity.TenantProfile;
 import com.innbucks.userservice.entity.User;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -55,7 +56,55 @@ public class UserResponseDTO {
             description = "Loyalty shop the user operates at. Populated for SHOP_ADMIN and SHOP_USER.")
     private UUID loyaltyShopId;
 
+    @Schema(example = "true", description = "Whether this is a business account (set at registration). " +
+            "Business accounts carry a tenant profile exposed via businessDetails.")
+    private boolean business;
+
+    @Schema(nullable = true, description = "Tenant/business profile for a business account. " +
+            "Null for personal accounts.")
+    private BusinessDetails businessDetails;
+
+    @Data
+    @Builder
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    @Schema(name = "BusinessDetails", description = "Business/tenant profile attached to a business account.")
+    public static class BusinessDetails {
+        @Schema(example = "Acme Merchandising (Pvt) Ltd")
+        private String businessName;
+        @Schema(example = "12 Samora Machel Ave, Harare", nullable = true)
+        private String businessAddress;
+        @Schema(example = "accounts@acme-merch.co.zw", nullable = true)
+        private String businessEmail;
+        @Schema(example = "+263242123456", nullable = true)
+        private String businessPhoneNumber;
+        @Schema(example = "CR-2026-00891", nullable = true)
+        private String registrationNumber;
+        @Schema(example = "BPO-44512", nullable = true)
+        private String bpoNumber;
+        @Schema(example = "37", description = "Number of events the organizer has run.")
+        private int totalEvents;
+        @Schema(example = "4.6", description = "Average organizer rating.")
+        private double rating;
+
+        public static BusinessDetails from(TenantProfile p) {
+            return BusinessDetails.builder()
+                    .businessName(p.getBusinessName())
+                    .businessAddress(p.getBusinessAddress())
+                    .businessEmail(p.getBusinessEmail())
+                    .businessPhoneNumber(p.getBusinessPhoneNumber())
+                    .registrationNumber(p.getRegistrationNumber())
+                    .bpoNumber(p.getBpoNumber())
+                    .totalEvents(p.getTotalEvents())
+                    .rating(p.getRating())
+                    .build();
+        }
+    }
+
     public static UserResponseDTO from(User user) {
+        return from(user, null);
+    }
+
+    public static UserResponseDTO from(User user, TenantProfile profile) {
         return UserResponseDTO.builder()
                 .id(user.getId())
                 .firstName(user.getFirstName())
@@ -71,6 +120,8 @@ public class UserResponseDTO {
                 .createdAt(user.getCreatedAt())
                 .loyaltyMerchantId(user.getLoyaltyMerchantId())
                 .loyaltyShopId(user.getLoyaltyShopId())
+                .business(user.isBusiness())
+                .businessDetails(profile == null ? null : BusinessDetails.from(profile))
                 .build();
     }
 }
