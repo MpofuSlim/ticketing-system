@@ -163,6 +163,19 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- WireMock: stubs the innbucks-core-gateway adapter (and other
+             external HTTP services) during contract tests so we assert what
+             the client does for each response shape we've actually seen
+             (200 SUBMITTED, 502 messenger-rejected, 503 unreachable, ...).
+             Standalone classifier — pulls a self-contained shaded jar so we
+             don't fight with the project's existing Jetty/Jackson versions. -->
+        <dependency>
+            <groupId>org.wiremock</groupId>
+            <artifactId>wiremock-standalone</artifactId>
+            <version>3.9.1</version>
+            <scope>test</scope>
+        </dependency>
+
     </dependencies>
 
     <build>
