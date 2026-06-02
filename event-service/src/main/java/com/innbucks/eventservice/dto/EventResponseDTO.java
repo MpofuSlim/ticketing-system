@@ -23,6 +23,10 @@ public class EventResponseDTO {
     @Schema(description = "Owning tenant identifier (typically the JWT subject/username).")
     private String tenantId;
 
+    @Schema(description = "Owning organizer's business details (name, email, address), resolved from " +
+            "user-service. Null when the organizer has no business profile or user-service is unavailable.")
+    private OrganizerDTO organizer;
+
     @Schema(example = "Summer Concert")
     private String title;
 

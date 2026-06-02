@@ -90,6 +90,17 @@ spring:
                     key-resolver: "#{@gatewayKeyResolver}"
 
             # Self-service endpoints under /users/me/** (e.g. service requests).
+            # Block /users/internal/** at the edge. These are service-to-service
+            # endpoints (event-service -> user-service tenant lookup) gated by
+            # the shared X-Internal-Token header. Real S2S traffic goes directly
+            # between pods over the cluster network and never touches the
+            # gateway. MUST be declared before the catch-all user-self-route so
+            # SCG matches it first (mirrors loyalty-internal-deny).
+            - id: user-internal-deny
+              uri: forward:/__edge_deny__
+              predicates:
+                - Path=/users/internal/**
+
             # Authenticated; rate-limited like the rest of user-service.
             - id: user-self-route
               uri: lb://user-service

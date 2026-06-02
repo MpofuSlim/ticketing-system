@@ -1,6 +1,7 @@
 package com.innbucks.eventservice.service;
 
 import com.innbucks.eventservice.client.BookingGateway;
+import com.innbucks.eventservice.client.OrganizerGateway;
 import com.innbucks.eventservice.client.SeatCategoryGateway;
 import com.innbucks.eventservice.dto.*;
 import com.innbucks.eventservice.entity.Event;
@@ -19,8 +20,11 @@ import java.io.IOException;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
@@ -38,6 +42,7 @@ public class EventService {
     private final EventMapper eventMapper;
     private final SeatCategoryGateway seatCategoryGateway;
     private final BookingGateway bookingGateway;
+    private final OrganizerGateway organizerGateway;
 
     public Page<EventResponseDTO> getAllActiveEvents(
             LocalDateTime from,
@@ -126,6 +131,7 @@ public class EventService {
                     return new RuntimeException("Event not found");
                 });
         EventResponseDTO response = toDtoWithAvailability(event, fetchActiveCounts(eventId));
+        attachOrganizer(response, event, resolveOrganizers(List.of(event)));
         response.setSeatCategories(seatCategoryGateway.fetchForEvent(eventId));
         return response;
     }
@@ -158,11 +164,13 @@ public class EventService {
 
         Map<UUID, Long> activeCounts = bookingGateway.activeCountsByEventIds(
                 entities.getContent().stream().map(Event::getEventId).toList());
+        Map<String, OrganizerDTO> organizers = resolveOrganizers(entities.getContent());
 
         List<EventResponseDTO> dtos = new ArrayList<>(entities.getNumberOfElements());
         int n = 1;
         for (Event event : entities.getContent()) {
             EventResponseDTO dto = toDtoWithAvailability(event, activeCounts);
+            attachOrganizer(dto, event, organizers);
             dto.setEventNo(n++);
             dtos.add(dto);
         }
@@ -183,16 +191,41 @@ public class EventService {
     }
 
     private Page<EventResponseDTO> enrichWithAvailability(Page<Event> page) {
-        List<UUID> ids = page.getContent().stream()
+        List<Event> content = page.getContent();
+        List<UUID> ids = content.stream()
                 .map(Event::getEventId)
-                .filter(java.util.Objects::nonNull)
+                .filter(Objects::nonNull)
                 .toList();
         Map<UUID, Long> activeCounts = ids.isEmpty()
-                ? java.util.Collections.emptyMap()
+                ? Collections.emptyMap()
                 : bookingGateway.activeCountsByEventIds(ids);
-        if (activeCounts == null) activeCounts = java.util.Collections.emptyMap();
+        if (activeCounts == null) activeCounts = Collections.emptyMap();
         Map<UUID, Long> finalCounts = activeCounts;
-        return page.map(e -> toDtoWithAvailability(e, finalCounts));
+        Map<String, OrganizerDTO> organizers = resolveOrganizers(content);
+        return page.map(e -> {
+            EventResponseDTO dto = toDtoWithAvailability(e, finalCounts);
+            attachOrganizer(dto, e, organizers);
+            return dto;
+        });
+    }
+
+    // Batch-resolve organizer (tenant) business details from user-service for
+    // the events on this page. Returns an empty map if user-service is
+    // unreachable (the gateway's circuit breaker falls back) so listings still
+    // serve — just without organizer details.
+    private Map<String, OrganizerDTO> resolveOrganizers(Collection<Event> events) {
+        List<String> tenantIds = events.stream()
+                .map(Event::getTenantId)
+                .filter(t -> t != null && !t.isBlank())
+                .toList();
+        Map<String, OrganizerDTO> organizers = organizerGateway.organizersByTenantIds(tenantIds);
+        return organizers == null ? Collections.emptyMap() : organizers;
+    }
+
+    private void attachOrganizer(EventResponseDTO dto, Event event, Map<String, OrganizerDTO> organizers) {
+        if (dto != null && organizers != null && event.getTenantId() != null) {
+            dto.setOrganizer(organizers.get(event.getTenantId()));
+        }
     }
 
     private Map<UUID, Long> fetchActiveCounts(UUID eventId) {
