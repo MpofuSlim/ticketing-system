@@ -1,7 +1,9 @@
 package com.innbucks.userservice.controller;
 
 import com.innbucks.userservice.dto.UserResponseDTO;
+import com.innbucks.userservice.entity.TenantProfile;
 import com.innbucks.userservice.entity.User;
+import com.innbucks.userservice.repository.TenantProfileRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -32,6 +34,9 @@ class AdminUserControllerTest {
 
     @Autowired
     private UserRepository userRepository;
+
+    @Autowired
+    private TenantProfileRepository tenantProfileRepository;
 
     @Autowired
     private PasswordEncoder passwordEncoder;
@@ -198,8 +203,21 @@ class AdminUserControllerTest {
                 .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
                 .defaultServices(new LinkedHashSet<>(List.of("loyalty")))
                 .active(true)
+                .business(true)
                 .build();
         userRepository.save(merchant);
+
+        // Business account -> tenant profile must be surfaced as businessDetails.
+        TenantProfile merchantProfile = TenantProfile.builder()
+                .user(merchant)
+                .businessName("Acme Merchandising (Pvt) Ltd")
+                .businessAddress("12 Samora Machel Ave, Harare")
+                .businessEmail("accounts@acme-merch.co.zw")
+                .businessPhoneNumber("+263242123456")
+                .registrationNumber("CR-2026-00891")
+                .bpoNumber("BPO-44512")
+                .build();
+        tenantProfileRepository.save(merchantProfile);
 
         User organizer = User.builder()
                 .firstName("Rumbi").lastName("Moyo")
@@ -245,6 +263,11 @@ class AdminUserControllerTest {
         assertThat(body.split("both@example.com", -1).length - 1).isEqualTo(1);
         // Shop-level staff are still excluded.
         assertThat(body).doesNotContain("shop-admin@example.com");
+        // Business details for the business account are surfaced.
+        assertThat(body).contains("businessDetails");
+        assertThat(body).contains("Acme Merchandising (Pvt) Ltd");
+        assertThat(body).contains("CR-2026-00891");
+        assertThat(body).contains("BPO-44512");
     }
 
     @Test

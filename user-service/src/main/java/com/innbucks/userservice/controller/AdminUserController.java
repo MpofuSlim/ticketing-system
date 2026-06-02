@@ -3,7 +3,9 @@ package com.innbucks.userservice.controller;
 import com.innbucks.userservice.dto.ApiResult;
 import com.innbucks.userservice.dto.UpdateActiveStatusDTO;
 import com.innbucks.userservice.dto.UserResponseDTO;
+import com.innbucks.userservice.entity.TenantProfile;
 import com.innbucks.userservice.entity.User;
+import com.innbucks.userservice.repository.TenantProfileRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.service.UserAdminService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -21,6 +23,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 
 @RestController
@@ -32,6 +35,7 @@ import java.util.stream.Collectors;
 public class AdminUserController {
 
     private final UserRepository userRepository;
+    private final TenantProfileRepository tenantProfileRepository;
     private final UserAdminService userAdminService;
 
     @GetMapping
@@ -128,7 +132,18 @@ public class AdminUserController {
                                           "roles": ["MERCHANT_ADMIN"],
                                           "defaultServices": ["loyalty"],
                                           "active": true,
-                                          "createdAt": "2026-02-10T09:15:00"
+                                          "createdAt": "2026-02-10T09:15:00",
+                                          "business": true,
+                                          "businessDetails": {
+                                            "businessName": "Acme Merchandising (Pvt) Ltd",
+                                            "businessAddress": "12 Samora Machel Ave, Harare",
+                                            "businessEmail": "accounts@acme-merch.co.zw",
+                                            "businessPhoneNumber": "+263242123456",
+                                            "registrationNumber": "CR-2026-00891",
+                                            "bpoNumber": "BPO-44512",
+                                            "totalEvents": 0,
+                                            "rating": 0.0
+                                          }
                                         },
                                         {
                                           "id": 9,
@@ -139,7 +154,18 @@ public class AdminUserController {
                                           "roles": ["EVENT_ORGANIZER"],
                                           "defaultServices": ["ticketing"],
                                           "active": true,
-                                          "createdAt": "2026-02-12T11:30:00"
+                                          "createdAt": "2026-02-12T11:30:00",
+                                          "business": true,
+                                          "businessDetails": {
+                                            "businessName": "Showtime Events",
+                                            "businessAddress": "5 Leopold Takawira St, Bulawayo",
+                                            "businessEmail": "hello@showtime.co.zw",
+                                            "businessPhoneNumber": "+263292987654",
+                                            "registrationNumber": "CR-2025-04412",
+                                            "bpoNumber": "BPO-39007",
+                                            "totalEvents": 37,
+                                            "rating": 4.6
+                                          }
                                         }
                                       ]
                                     }
@@ -156,8 +182,17 @@ public class AdminUserController {
                 ? userRepository.findByActiveAndAnyRole(active, businessRoles)
                 : userRepository.findByAnyRole(businessRoles);
 
+        // Batch-load tenant profiles for business accounts so we attach
+        // business details without an N+1 query per user.
+        Map<Long, TenantProfile> profilesByUserId = users.isEmpty()
+                ? Map.of()
+                : tenantProfileRepository
+                        .findByUserIdIn(users.stream().map(User::getId).collect(Collectors.toList()))
+                        .stream()
+                        .collect(Collectors.toMap(p -> p.getUser().getId(), p -> p));
+
         List<UserResponseDTO> body = users.stream()
-                .map(UserResponseDTO::from)
+                .map(u -> UserResponseDTO.from(u, profilesByUserId.get(u.getId())))
                 .collect(Collectors.toList());
 
         String msg = (active == null ? "Merchant admins & event organizers"
