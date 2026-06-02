@@ -206,6 +206,18 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- WireMock: real-HTTP contract tests for the Oradian middleware client
+             (sibling of user-service's SmsNotificationClient WireMock setup —
+             see CLAUDE.md "External-service contract tests"). Standalone
+             classifier so the shaded jar doesn't conflict with the project's
+             Jetty/Jackson versions. -->
+        <dependency>
+            <groupId>org.wiremock</groupId>
+            <artifactId>wiremock-standalone</artifactId>
+            <version>3.9.1</version>
+            <scope>test</scope>
+        </dependency>
+
         <!-- Sentry: ERROR logs become real-time alerts. Logback appender
              owns the SDK lifecycle so we skip the Spring autoconfig (Sentry
              8.x references Boot 3 classes that Boot 4 renamed); no-op when
