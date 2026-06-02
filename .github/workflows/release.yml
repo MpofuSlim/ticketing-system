@@ -113,16 +113,20 @@ jobs:
             | sudo sh -s -- -b /usr/local/bin
 
       - name: Scan image with Trivy
+        # --ignore-unfixed is intentionally NOT set. A CRITICAL/HIGH CVE
+        # without a published patch is still a CVE — we want to know
+        # about it and consciously decide. Per-vuln waivers live in
+        # `.trivyignore` at the repo root, where each entry MUST carry
+        # a tracking comment (owner + reason + expiry/review date).
+        # A noisy scan is healthier than a silent one.
         run: |
-          # Any tag the metadata action produced points at the same loaded
-          # image; pick the first.
           IMAGE=$(echo "${{ steps.meta.outputs.tags }}" | head -n 1)
           trivy image \
             --severity CRITICAL,HIGH \
-            --ignore-unfixed \
             --vuln-type os,library \
             --exit-code 1 \
             --no-progress \
+            --ignorefile .trivyignore \
             "$IMAGE"
 
   deploy:
