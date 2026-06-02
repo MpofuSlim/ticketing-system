@@ -48,6 +48,10 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/events/**").permitAll()
                         // Internal: booking-service decrements availability on confirm.
                         .requestMatchers(HttpMethod.PATCH, "/events/*/availability/consume").permitAll()
+                        // Internal: booking-service restores availability on reverse of a
+                        // confirmed booking (admin refund, future veengu real-payment
+                        // failure compensation). Controller enforces X-Internal-Token.
+                        .requestMatchers(HttpMethod.PATCH, "/events/*/availability/release").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                         .anyRequest().authenticated()
                 )

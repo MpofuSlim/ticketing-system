@@ -1073,6 +1073,65 @@ public class EventController {
                 new AvailabilityResponseDTO(remaining)));
     }
 
+    @PatchMapping("/{id}/availability/release")
+    @SecurityRequirements()
+    @Operation(
+            summary = "Release availability (internal)",
+            description = """
+                    Internal endpoint: booking-service calls this when a confirmed
+                    booking is reversed (admin refund, no-show, or — once real
+                    payment integration lands — a money-transfer failure that
+                    arrives after the booking was already CONFIRMED) so the seats
+                    it consumed return to the available pool. Returns the new
+                    value. Refuses to overflow — a request that would push
+                    availability above `totalCapacity` is rejected as a 400, so a
+                    buggy caller or a replay can't inflate capacity.
+
+                    Requires the `X-Internal-Token` shared secret. Missing or
+                    wrong token returns 401. The gateway also blocks this path
+                    from the public internet via the event-availability-deny
+                    rule (which covers `/events/*/availability/**`, including
+                    this path); this controller check is defence in depth.
+
+                    Idempotency lives on the CALLER's side: booking-service
+                    tracks per-booking `availability_released` so retrying the
+                    reverse operation never double-credits.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Availability released",
+                    content = @Content(
+                            mediaType = "application/json",
+                            examples = @ExampleObject(name = "Availability released", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Availability released",
+                                      "data": { "availableTickets": 9 }
+                                    }
+                                    """)
+                    )
+            ),
+            @ApiResponse(responseCode = "400", description = "count missing/non-positive, or releasing would exceed totalCapacity"),
+            @ApiResponse(responseCode = "401", description = "Missing or invalid X-Internal-Token")
+    })
+    public ResponseEntity<ApiResult<AvailabilityResponseDTO>> releaseAvailability(
+            @Parameter(description = "Event UUID") @PathVariable UUID id,
+            @RequestParam("count") int count,
+            @RequestHeader(value = "X-Internal-Token", required = false) String internalToken
+    ) {
+        if (!authorizedInternal(internalToken)) {
+            log.warn("Unauthorized PATCH /events/{}/availability/release — missing or wrong X-Internal-Token", id);
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing or invalid X-Internal-Token"));
+        }
+        log.info("PATCH /events/{}/availability/release count={}", id, count);
+        int remaining = eventService.releaseAvailability(id, count);
+        return ResponseEntity.ok(ApiResult.ok("Availability released",
+                new AvailabilityResponseDTO(remaining)));
+    }
+
     /**
      * Constant-time shared-secret check for the internal consume-availability
      * endpoint. Mirrors loyalty-service's InternalMerchantLookupController

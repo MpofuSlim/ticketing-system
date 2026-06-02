@@ -209,4 +209,20 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
           AND e.availableTickets >= :count
     """)
     int decrementAvailableTickets(@Param("eventId") UUID eventId, @Param("count") int count);
+
+    // Atomically restores availableTickets when a confirmed booking is
+    // reversed (admin refund, no-show, real-payment failure compensation).
+    // Clamped to totalCapacity so a buggy caller / replay can never push
+    // available above the event's seat count. Returns the number of rows
+    // updated (1 on success, 0 if the event is missing/deleted or the
+    // requested count would overflow totalCapacity).
+    @Modifying
+    @Query("""
+        UPDATE Event e
+        SET e.availableTickets = e.availableTickets + :count
+        WHERE e.eventId = :eventId
+          AND e.deleted = false
+          AND e.availableTickets + :count <= e.totalCapacity
+    """)
+    int releaseAvailableTickets(@Param("eventId") UUID eventId, @Param("count") int count);
 }

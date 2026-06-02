@@ -416,6 +416,79 @@ public class BookingService {
         return toDTO(booking);
     }
 
+    /**
+     * SUPER_ADMIN reversal of a CONFIRMED booking — admin refund, no-show, or
+     * (once veengu real payments land) a money-transfer failure that arrives
+     * after the booking was already CONFIRMED. Restores the event's stored
+     * {@code availableTickets} via event-service so the seats return to the
+     * available pool, then flips the booking to CANCELLED.
+     *
+     * <p>The release call is idempotent per booking via
+     * {@link Booking#isAvailabilityReleased()}: a successful release flips the
+     * flag, so a retried reversal short-circuits the release and never
+     * double-credits. If the release call fails (event-service unreachable
+     * mid-call), the booking is NOT marked CANCELLED — the admin retries the
+     * same call until release succeeds, then the state transition lands.
+     */
+    @Transactional
+    public BookingResponseDTO reverseConfirmedBooking(UUID bookingId, String adminEmail) {
+        log.info("Reversing confirmed booking bookingId={} adminEmail={}", bookingId, adminEmail);
+        Booking booking = bookingRepository.findById(bookingId)
+                .orElseThrow(() -> {
+                    log.warn("Reverse failed, booking not found bookingId={}", bookingId);
+                    return new RuntimeException("Booking not found");
+                });
+
+        if (booking.getStatus() != Booking.BookingStatus.CONFIRMED) {
+            // Caller can only reverse a CONFIRMED booking. PENDING uses /cancel;
+            // already-CANCELLED is a no-op the caller shouldn't be hitting.
+            log.warn("Reverse rejected, booking not confirmed bookingId={} status={}",
+                    bookingId, booking.getStatus());
+            throw new RuntimeException(
+                    "Cannot reverse booking with status " + booking.getStatus()
+                            + " — only CONFIRMED bookings can be reversed");
+        }
+
+        if (!booking.isAvailabilityReleased()) {
+            releaseEventAvailability(booking); // throws on failure → admin retries → no partial state
+            booking.setAvailabilityReleased(true);
+        } else {
+            log.info("Skipping release call, already released bookingId={}", bookingId);
+        }
+
+        booking.setStatus(Booking.BookingStatus.CANCELLED);
+        bookingRepository.save(booking);
+
+        eventPublisher.publishEvent(BookingDomainEvent.BookingCancelled.of(booking));
+
+        log.info("Booking reversed bookingId={} adminEmail={}", bookingId, adminEmail);
+        return toDTO(booking);
+    }
+
+    private void releaseEventAvailability(Booking booking) {
+        EventServiceClient client = eventClientProvider == null
+                ? null : eventClientProvider.getIfAvailable();
+        if (client == null) {
+            throw new RuntimeException("event-service client unavailable; cannot release availability");
+        }
+        int count = booking.getItems() == null ? 0 : booking.getItems().size();
+        if (count <= 0) {
+            // Nothing was consumed (no items) — nothing to release. Idempotent no-op.
+            return;
+        }
+        ApiResult<AvailabilityResponseDTO> envelope =
+                client.releaseAvailability(booking.getEventId(), count, eventInternalToken);
+        AvailabilityResponseDTO data = envelope == null ? null : envelope.getData();
+        if (data == null) {
+            // Fallback returned null payload (circuit open / event-service down).
+            // Do NOT flip the idempotency flag — retry must call event-service again.
+            throw new RuntimeException("event-service rejected/skipped release"
+                    + (envelope == null ? "" : ": " + envelope.getMessage()));
+        }
+        log.info("Released event availability eventId={} released={} remaining={}",
+                booking.getEventId(), count, data.getAvailableTickets());
+    }
+
     // Backward-compatible overload: confirm with no points/cash split. Used
     // by callers (tests, payment-service) that don't yet know about loyalty.
     public BookingResponseDTO confirmBooking(UUID bookingId) {

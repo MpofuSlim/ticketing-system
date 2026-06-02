@@ -33,4 +33,17 @@ public interface EventServiceClient {
             @RequestParam("count") int count,
             @RequestHeader("X-Internal-Token") String internalToken
     );
+
+    // Inverse of consumeAvailability — increments the event's stored
+    // availableTickets when a CONFIRMED booking is reversed (admin refund,
+    // no-show, future real-payment failure compensation). Same X-Internal-Token
+    // contract. Clamped to totalCapacity on the event-service side so a buggy
+    // caller can't inflate available above the seat count; double-release
+    // prevention lives on this side via Booking.availabilityReleased.
+    @PatchMapping("/events/{id}/availability/release")
+    ApiResult<AvailabilityResponseDTO> releaseAvailability(
+            @PathVariable("id") UUID id,
+            @RequestParam("count") int count,
+            @RequestHeader("X-Internal-Token") String internalToken
+    );
 }

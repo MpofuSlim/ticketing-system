@@ -427,4 +427,68 @@ class EventControllerTest {
                         .accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().is4xxClientError());
     }
+
+    // ---- PATCH /events/{id}/availability/release (audit #3 — restore consumed capacity) ----
+
+    @Test
+    void releaseAvailability_withoutInternalToken_returns401_andDoesNotMutate() throws Exception {
+        Event saved = eventRepository.save(eventBuilder()
+                .title("Concert")
+                .startDateTime(LocalDateTime.now().plusDays(7))
+                .endDateTime(LocalDateTime.now().plusDays(7).plusHours(2))
+                .totalCapacity(100)
+                .availableTickets(90)
+                .build());
+
+        mockMvc.perform(patch("/events/{id}/availability/release", saved.getEventId())
+                        .param("count", "5"))
+                .andExpect(status().isUnauthorized());
+
+        Event reloaded = eventRepository.findById(saved.getEventId()).orElseThrow();
+        org.junit.jupiter.api.Assertions.assertEquals(90, reloaded.getAvailableTickets());
+    }
+
+    @Test
+    void releaseAvailability_withValidToken_returns200_andRestoresCapacity() throws Exception {
+        // Simulate the state after a confirmed booking decremented availability:
+        // total=100, available=90 (10 tickets currently held by a confirmed booking).
+        Event saved = eventRepository.save(eventBuilder()
+                .title("Concert")
+                .startDateTime(LocalDateTime.now().plusDays(7))
+                .endDateTime(LocalDateTime.now().plusDays(7).plusHours(2))
+                .totalCapacity(100)
+                .availableTickets(90)
+                .build());
+
+        mockMvc.perform(patch("/events/{id}/availability/release", saved.getEventId())
+                        .param("count", "10")
+                        .header("X-Internal-Token", VALID_INTERNAL_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code", is("200 OK")))
+                .andExpect(jsonPath("$.data.availableTickets", is(100)));
+
+        Event reloaded = eventRepository.findById(saved.getEventId()).orElseThrow();
+        org.junit.jupiter.api.Assertions.assertEquals(100, reloaded.getAvailableTickets());
+    }
+
+    @Test
+    void releaseAvailability_refusesToOverflowTotalCapacity() throws Exception {
+        // Available is already at totalCapacity. A buggy / replayed release MUST NOT
+        // push it higher — the SQL clamp rejects, the service throws, no mutation.
+        Event saved = eventRepository.save(eventBuilder()
+                .title("Concert")
+                .startDateTime(LocalDateTime.now().plusDays(7))
+                .endDateTime(LocalDateTime.now().plusDays(7).plusHours(2))
+                .totalCapacity(100)
+                .availableTickets(100)
+                .build());
+
+        mockMvc.perform(patch("/events/{id}/availability/release", saved.getEventId())
+                        .param("count", "5")
+                        .header("X-Internal-Token", VALID_INTERNAL_TOKEN))
+                .andExpect(status().isBadRequest());
+
+        Event reloaded = eventRepository.findById(saved.getEventId()).orElseThrow();
+        org.junit.jupiter.api.Assertions.assertEquals(100, reloaded.getAvailableTickets());
+    }
 }
