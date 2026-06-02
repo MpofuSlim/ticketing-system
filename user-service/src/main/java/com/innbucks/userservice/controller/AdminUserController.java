@@ -97,6 +97,60 @@ public class AdminUserController {
         return ResponseEntity.ok(ApiResult.ok(msg, body));
     }
 
+    @GetMapping("/merchants")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @Operation(
+            summary = "List MERCHANT_ADMIN users (merchants)",
+            description = "Returns user accounts carrying the **MERCHANT_ADMIN** role — the people " +
+                    "who own/administer a merchant on the platform. SHOP_ADMIN / SHOP_USER staff " +
+                    "are scoped to a single shop and are not included here; use `GET /admin/users` " +
+                    "for the full system-user listing.\n\n" +
+                    "Pass `?active=true` for approved/active merchant admins, `?active=false` for " +
+                    "pending/inactive ones. Omit to return all status values. Requires **SUPER_ADMIN** role."
+    )
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "Merchant admins retrieved",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Merchant admins retrieved",
+                                      "data": [
+                                        {
+                                          "id": 7,
+                                          "firstName": "Tendai",
+                                          "lastName": "Ncube",
+                                          "email": "tendai@acme-merch.co.zw",
+                                          "phoneNumber": "+263772345678",
+                                          "roles": ["MERCHANT_ADMIN"],
+                                          "defaultServices": ["loyalty"],
+                                          "active": true,
+                                          "createdAt": "2026-02-10T09:15:00"
+                                        }
+                                      ]
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Caller is not a SUPER_ADMIN")
+    })
+    public ResponseEntity<ApiResult<List<UserResponseDTO>>> listMerchants(
+            @RequestParam(name = "active", required = false) Boolean active) {
+
+        List<User> users = (active != null)
+                ? userRepository.findByActiveAndRole(active, User.Role.MERCHANT_ADMIN)
+                : userRepository.findByRole(User.Role.MERCHANT_ADMIN);
+
+        List<UserResponseDTO> body = users.stream()
+                .map(UserResponseDTO::from)
+                .collect(Collectors.toList());
+
+        String msg = (active == null ? "Merchant admins"
+                : (active ? "Active merchant admins" : "Inactive merchant admins"))
+                + " retrieved";
+        log.info("{} count={}", msg, body.size());
+        return ResponseEntity.ok(ApiResult.ok(msg, body));
+    }
+
     @PutMapping("/{id}/active")
     @PreAuthorize("hasRole('SUPER_ADMIN')")
     @Operation(

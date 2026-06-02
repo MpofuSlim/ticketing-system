@@ -185,4 +185,88 @@ class AdminUserControllerTest {
         assertThat(responseBody).contains("\"defaultServices\":[\"loyalty\"]");
         assertThat(responseBody).doesNotContain("\"payments\"");
     }
+
+    // ---- GET /admin/users/merchants (SUPER_ADMIN-only MERCHANT_ADMIN listing) ----
+
+    @Test
+    @WithMockUser(roles = "SUPER_ADMIN")
+    void listMerchants_returnsOnlyMerchantAdmins() throws Exception {
+        User merchant = User.builder()
+                .firstName("Tendai").lastName("Ncube")
+                .email("tendai@acme-merch.co.zw").phoneNumber("+263772345678")
+                .password(passwordEncoder.encode("Password123"))
+                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .defaultServices(new LinkedHashSet<>(List.of("loyalty")))
+                .active(true)
+                .build();
+        userRepository.save(merchant);
+
+        User organizer = User.builder()
+                .firstName("Other").lastName("Person")
+                .email("organizer@example.com").phoneNumber("+263770000001")
+                .password(passwordEncoder.encode("Password123"))
+                .roles(EnumSet.of(User.Role.EVENT_ORGANIZER))
+                .defaultServices(new LinkedHashSet<>(List.of("ticketing")))
+                .active(true)
+                .build();
+        userRepository.save(organizer);
+
+        String body = mockMvc.perform(get("/admin/users/merchants")
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // The merchant must be there.
+        assertThat(body).contains("tendai@acme-merch.co.zw");
+        assertThat(body).contains("\"MERCHANT_ADMIN\"");
+        // The EVENT_ORGANIZER-only user must NOT appear.
+        assertThat(body).doesNotContain("organizer@example.com");
+    }
+
+    @Test
+    @WithMockUser(roles = "SUPER_ADMIN")
+    void listMerchants_withActiveFalse_returnsOnlyInactiveMerchantAdmins() throws Exception {
+        User activeMerchant = User.builder()
+                .firstName("Active").lastName("Merchant")
+                .email("active-merch@example.com").phoneNumber("+263770000002")
+                .password(passwordEncoder.encode("Password123"))
+                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .defaultServices(new LinkedHashSet<>(List.of("loyalty")))
+                .active(true)
+                .build();
+        userRepository.save(activeMerchant);
+
+        User pendingMerchant = User.builder()
+                .firstName("Pending").lastName("Merchant")
+                .email("pending-merch@example.com").phoneNumber("+263770000003")
+                .password(passwordEncoder.encode("Password123"))
+                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .defaultServices(new LinkedHashSet<>(List.of("loyalty")))
+                .active(false)
+                .build();
+        userRepository.save(pendingMerchant);
+
+        String body = mockMvc.perform(get("/admin/users/merchants?active=false")
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        assertThat(body).contains("pending-merch@example.com");
+        assertThat(body).doesNotContain("active-merch@example.com");
+    }
+
+    @Test
+    @WithMockUser(roles = "EVENT_ORGANIZER")
+    void listMerchants_asEventOrganizer_isForbidden() throws Exception {
+        mockMvc.perform(get("/admin/users/merchants")
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void listMerchants_unauthenticated_isDenied() throws Exception {
+        mockMvc.perform(get("/admin/users/merchants")
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().is4xxClientError());
+    }
 }

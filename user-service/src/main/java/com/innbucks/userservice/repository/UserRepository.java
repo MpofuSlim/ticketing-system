@@ -32,6 +32,20 @@ public interface UserRepository extends JpaRepository<User, Long> {
     List<User> findByActiveExcludingRole(@Param("active") boolean active, @Param("role") User.Role role);
 
     /**
+     * Users carrying the supplied role. Backs the SUPER_ADMIN
+     * {@code GET /admin/users/merchants} listing (role=MERCHANT_ADMIN) and is
+     * generic enough to extend to other role-scoped admin views. Uses
+     * {@code MEMBER OF} — the JPA-standard way to test membership in an
+     * {@link jakarta.persistence.ElementCollection} without dropping to
+     * native SQL.
+     */
+    @Query("SELECT u FROM User u WHERE :role MEMBER OF u.roles")
+    List<User> findByRole(@Param("role") User.Role role);
+
+    @Query("SELECT u FROM User u WHERE u.active = :active AND :role MEMBER OF u.roles")
+    List<User> findByActiveAndRole(@Param("active") boolean active, @Param("role") User.Role role);
+
+    /**
      * Project-only lookup for the token_version column. JwtFilter calls this
      * on every authenticated request to validate the JWT's session epoch
      * against the current DB value — fetching the column directly avoids
