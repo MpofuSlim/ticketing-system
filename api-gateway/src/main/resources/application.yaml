@@ -365,6 +365,20 @@ spring:
 gateway:
   trusted-proxy-count: ${GATEWAY_TRUSTED_PROXY_COUNT:1}
 
+# Browser security response headers — stamped by SecurityHeadersWebFilter on every
+# gateway response. X-Content-Type-Options and HSTS are unconditional. X-Frame-Options
+# can be relaxed to SAMEORIGIN if the FE ever needs to embed its own pages. CSP is
+# OPT-IN: leave `csp` blank to skip it, otherwise it ships in Report-Only mode (the
+# header `Content-Security-Policy-Report-Only`) so violations are reported without
+# breaking the FE. Flip `csp-enforce: true` once the FE team has validated the
+# policy and you want it enforcing.
+security:
+  headers:
+    frame-options: ${SECURITY_HEADERS_FRAME_OPTIONS:DENY}
+    hsts: ${SECURITY_HEADERS_HSTS:max-age=31536000; includeSubDomains}
+    csp: ${SECURITY_HEADERS_CSP:}
+    csp-enforce: ${SECURITY_HEADERS_CSP_ENFORCE:false}
+
 server:
   port: ${SERVER_PORT:8080}
   shutdown: graceful
