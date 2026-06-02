@@ -67,7 +67,23 @@ services:
     restart: unless-stopped
     mem_limit: 256m
     mem_reservation: 128m
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}"]
+    # maxmemory + allkeys-lru: bound Redis to ~200 MB (well inside the 256 MB
+    # mem_limit so we don't OOM-kill on a memory-pressure spike) and evict the
+    # least-recently-used key when full. Without this, every distinct bearer
+    # token spawns its own rate-limiter bucket (and the gateway's velocity-counter
+    # + seat-lock keys add to the pool) — under a botnet that creates many
+    # accounts, Redis would OOM in 1-2 days and take the gateway down with it.
+    # appendonly:yes -> AOF persistence; persistence and eviction can co-exist.
+    command:
+      - "redis-server"
+      - "--appendonly"
+      - "yes"
+      - "--requirepass"
+      - "${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}"
+      - "--maxmemory"
+      - "200mb"
+      - "--maxmemory-policy"
+      - "allkeys-lru"
     ports:
       - "127.0.0.1:6379:6379"
     volumes:

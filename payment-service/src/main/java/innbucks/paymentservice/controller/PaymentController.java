@@ -30,6 +30,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Map;
 import java.util.UUID;
 
@@ -156,7 +157,7 @@ public class PaymentController {
                 .currency(request.getCurrency() != null ? request.getCurrency() : "USD")
                 .cardLast4(request.getCardLast4())
                 .confirmationNumber(asString(confirmedBooking.get("confirmationNumber")))
-                .processedAt(LocalDateTime.now())
+                .processedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .build();
 
         log.info("Payment processed transactionId={} bookingId={} confirmation={} amountPaid={}",
@@ -325,7 +326,7 @@ public class PaymentController {
                 .pointsRedeemed(result.pointsRedeemed())
                 .pointsEarned(result.pointsEarned())
                 .walletBalanceAfter(result.walletBalanceAfter())
-                .processedAt(LocalDateTime.now())
+                .processedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .build();
 
         metrics.incShopCheckout("success", mode);
