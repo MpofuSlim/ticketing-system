@@ -6,6 +6,10 @@ import com.innbucks.bookingservice.client.SeatServiceClient;
 import com.innbucks.bookingservice.dto.*;
 import com.innbucks.bookingservice.entity.*;
 import com.innbucks.bookingservice.event.BookingDomainEvent;
+import com.innbucks.bookingservice.exception.BadRequestException;
+import com.innbucks.bookingservice.exception.BookingConflictException;
+import com.innbucks.bookingservice.exception.DependencyUnavailableException;
+import com.innbucks.bookingservice.exception.NotFoundException;
 import com.innbucks.bookingservice.exception.TierRequirementException;
 import com.innbucks.bookingservice.loyalty.LoyaltyEarnRetryService;
 import com.innbucks.bookingservice.repository.*;
@@ -99,7 +103,7 @@ public class BookingService {
             UUID picked = pickRandomAvailable(pool, pickedInThisRequest);
             if (picked == null) {
                 log.warn("Booking rejected, no available seats userEmail={} categoryId={}", userEmail, categoryId);
-                throw new RuntimeException("No available seats in category " + categoryId);
+                throw new BadRequestException("No available seats in category " + categoryId);
             }
             pickedInThisRequest.add(picked);
             assignedSeatIds.add(picked);
@@ -118,7 +122,7 @@ public class BookingService {
                     .toList();
             log.warn("Booking create rejected, picked seats already booked userEmail={} seatIds={}",
                     userEmail, clashingSeats);
-            throw new RuntimeException("One or more seats are already booked: " + clashingSeats);
+            throw new BookingConflictException("One or more seats are already booked: " + clashingSeats);
         }
 
         // Resolve full details (price, eventId, sectionLabel) from seat-service.
@@ -129,7 +133,7 @@ public class BookingService {
             if (!request.getEventId().equals(seat.getEventId())) {
                 log.warn("Booking rejected, category does not belong to event userEmail={} seatId={} requestEventId={} actualEventId={}",
                         userEmail, seatId, request.getEventId(), seat.getEventId());
-                throw new RuntimeException(
+                throw new BadRequestException(
                         "Category " + seat.getCategoryId() + " does not belong to event " + request.getEventId());
             }
             resolved.add(seat);
@@ -396,14 +400,14 @@ public class BookingService {
 
         if (booking.getStatus() == Booking.BookingStatus.CONFIRMED) {
             log.warn("Cancel rejected, booking already confirmed bookingId={}", bookingId);
-            throw new RuntimeException(
+            throw new BookingConflictException(
                     "Cannot cancel a confirmed booking — payment already processed"
             );
         }
 
         if (booking.getStatus() == Booking.BookingStatus.CANCELLED) {
             log.warn("Cancel rejected, booking already cancelled bookingId={}", bookingId);
-            throw new RuntimeException("Booking is already cancelled");
+            throw new BookingConflictException("Booking is already cancelled");
         }
 
         booking.setStatus(Booking.BookingStatus.CANCELLED);
@@ -444,7 +448,7 @@ public class BookingService {
             // already-CANCELLED is a no-op the caller shouldn't be hitting.
             log.warn("Reverse rejected, booking not confirmed bookingId={} status={}",
                     bookingId, booking.getStatus());
-            throw new RuntimeException(
+            throw new BookingConflictException(
                     "Cannot reverse booking with status " + booking.getStatus()
                             + " — only CONFIRMED bookings can be reversed");
         }
@@ -469,7 +473,7 @@ public class BookingService {
         EventServiceClient client = eventClientProvider == null
                 ? null : eventClientProvider.getIfAvailable();
         if (client == null) {
-            throw new RuntimeException("event-service client unavailable; cannot release availability");
+            throw new DependencyUnavailableException("event-service client unavailable; cannot release availability");
         }
         int count = booking.getItems() == null ? 0 : booking.getItems().size();
         if (count <= 0) {
@@ -482,7 +486,7 @@ public class BookingService {
         if (data == null) {
             // Fallback returned null payload (circuit open / event-service down).
             // Do NOT flip the idempotency flag — retry must call event-service again.
-            throw new RuntimeException("event-service rejected/skipped release"
+            throw new DependencyUnavailableException("event-service rejected/skipped release"
                     + (envelope == null ? "" : ": " + envelope.getMessage()));
         }
         log.info("Released event availability eventId={} released={} remaining={}",
@@ -510,7 +514,7 @@ public class BookingService {
         if (booking.getStatus() != Booking.BookingStatus.PENDING) {
             log.warn("Confirm rejected, booking not pending bookingId={} status={}",
                     bookingId, booking.getStatus());
-            throw new RuntimeException("Only pending bookings can be confirmed");
+            throw new BookingConflictException("Only pending bookings can be confirmed");
         }
 
         // Reject confirms that arrive after the seat hold has lapsed — the
@@ -519,7 +523,7 @@ public class BookingService {
                 && booking.getExpiresAt().isBefore(LocalDateTime.now(ZoneOffset.UTC))) {
             log.warn("Confirm rejected, hold expired bookingId={} expiredAt={}",
                     bookingId, booking.getExpiresAt());
-            throw new RuntimeException(
+            throw new BookingConflictException(
                     "Seat hold expired — please create a new booking and pay within "
                             + holdTtlMinutes + " minutes");
         }
@@ -567,7 +571,7 @@ public class BookingService {
         }
         if (booking.getTenantId() == null) {
             if (pointsToUse.signum() > 0) {
-                throw new RuntimeException("Cannot redeem points — booking has no tenant attached");
+                throw new BadRequestException("Cannot redeem points — booking has no tenant attached");
             }
             log.debug("No tenantId on booking; skipping loyalty earn for bookingId={}", booking.getId());
             return;
@@ -576,7 +580,7 @@ public class BookingService {
         LoyaltyRuleResponse rule = fetchRule(loyalty, booking.getTenantId());
         if (rule == null) {
             if (pointsToUse.signum() > 0) {
-                throw new RuntimeException("Loyalty rule unavailable; cannot redeem points right now");
+                throw new DependencyUnavailableException("Loyalty rule unavailable; cannot redeem points right now");
             }
             log.debug("Loyalty rule unavailable; skipping earn for bookingId={}", booking.getId());
             return;
@@ -589,7 +593,7 @@ public class BookingService {
         BigDecimal reconstructedTotal = pointsAsCash.add(cashAmount);
         BigDecimal diff = reconstructedTotal.subtract(booking.getTotalAmount()).abs();
         if (diff.compareTo(SPLIT_TOLERANCE) > 0) {
-            throw new RuntimeException(String.format(
+            throw new BadRequestException(String.format(
                     "Payment split does not match total: points worth %s + cash %s = %s, expected %s",
                     pointsAsCash, cashAmount, reconstructedTotal, booking.getTotalAmount()));
         }
@@ -699,7 +703,7 @@ public class BookingService {
         ApiResult<SeatLookupResponseDTO> envelope = seatServiceClient.lookupSeat(seatId);
         if (envelope == null || envelope.getData() == null) {
             log.warn("Seat lookup returned no data seatId={}", seatId);
-            throw new RuntimeException("Seat " + seatId + " not found");
+            throw new NotFoundException("Seat " + seatId + " not found");
         }
         return envelope.getData();
     }
@@ -708,7 +712,7 @@ public class BookingService {
         ApiResult<List<AvailableSeatDTO>> envelope = seatServiceClient.getAvailableSeats(categoryId);
         if (envelope == null || envelope.getData() == null || envelope.getData().isEmpty()) {
             log.warn("No available seats returned by seat-service categoryId={}", categoryId);
-            throw new RuntimeException("No available seats in category " + categoryId);
+            throw new BadRequestException("No available seats in category " + categoryId);
         }
         return envelope.getData().stream()
                 .map(AvailableSeatDTO::getId)
