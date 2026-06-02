@@ -147,7 +147,7 @@ public class AdminUserController {
         String msg = (active == null ? "Merchant admins"
                 : (active ? "Active merchant admins" : "Inactive merchant admins"))
                 + " retrieved";
-        log.info("{} count={}", msg, body.size());
+        log.info("GET /admin/users/merchants -> {} count={}", msg, body.size());
         return ResponseEntity.ok(ApiResult.ok(msg, body));
     }
 
