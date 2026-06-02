@@ -1,7 +1,9 @@
 package com.innbucks.bookingservice.service;
 
+import com.innbucks.bookingservice.client.EventServiceClient;
 import com.innbucks.bookingservice.client.SeatServiceClient;
 import com.innbucks.bookingservice.dto.ApiResult;
+import com.innbucks.bookingservice.dto.AvailabilityResponseDTO;
 import com.innbucks.bookingservice.dto.AvailableSeatDTO;
 import com.innbucks.bookingservice.dto.BookingResponseDTO;
 import com.innbucks.bookingservice.dto.CategoryBookingDTO;
@@ -694,5 +696,174 @@ class BookingServiceTest {
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
         verify(publisher).publishEvent(captor.capture());
         assertInstanceOf(BookingDomainEvent.BookingCancelled.class, captor.getValue());
+    }
+
+    // ---- reverseConfirmedBooking (audit #3 — saga compensation) ----
+
+    /** Build a BookingService with a stubbed EventServiceClient so the release path is reachable. */
+    @SuppressWarnings("unchecked")
+    private BookingService newServiceWithEventClient(BookingRepository bookingRepo,
+                                                     ApplicationEventPublisher publisher,
+                                                     EventServiceClient eventClient) {
+        org.springframework.beans.factory.ObjectProvider<EventServiceClient> provider =
+                mock(org.springframework.beans.factory.ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(eventClient);
+        return new BookingService(bookingRepo, mock(BookingItemRepository.class),
+                mock(SeatServiceClient.class), publisher,
+                new QrCodeGenerator(), null, provider, null);
+    }
+
+    private static AvailabilityResponseDTO availabilityResponse(int remaining) {
+        AvailabilityResponseDTO dto = new AvailabilityResponseDTO();
+        dto.setAvailableTickets(remaining);
+        return dto;
+    }
+
+    private static Booking confirmedBookingWith(int itemCount) {
+        Booking b = Booking.builder()
+                .id(UUID.randomUUID())
+                .userEmail("alice@example.com")
+                .eventId(UUID.randomUUID())
+                .status(Booking.BookingStatus.CONFIRMED)
+                .totalAmount(BigDecimal.TEN)
+                .availabilityReleased(false)
+                .items(new ArrayList<>())
+                .build();
+        for (int i = 0; i < itemCount; i++) {
+            b.getItems().add(BookingItem.builder().seatId(UUID.randomUUID()).build());
+        }
+        return b;
+    }
+
+    @Test
+    void reverseBooking_restoresAvailability_flipsToCancelled_andSetsReleasedFlag() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+        EventServiceClient eventClient = mock(EventServiceClient.class);
+        // event-service responds with a populated payload — release succeeded.
+        when(eventClient.releaseAvailability(any(), eq(3), any())).thenReturn(
+                ApiResult.ok("Availability released", availabilityResponse(50)));
+
+        BookingService service = newServiceWithEventClient(bookingRepo, publisher, eventClient);
+        Booking booking = confirmedBookingWith(3); // 3 items → release 3
+        when(bookingRepo.findById(booking.getId())).thenReturn(Optional.of(booking));
+
+        service.reverseConfirmedBooking(booking.getId(), "admin@example.com");
+
+        verify(eventClient).releaseAvailability(eq(booking.getEventId()), eq(3), any());
+        assertTrue(booking.isAvailabilityReleased(), "availability_released must be set after success");
+        assertEquals(Booking.BookingStatus.CANCELLED, booking.getStatus());
+        verify(bookingRepo).save(booking);
+
+        ArgumentCaptor<Object> evCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(publisher).publishEvent(evCaptor.capture());
+        assertInstanceOf(BookingDomainEvent.BookingCancelled.class, evCaptor.getValue());
+    }
+
+    @Test
+    void reverseBooking_isIdempotent_whenAvailabilityAlreadyReleased() {
+        // Partial-failure state from a previous attempt: release succeeded but the
+        // local CANCELLED save failed. Retry must skip the release call to avoid
+        // double-credit, but must still complete the status flip.
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        EventServiceClient eventClient = mock(EventServiceClient.class);
+        BookingService service = newServiceWithEventClient(bookingRepo,
+                mock(ApplicationEventPublisher.class), eventClient);
+
+        Booking booking = confirmedBookingWith(2);
+        booking.setAvailabilityReleased(true); // <- already released, but status still CONFIRMED
+        when(bookingRepo.findById(booking.getId())).thenReturn(Optional.of(booking));
+
+        service.reverseConfirmedBooking(booking.getId(), "admin@example.com");
+
+        verifyNoInteractions(eventClient); // critical: no second release
+        assertEquals(Booking.BookingStatus.CANCELLED, booking.getStatus());
+        verify(bookingRepo).save(booking);
+    }
+
+    @Test
+    void reverseBooking_failsAndLeavesBookingConfirmed_whenReleaseHttpFails() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        EventServiceClient eventClient = mock(EventServiceClient.class);
+        when(eventClient.releaseAvailability(any(), anyInt(), any()))
+                .thenThrow(new RuntimeException("event-service down"));
+
+        BookingService service = newServiceWithEventClient(bookingRepo,
+                mock(ApplicationEventPublisher.class), eventClient);
+        Booking booking = confirmedBookingWith(2);
+        when(bookingRepo.findById(booking.getId())).thenReturn(Optional.of(booking));
+
+        assertThrows(RuntimeException.class,
+                () -> service.reverseConfirmedBooking(booking.getId(), "admin@example.com"));
+
+        // No partial state: still CONFIRMED, flag still false → admin can retry safely.
+        assertEquals(Booking.BookingStatus.CONFIRMED, booking.getStatus());
+        assertFalse(booking.isAvailabilityReleased());
+        verify(bookingRepo, never()).save(any());
+    }
+
+    @Test
+    void reverseBooking_failsWhenFallbackReturnsNullPayload() {
+        // EventServiceClientFallback returns an ApiResult whose data is null when
+        // the circuit is open. Treat that as a release failure — don't flip the
+        // idempotency flag, don't mark CANCELLED.
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        EventServiceClient eventClient = mock(EventServiceClient.class);
+        when(eventClient.releaseAvailability(any(), anyInt(), any())).thenReturn(
+                ApiResult.<AvailabilityResponseDTO>builder()
+                        .code("503").message("event unavailable").data(null).build());
+
+        BookingService service = newServiceWithEventClient(bookingRepo,
+                mock(ApplicationEventPublisher.class), eventClient);
+        Booking booking = confirmedBookingWith(2);
+        when(bookingRepo.findById(booking.getId())).thenReturn(Optional.of(booking));
+
+        assertThrows(RuntimeException.class,
+                () -> service.reverseConfirmedBooking(booking.getId(), "admin@example.com"));
+
+        assertEquals(Booking.BookingStatus.CONFIRMED, booking.getStatus());
+        assertFalse(booking.isAvailabilityReleased());
+    }
+
+    @Test
+    void reverseBooking_rejectsPendingBooking() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newServiceWithEventClient(bookingRepo,
+                mock(ApplicationEventPublisher.class), mock(EventServiceClient.class));
+
+        Booking pending = confirmedBookingWith(1);
+        pending.setStatus(Booking.BookingStatus.PENDING);
+        when(bookingRepo.findById(pending.getId())).thenReturn(Optional.of(pending));
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> service.reverseConfirmedBooking(pending.getId(), "admin@example.com"));
+        assertTrue(ex.getMessage().contains("CONFIRMED"));
+        verify(bookingRepo, never()).save(any());
+    }
+
+    @Test
+    void reverseBooking_rejectsCancelledBooking() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newServiceWithEventClient(bookingRepo,
+                mock(ApplicationEventPublisher.class), mock(EventServiceClient.class));
+
+        Booking cancelled = confirmedBookingWith(1);
+        cancelled.setStatus(Booking.BookingStatus.CANCELLED);
+        when(bookingRepo.findById(cancelled.getId())).thenReturn(Optional.of(cancelled));
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> service.reverseConfirmedBooking(cancelled.getId(), "admin@example.com"));
+        assertTrue(ex.getMessage().contains("CONFIRMED"));
+    }
+
+    @Test
+    void reverseBooking_rejectsMissingBooking() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        when(bookingRepo.findById(any())).thenReturn(Optional.empty());
+        BookingService service = newServiceWithEventClient(bookingRepo,
+                mock(ApplicationEventPublisher.class), mock(EventServiceClient.class));
+
+        assertThrows(RuntimeException.class,
+                () -> service.reverseConfirmedBooking(UUID.randomUUID(), "admin@example.com"));
     }
 }

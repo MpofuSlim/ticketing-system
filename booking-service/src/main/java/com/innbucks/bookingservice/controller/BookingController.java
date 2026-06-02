@@ -638,6 +638,82 @@ public class BookingController {
                 bookingService.cancelBooking(id, userEmail, isAdmin)));
     }
 
+    @PatchMapping("/{id}/reverse")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @Operation(
+            summary = "Reverse a confirmed booking (SUPER_ADMIN only)",
+            description = """
+                    Reverses a **CONFIRMED** booking — admin refund, no-show, or
+                    (once veengu real payment integration arrives) a money-transfer
+                    failure that arrives after the booking was already CONFIRMED.
+
+                    Calls event-service to restore the booking's consumed seats to
+                    the available pool, then flips the booking to **CANCELLED**.
+                    Per-booking idempotent: a successful release flips
+                    `availability_released=true` on the booking row so a retried
+                    reversal short-circuits the release call and never double-credits.
+                    If the release call fails (event-service unreachable mid-call),
+                    the booking is NOT marked CANCELLED — the admin retries the
+                    same call until release succeeds.
+
+                    Distinct from `PATCH /bookings/{id}/cancel`: cancel is for
+                    PENDING (no payment processed); reverse is for CONFIRMED.
+
+                    Requires **SUPER_ADMIN** role.
+                    """
+    )
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Booking reversed",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = BookingResponseDTO.class),
+                            examples = @ExampleObject(name = "Booking reversed", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Booking reversed successfully",
+                                      "data": {
+                                        "id": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                        "userEmail": "alice@example.com",
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "confirmationNumber": "INN-20260502-AB12CD",
+                                        "status": "CANCELLED",
+                                        "totalAmount": 100.00,
+                                        "items": [
+                                          {
+                                            "seatId": "11111111-2222-3333-4444-555555555555",
+                                            "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                            "categoryName": "VIP",
+                                            "rowLabel": "A",
+                                            "seatNumber": 12,
+                                            "priceAtBooking": 100.00,
+                                            "ticketNumber": "20260502-12345A",
+                                            "qrCode": "data:image/png;base64,...(truncated)"
+                                          }
+                                        ],
+                                        "createdAt": "2026-05-02T15:45:00",
+                                        "updatedAt": "2026-05-02T16:30:00"
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Booking not CONFIRMED, or event-service release failed"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Caller is not a SUPER_ADMIN"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Booking not found")
+    })
+    public ResponseEntity<ApiResult<BookingResponseDTO>> reverseBooking(
+            @PathVariable UUID id,
+            Authentication authentication
+    ) {
+        String adminEmail = authentication.getName();
+        log.info("PATCH /bookings/{}/reverse adminEmail={}", id, adminEmail);
+        return ResponseEntity.ok(ApiResult.ok("Booking reversed successfully",
+                bookingService.reverseConfirmedBooking(id, adminEmail)));
+    }
+
     @PatchMapping("/{id}/confirm")
     @Operation(summary = "Confirm booking", description = "Marks a booking as confirmed (typically called by payment flow).")
     @ApiResponses({

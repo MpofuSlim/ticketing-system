@@ -80,6 +80,15 @@ public class Booking {
     // hold model existed.
     private LocalDateTime expiresAt;
 
+    // Idempotency guard for the event-service availability release. Set true
+    // after a successful PATCH /events/{id}/availability/release as part of
+    // reversing a CONFIRMED booking; the reverse handler short-circuits the
+    // release call when this is already true so a retry never double-credits
+    // the event's stored availableTickets.
+    @Column(name = "availability_released", nullable = false)
+    @Builder.Default
+    private boolean availabilityReleased = false;
+
     @PrePersist
     public void onCreate() {
         this.createdAt = LocalDateTime.now(ZoneOffset.UTC);

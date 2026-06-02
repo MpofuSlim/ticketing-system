@@ -27,4 +27,12 @@ public class EventServiceClientFallback implements EventServiceClient {
         return ApiResult.<AvailabilityResponseDTO>builder()
                 .code("503").message("event unavailable").data(null).build();
     }
+
+    @Override
+    public ApiResult<AvailabilityResponseDTO> releaseAvailability(java.util.UUID id, int count, String internalToken) {
+        log.warn("event-service circuit open or call failed (releaseAvailability) eventId={} count={}",
+                id, count);
+        return ApiResult.<AvailabilityResponseDTO>builder()
+                .code("503").message("event unavailable").data(null).build();
+    }
 }
