@@ -76,6 +76,12 @@ seat-service:
 booking-service:
   base-url: http://booking-service
 
+# user-service is resolved by name via Eureka/LoadBalancer. event-service calls
+# its service-to-service tenant-lookup (POST /users/internal/tenants/lookup) to
+# attach organizer business details to event responses.
+user-service:
+  base-url: http://user-service
+
 # Circuit breaker + retry around outbound calls.
 #  - seatCategories: SeatCategoryGateway (fallback = empty category list).
 #  - bookingActiveCounts: BookingGateway, used to compute availableTickets on

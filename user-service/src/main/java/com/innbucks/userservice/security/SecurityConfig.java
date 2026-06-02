@@ -51,6 +51,13 @@ public class SecurityConfig {
                         // it must come first. Closes the unauthenticated PII / Oradian
                         // account-ID enumeration (audit H1).
                         .requestMatchers(HttpMethod.GET, "/auth/customer/send-money/details/**").authenticated()
+                        // Service-to-service tenant lookup. Authenticated by the
+                        // shared X-Internal-Token header checked inside
+                        // InternalTenantLookupController, not a user JWT — and
+                        // blocked at the gateway edge (user-internal-deny route)
+                        // so it's only reachable pod-to-pod. Must precede the
+                        // catch-all authenticated() rule below.
+                        .requestMatchers("/users/internal/**").permitAll()
                         // Public auth endpoints
                         .requestMatchers("/auth/**").permitAll()
                         // Swagger UI
