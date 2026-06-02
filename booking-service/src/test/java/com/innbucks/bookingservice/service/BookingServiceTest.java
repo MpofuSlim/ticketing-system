@@ -398,18 +398,46 @@ class BookingServiceTest {
     }
 
     @Test
-    void confirmBooking_rejectsNonPendingBookings() {
+    void confirmBooking_alreadyConfirmed_isIdempotentReplay() {
+        // Was: this test asserted that re-confirming a CONFIRMED booking throws.
+        // Audit hardening: confirm is now idempotent for CONFIRMED — payment-service
+        // retries (or replicas that lost their in-memory idempotency cache) must
+        // see the same response, not a false 409 right after a successful confirm.
         BookingRepository bookingRepo = mock(BookingRepository.class);
         BookingService service = newService(bookingRepo,
                 mock(BookingItemRepository.class), mock(SeatServiceClient.class));
 
         UUID id = UUID.randomUUID();
         Booking booking = Booking.builder().id(id).status(Booking.BookingStatus.CONFIRMED)
+                .userEmail("u@example.com").totalAmount(BigDecimal.TEN)
+                .confirmationNumber("INN-20260602-AB12CD")
+                .items(new ArrayList<>())
+                .build();
+        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+
+        BookingResponseDTO resp = service.confirmBooking(id);
+
+        assertEquals(id, resp.getId());
+        assertEquals(Booking.BookingStatus.CONFIRMED, resp.getStatus());
+        // No state mutation — replay returns the existing row, doesn't re-save.
+        verify(bookingRepo, never()).save(any());
+    }
+
+    @Test
+    void confirmBooking_cancelledBooking_stillRejects() {
+        // CANCELLED is still a real error — it must NOT idempotent-replay.
+        // A CANCELLED booking can't be confirmed; that's a client bug, not a retry.
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+
+        UUID id = UUID.randomUUID();
+        Booking booking = Booking.builder().id(id).status(Booking.BookingStatus.CANCELLED)
                 .userEmail("u@example.com").totalAmount(BigDecimal.TEN).build();
         when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
 
         RuntimeException ex = assertThrows(RuntimeException.class, () -> service.confirmBooking(id));
-        assertTrue(ex.getMessage().contains("pending"));
+        assertTrue(ex.getMessage().toLowerCase().contains("pending"));
         verify(bookingRepo, never()).save(any());
     }
 

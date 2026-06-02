@@ -511,6 +511,18 @@ public class BookingService {
                     return new RuntimeException("Booking not found");
                 });
 
+        // CONFIRMED: idempotent replay. payment-service's Idempotency-Key cache
+        // holds the original response for 24h, but a retry that lands beyond
+        // that window — or arrives from a different replica that lost its
+        // in-memory cache — would otherwise see status != PENDING and 409 even
+        // though the booking IS confirmed. False-rejection surfaces to the
+        // customer as "your booking failed" right after a successful confirm.
+        // Returning the existing DTO is the correct retry semantics.
+        if (booking.getStatus() == Booking.BookingStatus.CONFIRMED) {
+            log.info("Confirm idempotent replay (already CONFIRMED) bookingId={}", bookingId);
+            return toDTO(booking);
+        }
+        // CANCELLED is still a real error — a CANCELLED booking can't be confirmed.
         if (booking.getStatus() != Booking.BookingStatus.PENDING) {
             log.warn("Confirm rejected, booking not pending bookingId={} status={}",
                     bookingId, booking.getStatus());

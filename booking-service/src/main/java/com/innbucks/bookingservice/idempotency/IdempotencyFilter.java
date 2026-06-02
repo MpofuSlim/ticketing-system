@@ -38,7 +38,16 @@ public class IdempotencyFilter extends OncePerRequestFilter {
 
     public static final String HEADER = "Idempotency-Key";
     private static final Set<String> MUTATING_METHODS = Set.of("POST", "PUT", "PATCH", "DELETE");
-    static final long COMPLETED_TTL_SECONDS = 10 * 60; // 10 minutes
+    // 24 hours — same as payment-service's filter. The previous 10-min TTL was
+    // shorter than realistic payment-processor retry windows: a payment-service
+    // call that timed out and retried at minute 11 would find the cache expired,
+    // hit the now-CONFIRMED booking, and 409 even though the booking was fine —
+    // surfacing to the customer as a false "your booking failed" right after a
+    // successful confirm. confirmBooking() is now ALSO idempotent for
+    // already-CONFIRMED bookings (returns the existing DTO), so this TTL bump
+    // is belt-and-braces: both layers must lapse before a legitimately-retried
+    // request could see anything other than the original response.
+    static final long COMPLETED_TTL_SECONDS = 24 * 60 * 60;
     static final long RESERVATION_TTL_SECONDS = 30;
     private static final String ANONYMOUS_PRINCIPAL = "anonymousUser";
 
