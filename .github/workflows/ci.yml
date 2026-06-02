@@ -41,7 +41,7 @@ jobs:
       # download — a transient Maven Central blip during this bootstrap was
       # failing the whole job in seconds, before any code was compiled.
       - name: Cache Maven wrapper distribution
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.m2/wrapper
           key: ${{ runner.os }}-maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
