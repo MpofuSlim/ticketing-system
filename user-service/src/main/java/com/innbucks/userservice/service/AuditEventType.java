@@ -53,5 +53,22 @@ public enum AuditEventType {
     /** /auth/change-password completed. */
     AUTH_PASSWORD_CHANGED,
     /** Rate-limit threshold exceeded on /auth/login or /auth/refresh. */
-    AUTH_RATE_LIMITED
+    AUTH_RATE_LIMITED,
+
+    /**
+     * SUPER_ADMIN approved a system user's first activation — combines the
+     * activation itself with the assignment of the default password
+     * ({@code #Pass123}, force-changed on first login). Fires at most once per
+     * user (the {@code approved} flag makes the path one-shot). Distinct from
+     * {@link #USER_ACTIVATED} so dashboards can break out "new account approvals"
+     * (compliance-relevant) from routine reactivation traffic.
+     */
+    USER_APPROVED,
+    /**
+     * SUPER_ADMIN re-activated an already-approved user — admin lifted a
+     * previous deactivation, no password reset involved.
+     */
+    USER_ACTIVATED,
+    /** SUPER_ADMIN deactivated a user — account can no longer log in. */
+    USER_DEACTIVATED
 }

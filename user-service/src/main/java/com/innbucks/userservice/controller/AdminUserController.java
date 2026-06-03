@@ -7,6 +7,7 @@ import com.innbucks.userservice.entity.TenantProfile;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.repository.TenantProfileRepository;
 import com.innbucks.userservice.repository.UserRepository;
+import com.innbucks.userservice.service.AuditContext;
 import com.innbucks.userservice.service.UserAdminService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -14,12 +15,14 @@ import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -236,11 +239,37 @@ public class AdminUserController {
     })
     public ResponseEntity<ApiResult<UserResponseDTO>> updateActiveStatus(
             @PathVariable Long id,
-            @Valid @RequestBody UpdateActiveStatusDTO request) {
+            @Valid @RequestBody UpdateActiveStatusDTO request,
+            Authentication authentication,
+            HttpServletRequest httpRequest) {
 
-        User user = userAdminService.setActive(id, request.getActive());
+        // Capture the admin's identity + request envelope so the audit row
+        // (written inside setActive) ties the action back to whoever made it.
+        // Authentication is non-null here — @PreAuthorize already enforced
+        // hasRole('SUPER_ADMIN'), so Spring Security would have 401'd anonymous.
+        String adminEmail = authentication.getName();
+        AuditContext auditContext = new AuditContext(clientIp(httpRequest),
+                httpRequest.getHeader("User-Agent"));
+
+        User user = userAdminService.setActive(id, request.getActive(), adminEmail, auditContext);
 
         String action = request.getActive() ? "activated" : "deactivated";
         return ResponseEntity.ok(ApiResult.ok("User " + action, UserResponseDTO.from(user)));
+    }
+
+    /**
+     * Best-effort source-IP extraction. Same shape as
+     * {@code AuthController.clientIp} — behind the api-gateway every request
+     * carries an {@code X-Forwarded-For} chain; the leftmost entry is the real
+     * client. Falls back to {@code remoteAddr} for direct connections.
+     */
+    private static String clientIp(HttpServletRequest request) {
+        String forwarded = request.getHeader("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isBlank()) {
+            int comma = forwarded.indexOf(',');
+            String first = (comma < 0 ? forwarded : forwarded.substring(0, comma)).trim();
+            if (!first.isEmpty()) return first;
+        }
+        return request.getRemoteAddr();
     }
 }
