@@ -61,6 +61,13 @@ public class RegisterRequestDTO {
             description = "Physical address of the business. Required when isBusiness is true.")
     private String businessAddress;
 
+    @Schema(example = "accounts@innbucks.co.zw", nullable = true,
+            description = "Business contact email. OPTIONAL even for a business account — surfaces as " +
+                    "the organizer's `email` on event listings when set. Validated for format only when " +
+                    "provided; null/blank is accepted.")
+    @Email(message = "Invalid business email")
+    private String businessEmail;
+
     @Schema(example = "12345", nullable = true,
             description = "Business BPO number. Required when isBusiness is true.")
     private String bpoNumber;
