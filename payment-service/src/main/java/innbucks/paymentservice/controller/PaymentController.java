@@ -11,6 +11,7 @@ import innbucks.paymentservice.dto.PaymentRequest;
 import innbucks.paymentservice.dto.PaymentResponse;
 import innbucks.paymentservice.dto.ShopCheckoutRequest;
 import innbucks.paymentservice.dto.ShopCheckoutResponse;
+import innbucks.paymentservice.exception.BadRequestException;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
@@ -281,7 +282,13 @@ public class PaymentController {
 
         try {
             validateAmounts(request);
-        } catch (IllegalArgumentException e) {
+        } catch (BadRequestException e) {
+            // validateAmounts now throws the typed BadRequestException
+            // (was IllegalArgumentException). We catch it here so the
+            // metrics counter still ticks the validation_failed branch —
+            // letting the exception propagate to GlobalExceptionHandler
+            // would still return 400 but miss the per-mode metric. Same
+            // response shape either way; the catch is for instrumentation.
             metrics.incShopCheckout("validation_failed", mode);
             metrics.shopCheckoutDuration().record(System.nanoTime() - startNanos, java.util.concurrent.TimeUnit.NANOSECONDS);
             return ResponseEntity.badRequest().body(
@@ -357,19 +364,19 @@ public class PaymentController {
         switch (r.getPaymentMethod()) {
             case CASH -> {
                 if (!cash || points) {
-                    throw new IllegalArgumentException(
+                    throw new BadRequestException(
                             "paymentMethod=CASH requires cashAmount > 0 and pointsAmount must be null/zero");
                 }
             }
             case POINTS -> {
                 if (!points || cash) {
-                    throw new IllegalArgumentException(
+                    throw new BadRequestException(
                             "paymentMethod=POINTS requires pointsAmount > 0 and cashAmount must be null/zero");
                 }
             }
             case CASH_AND_POINTS -> {
                 if (!cash || !points) {
-                    throw new IllegalArgumentException(
+                    throw new BadRequestException(
                             "paymentMethod=CASH_AND_POINTS requires both cashAmount > 0 and pointsAmount > 0");
                 }
             }

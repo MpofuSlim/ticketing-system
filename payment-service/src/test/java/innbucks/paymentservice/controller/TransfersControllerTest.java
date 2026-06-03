@@ -1,5 +1,6 @@
 package innbucks.paymentservice.controller;
 
+import innbucks.paymentservice.exception.BadRequestException;
 import innbucks.paymentservice.client.OradianMiddlewareClient;
 import innbucks.paymentservice.client.OradianMiddlewareException;
 import innbucks.paymentservice.dto.ApiResult;
@@ -696,7 +697,7 @@ class TransfersControllerTest {
         DepositTransferRequest body = request(OWNED_ACCOUNT);
         body.setAmount("0.00");
 
-        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
+        BadRequestException ex = assertThrows(BadRequestException.class, () ->
                 new TransfersController(jwt, oradian, txService, stubbedLimitService(), stubbedTxRepo())
                         .transfer(bearerRequest(VALID_TOKEN), body));
         assertTrue(ex.getMessage().contains("greater than zero"));
@@ -720,7 +721,7 @@ class TransfersControllerTest {
         DepositTransferRequest body = request(OWNED_ACCOUNT);
         body.setAmount("ten bucks");
 
-        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
+        BadRequestException ex = assertThrows(BadRequestException.class, () ->
                 new TransfersController(jwt, oradian, txService, stubbedLimitService(), stubbedTxRepo())
                         .transfer(bearerRequest(VALID_TOKEN), body));
         assertTrue(ex.getMessage().contains("valid decimal"));
@@ -743,7 +744,7 @@ class TransfersControllerTest {
         DepositTransferRequest body = request(OWNED_ACCOUNT);
         body.setAmount("123.456789");
 
-        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
+        BadRequestException ex = assertThrows(BadRequestException.class, () ->
                 new TransfersController(jwt, oradian, txService, stubbedLimitService(), stubbedTxRepo())
                         .transfer(bearerRequest(VALID_TOKEN), body));
         assertTrue(ex.getMessage().contains("4 decimal places"));
@@ -887,11 +888,11 @@ class TransfersControllerTest {
 
         TransactionService txService = stubbedTxService();
         TransferLimitService limits = mock(TransferLimitService.class);
-        doThrow(new IllegalArgumentException(
+        doThrow(new BadRequestException(
                 "Daily limit exceeded (max 500000, today 450000, requested 100000, projected 550000)"))
                 .when(limits).enforce(eq(OWNED_ACCOUNT), any(BigDecimal.class));
 
-        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
+        BadRequestException ex = assertThrows(BadRequestException.class, () ->
                 new TransfersController(jwt, oradian, txService, limits, stubbedTxRepo())
                         .transfer(bearerRequest(VALID_TOKEN), request(OWNED_ACCOUNT)));
         assertTrue(ex.getMessage().contains("Daily limit exceeded"));
@@ -917,11 +918,11 @@ class TransfersControllerTest {
 
         TransactionService txService = stubbedTxService();
         TransferLimitService limits = mock(TransferLimitService.class);
-        doThrow(new IllegalArgumentException(
+        doThrow(new BadRequestException(
                 "Per-transaction limit exceeded (max 100000, requested 1000000)"))
                 .when(limits).enforce(eq(OWNED_ACCOUNT), any(BigDecimal.class));
 
-        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () ->
+        BadRequestException ex = assertThrows(BadRequestException.class, () ->
                 new TransfersController(jwt, oradian, txService, limits, stubbedTxRepo())
                         .withdraw(bearerRequest(VALID_TOKEN), withdrawalRequest(OWNED_ACCOUNT)));
         assertTrue(ex.getMessage().contains("Per-transaction limit exceeded"));

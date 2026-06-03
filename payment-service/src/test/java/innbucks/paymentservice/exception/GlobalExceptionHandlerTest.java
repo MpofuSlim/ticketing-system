@@ -14,6 +14,7 @@ import java.lang.reflect.Method;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -54,11 +55,31 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
-    void illegalArgument_returnsApiResultWithMessage() {
-        ResponseEntity<ApiResult<Void>> resp = handler.handle(new IllegalArgumentException("bad mix"));
+    void badRequestException_returnsApiResultWithMessage() {
+        // Typed BadRequestException replaces the previous IllegalArgumentException
+        // 400-handler: only deliberate 4xx text from our code is echoed back to
+        // the client. An accidental IAE from the JDK / a library no longer goes
+        // through this handler — it falls to the sanitised 500 catch-all (see
+        // accidentalIllegalArgument_fallsThroughToInternalError_noLeak below).
+        ResponseEntity<ApiResult<Void>> resp = handler.handle(
+                new innbucks.paymentservice.exception.BadRequestException("bad mix"));
         assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
         assertEquals("400 BAD_REQUEST", resp.getBody().getCode());
         assertEquals("bad mix", resp.getBody().getMessage());
+    }
+
+    @Test
+    void accidentalIllegalArgument_fallsThroughToInternalError_noLeak() {
+        // Old behaviour: any IllegalArgumentException (deliberate OR accidental
+        // — e.g. Map.of with a null value, Objects.requireNonNull failures) was
+        // mapped to 400 with the raw exception message, leaking internal text
+        // to clients. After the typed-exception refactor, an accidental IAE
+        // falls through to the generic Exception catch-all, which sanitises.
+        ResponseEntity<ApiResult<Void>> resp = handler.handle(
+                (Exception) new IllegalArgumentException("internal: cannot put null into Map.of"));
+        assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, resp.getStatusCode());
+        assertEquals("internal error", resp.getBody().getMessage());
+        assertFalse(resp.getBody().getMessage().toLowerCase().contains("map.of"));
     }
 
     @Test

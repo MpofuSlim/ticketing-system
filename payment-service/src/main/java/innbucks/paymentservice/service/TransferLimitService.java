@@ -1,5 +1,6 @@
 package innbucks.paymentservice.service;
 
+import innbucks.paymentservice.exception.BadRequestException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -108,7 +109,7 @@ public class TransferLimitService {
         if (amount.compareTo(perTransactionMax) > 0) {
             log.warn("Per-transaction limit exceeded account={} amount={} max={}",
                     accountId, amount, perTransactionMax);
-            throw new IllegalArgumentException(
+            throw new BadRequestException(
                     "Per-transaction limit exceeded (max " + perTransactionMax.toPlainString() +
                             ", requested " + amount.toPlainString() + ")");
         }
@@ -126,13 +127,13 @@ public class TransferLimitService {
             redis.expire(key, COUNTER_TTL);
         } catch (RuntimeException ex) {
             log.error("Redis velocity counter unreachable account={}; failing closed", accountId, ex);
-            throw new IllegalArgumentException(
+            throw new BadRequestException(
                     "Velocity service is temporarily unavailable; please try again in a moment");
         }
         if (newTotalUnits == null) {
             // Redis returned null — shouldn't happen for INCRBY, defence
             // in depth in case of a Lettuce / connection-pool oddity.
-            throw new IllegalArgumentException(
+            throw new BadRequestException(
                     "Velocity service is temporarily unavailable; please try again in a moment");
         }
 
@@ -150,7 +151,7 @@ public class TransferLimitService {
             BigDecimal todaySoFar = projected.subtract(amount);
             log.warn("Daily limit exceeded account={} today={} requested={} projected={} max={}",
                     accountId, todaySoFar, amount, projected, perDayMax);
-            throw new IllegalArgumentException(
+            throw new BadRequestException(
                     "Daily limit exceeded (max " + perDayMax.toPlainString() +
                             ", today " + todaySoFar.toPlainString() +
                             ", requested " + amount.toPlainString() +
