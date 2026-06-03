@@ -1,6 +1,17 @@
 spring:
   application:
     name: loyalty-service
+  # Cap Spring's Pageable auto-binding: every controller param of type
+  # Pageable picks size from the ?size= query param, and Spring's default
+  # max-page-size is 2000. That's bounded but still way too high for the
+  # per-page enrichment some endpoints do (and lets ?size=2000 chew DB +
+  # gateway budget). 100 matches the @Max we put on the raw-int size
+  # params in event-service / seat-service — same DoS surface, same cap.
+  data:
+    web:
+      pageable:
+        max-page-size: ${PAGEABLE_MAX_PAGE_SIZE:100}
+        default-page-size: ${PAGEABLE_DEFAULT_PAGE_SIZE:20}
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/loyalty_service}
     driver-class-name: ${DB_DRIVER:org.postgresql.Driver}

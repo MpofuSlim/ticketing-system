@@ -17,12 +17,15 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -39,11 +42,21 @@ import java.util.UUID;
 @RequestMapping("/seat-categories")
 @RequiredArgsConstructor
 @Slf4j
+@Validated  // makes @Min/@Max fire on @RequestParam pagination params (caps DoS via size=999999)
 @Tag(name = "Seat Categories", description = "Manage seat categories for events.")
 public class SeatCategoryController {
 
     private final SeatCategoryService categoryService;
     private final SeatCategoryAnalyticsService analyticsService;
+
+    /**
+     * Upper bound on @RequestParam {@code size} across listing endpoints.
+     * Stops a hostile {@code size=999999} from materialising the entire
+     * per-category bookings list (could be tens of thousands of rows) in
+     * a single request. 100 is generous for the kiosk/admin scroll UX,
+     * a 400 for everyone else.
+     */
+    private static final int MAX_PAGE_SIZE = 100;
 
     @GetMapping
     @SecurityRequirements()
@@ -295,9 +308,9 @@ public class SeatCategoryController {
     public ResponseEntity<ApiResult<EventAnalyticsDTO>> getEventAnalytics(
             @Parameter(description = "Event UUID") @RequestParam UUID eventId,
             @Parameter(description = "Zero-based page index for the per-category bookings list (default 0)")
-            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "0") @Min(0) int page,
             @Parameter(description = "Page size for the per-category bookings list (default 20, max 100)")
-            @RequestParam(defaultValue = "20") int size,
+            @RequestParam(defaultValue = "20") @Min(1) @Max(MAX_PAGE_SIZE) int size,
             Authentication authentication,
             HttpServletRequest httpRequest
     ) {

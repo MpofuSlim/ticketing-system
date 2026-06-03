@@ -1,11 +1,16 @@
 package com.innbucks.seatservice.exception;
 
 import com.innbucks.seatservice.dto.ApiResult;
+import jakarta.validation.ConstraintViolation;
+import jakarta.validation.ConstraintViolationException;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.web.server.ResponseStatusException;
+
+import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -66,6 +71,35 @@ class GlobalExceptionHandlerTest {
         assertEquals(HttpStatus.FORBIDDEN, resp.getStatusCode());
         assertNotNull(resp.getBody());
         assertEquals("You cannot release a lock that belongs to another user", resp.getBody().getMessage());
+    }
+
+    @Test
+    void handleConstraintViolation_returns400WithViolationMessage_notSwallowedAs500() {
+        // @Validated + @Min/@Max on @RequestParam fires a ConstraintViolationException
+        // when a client sends size=999999. Without the dedicated handler it falls to
+        // the RuntimeException catch-all and surfaces as a sanitised 500 — wrong status.
+        ConstraintViolation<?> violation = Mockito.mock(ConstraintViolation.class);
+        jakarta.validation.Path path = Mockito.mock(jakarta.validation.Path.class);
+        Mockito.when(path.toString()).thenReturn("listBookings.size");
+        Mockito.when(violation.getPropertyPath()).thenReturn(path);
+        Mockito.when(violation.getMessage()).thenReturn("must be less than or equal to 100");
+
+        ResponseEntity<ApiResult<Void>> resp = handler.handleConstraintViolation(
+                new ConstraintViolationException(Set.of(violation)));
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
+        assertNotNull(resp.getBody());
+        assertEquals("listBookings.size must be less than or equal to 100", resp.getBody().getMessage());
+    }
+
+    @Test
+    void handleConstraintViolation_emptyViolations_returnsGenericMessage() {
+        // Defensive: an empty violation set (shouldn't happen) must still yield a
+        // sensible 400 — not null body.message that would crash an FE renderer.
+        ResponseEntity<ApiResult<Void>> resp = handler.handleConstraintViolation(
+                new ConstraintViolationException(Set.of()));
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
+        assertNotNull(resp.getBody());
+        assertEquals("Invalid request parameter", resp.getBody().getMessage());
     }
 
     @Test
