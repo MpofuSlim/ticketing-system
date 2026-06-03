@@ -274,6 +274,31 @@ class BookingServiceTest {
     }
 
     @Test
+    void createBooking_ticketNumbersVaryAcrossBookings_notDrawnFromAPredictableSequence() {
+        // Security regression guard for the SecureRandom swap. A ticket number
+        // is the QR-code payload validated at the gate, so it must be
+        // unpredictable. We can't assert "is a CSPRNG" directly, but we CAN
+        // assert the variable part (5 digits + 1 letter) spreads widely across
+        // many generations — a regression to a constant, a fixed seed, or a
+        // tiny cycle would collapse that spread and fail here.
+        java.util.Set<String> variablePart = new java.util.HashSet<>();
+        for (int i = 0; i < 200; i++) {
+            RequestFixture fx = request(BigDecimal.ONE);
+            BookingService perCall = newService(mock(BookingRepository.class),
+                    mock(BookingItemRepository.class), stubClient(fx.lookups));
+            String ticket = perCall.createBooking("u@example.com", 4, null, fx.request)
+                    .getItems().get(0).getTicketNumber();
+            // Strip the leading "YYYYMMDD-" date prefix; keep the random tail.
+            variablePart.add(ticket.substring(ticket.indexOf('-') + 1));
+        }
+        // 200 draws from a 2.6M space (10^5 * 26): collisions are vanishingly
+        // unlikely with a real CSPRNG. Anything under ~190 distinct values
+        // signals the randomness collapsed (constant, fixed seed, or tiny cycle).
+        assertTrue(variablePart.size() >= 190,
+                "ticket randomness collapsed: only " + variablePart.size() + " distinct of 200");
+    }
+
+    @Test
     void createBooking_producesConfirmationNumberWithExpectedFormat() {
         RequestFixture fx = request(BigDecimal.TEN);
         BookingService service = newService(mock(BookingRepository.class),

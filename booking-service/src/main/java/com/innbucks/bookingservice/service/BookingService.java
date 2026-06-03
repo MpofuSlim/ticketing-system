@@ -23,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.security.SecureRandom;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -46,6 +47,14 @@ public class BookingService {
     private final ObjectProvider<LoyaltyServiceClient> loyaltyClientProvider;
     private final ObjectProvider<EventServiceClient> eventClientProvider;
     private final LoyaltyEarnRetryService loyaltyEarnRetryService;
+
+    // CSPRNG for ticket-number generation. A ticket number IS the QR-code
+    // payload a gate scanner validates, so it's an entry credential, not a
+    // cosmetic id — it must be unpredictable. java.util.Random is a 48-bit
+    // LCG whose entire future stream a holder of one ticket can reconstruct,
+    // letting them forge a neighbour's ticket. SecureRandom closes that.
+    // Static + thread-safe: one shared instance avoids per-call reseed cost.
+    private static final SecureRandom TICKET_RNG = new SecureRandom();
 
     // Fuzz tolerance for split-payment math: pointsToUse / redeemRate +
     // cashAmount must equal totalAmount within $0.01.
@@ -782,19 +791,23 @@ public class BookingService {
      * — today's date
      * — 5 random digits
      * — 1 random uppercase letter
+     *
+     * <p>Randomness comes from {@link #TICKET_RNG} (SecureRandom), NOT
+     * {@code java.util.Random}: the value is embedded in the seat's QR code
+     * and validated at the gate, so a predictable stream would let a holder
+     * of one ticket forge an adjacent one. Format is unchanged — same wire
+     * shape the FE already renders.
      */
     private String generateTicketNumber() {
         String date = LocalDateTime.now(ZoneOffset.UTC)
                 .format(DateTimeFormatter.ofPattern("yyyyMMdd"));
 
-        Random random = new Random();
-
         StringBuilder digits = new StringBuilder();
         for (int i = 0; i < 5; i++) {
-            digits.append(random.nextInt(10));
+            digits.append(TICKET_RNG.nextInt(10));
         }
 
-        char letter = (char) ('A' + random.nextInt(26));
+        char letter = (char) ('A' + TICKET_RNG.nextInt(26));
 
         return date + "-" + digits + letter;
     }
