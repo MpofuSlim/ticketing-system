@@ -919,4 +919,48 @@ class BookingServiceTest {
         assertThrows(RuntimeException.class,
                 () -> service.reverseConfirmedBooking(UUID.randomUUID(), "admin@example.com"));
     }
+
+    @Test
+    void getActiveItemCountsByEvents_excludesCancelled_butIncludesPendingAndConfirmed() {
+        // event-service's availableTickets safety net is driven by this query.
+        // It MUST count PENDING + CONFIRMED (anything not CANCELLED) so the
+        // public event card stays in sync with seat-service's per-category
+        // counter — which drops the instant a booking goes PENDING (the seat
+        // is LOCKED at that moment). Pinned by passing CANCELLED as the
+        // EXCLUDED status, not CONFIRMED as the included one.
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        BookingService service = newService(bookingRepo, itemRepo, mock(SeatServiceClient.class));
+
+        UUID eventId = UUID.randomUUID();
+        BookingItemRepository.EventActiveItemCount row = mock(BookingItemRepository.EventActiveItemCount.class);
+        when(row.getEventId()).thenReturn(eventId);
+        when(row.getCount()).thenReturn(3L);
+        when(itemRepo.countActiveItemsByEventIds(eq(List.of(eventId)), eq(Booking.BookingStatus.CANCELLED)))
+                .thenReturn(List.of(row));
+
+        var result = service.getActiveItemCountsByEvents(List.of(eventId));
+        assertEquals(1, result.size());
+        assertEquals(eventId, result.get(0).getEventId());
+        assertEquals(3L, result.get(0).getCount());
+
+        // Belt-and-braces: prove the WRONG arg shape (filtering only CONFIRMED
+        // in) isn't being passed. A drift back to b.status = CONFIRMED would
+        // call the repository with the CONFIRMED status as the parameter, and
+        // this verifies the CANCELLED status was used instead.
+        verify(itemRepo).countActiveItemsByEventIds(eq(List.of(eventId)), eq(Booking.BookingStatus.CANCELLED));
+        verify(itemRepo, never()).countActiveItemsByEventIds(any(), eq(Booking.BookingStatus.CONFIRMED));
+        verify(itemRepo, never()).countActiveItemsByEventIds(any(), eq(Booking.BookingStatus.PENDING));
+    }
+
+    @Test
+    void getActiveItemCountsByEvents_emptyOrNullInput_shortCircuits_noRepoCall() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        BookingService service = newService(bookingRepo, itemRepo, mock(SeatServiceClient.class));
+
+        assertTrue(service.getActiveItemCountsByEvents(List.of()).isEmpty());
+        assertTrue(service.getActiveItemCountsByEvents(null).isEmpty());
+        verify(itemRepo, never()).countActiveItemsByEventIds(any(), any());
+    }
 }

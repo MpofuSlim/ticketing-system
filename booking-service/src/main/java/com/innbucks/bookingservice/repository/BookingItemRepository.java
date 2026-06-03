@@ -45,22 +45,29 @@ public interface BookingItemRepository extends JpaRepository<BookingItem, UUID> 
     """)
     List<BookingItem> findByEventIdWithBooking(@Param("eventId") UUID eventId);
 
-    // Counts CONFIRMED booking items grouped by event. Powers event-service's
-    // availableTickets safety net: events return availableTickets = totalCapacity
-    // − confirmedCount when the stored field falls behind (e.g. a confirm where
-    // the event-service availability call failed). PENDING bookings don't count
-    // because the user only sees the seat consumed once they've paid.
+    // Counts active (non-CANCELLED, i.e. PENDING + CONFIRMED) booking items
+    // grouped by event. Powers event-service's availableTickets safety net:
+    // events return availableTickets = totalCapacity − activeCount, so the
+    // public listing reflects holds the moment a customer starts checkout —
+    // not only after they pay. This matches seat-service's view of reality
+    // (the seats are LOCKED in seat-service the instant a booking goes
+    // PENDING, so the per-category counter already drops by N). Counting
+    // only CONFIRMED here lets the event-level count drift above the
+    // seat-level count and confuses the public:  the categories show "10
+    // left" while the event card still says "12 left". CANCELLED items are
+    // excluded so released holds (expired or refunded) free up capacity
+    // immediately.
     @Query("""
         SELECT b.eventId AS eventId, COUNT(i) AS count
         FROM BookingItem i
         JOIN i.booking b
         WHERE b.eventId IN :eventIds
-          AND b.status = :confirmedStatus
+          AND b.status <> :cancelledStatus
         GROUP BY b.eventId
     """)
     List<EventActiveItemCount> countActiveItemsByEventIds(
             @Param("eventIds") Collection<UUID> eventIds,
-            @Param("confirmedStatus") Booking.BookingStatus confirmedStatus
+            @Param("cancelledStatus") Booking.BookingStatus cancelledStatus
     );
 
     interface EventActiveItemCount {
