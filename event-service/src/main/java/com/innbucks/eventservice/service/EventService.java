@@ -7,6 +7,10 @@ import com.innbucks.eventservice.dto.*;
 import com.innbucks.eventservice.entity.Event;
 import com.innbucks.eventservice.entity.EventCategory;
 import com.innbucks.eventservice.entity.Location;
+import com.innbucks.eventservice.exception.BadRequestException;
+import com.innbucks.eventservice.exception.ConflictException;
+import com.innbucks.eventservice.exception.ForbiddenException;
+import com.innbucks.eventservice.exception.NotFoundException;
 import com.innbucks.eventservice.mapper.EventMapper;
 import com.innbucks.eventservice.repository.EventRepository;
 import lombok.RequiredArgsConstructor;
@@ -128,7 +132,7 @@ public class EventService {
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
                 .orElseThrow(() -> {
                     log.warn("Event not found eventId={}", eventId);
-                    return new RuntimeException("Event not found");
+                    return new NotFoundException("Event not found");
                 });
         EventResponseDTO response = toDtoWithAvailability(event, fetchActiveCounts(eventId));
         attachOrganizer(response, event, resolveOrganizers(List.of(event)));
@@ -251,14 +255,14 @@ public class EventService {
         // reject rather than persist an event with no country.
         if (country == null || country.isBlank()) {
             log.warn("Event create rejected, missing country claim on token tenantId={}", tenantId);
-            throw new RuntimeException("Country is required but was not present in your token");
+            throw new BadRequestException("Country is required but was not present in your token");
         }
 
         if (eventRepository.existsByTenantIdAndTitleAndVenueAndStartDateTimeAndDeletedFalse(
                 tenantId, request.getTitle(), request.getVenue(), request.getStartDateTime())) {
             log.warn("Event create rejected, duplicate tenantId={} title={} venue={} startDateTime={}",
                     tenantId, request.getTitle(), request.getVenue(), request.getStartDateTime());
-            throw new RuntimeException("An event with the same title, venue and date already exists");
+            throw new ConflictException("An event with the same title, venue and date already exists");
         }
 
         Event event = Event.builder()
@@ -289,9 +293,9 @@ public class EventService {
     @Transactional(readOnly = true)
     public BannerImage getEventBanner(UUID eventId) {
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
-                .orElseThrow(() -> new RuntimeException("Event not found"));
+                .orElseThrow(() -> new NotFoundException("Event not found"));
         if (event.getBannerImage() == null || event.getBannerImage().length == 0) {
-            throw new RuntimeException("Banner not found");
+            throw new NotFoundException("Banner not found");
         }
         return new BannerImage(event.getBannerImage(), event.getBannerContentType());
     }
@@ -309,16 +313,20 @@ public class EventService {
     private static void applyBanner(Event event, MultipartFile file) {
         if (file == null || file.isEmpty()) return;
         if (file.getSize() > MAX_BANNER_BYTES) {
-            throw new RuntimeException("Banner image is too large (max 5MB)");
+            throw new BadRequestException("Banner image is too large (max 5MB)");
         }
         String contentType = file.getContentType();
         if (contentType == null || !ALLOWED_BANNER_CONTENT_TYPES.contains(contentType.toLowerCase())) {
-            throw new RuntimeException("Banner image must be JPEG, PNG, GIF or WEBP");
+            throw new BadRequestException("Banner image must be JPEG, PNG, GIF or WEBP");
         }
         try {
             event.setBannerImage(file.getBytes());
             event.setBannerContentType(contentType.toLowerCase());
         } catch (IOException e) {
+            // Genuine server-side I/O failure reading the upload stream — let
+            // the catch-all in GlobalExceptionHandler return 500 with a
+            // sanitised message. We wrap so the IOException doesn't escape
+            // the @Transactional boundary unchecked.
             throw new RuntimeException("Failed to read banner image", e);
         }
     }
@@ -331,16 +339,16 @@ public class EventService {
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
                 .orElseThrow(() -> {
                     log.warn("Update failed, event not found eventId={} tenantId={}", eventId, tenantId);
-                    return new RuntimeException("Event not found");
+                    return new NotFoundException("Event not found");
                 });
 
         boolean isAdmin = "ROLE_SUPER_ADMIN".equals(role);
 
-        // EVENT_ORGANIZER can update only own event; 
+        // EVENT_ORGANIZER can update only own event;
         if (!isAdmin && !event.getTenantId().equals(tenantId)) {
             log.warn("Unauthorized update attempt eventId={} tenantId={} ownerTenantId={}",
                     eventId, tenantId, event.getTenantId());
-            throw new RuntimeException("You are not authorized to update this event");
+            throw new ForbiddenException("You are not authorized to update this event");
         }
 
         if (request.getTitle() != null)        event.setTitle(request.getTitle());
@@ -355,7 +363,7 @@ public class EventService {
         // the request-level @AssertTrue can't catch.
         if (event.getStartDateTime() != null && event.getEndDateTime() != null
                 && !event.getEndDateTime().isAfter(event.getStartDateTime())) {
-            throw new RuntimeException("endDateTime must be after startDateTime");
+            throw new BadRequestException("endDateTime must be after startDateTime");
         }
         if (request.getTotalCapacity() != null) {
             int diff = request.getTotalCapacity() - event.getTotalCapacity();
@@ -380,19 +388,19 @@ public class EventService {
     @Transactional
     public int consumeAvailability(UUID eventId, int count) {
         if (count <= 0) {
-            throw new RuntimeException("count must be positive");
+            throw new BadRequestException("count must be positive");
         }
         log.info("Consuming availability eventId={} count={}", eventId, count);
         int updated = eventRepository.decrementAvailableTickets(eventId, count);
         if (updated == 0) {
             // Either the event doesn't exist or available < count.
             Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
-                    .orElseThrow(() -> new RuntimeException("Event not found"));
-            throw new RuntimeException("Insufficient availability: requested=" + count
+                    .orElseThrow(() -> new NotFoundException("Event not found"));
+            throw new ConflictException("Insufficient availability: requested=" + count
                     + " available=" + event.getAvailableTickets());
         }
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
-                .orElseThrow(() -> new RuntimeException("Event not found"));
+                .orElseThrow(() -> new NotFoundException("Event not found"));
         log.info("Availability consumed eventId={} count={} remaining={}",
                 eventId, count, event.getAvailableTickets());
         return event.getAvailableTickets();
@@ -409,19 +417,19 @@ public class EventService {
     @Transactional
     public int releaseAvailability(UUID eventId, int count) {
         if (count <= 0) {
-            throw new RuntimeException("count must be positive");
+            throw new BadRequestException("count must be positive");
         }
         log.info("Releasing availability eventId={} count={}", eventId, count);
         int updated = eventRepository.releaseAvailableTickets(eventId, count);
         if (updated == 0) {
             Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
-                    .orElseThrow(() -> new RuntimeException("Event not found"));
-            throw new RuntimeException("Cannot release " + count + " ticket(s): would exceed totalCapacity"
+                    .orElseThrow(() -> new NotFoundException("Event not found"));
+            throw new ConflictException("Cannot release " + count + " ticket(s): would exceed totalCapacity"
                     + " available=" + event.getAvailableTickets()
                     + " total=" + event.getTotalCapacity());
         }
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
-                .orElseThrow(() -> new RuntimeException("Event not found"));
+                .orElseThrow(() -> new NotFoundException("Event not found"));
         log.info("Availability released eventId={} count={} remaining={}",
                 eventId, count, event.getAvailableTickets());
         return event.getAvailableTickets();
@@ -433,14 +441,14 @@ public class EventService {
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
                 .orElseThrow(() -> {
                     log.warn("Activate failed, event not found eventId={} tenantId={}", eventId, tenantId);
-                    return new RuntimeException("Event not found");
+                    return new NotFoundException("Event not found");
                 });
 
         boolean isAdmin = "ROLE_SUPER_ADMIN".equals(role);
         if (!isAdmin && !event.getTenantId().equals(tenantId)) {
             log.warn("Unauthorized activate attempt eventId={} tenantId={} ownerTenantId={}",
                     eventId, tenantId, event.getTenantId());
-            throw new RuntimeException("You are not authorized to activate this event");
+            throw new ForbiddenException("You are not authorized to activate this event");
         }
 
         event.setActive(true);
@@ -455,16 +463,16 @@ public class EventService {
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
                 .orElseThrow(() -> {
                     log.warn("Delete failed, event not found eventId={} tenantId={}", eventId, tenantId);
-                    return new RuntimeException("Event not found");
+                    return new NotFoundException("Event not found");
                 });
 
         boolean isAdmin = "ROLE_SUPER_ADMIN".equals(role);
 
-        // EVENT_ORGANIZER can delete only own event; 
+        // EVENT_ORGANIZER can delete only own event;
         if (!isAdmin && !event.getTenantId().equals(tenantId)) {
             log.warn("Unauthorized delete attempt eventId={} tenantId={} ownerTenantId={}",
                     eventId, tenantId, event.getTenantId());
-            throw new RuntimeException("You are not authorized to delete this event");
+            throw new ForbiddenException("You are not authorized to delete this event");
         }
 
         event.setDeleted(true);

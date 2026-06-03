@@ -3,6 +3,9 @@ package com.innbucks.seatservice.service;
 import com.innbucks.seatservice.client.EventServiceClient;
 import com.innbucks.seatservice.dto.*;
 import com.innbucks.seatservice.entity.*;
+import com.innbucks.seatservice.exception.BadRequestException;
+import com.innbucks.seatservice.exception.ConflictException;
+import com.innbucks.seatservice.exception.NotFoundException;
 import com.innbucks.seatservice.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -58,7 +61,7 @@ public class SeatCategoryService {
                 request.getEventId(), request.getName())) {
             log.warn("Category creation rejected, duplicate name eventId={} name={}",
                     request.getEventId(), request.getName());
-            throw new RuntimeException("Category '" + request.getName()
+            throw new ConflictException("Category '" + request.getName()
                     + "' already exists for this event");
         }
 
@@ -70,7 +73,7 @@ public class SeatCategoryService {
         if (totalSeatsLong > MAX_TOTAL_SEATS_PER_CATEGORY) {
             log.warn("Category creation rejected, total seats exceeds cap eventId={} requested={} cap={}",
                     request.getEventId(), totalSeatsLong, MAX_TOTAL_SEATS_PER_CATEGORY);
-            throw new RuntimeException("Total seats (" + totalSeatsLong
+            throw new BadRequestException("Total seats (" + totalSeatsLong
                     + ") exceeds the per-category cap of " + MAX_TOTAL_SEATS_PER_CATEGORY);
         }
         int totalSeats = (int) totalSeatsLong;
@@ -82,7 +85,7 @@ public class SeatCategoryService {
             if (!seenSections.add(normalized)) {
                 log.warn("Category creation rejected, duplicate section eventId={} name={} section={}",
                         request.getEventId(), request.getName(), normalized);
-                throw new RuntimeException("Duplicate section '" + normalized + "' in request");
+                throw new BadRequestException("Duplicate section '" + normalized + "' in request");
             }
         }
 
@@ -173,7 +176,7 @@ public class SeatCategoryService {
         SeatCategory category = categoryRepository.findById(categoryId)
                 .orElseThrow(() -> {
                     log.warn("Category delete failed, not found categoryId={}", categoryId);
-                    return new RuntimeException("Category not found");
+                    return new NotFoundException("Category not found");
                 });
         if (!isAdmin) {
             requireEventOwnership(category.getEventId(), requesterEmail, authHeader);

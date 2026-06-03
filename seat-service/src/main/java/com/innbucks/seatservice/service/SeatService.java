@@ -5,6 +5,9 @@ import com.innbucks.seatservice.dto.SeatLookupResponseDTO;
 import com.innbucks.seatservice.dto.SeatResponseDTO;
 import com.innbucks.seatservice.entity.Seat;
 import com.innbucks.seatservice.entity.SeatCategory;
+import com.innbucks.seatservice.exception.ConflictException;
+import com.innbucks.seatservice.exception.ForbiddenException;
+import com.innbucks.seatservice.exception.NotFoundException;
 import com.innbucks.seatservice.repository.SeatCategoryRepository;
 import com.innbucks.seatservice.repository.SeatRepository;
 import lombok.RequiredArgsConstructor;
@@ -56,7 +59,7 @@ public class SeatService {
         Seat seat = seatRepository.findById(seatId)
                 .orElseThrow(() -> {
                     log.warn("Lookup failed, seat not found seatId={}", seatId);
-                    return new RuntimeException("Seat not found");
+                    return new NotFoundException("Seat not found");
                 });
         SeatCategory category = seat.getCategory();
         return SeatLookupResponseDTO.builder()
@@ -79,7 +82,7 @@ public class SeatService {
         Seat seat = seatRepository.findByIdForUpdate(seatId)
                 .orElseThrow(() -> {
                     log.warn("Lock failed, seat not found seatId={}", seatId);
-                    return new RuntimeException("Seat not found");
+                    return new NotFoundException("Seat not found");
                 });
 
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
@@ -94,7 +97,7 @@ public class SeatService {
         if (!reclaimingStale && seat.getStatus() != Seat.SeatStatus.AVAILABLE) {
             log.warn("Lock rejected, seat not available seatId={} section={} number={} status={}",
                     seatId, seat.getSectionLabel(), seat.getSeatNumber(), seat.getStatus());
-            throw new RuntimeException("Seat " + seat.getSectionLabel()
+            throw new ConflictException("Seat " + seat.getSectionLabel()
                     + seat.getSeatNumber() + " is not available");
         }
 
@@ -104,7 +107,7 @@ public class SeatService {
             if (updated == 0) {
                 log.warn("Lock rejected, category exhausted seatId={} categoryId={}",
                         seatId, category.getId());
-                throw new RuntimeException("No seats available in category " + category.getName());
+                throw new ConflictException("No seats available in category " + category.getName());
             }
         } else {
             log.info("Reclaiming stale lock seatId={} previousExpiresAt={}",
@@ -141,16 +144,20 @@ public class SeatService {
         Seat seat = seatRepository.findById(seatId)
                 .orElseThrow(() -> {
                     log.warn("Confirm failed, seat not found seatId={}", seatId);
-                    return new RuntimeException("Seat not found");
+                    return new NotFoundException("Seat not found");
                 });
 
         String lockKey = LOCK_KEY_PREFIX + seatId;
         String lockOwner = seatLockStore.get(lockKey);
 
         if (lockOwner == null || !lockOwner.equals(userEmail)) {
+            // 409 covers both branches the message lumps together: lock expired
+            // (legit user retried after TTL, state changed under them) and lock
+            // is owned by a different user (race lost). Both surface as "your
+            // seat hold isn't valid anymore, restart the booking" in the FE.
             log.warn("Confirm rejected, lock expired or owned by another user seatId={} userEmail={} lockOwner={}",
                     seatId, userEmail, lockOwner);
-            throw new RuntimeException("Lock expired or belongs to a different user");
+            throw new ConflictException("Lock expired or belongs to a different user");
         }
 
         seat.setStatus(Seat.SeatStatus.BOOKED);
@@ -169,16 +176,20 @@ public class SeatService {
         Seat seat = seatRepository.findById(seatId)
                 .orElseThrow(() -> {
                     log.warn("Release failed, seat not found seatId={}", seatId);
-                    return new RuntimeException("Seat not found");
+                    return new NotFoundException("Seat not found");
                 });
 
         String lockKey = LOCK_KEY_PREFIX + seatId;
         String lockOwner = seatLockStore.get(lockKey);
 
         if (lockOwner != null && !lockOwner.equals(userEmail)) {
+            // 403 not 409: this is an explicit ownership violation (different
+            // user trying to release someone else's hold), not a state-race
+            // outcome. Distinct from confirmSeat's 409 — there the message
+            // lumps expiry-race + ownership; here only ownership applies.
             log.warn("Release rejected, lock owned by another user seatId={} userEmail={} lockOwner={}",
                     seatId, userEmail, lockOwner);
-            throw new RuntimeException("You cannot release a lock that belongs to another user");
+            throw new ForbiddenException("You cannot release a lock that belongs to another user");
         }
 
         seat.setStatus(Seat.SeatStatus.AVAILABLE);

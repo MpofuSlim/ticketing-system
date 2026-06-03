@@ -483,10 +483,14 @@ class EventControllerTest {
                 .availableTickets(100)
                 .build());
 
+        // Typed-exception rollout: an over-cap release is now a state conflict
+        // (409), not a malformed request (400). The endpoint is internal-only
+        // (booking-service caller) so this isn't FE-visible; previous shape
+        // came from GlobalExceptionHandler's generic RuntimeException fallback.
         mockMvc.perform(patch("/events/{id}/availability/release", saved.getEventId())
                         .param("count", "5")
                         .header("X-Internal-Token", VALID_INTERNAL_TOKEN))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isConflict());
 
         Event reloaded = eventRepository.findById(saved.getEventId()).orElseThrow();
         org.junit.jupiter.api.Assertions.assertEquals(100, reloaded.getAvailableTickets());
