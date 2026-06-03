@@ -3,6 +3,7 @@ package com.innbucks.loyaltyservice.client;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.innbucks.loyaltyservice.config.CorrelationIdPropagatingInterceptor;
+import com.innbucks.loyaltyservice.util.MsisdnMasking;
 import com.innbucks.loyaltyservice.dto.CustomerTierResponseDTO;
 import com.innbucks.loyaltyservice.dto.UserServiceApiResult;
 import lombok.extern.slf4j.Slf4j;
@@ -67,7 +68,7 @@ public class UserServiceClient {
             );
             return Optional.ofNullable(envelope.data());
         } catch (Exception e) {
-            log.warn("user-service tier lookup failed phoneNumber={} cause={}", phoneNumber, e.toString());
+            log.warn("user-service tier lookup failed phoneNumber={} cause={}", MsisdnMasking.mask(phoneNumber), e.toString());
             return Optional.empty();
         }
     }

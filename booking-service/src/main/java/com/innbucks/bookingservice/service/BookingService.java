@@ -11,6 +11,7 @@ import com.innbucks.bookingservice.exception.BookingConflictException;
 import com.innbucks.bookingservice.exception.DependencyUnavailableException;
 import com.innbucks.bookingservice.exception.NotFoundException;
 import com.innbucks.bookingservice.exception.TierRequirementException;
+import com.innbucks.bookingservice.util.MsisdnMasking;
 import com.innbucks.bookingservice.loyalty.LoyaltyEarnRetryService;
 import com.innbucks.bookingservice.repository.*;
 import lombok.RequiredArgsConstructor;
@@ -328,7 +329,7 @@ public class BookingService {
     // Phone-number lookup (most-recent first). One phone may have many
     // bookings; the caller decides how to render the list.
     public List<BookingResponseDTO> getByPhoneNumber(String phoneNumber) {
-        log.debug("Fetching bookings phoneNumber={}", phoneNumber);
+        log.debug("Fetching bookings phoneNumber={}", MsisdnMasking.mask(phoneNumber));
         return bookingRepository.findByPhoneNumberOrderByCreatedAtDesc(phoneNumber)
                 .stream()
                 .map(this::toDTO)
@@ -338,7 +339,7 @@ public class BookingService {
     // Returns only CONFIRMED bookings for a phone number — excludes PENDING and
     // CANCELLED so customers see only paid, valid tickets.
     public List<BookingResponseDTO> getActiveByPhoneNumber(String phoneNumber) {
-        log.debug("Fetching confirmed bookings phoneNumber={}", phoneNumber);
+        log.debug("Fetching confirmed bookings phoneNumber={}", MsisdnMasking.mask(phoneNumber));
         return bookingRepository.findByPhoneNumberOrderByCreatedAtDesc(phoneNumber)
                 .stream()
                 .filter(b -> b.getStatus() == Booking.BookingStatus.CONFIRMED)

@@ -5,6 +5,7 @@ import com.innbucks.bookingservice.client.UserServiceClient;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.CustomerTierResponseDTO;
 import com.innbucks.bookingservice.dto.TierViolationData;
+import com.innbucks.bookingservice.util.MsisdnMasking;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
@@ -95,7 +96,7 @@ public class TierAccessInterceptor implements HandlerInterceptor {
             return result.getData().getCurrentTier();
         } catch (Exception ex) {
             log.warn("Failed to resolve customer tier from user-service phoneNumber={} message={}",
-                    phoneNumber, ex.getMessage());
+                    MsisdnMasking.mask(phoneNumber), ex.getMessage());
             return 0;
         }
     }

@@ -2,6 +2,7 @@ package com.innbucks.userservice.integration;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.innbucks.userservice.config.CorrelationIdPropagatingInterceptor;
+import com.innbucks.userservice.util.MsisdnMasking;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.client.loadbalancer.LoadBalanced;
@@ -102,11 +103,11 @@ public class LoyaltyServiceClient {
                     .body(java.util.Map.of("phoneNumber", phoneNumber))
                     .retrieve()
                     .toBodilessEntity();
-            log.info("Loyalty promote webhook OK phone={}", phoneNumber);
+            log.info("Loyalty promote webhook OK phone={}", MsisdnMasking.mask(phoneNumber));
             return true;
         } catch (Exception ex) {
             // Don't rethrow — registration succeeds even if loyalty is down.
-            log.warn("Loyalty promote webhook failed phone={} error={}", phoneNumber, ex.getMessage());
+            log.warn("Loyalty promote webhook failed phone={} error={}", MsisdnMasking.mask(phoneNumber), ex.getMessage());
             return false;
         }
     }

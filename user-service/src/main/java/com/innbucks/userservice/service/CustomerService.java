@@ -3,6 +3,7 @@ package com.innbucks.userservice.service;
 import com.innbucks.userservice.client.DepositAccount;
 import com.innbucks.userservice.client.OradianClient;
 import com.innbucks.userservice.client.OradianClientException;
+import com.innbucks.userservice.util.MsisdnMasking;
 import com.innbucks.userservice.client.OradianCustomerRequest;
 import com.innbucks.userservice.client.OradianCustomerResponse;
 import com.innbucks.userservice.dto.*;
@@ -46,7 +47,7 @@ public class CustomerService {
      */
     @Transactional
     public CustomerRegistrationResponseDTO registerTier1(CustomerTier1RegisterDTO request) {
-        log.info("Customer tier 1 registration phone={}", request.getPhoneNumber());
+        log.info("Customer tier 1 registration phone={}", MsisdnMasking.mask(request.getPhoneNumber()));
         if (userRepository.existsByPhoneNumber(request.getPhoneNumber())) {
             throw new RuntimeException("Phone number already registered");
         }
@@ -149,7 +150,7 @@ public class CustomerService {
         customerProfileRepository.save(profile);
 
         log.info("Tier-2 mirrored to Oradian phone={} userId={} oradianClientId={} externalId={}",
-                user.getPhoneNumber(),
+                MsisdnMasking.mask(user.getPhoneNumber()),
                 user.getId(),
                 oradian.getOradianClientId(),
                 oradian.getOradianExternalId());

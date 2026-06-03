@@ -1,6 +1,7 @@
 package com.innbucks.userservice.controller;
 
 import com.innbucks.userservice.client.DepositAccount;
+import com.innbucks.userservice.util.MsisdnMasking;
 import com.innbucks.userservice.dto.*;
 import com.innbucks.userservice.security.JwtUtil;
 import com.innbucks.userservice.service.AuditContext;
@@ -628,7 +629,7 @@ public class AuthController {
     })
     public ResponseEntity<ApiResult<CustomerTierResponseDTO>> getCustomerTier(
             @RequestParam("phoneNumber") String phoneNumber) {
-        log.info("Get customer tier phone={}", phoneNumber);
+        log.info("Get customer tier phone={}", MsisdnMasking.mask(phoneNumber));
         CustomerTierResponseDTO response = customerService.getCustomerTierByPhoneNumber(phoneNumber);
         return ResponseEntity.ok(ApiResult.ok("Customer tier retrieved", response));
     }
@@ -701,7 +702,7 @@ public class AuthController {
                     .body(ApiResult.error(HttpStatus.BAD_REQUEST,
                             "Token has no phoneNumber claim; only CUSTOMER tokens can call /auth/customer/deposits"));
         }
-        log.info("GET /auth/customer/deposits phoneNumber={}", phoneNumber);
+        log.info("GET /auth/customer/deposits phoneNumber={}", MsisdnMasking.mask(phoneNumber));
         List<DepositAccount> deposits = customerService.getDepositsForCustomer(phoneNumber);
         return ResponseEntity.ok(ApiResult.ok("Deposits retrieved", deposits));
     }
@@ -758,7 +759,7 @@ public class AuthController {
     })
     public ResponseEntity<ApiResult<List<CustomerSendMoneyDetail>>> getCustomerSendMoneyDetails(
             @PathVariable String customerPhoneNumber) {
-        log.info("GET /auth/customer/send-money/details phoneNumber={}", customerPhoneNumber);
+        log.info("GET /auth/customer/send-money/details phoneNumber={}", MsisdnMasking.mask(customerPhoneNumber));
         List<CustomerSendMoneyDetail> details =
                 customerService.getSendMoneyDetailsForCustomer(customerPhoneNumber);
         return ResponseEntity.ok(ApiResult.ok("Customer Details retrieved", details));
@@ -797,7 +798,7 @@ public class AuthController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429", description = "Retry quota exceeded — try again after the lockout expires")
     })
     public ResponseEntity<ApiResult<Void>> requestOtp(@Valid @RequestBody OtpRequestDTO request) {
-        log.info("OTP request phone={}", request.getPhoneNumber());
+        log.info("OTP request phone={}", MsisdnMasking.mask(request.getPhoneNumber()));
         try {
             otpService.sendOtp(request.getPhoneNumber());
         } catch (OtpService.OtpRateLimitException e) {
@@ -834,7 +835,7 @@ public class AuthController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "OTP invalid or expired")
     })
     public ResponseEntity<ApiResult<Void>> verifyOtp(@Valid @RequestBody OtpVerifyDTO request) {
-        log.info("OTP verify phone={}", request.getPhoneNumber());
+        log.info("OTP verify phone={}", MsisdnMasking.mask(request.getPhoneNumber()));
         boolean ok = otpService.verifyOtp(request.getPhoneNumber(), request.getCode());
         if (!ok) {
             return ResponseEntity.badRequest()

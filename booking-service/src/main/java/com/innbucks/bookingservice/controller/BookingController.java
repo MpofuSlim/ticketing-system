@@ -1,6 +1,7 @@
 package com.innbucks.bookingservice.controller;
 
 import com.innbucks.bookingservice.dto.ApiResult;
+import com.innbucks.bookingservice.util.MsisdnMasking;
 import com.innbucks.bookingservice.dto.BookingResponseDTO;
 import com.innbucks.bookingservice.dto.CategoryBookingDTO;
 import com.innbucks.bookingservice.dto.ConfirmBookingRequestDTO;
@@ -135,7 +136,7 @@ public class BookingController {
                     userServiceClient.getCustomerTier(phoneNumber);
             tierData = result == null ? null : result.getData();
         } catch (Exception ex) {
-            log.warn("user-service tier lookup failed phoneNumber={} cause={}", phoneNumber, ex.toString());
+            log.warn("user-service tier lookup failed phoneNumber={} cause={}", MsisdnMasking.mask(phoneNumber), ex.toString());
             tierData = null;
         }
         if (tierData == null) {
@@ -153,7 +154,7 @@ public class BookingController {
             userEmail = null;
         }
         log.info("POST /bookings userEmail={} tier={} phoneNumber={} eventId={} seats={}",
-                userEmail, tier, phoneNumber, request.getEventId(), request.getSeats().size());
+                userEmail, tier, MsisdnMasking.mask(phoneNumber), request.getEventId(), request.getSeats().size());
         BookingResponseDTO created = bookingService.createBooking(userEmail, tier, phoneNumber, request);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Booking created successfully", created));
@@ -579,7 +580,7 @@ public class BookingController {
     })
     public ResponseEntity<ApiResult<List<BookingResponseDTO>>> getBookingsByPhoneNumber(
             @PathVariable String phoneNumber) {
-        log.debug("GET /bookings/phone/{}", phoneNumber);
+        log.debug("GET /bookings/phone/{}", MsisdnMasking.mask(phoneNumber));
         return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully",
                 bookingService.getActiveByPhoneNumber(phoneNumber)));
     }

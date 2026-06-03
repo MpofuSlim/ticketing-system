@@ -3,6 +3,7 @@ package innbucks.paymentservice.client;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import innbucks.paymentservice.config.CorrelationIdPropagatingInterceptor;
+import innbucks.paymentservice.util.MsisdnMasking;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.client.loadbalancer.LoadBalanced;
@@ -96,11 +97,11 @@ public class LoyaltyServiceClient {
         } catch (RestClientResponseException e) {
             String detail = parseErrorMessage(e.getResponseBodyAsString()).orElse(e.getStatusText());
             log.warn("loyalty shop-checkout failed shopId={} msisdn={} status={} detail={}",
-                    shopId, msisdn, e.getStatusCode().value(), detail);
+                    shopId, MsisdnMasking.mask(msisdn), e.getStatusCode().value(), detail);
             throw new LoyaltyCheckoutException(detail, e.getStatusCode().value());
         } catch (Exception e) {
             log.warn("loyalty shop-checkout errored shopId={} msisdn={} cause={}",
-                    shopId, msisdn, e.toString());
+                    shopId, MsisdnMasking.mask(msisdn), e.toString());
             throw new LoyaltyCheckoutException("Unable to reach loyalty-service for checkout", 503);
         }
     }
