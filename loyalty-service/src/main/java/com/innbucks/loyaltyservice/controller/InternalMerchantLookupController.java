@@ -3,6 +3,7 @@ package com.innbucks.loyaltyservice.controller;
 import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.entity.Shop;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
+import com.innbucks.loyaltyservice.util.MsisdnMasking;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
 import com.innbucks.loyaltyservice.repository.ShopRepository;
 import com.innbucks.loyaltyservice.service.ShopCheckoutService;
@@ -128,7 +129,7 @@ public class InternalMerchantLookupController {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", "phoneNumber is required"));
         }
         int promoted = userService.promoteByPhone(phone);
-        log.info("Promoted {} PENDING LoyaltyUser(s) for phone={}", promoted, phone);
+        log.info("Promoted {} PENDING LoyaltyUser(s) for phone={}", promoted, MsisdnMasking.mask(phone));
         return ResponseEntity.ok(Map.of("phoneNumber", phone, "promoted", promoted));
     }
 

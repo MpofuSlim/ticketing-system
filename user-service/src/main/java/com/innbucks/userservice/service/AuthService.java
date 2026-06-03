@@ -3,6 +3,7 @@ package com.innbucks.userservice.service;
 import com.innbucks.userservice.dto.*;
 import com.innbucks.userservice.entity.*;
 import com.innbucks.userservice.repository.*;
+import com.innbucks.userservice.util.MsisdnMasking;
 import com.innbucks.userservice.security.JwtUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -101,7 +102,7 @@ public class AuthService {
             throw new RuntimeException("Email already registered");
         }
         if (userRepository.existsByPhoneNumber(request.getPhoneNumber())) {
-            log.warn("Registration failed, phone already registered phone={}", request.getPhoneNumber());
+            log.warn("Registration failed, phone already registered phone={}", MsisdnMasking.mask(request.getPhoneNumber()));
             throw new RuntimeException("Phone number already registered");
         }
 

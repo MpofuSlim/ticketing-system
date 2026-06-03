@@ -1,6 +1,7 @@
 package com.innbucks.userservice.service;
 
 import com.innbucks.userservice.client.NotificationDeliveryException;
+import com.innbucks.userservice.util.MsisdnMasking;
 import com.innbucks.userservice.client.SmsNotificationClient;
 import com.innbucks.userservice.client.WhatsAppNotificationClient;
 import com.innbucks.userservice.entity.CustomerProfile;
@@ -72,20 +73,20 @@ public class OtpService {
         if (consumed > 0) {
             retryRepository.findByPhoneNumber(phoneNumber).ifPresent(retryRepository::delete);
             finalizeVerification(phoneNumber);
-            log.info("OTP verified phone={}", phoneNumber);
+            log.info("OTP verified phone={}", MsisdnMasking.mask(phoneNumber));
             return true;
         }
 
         otpRepository.findByPhoneNumber(phoneNumber).ifPresent(otp -> {
             otp.setFailedAttempts(otp.getFailedAttempts() + 1);
             if (otp.getFailedAttempts() >= MAX_FAILED_VERIFICATIONS) {
-                log.warn("OTP invalidated after {} failed attempts phone={}", otp.getFailedAttempts(), phoneNumber);
+                log.warn("OTP invalidated after {} failed attempts phone={}", otp.getFailedAttempts(), MsisdnMasking.mask(phoneNumber));
                 otpRepository.delete(otp);
             } else {
                 otpRepository.save(otp);
             }
         });
-        log.warn("OTP verification failed phone={}", phoneNumber);
+        log.warn("OTP verification failed phone={}", MsisdnMasking.mask(phoneNumber));
         return false;
     }
 
@@ -158,12 +159,12 @@ public class OtpService {
                 + " minutes. Do not share this code with anyone.";
         try {
             smsNotificationClient.sendSms(phoneNumber, message, "OTP-" + System.currentTimeMillis());
-            log.info("[OTP] dispatched via SMS to phone={}", phoneNumber);
+            log.info("[OTP] dispatched via SMS to phone={}", MsisdnMasking.mask(phoneNumber));
         } catch (NotificationDeliveryException smsEx) {
             log.warn("[OTP] SMS delivery failed for phone={}, falling back to WhatsApp: {}",
-                    phoneNumber, smsEx.getMessage());
+                    MsisdnMasking.mask(phoneNumber), smsEx.getMessage());
             whatsAppNotificationClient.sendCustomNotification(phoneNumber, message);
-            log.info("[OTP] dispatched via WhatsApp fallback to phone={}", phoneNumber);
+            log.info("[OTP] dispatched via WhatsApp fallback to phone={}", MsisdnMasking.mask(phoneNumber));
         }
     }
 
@@ -202,7 +203,7 @@ public class OtpService {
             customerProfileRepository.save(profile);
             pendingRegistrationRepository.delete(pending);
             log.info("Customer account materialised from pending registration phone={} userId={}",
-                    phoneNumber, user.getId());
+                    MsisdnMasking.mask(phoneNumber), user.getId());
             // Tell loyalty-service this phone has now registered so every
             // PENDING LoyaltyUser row matching it (created by prior voucher
             // issues, transactions, P2P transfers) flips ACTIVE and the

@@ -1,6 +1,7 @@
 package com.innbucks.userservice.client;
 
 import com.innbucks.userservice.config.OradianProperties;
+import com.innbucks.userservice.util.MsisdnMasking;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.ParameterizedTypeReference;
@@ -60,19 +61,19 @@ public class OradianClient {
                     .retrieve()
                     .body(OradianCustomerResponse.class);
             log.info("Oradian create succeeded msisdn={} customerId={} oradianClientId={} idemKey={}",
-                    request.getMsisdn(),
+                    MsisdnMasking.mask(request.getMsisdn()),
                     response != null ? response.getCustomerId() : null,
                     response != null ? response.getOradianClientId() : null,
                     idempotencyKey);
             return response;
         } catch (RestClientResponseException ex) {
             log.warn("Oradian create failed msisdn={} idemKey={} status={} body={}",
-                    request.getMsisdn(), idempotencyKey, ex.getStatusCode(), ex.getResponseBodyAsString());
+                    MsisdnMasking.mask(request.getMsisdn()), idempotencyKey, ex.getStatusCode(), ex.getResponseBodyAsString());
             throw new OradianClientException(
                     "Oradian middleware rejected the customer create: HTTP " + ex.getStatusCode().value(), ex);
         } catch (RuntimeException ex) {
             log.warn("Oradian create failed msisdn={} idemKey={} message={}",
-                    request.getMsisdn(), idempotencyKey, ex.getMessage());
+                    MsisdnMasking.mask(request.getMsisdn()), idempotencyKey, ex.getMessage());
             throw new OradianClientException(
                     "Oradian middleware is unreachable: " + ex.getMessage(), ex);
         }
@@ -96,15 +97,15 @@ public class OradianClient {
                     .retrieve()
                     .body(new ParameterizedTypeReference<List<DepositAccount>>() {});
             log.info("Oradian deposits lookup succeeded msisdn={} count={}",
-                    msisdn, response == null ? 0 : response.size());
+                    MsisdnMasking.mask(msisdn), response == null ? 0 : response.size());
             return response == null ? List.of() : response;
         } catch (RestClientResponseException ex) {
             log.warn("Oradian deposits lookup failed msisdn={} status={} body={}",
-                    msisdn, ex.getStatusCode(), ex.getResponseBodyAsString());
+                    MsisdnMasking.mask(msisdn), ex.getStatusCode(), ex.getResponseBodyAsString());
             throw new OradianClientException(
                     "Oradian middleware rejected the deposits lookup: HTTP " + ex.getStatusCode().value(), ex);
         } catch (RuntimeException ex) {
-            log.warn("Oradian deposits lookup failed msisdn={} message={}", msisdn, ex.getMessage());
+            log.warn("Oradian deposits lookup failed msisdn={} message={}", MsisdnMasking.mask(msisdn), ex.getMessage());
             throw new OradianClientException(
                     "Oradian middleware is unreachable: " + ex.getMessage(), ex);
         }

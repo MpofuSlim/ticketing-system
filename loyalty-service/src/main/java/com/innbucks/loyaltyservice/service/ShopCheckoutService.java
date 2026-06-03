@@ -3,6 +3,7 @@ package com.innbucks.loyaltyservice.service;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.LoyaltyUser;
 import com.innbucks.loyaltyservice.entity.Merchant;
+import com.innbucks.loyaltyservice.util.MsisdnMasking;
 import com.innbucks.loyaltyservice.entity.Shop;
 import com.innbucks.loyaltyservice.entity.TransactionType;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
@@ -127,7 +128,7 @@ public class ShopCheckoutService {
         }
 
         log.info("Shop checkout shopId={} merchantId={} phone={} cash={} pointsRedeemed={} pointsEarned={} balance={}",
-                shopId, merchantId, phoneNumber, cashAmount, pointsRedeemed, pointsEarned, balance);
+                shopId, merchantId, MsisdnMasking.mask(phoneNumber), cashAmount, pointsRedeemed, pointsEarned, balance);
 
         return new Result(shopId, merchantId, tenantId, user.getId(),
                 cashAmount == null ? BigDecimal.ZERO : cashAmount,
