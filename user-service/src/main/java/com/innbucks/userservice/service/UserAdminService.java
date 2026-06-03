@@ -11,6 +11,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Map;
+
 /**
  * Service-layer home for SUPER_ADMIN-scoped user-administration operations.
  *
@@ -36,9 +38,19 @@ public class UserAdminService {
     private final PasswordEncoder passwordEncoder;
     private final WhatsAppNotificationClient whatsAppNotificationClient;
     private final SmsNotificationClient smsNotificationClient;
+    private final AuditService auditService;
+
+    /**
+     * Backward-compatible overload used by unit tests / callers that don't have
+     * an HTTP request context. The caller's identity is recorded as "SYSTEM"
+     * and the audit row carries no IP / user-agent.
+     */
+    public User setActive(Long id, boolean active) {
+        return setActive(id, active, null, AuditContext.none());
+    }
 
     @Transactional
-    public User setActive(Long id, boolean active) {
+    public User setActive(Long id, boolean active, String adminEmail, AuditContext auditContext) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new NotFoundException("User not found: " + id));
 
@@ -50,7 +62,8 @@ public class UserAdminService {
         boolean firstApproval = active && !user.isApproved();
 
         // Idempotent: a retried call sees the same outcome without a write, but
-        // must never short-circuit a still-pending first approval.
+        // must never short-circuit a still-pending first approval. No audit
+        // row either — the no-op didn't change observable state.
         if (user.isActive() == active && !firstApproval) {
             log.info("setActive no-op userId={} active={}", id, active);
             return user;
@@ -67,10 +80,41 @@ public class UserAdminService {
         User saved = userRepository.save(user);
         log.info("User {} userId={}", active ? "activated" : "deactivated", id);
 
+        recordAudit(saved, firstApproval, active, adminEmail, auditContext);
+
         if (firstApproval) {
             notifyApproval(saved);
         }
         return saved;
+    }
+
+    /**
+     * Append an audit row covering the SUPER_ADMIN actor + the user whose
+     * status changed. AuditService runs in REQUIRES_NEW + swallows exceptions
+     * so a transient DB hiccup on the audit path can't reject the
+     * already-committed activation; operators reading logs see the
+     * {@code AUDIT_WRITE_FAILED} marker.
+     */
+    private void recordAudit(User target, boolean firstApproval, boolean active,
+                             String adminEmail, AuditContext auditContext) {
+        AuditEventType type = firstApproval
+                ? AuditEventType.USER_APPROVED
+                : (active ? AuditEventType.USER_ACTIVATED : AuditEventType.USER_DEACTIVATED);
+        // adminEmail null when called via the no-arg overload (background /
+        // tests). Surface that as actor_type=SYSTEM so the row still lands.
+        String actorId = adminEmail == null ? "system" : adminEmail;
+        String actorType = adminEmail == null
+                ? AuditService.ACTOR_TYPE_SYSTEM
+                : AuditService.ACTOR_TYPE_USER;
+        auditService.recordSuccess(
+                type,
+                actorId, actorType,
+                String.valueOf(target.getId()), AuditService.TARGET_TYPE_USER,
+                Map.of(
+                        "targetEmail", target.getEmail() == null ? "" : target.getEmail(),
+                        "active", active,
+                        "mustChangePassword", target.isMustChangePassword()),
+                auditContext == null ? AuditContext.none() : auditContext);
     }
 
     /**
