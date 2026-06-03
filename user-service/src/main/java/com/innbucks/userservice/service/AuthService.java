@@ -135,6 +135,7 @@ public class AuthService {
                     .user(user)
                     .businessName(request.getBusinessName())
                     .businessAddress(request.getBusinessAddress())
+                    .businessEmail(request.getBusinessEmail())
                     .bpoNumber(request.getBpoNumber())
                     .build();
             tenantProfileRepository.save(profile);

@@ -196,6 +196,7 @@ class AuthServiceTest {
         req.setBusiness(true);
         req.setBusinessName("InnBucks Ticketing Ltd");
         req.setBusinessAddress("123 Samora Machel Ave, Harare");
+        req.setBusinessEmail("accounts@innbucks.co.zw");
         req.setBpoNumber("12345");
 
         newService(userRepo, tenantRepo, encoder, jwt).register(req);
@@ -209,7 +210,36 @@ class AuthServiceTest {
         verify(tenantRepo).save(savedProfile.capture());
         assertEquals("InnBucks Ticketing Ltd", savedProfile.getValue().getBusinessName());
         assertEquals("123 Samora Machel Ave, Harare", savedProfile.getValue().getBusinessAddress());
+        // businessEmail now captured at registration so it surfaces as the
+        // organizer's email on event listings (was always null before).
+        assertEquals("accounts@innbucks.co.zw", savedProfile.getValue().getBusinessEmail());
         assertEquals("12345", savedProfile.getValue().getBpoNumber());
+    }
+
+    @Test
+    void register_businessAccount_businessEmailOptional_persistsNullWhenOmitted() {
+        UserRepository userRepo = mock(UserRepository.class);
+        TenantProfileRepository tenantRepo = mock(TenantProfileRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(userRepo.existsByEmail(any())).thenReturn(false);
+        when(userRepo.existsByPhoneNumber(any())).thenReturn(false);
+        when(encoder.encode(any())).thenReturn("hashed");
+
+        // Business account with the required fields but NO businessEmail — it's
+        // optional, so registration must succeed and the profile carries null.
+        RegisterRequestDTO req = baseRequest("biz2@example.com", "0777444444", "ticketing");
+        req.setBusiness(true);
+        req.setBusinessName("No Email Co");
+        req.setBusinessAddress("1 Nowhere St, Harare");
+        req.setBpoNumber("67890");
+
+        newService(userRepo, tenantRepo, encoder, jwt).register(req);
+
+        ArgumentCaptor<TenantProfile> savedProfile = ArgumentCaptor.forClass(TenantProfile.class);
+        verify(tenantRepo).save(savedProfile.capture());
+        assertEquals("No Email Co", savedProfile.getValue().getBusinessName());
+        assertNull(savedProfile.getValue().getBusinessEmail());
     }
 
     @Test
