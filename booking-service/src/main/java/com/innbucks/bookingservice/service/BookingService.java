@@ -18,6 +18,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -194,7 +195,26 @@ public class BookingService {
                         .build())
                 .collect(Collectors.toList());
 
-        bookingItemRepository.saveAll(items);
+        // saveAllAndFlush (not saveAll) forces the INSERT to hit the DB now,
+        // inside this try-block, instead of deferring to transaction commit
+        // where we couldn't catch the result. The partial unique index
+        // uq_active_booking_item_per_seat (V5) is the last line of defence
+        // against the in-flight seat race the findActiveBySeatIds pre-check
+        // above can't see: two concurrent createBooking calls picking the
+        // same seat are serialised on the index, and the loser's insert is
+        // rejected. Translate that into the SAME 409 the pre-check uses, so a
+        // race-loser gets "seat already booked" (retryable) rather than the
+        // generic 500 the DataIntegrityViolationException would otherwise
+        // become via the RuntimeException catch-all — and so peak-contention
+        // log noise stays at WARN, not ERROR.
+        try {
+            bookingItemRepository.saveAllAndFlush(items);
+        } catch (DataIntegrityViolationException e) {
+            log.warn("Booking create lost the seat race (DB unique constraint) userEmail={} seatIds={}",
+                    userEmail, assignedSeatIds);
+            throw new BookingConflictException(
+                    "One or more seats are already booked: " + assignedSeatIds);
+        }
         booking.setItems(items);
         bookingRepository.save(booking);
 

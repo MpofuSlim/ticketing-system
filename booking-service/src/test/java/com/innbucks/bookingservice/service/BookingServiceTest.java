@@ -138,7 +138,36 @@ class BookingServiceTest {
                 () -> service.createBooking("user@example.com", 4, null, fx.request));
         assertTrue(ex.getMessage().toLowerCase().contains("already booked"));
         verify(bookingRepo, never()).save(any());
-        verify(itemRepo, never()).saveAll(any());
+        verify(itemRepo, never()).saveAllAndFlush(any());
+    }
+
+    @Test
+    void createBooking_inFlightSeatRace_translatesUniqueViolationTo409Conflict() {
+        // The findActiveBySeatIds pre-check can't see a competing booking whose
+        // transaction hasn't committed yet — that race is caught only by the DB
+        // partial unique index (uq_active_booking_item_per_seat, V5). When the
+        // loser's insert is rejected, saveAllAndFlush throws
+        // DataIntegrityViolationException. The service MUST translate that into
+        // BookingConflictException (→ 409 "already booked", retryable), NOT let
+        // it bubble to the RuntimeException catch-all as a generic 500.
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        RequestFixture fx = request(new BigDecimal("20.00"));
+        BookingService service = newService(bookingRepo, itemRepo, stubClient(fx.lookups));
+
+        // Pre-check sees nothing (the competing tx is still in-flight), so we
+        // proceed to the insert — where the DB index rejects us.
+        when(itemRepo.findActiveBySeatIds(any(), eq(Booking.BookingStatus.CANCELLED)))
+                .thenReturn(List.of());
+        when(itemRepo.saveAllAndFlush(any()))
+                .thenThrow(new org.springframework.dao.DataIntegrityViolationException(
+                        "duplicate key value violates unique constraint \"uq_active_booking_item_per_seat\""));
+
+        com.innbucks.bookingservice.exception.BookingConflictException ex = assertThrows(
+                com.innbucks.bookingservice.exception.BookingConflictException.class,
+                () -> service.createBooking("user@example.com", 4, null, fx.request));
+        assertTrue(ex.getMessage().toLowerCase().contains("already booked"),
+                "race-loser must get the retryable 'already booked' conflict, got: " + ex.getMessage());
     }
 
     @Test
@@ -197,7 +226,7 @@ class BookingServiceTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<List<BookingItem>> itemsCaptor = ArgumentCaptor.forClass(List.class);
-        verify(itemRepo).saveAll(itemsCaptor.capture());
+        verify(itemRepo).saveAllAndFlush(itemsCaptor.capture());
         assertEquals(3, itemsCaptor.getValue().size());
         assertEquals(3, resp.getItems().size());
     }
@@ -217,7 +246,7 @@ class BookingServiceTest {
                 () -> service.createBooking("user@example.com", 4, null, fx.request));
         assertTrue(ex.getMessage().contains("does not belong to event"));
         verify(bookingRepo, never()).save(any());
-        verify(itemRepo, never()).saveAll(any());
+        verify(itemRepo, never()).saveAllAndFlush(any());
     }
 
     @Test
@@ -235,7 +264,7 @@ class BookingServiceTest {
                 () -> service.createBooking("user@example.com", 4, null, fx.request));
         assertTrue(ex.getMessage().toLowerCase().contains("no available seats"));
         verify(bookingRepo, never()).save(any());
-        verify(itemRepo, never()).saveAll(any());
+        verify(itemRepo, never()).saveAllAndFlush(any());
     }
 
     @Test
