@@ -235,15 +235,19 @@ public class BookingService {
                 .collect(Collectors.toList());
     }
 
-    // Returns the count of active (PENDING + CONFIRMED) booking items per
-    // eventId. event-service uses this to compute availableTickets on read so
-    // its responses tally with reality, without maintaining a stored counter.
+    // Returns the count of active (PENDING + CONFIRMED, i.e. anything not
+    // CANCELLED) booking items per eventId. event-service uses this to compute
+    // availableTickets on read so its responses tally with seat-service's
+    // category counter (which drops the instant a booking goes PENDING — the
+    // seat is LOCKED at that point). Counting only CONFIRMED here let the
+    // event card stay at "12 left" while the per-category card already said
+    // "10 left", confusing the customer.
     public List<EventActiveCountDTO> getActiveItemCountsByEvents(Collection<UUID> eventIds) {
         if (eventIds == null || eventIds.isEmpty()) {
             return List.of();
         }
         return bookingItemRepository
-                .countActiveItemsByEventIds(eventIds, Booking.BookingStatus.CONFIRMED)
+                .countActiveItemsByEventIds(eventIds, Booking.BookingStatus.CANCELLED)
                 .stream()
                 .map(p -> EventActiveCountDTO.builder()
                         .eventId(p.getEventId())
