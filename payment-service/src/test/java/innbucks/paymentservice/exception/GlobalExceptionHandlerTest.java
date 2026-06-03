@@ -9,6 +9,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.BeanPropertyBindingResult;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.lang.reflect.Method;
 import java.util.Map;
@@ -80,6 +81,16 @@ class GlobalExceptionHandlerTest {
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, resp.getStatusCode());
         assertEquals("internal error", resp.getBody().getMessage());
         assertFalse(resp.getBody().getMessage().toLowerCase().contains("map.of"));
+    }
+
+    @Test
+    void responseStatusException_honoursEmbeddedStatusAndReason_notSwallowedByCatchAll() {
+        // ResponseStatusException extends RuntimeException; without the
+        // dedicated handler the Exception catch-all swallows it as 500.
+        ResponseEntity<ApiResult<Void>> resp = handler.handle(
+                new ResponseStatusException(HttpStatus.BAD_REQUEST, "amount required"));
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
+        assertEquals("amount required", resp.getBody().getMessage());
     }
 
     @Test

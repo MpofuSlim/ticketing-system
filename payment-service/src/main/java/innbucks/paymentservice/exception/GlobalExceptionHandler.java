@@ -10,6 +10,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -135,6 +136,27 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(status).body(ApiResult.<Void>builder()
                 .code(status.value() + " " + status.name())
                 .message(ex.getMessage() == null ? "booking confirm error" : ex.getMessage())
+                .data(null)
+                .build());
+    }
+
+    /**
+     * Spring's {@link ResponseStatusException} extends RuntimeException, so
+     * without this handler it would be swallowed by the {@code Exception}
+     * catch-all below and surface as a sanitised 500. Honour the embedded
+     * status / reason instead. Prefer the typed {@link BadRequestException}
+     * at throw sites; this is a defence-in-depth net for Spring's own /
+     * library code.
+     */
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<ApiResult<Void>> handle(ResponseStatusException ex) {
+        HttpStatus status = HttpStatus.resolve(ex.getStatusCode().value());
+        if (status == null) status = HttpStatus.INTERNAL_SERVER_ERROR;
+        String reason = ex.getReason() == null ? status.getReasonPhrase() : ex.getReason();
+        log.warn("ResponseStatusException status={} reason={}", status.value(), reason);
+        return ResponseEntity.status(status).body(ApiResult.<Void>builder()
+                .code(status.value() + " " + status.name())
+                .message(reason)
                 .data(null)
                 .build());
     }

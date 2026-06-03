@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.web.server.ResponseStatusException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -65,6 +66,17 @@ class GlobalExceptionHandlerTest {
         assertEquals(HttpStatus.FORBIDDEN, resp.getStatusCode());
         assertNotNull(resp.getBody());
         assertEquals("You are not authorized to update this event", resp.getBody().getMessage());
+    }
+
+    @Test
+    void handleResponseStatusException_honoursEmbeddedStatus_notSwallowedByRuntimeCatchAll() {
+        // ResponseStatusException extends RuntimeException, so without the
+        // dedicated handler the RuntimeException catch-all swallows it and
+        // surfaces every deliberate 4xx throw as a sanitised 500.
+        ResponseEntity<ApiResult<Void>> resp = handler.handleResponseStatus(
+                new ResponseStatusException(HttpStatus.NOT_FOUND, "Event not found"));
+        assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
+        assertEquals("Event not found", resp.getBody().getMessage());
     }
 
     @Test

@@ -1,6 +1,7 @@
 package com.innbucks.bookingservice.controller;
 
 import com.innbucks.bookingservice.dto.ApiResult;
+import com.innbucks.bookingservice.exception.BadRequestException;
 import com.innbucks.bookingservice.util.MsisdnMasking;
 import com.innbucks.bookingservice.dto.BookingResponseDTO;
 import com.innbucks.bookingservice.dto.CategoryBookingDTO;
@@ -51,6 +52,16 @@ public class BookingController {
 
     private final BookingService bookingService;
     private final com.innbucks.bookingservice.client.UserServiceClient userServiceClient;
+
+    /**
+     * Default tier applied to a booking when the caller's phone isn't
+     * registered with user-service, or user-service is unreachable. Matches
+     * the existing minimum bookable rung (2 = max 2 seats per booking), so
+     * a guest can book up to a pair of seats without registering first. A
+     * registered customer with a higher real tier (3 or 4) gets their actual
+     * tier whenever user-service answers, unlocking the larger caps.
+     */
+    private static final int GUEST_TIER = 2;
 
     /**
      * Shared secret payment-service must present on PATCH
@@ -122,14 +133,20 @@ public class BookingController {
             phoneNumber = request.getPhoneNumber();
         }
         if (phoneNumber == null || phoneNumber.isBlank()) {
-            throw new org.springframework.web.server.ResponseStatusException(
-                    HttpStatus.BAD_REQUEST,
-                    "phoneNumber is required");
+            throw new BadRequestException("phoneNumber is required");
         }
 
-        // Look up the customer's current tier in user-service. If the phone
-        // isn't registered there, refuse the booking with a 404 — guests
-        // must register (at least tier 1) before booking online.
+        // Look up the customer's current tier in user-service. A null result
+        // covers two cases that both mean the same thing here:
+        //   (a) the phone isn't registered — they're a true guest;
+        //   (b) user-service is unreachable / the circuit is open.
+        // In both cases we DO NOT block the booking — guests are allowed to
+        // book without registering (the registered-only requirement is on
+        // RETRIEVAL, enforced by the GET endpoints). The fallback tier is
+        // GUEST_TIER (2 = the existing minimum bookable rung, max 2 seats per
+        // booking). Registered customers with a higher real tier (3 or 4)
+        // get their actual tier when user-service answers, unlocking the
+        // larger per-booking seat caps.
         com.innbucks.bookingservice.dto.CustomerTierResponseDTO tierData;
         try {
             com.innbucks.bookingservice.dto.ApiResult<com.innbucks.bookingservice.dto.CustomerTierResponseDTO> result =
@@ -139,16 +156,21 @@ public class BookingController {
             log.warn("user-service tier lookup failed phoneNumber={} cause={}", MsisdnMasking.mask(phoneNumber), ex.toString());
             tierData = null;
         }
+        int tier;
+        String tierEmail;
         if (tierData == null) {
-            throw new org.springframework.web.server.ResponseStatusException(
-                    HttpStatus.NOT_FOUND,
-                    "Phone number " + phoneNumber + " is not registered. Please register before booking.");
+            tier = GUEST_TIER;
+            tierEmail = null;
+            log.info("Guest booking path phoneNumber={} defaultTier={}",
+                    MsisdnMasking.mask(phoneNumber), tier);
+        } else {
+            tier = tierData.getCurrentTier();
+            tierEmail = tierData.getEmail();
         }
-        int tier = tierData.getCurrentTier();
 
         String userEmail = authenticated ? authentication.getName() : request.getUserEmail();
         if (userEmail == null || userEmail.isBlank()) {
-            userEmail = tierData.getEmail();
+            userEmail = tierEmail;
         }
         if (userEmail != null && userEmail.isBlank()) {
             userEmail = null;

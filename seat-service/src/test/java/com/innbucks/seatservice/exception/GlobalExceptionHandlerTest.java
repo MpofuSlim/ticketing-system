@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
+import org.springframework.web.server.ResponseStatusException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -65,6 +66,16 @@ class GlobalExceptionHandlerTest {
         assertEquals(HttpStatus.FORBIDDEN, resp.getStatusCode());
         assertNotNull(resp.getBody());
         assertEquals("You cannot release a lock that belongs to another user", resp.getBody().getMessage());
+    }
+
+    @Test
+    void handleResponseStatusException_honoursEmbeddedStatus_notSwallowedByRuntimeCatchAll() {
+        // ResponseStatusException extends RuntimeException; without the
+        // dedicated handler the RuntimeException catch-all swallows it as 500.
+        ResponseEntity<ApiResult<Void>> resp = handler.handleResponseStatus(
+                new ResponseStatusException(HttpStatus.CONFLICT, "Seat A1 not available"));
+        assertEquals(HttpStatus.CONFLICT, resp.getStatusCode());
+        assertEquals("Seat A1 not available", resp.getBody().getMessage());
     }
 
     @Test

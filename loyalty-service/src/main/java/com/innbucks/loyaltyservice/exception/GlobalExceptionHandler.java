@@ -8,6 +8,7 @@ import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Instant;
 import java.util.Map;
@@ -77,6 +78,28 @@ public class GlobalExceptionHandler {
                         .message("Validation failed")
                         .data(fields)
                         .build());
+    }
+
+    /**
+     * Spring's {@link ResponseStatusException} extends RuntimeException, so
+     * without this handler it would be swallowed by the {@code Exception}
+     * catch-all below and surface as a sanitised 500. Honour the embedded
+     * status / reason instead. Prefer the typed {@link LoyaltyException}
+     * factories at throw sites; this is a defence-in-depth net for Spring's
+     * own / library code.
+     */
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<Map<String, Object>> handle(ResponseStatusException ex) {
+        HttpStatus status = HttpStatus.resolve(ex.getStatusCode().value());
+        if (status == null) status = HttpStatus.INTERNAL_SERVER_ERROR;
+        String reason = ex.getReason() == null ? status.getReasonPhrase() : ex.getReason();
+        log.warn("ResponseStatusException status={} reason={}", status.value(), reason);
+        return ResponseEntity.status(status).body(Map.of(
+                "timestamp", Instant.now().toString(),
+                "status", status.value(),
+                "code", status.name(),
+                "message", reason
+        ));
     }
 
     @ExceptionHandler(Exception.class)

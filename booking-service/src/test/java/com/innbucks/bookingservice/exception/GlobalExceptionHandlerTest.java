@@ -5,6 +5,7 @@ import com.innbucks.bookingservice.dto.TierViolationData;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.server.ResponseStatusException;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -64,6 +65,32 @@ class GlobalExceptionHandlerTest {
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, resp.getStatusCode());
         assertNotNull(resp.getBody());
         assertEquals("event-service down", resp.getBody().getMessage());
+    }
+
+    @Test
+    void handleResponseStatusException_honoursEmbeddedStatusAndReason_notSwallowedByRuntimeCatchAll() {
+        // Regression for the production incident: a controller throwing
+        // `new ResponseStatusException(HttpStatus.NOT_FOUND, "...")` was being
+        // swallowed by the @ExceptionHandler(RuntimeException.class) catch-all
+        // (ResponseStatusException extends RuntimeException) and surfaced as a
+        // sanitised 500 — turning every deliberate 4xx throw into an opaque
+        // server error in the log + a misleading client status.
+        ResponseEntity<ApiResult<Void>> resp = new GlobalExceptionHandler()
+                .handleResponseStatus(new ResponseStatusException(HttpStatus.NOT_FOUND, "Phone not registered"));
+        assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
+        assertNotNull(resp.getBody());
+        assertEquals("Phone not registered", resp.getBody().getMessage());
+    }
+
+    @Test
+    void handleResponseStatusException_fallsBackToStatusReasonPhrase_whenReasonIsNull() {
+        ResponseEntity<ApiResult<Void>> resp = new GlobalExceptionHandler()
+                .handleResponseStatus(new ResponseStatusException(HttpStatus.CONFLICT));
+        assertEquals(HttpStatus.CONFLICT, resp.getStatusCode());
+        assertNotNull(resp.getBody());
+        // Reason phrase from HttpStatus when ex.getReason() is null — never a
+        // null body.message that would crash the FE's renderer.
+        assertEquals("Conflict", resp.getBody().getMessage());
     }
 
     @Test
