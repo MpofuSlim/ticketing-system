@@ -27,4 +27,25 @@ public interface OutboxEventRepository extends JpaRepository<OutboxEvent, UUID> 
 
     /** Backs the queue-depth gauge OutboxEventDrainer publishes each scrape. */
     long countByStatus(OutboxEvent.Status status);
+
+    /**
+     * Page of {@code published} row IDs older than {@code cutoff}, used by
+     * {@link OutboxEventPurgeJob} to bound each purge batch. We return IDs
+     * (not entities) because the caller only needs them to feed
+     * {@code deleteAllByIdInBatch}, and IDs alone keep the hydrator out of
+     * the loop. Oldest-first so a sustained backlog drains FIFO and the
+     * partial index {@code idx_event_outbox_published_updated_at} (V11)
+     * stays on the cheap ASC scan path.
+     *
+     * <p>Status filter is hard-coded to {@code published} — {@code giving_up}
+     * rows must NEVER be purged here (they're the operator-attention signal),
+     * and {@code pending} rows still belong to the drainer.
+     */
+    @Query("""
+            SELECT e.id FROM OutboxEvent e
+             WHERE e.status = com.innbucks.bookingservice.outbox.OutboxEvent.Status.published
+               AND e.updatedAt < :cutoff
+             ORDER BY e.updatedAt ASC
+            """)
+    List<UUID> findPublishedOlderThan(@Param("cutoff") LocalDateTime cutoff, Pageable pageable);
 }

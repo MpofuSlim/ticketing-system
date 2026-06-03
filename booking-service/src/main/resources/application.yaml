@@ -167,6 +167,25 @@ app:
     booking-created-topic: ${BOOKING_CREATED_TOPIC:booking.created}
     booking-confirmed-topic: ${BOOKING_CONFIRMED_TOPIC:booking.confirmed}
     booking-cancelled-topic: ${BOOKING_CANCELLED_TOPIC:booking.cancelled}
+  event-outbox:
+    # OutboxEventDrainer — how many rows it pulls per tick and how many
+    # attempts before flipping a row to giving_up. Keys also referenced
+    # from OutboxEventDrainer's @Value defaults; listing them here makes
+    # them discoverable.
+    batch-size: ${EVENT_OUTBOX_BATCH_SIZE:200}
+    max-attempts: ${EVENT_OUTBOX_MAX_ATTEMPTS:10}
+    interval-ms: ${EVENT_OUTBOX_INTERVAL_MS:5000}
+    initial-delay-ms: ${EVENT_OUTBOX_INITIAL_DELAY_MS:10000}
+    purge:
+      # OutboxEventPurgeJob deletes 'published' rows older than `retention`
+      # every `interval-ms`. Default: hourly, 7-day retention, 1k rows per
+      # batch. `pending` and `giving_up` rows are never touched. Set
+      # interval-ms to a very large number to effectively disable the job
+      # (the @Scheduled annotation requires a positive value).
+      retention: ${EVENT_OUTBOX_PURGE_RETENTION:P7D}
+      batch-size: ${EVENT_OUTBOX_PURGE_BATCH_SIZE:1000}
+      interval-ms: ${EVENT_OUTBOX_PURGE_INTERVAL_MS:3600000}
+      initial-delay-ms: ${EVENT_OUTBOX_PURGE_INITIAL_DELAY_MS:60000}
 
 jwt:
   secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
