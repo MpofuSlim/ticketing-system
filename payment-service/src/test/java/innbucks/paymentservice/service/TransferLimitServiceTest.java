@@ -1,5 +1,6 @@
 package innbucks.paymentservice.service;
 
+import innbucks.paymentservice.exception.BadRequestException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -52,7 +53,7 @@ class TransferLimitServiceTest {
         // "100001" lands here without burning a Redis round-trip.
         TransferLimitService svc = newService();
 
-        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+        BadRequestException ex = assertThrows(BadRequestException.class,
                 () -> svc.enforce(ACCOUNT, new BigDecimal("100001")));
         assertTrue(ex.getMessage().contains("Per-transaction limit"));
         verifyNoInteractions(redis);
@@ -93,7 +94,7 @@ class TransferLimitServiceTest {
         when(ops.increment(any(String.class), eq(units("60000")))).thenReturn(units("510000"));
         when(redis.expire(any(String.class), any(Duration.class))).thenReturn(true);
 
-        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+        BadRequestException ex = assertThrows(BadRequestException.class,
                 () -> newService().enforce(ACCOUNT, new BigDecimal("60000")));
 
         assertTrue(ex.getMessage().contains("Daily limit exceeded"));
@@ -117,7 +118,7 @@ class TransferLimitServiceTest {
         // One cent over the cap (using 4-decimal units): rejected.
         when(ops.increment(any(String.class), eq(units("0.0001"))))
                 .thenReturn(units("500000") + 1);
-        assertThrows(IllegalArgumentException.class,
+        assertThrows(BadRequestException.class,
                 () -> newService().enforce(ACCOUNT, new BigDecimal("0.0001")));
     }
 
@@ -131,7 +132,7 @@ class TransferLimitServiceTest {
         when(ops.increment(any(String.class), anyLong()))
                 .thenThrow(new RedisConnectionFailureException("connection refused"));
 
-        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+        BadRequestException ex = assertThrows(BadRequestException.class,
                 () -> newService().enforce(ACCOUNT, new BigDecimal("100")));
         assertTrue(ex.getMessage().contains("temporarily unavailable"),
                 "message must signal a retryable infrastructure issue, not a permanent rejection");
@@ -144,7 +145,7 @@ class TransferLimitServiceTest {
         // rather than allow the transfer past an unknown total.
         when(ops.increment(any(String.class), anyLong())).thenReturn(null);
 
-        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+        BadRequestException ex = assertThrows(BadRequestException.class,
                 () -> newService().enforce(ACCOUNT, new BigDecimal("100")));
         assertTrue(ex.getMessage().contains("temporarily unavailable"));
     }

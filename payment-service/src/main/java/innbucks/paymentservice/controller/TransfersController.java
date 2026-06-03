@@ -12,6 +12,7 @@ import innbucks.paymentservice.dto.TransactionHistoryResponse;
 import innbucks.paymentservice.dto.TransactionView;
 import innbucks.paymentservice.entity.Transaction;
 import innbucks.paymentservice.entity.TransactionType;
+import innbucks.paymentservice.exception.BadRequestException;
 import innbucks.paymentservice.repository.TransactionRepository;
 import innbucks.paymentservice.security.JwtUtil;
 import innbucks.paymentservice.service.TransactionService;
@@ -714,13 +715,13 @@ public class TransfersController {
         try {
             parsed = new BigDecimal(amount);
         } catch (NumberFormatException ex) {
-            throw new IllegalArgumentException("amount must be a valid decimal number");
+            throw new BadRequestException("amount must be a valid decimal number");
         }
         if (parsed.signum() <= 0) {
-            throw new IllegalArgumentException("amount must be greater than zero");
+            throw new BadRequestException("amount must be greater than zero");
         }
         if (parsed.scale() > 4) {
-            throw new IllegalArgumentException("amount must have at most 4 decimal places");
+            throw new BadRequestException("amount must have at most 4 decimal places");
         }
         return parsed;
     }

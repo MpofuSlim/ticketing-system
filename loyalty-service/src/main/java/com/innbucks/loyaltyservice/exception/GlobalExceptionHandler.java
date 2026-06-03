@@ -79,22 +79,21 @@ public class GlobalExceptionHandler {
                         .build());
     }
 
-    @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<Map<String, Object>> handle(IllegalArgumentException ex) {
-        return ResponseEntity.badRequest().body(Map.of(
-                "timestamp", Instant.now().toString(),
-                "status", 400,
-                "code", "BAD_REQUEST",
-                "message", ex.getMessage() == null ? "bad request" : ex.getMessage()
-        ));
-    }
-
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> handle(Exception ex) {
         // Don't swallow the cause: a 500 with an opaque body is hard enough to
         // diagnose in prod without the stack trace also being missing from the
         // logs. The response stays generic so we don't leak internals; the log
         // is where on-call goes to find the real problem.
+        //
+        // Note: this used to be preceded by an @ExceptionHandler(IllegalArgumentException)
+        // that returned 400 with the raw exception message. The 400-mapped
+        // path was unused — every deliberate 4xx in loyalty-service goes
+        // through LoyaltyException.{notFound,badRequest,conflict,forbidden} —
+        // so the handler only fired on accidental IAEs from the JDK / libraries,
+        // and leaked their (often-internal) messages to the client as a 400.
+        // Removed: an accidental IAE now falls through to here and produces
+        // the same sanitised 500 a NullPointerException would.
         log.error("Unhandled exception bubbled to GlobalExceptionHandler", ex);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
                 "timestamp", Instant.now().toString(),

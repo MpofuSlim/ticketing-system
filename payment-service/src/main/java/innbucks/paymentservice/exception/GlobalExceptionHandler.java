@@ -52,8 +52,18 @@ public class GlobalExceptionHandler {
                 .build());
     }
 
-    @ExceptionHandler(IllegalArgumentException.class)
-    public ResponseEntity<ApiResult<Void>> handle(IllegalArgumentException ex) {
+    /**
+     * Deliberate 4xx rejections from the service / controller layer (velocity
+     * caps, amount parsing, cross-field rules between paymentMethod and
+     * cash/points). Replaced the previous {@code @ExceptionHandler(IllegalArgumentException)}:
+     * that one returned 400 with the raw exception message and ALSO caught
+     * accidental JDK IAEs (e.g. {@code Map.of} with a null value), leaking
+     * their internal text to the client. The typed exception keeps only the
+     * intentional 4xx messages — accidental IAEs now fall to the sanitised
+     * 500 catch-all below.
+     */
+    @ExceptionHandler(BadRequestException.class)
+    public ResponseEntity<ApiResult<Void>> handle(BadRequestException ex) {
         return ResponseEntity.badRequest().body(ApiResult.<Void>builder()
                 .code("400 BAD_REQUEST")
                 .message(ex.getMessage() == null ? "bad request" : ex.getMessage())
