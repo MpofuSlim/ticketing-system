@@ -58,13 +58,53 @@ public class GlobalExceptionHandler {
                         "Seat was modified by another request. Please retry."));
     }
 
+    @ExceptionHandler(NotFoundException.class)
+    public ResponseEntity<ApiResult<Void>> handleNotFound(NotFoundException ex) {
+        log.warn("NotFound: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(ApiResult.error(HttpStatus.NOT_FOUND, ex.getMessage()));
+    }
+
+    @ExceptionHandler(BadRequestException.class)
+    public ResponseEntity<ApiResult<Void>> handleBadRequest(BadRequestException ex) {
+        log.warn("BadRequest: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResult.error(HttpStatus.BAD_REQUEST, ex.getMessage()));
+    }
+
+    @ExceptionHandler(ConflictException.class)
+    public ResponseEntity<ApiResult<Void>> handleConflict(ConflictException ex) {
+        log.warn("Conflict: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(ApiResult.error(HttpStatus.CONFLICT, ex.getMessage()));
+    }
+
+    @ExceptionHandler(ForbiddenException.class)
+    public ResponseEntity<ApiResult<Void>> handleForbidden(ForbiddenException ex) {
+        log.warn("Forbidden: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ApiResult.error(HttpStatus.FORBIDDEN, ex.getMessage()));
+    }
+
+    /**
+     * Catch-all for any RuntimeException that did NOT match a typed handler
+     * above. Pre-refactor this returned 400 with the raw exception message,
+     * which (a) misclassified genuine server bugs as client errors, (b) sniffed
+     * the message string for "not found" to upgrade to 404 — fragile across
+     * wording changes, and (c) leaked internal exception detail to whoever
+     * called the API. Now returns 500 with a generic message; the real cause
+     * is logged at ERROR with a stack trace so operators can still debug.
+     *
+     * <p>If you're hitting this handler from a legitimate 4xx case, introduce
+     * a typed exception ({@link NotFoundException}, {@link BadRequestException},
+     * {@link ConflictException}, {@link ForbiddenException}) at the throw site
+     * rather than widening this fallback.
+     */
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<ApiResult<Void>> handleRuntime(RuntimeException ex) {
-        log.warn("RuntimeException: {}", ex.getMessage());
-        HttpStatus status = ex.getMessage() != null && ex.getMessage().toLowerCase().contains("not found")
-                ? HttpStatus.NOT_FOUND
-                : HttpStatus.BAD_REQUEST;
-        return ResponseEntity.status(status)
-                .body(ApiResult.error(status, ex.getMessage()));
+        log.error("Unhandled RuntimeException — returning 500 to client", ex);
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                .body(ApiResult.error(HttpStatus.INTERNAL_SERVER_ERROR,
+                        "An unexpected error occurred. Please try again."));
     }
 }
