@@ -15,6 +15,8 @@ import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -23,6 +25,7 @@ import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.*;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -37,10 +40,23 @@ import java.util.UUID;
 @RequestMapping("/events")
 @RequiredArgsConstructor
 @Slf4j
+@Validated  // makes @Min/@Max on @RequestParam fire on pagination params (caps DoS via size=999999)
 @Tag(name = "Events", description = "Browse events publicly; tenants can create/update/delete events.")
 public class EventController {
 
     private final EventService eventService;
+
+    /**
+     * Upper bound on @RequestParam {@code size} across every listing endpoint.
+     * Per-row enrichment ({@code enrichWithAvailability} fans out to
+     * booking-service + user-service for organizer details), so cost-per-page
+     * is non-trivial — an unbounded {@code size=999999} would pin a worker
+     * thread and burn sibling-service capacity past what the gateway's
+     * 50 rps / 100 burst rate-limit caps (the limiter caps frequency, not
+     * cost-per-request). 100 is generous for normal list-and-scroll UX,
+     * a reject for everyone else.
+     */
+    private static final int MAX_PAGE_SIZE = 100;
 
     /**
      * Shared secret booking-service must present on the internal
@@ -146,10 +162,10 @@ public class EventController {
             @RequestParam(required = false) String venue,
 
             @Parameter(description = "Zero-based page index")
-            @RequestParam(defaultValue = "0")   int page,
+            @RequestParam(defaultValue = "0") @Min(0) int page,
 
             @Parameter(description = "Page size")
-            @RequestParam(defaultValue = "10")  int size,
+            @RequestParam(defaultValue = "10") @Min(1) @Max(MAX_PAGE_SIZE) int size,
 
             @Parameter(description = "Sort field name (must match an entity property), ascending")
             @RequestParam(defaultValue = "startDateTime") String sortBy
@@ -213,10 +229,10 @@ public class EventController {
             @RequestParam(required = false) String venue,
 
             @Parameter(description = "Zero-based page index")
-            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "0") @Min(0) int page,
 
             @Parameter(description = "Page size")
-            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(defaultValue = "10") @Min(1) @Max(MAX_PAGE_SIZE) int size,
 
             @Parameter(description = "Sort field name (must match an entity property), ascending")
             @RequestParam(defaultValue = "startDateTime") String sortBy
@@ -327,10 +343,10 @@ public class EventController {
             @RequestParam(required = false) String venue,
 
             @Parameter(description = "Zero-based page index")
-            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "0") @Min(0) int page,
 
             @Parameter(description = "Page size")
-            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(defaultValue = "10") @Min(1) @Max(MAX_PAGE_SIZE) int size,
 
             @Parameter(description = "Sort field name (must match an entity property), ascending")
             @RequestParam(defaultValue = "startDateTime") String sortBy
@@ -449,10 +465,10 @@ public class EventController {
             @RequestParam(required = false) EventCategory category,
 
             @Parameter(description = "Zero-based page index")
-            @RequestParam(defaultValue = "0")   int page,
+            @RequestParam(defaultValue = "0") @Min(0) int page,
 
             @Parameter(description = "Page size")
-            @RequestParam(defaultValue = "10")  int size,
+            @RequestParam(defaultValue = "10") @Min(1) @Max(MAX_PAGE_SIZE) int size,
 
             @Parameter(description = "Sort field name (must match an entity property), ascending")
             @RequestParam(defaultValue = "startDateTime") String sortBy
@@ -619,10 +635,10 @@ public class EventController {
             @RequestParam String country,
 
             @Parameter(description = "Zero-based page index")
-            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "0") @Min(0) int page,
 
             @Parameter(description = "Page size")
-            @RequestParam(defaultValue = "10") int size
+            @RequestParam(defaultValue = "10") @Min(1) @Max(MAX_PAGE_SIZE) int size
     ) {
         log.debug("GET /events/by-country country={} page={} size={}", country, page, size);
         Page<EventResponseDTO> result = eventService.getEventsByCountry(country, page, size);
@@ -710,10 +726,10 @@ public class EventController {
             @RequestParam("q") String q,
 
             @Parameter(description = "Zero-based page index")
-            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "0") @Min(0) int page,
 
             @Parameter(description = "Page size")
-            @RequestParam(defaultValue = "10") int size,
+            @RequestParam(defaultValue = "10") @Min(1) @Max(MAX_PAGE_SIZE) int size,
 
             @Parameter(description = "Sort field name (must match an entity property), ascending")
             @RequestParam(defaultValue = "startDateTime") String sortBy

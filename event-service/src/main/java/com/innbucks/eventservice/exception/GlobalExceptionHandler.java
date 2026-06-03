@@ -1,6 +1,7 @@
 package com.innbucks.eventservice.exception;
 
 import com.innbucks.eventservice.dto.ApiResult;
+import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.support.DefaultMessageSourceResolvable;
 import org.springframework.http.HttpStatus;
@@ -103,6 +104,24 @@ public class GlobalExceptionHandler {
         log.warn("Forbidden: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
                 .body(ApiResult.error(HttpStatus.FORBIDDEN, ex.getMessage()));
+    }
+
+    /**
+     * Class-level {@code @Validated} + {@code @Min}/{@code @Max} on
+     * {@code @RequestParam} pagination params fires this exception when a
+     * client sends, e.g. {@code size=999999}. Without the handler it would
+     * fall to the RuntimeException catch-all and return a sanitised 500 —
+     * a 400 with the violation message is the honest answer.
+     */
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<ApiResult<Void>> handleConstraintViolation(ConstraintViolationException ex) {
+        String msg = ex.getConstraintViolations().stream()
+                .map(v -> v.getPropertyPath() + " " + v.getMessage())
+                .findFirst()
+                .orElse("Invalid request parameter");
+        log.warn("ConstraintViolation: {}", msg);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResult.error(HttpStatus.BAD_REQUEST, msg));
     }
 
     /**

@@ -1,6 +1,7 @@
 package com.innbucks.seatservice.exception;
 
 import com.innbucks.seatservice.dto.ApiResult;
+import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -85,6 +86,23 @@ public class GlobalExceptionHandler {
         log.warn("Forbidden: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
                 .body(ApiResult.error(HttpStatus.FORBIDDEN, ex.getMessage()));
+    }
+
+    /**
+     * Class-level {@code @Validated} + {@code @Min}/{@code @Max} on
+     * {@code @RequestParam} fires this exception when a client sends, e.g.
+     * {@code size=999999}. Without the handler it would fall to the
+     * RuntimeException catch-all and return a sanitised 500.
+     */
+    @ExceptionHandler(ConstraintViolationException.class)
+    public ResponseEntity<ApiResult<Void>> handleConstraintViolation(ConstraintViolationException ex) {
+        String msg = ex.getConstraintViolations().stream()
+                .map(v -> v.getPropertyPath() + " " + v.getMessage())
+                .findFirst()
+                .orElse("Invalid request parameter");
+        log.warn("ConstraintViolation: {}", msg);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResult.error(HttpStatus.BAD_REQUEST, msg));
     }
 
     /**
