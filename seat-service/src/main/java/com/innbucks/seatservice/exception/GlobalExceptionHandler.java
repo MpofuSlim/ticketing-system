@@ -10,6 +10,7 @@ import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -84,6 +85,22 @@ public class GlobalExceptionHandler {
         log.warn("Forbidden: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.FORBIDDEN)
                 .body(ApiResult.error(HttpStatus.FORBIDDEN, ex.getMessage()));
+    }
+
+    /**
+     * Spring's {@link ResponseStatusException} extends RuntimeException, so
+     * without this handler it would be swallowed by the {@code RuntimeException}
+     * catch-all below and surface as a sanitised 500. Honour the embedded
+     * status / reason instead. Prefer typed exceptions at throw sites; this
+     * is a defence-in-depth net for Spring's own / library code.
+     */
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<ApiResult<Void>> handleResponseStatus(ResponseStatusException ex) {
+        HttpStatus status = HttpStatus.resolve(ex.getStatusCode().value());
+        if (status == null) status = HttpStatus.INTERNAL_SERVER_ERROR;
+        String reason = ex.getReason() == null ? status.getReasonPhrase() : ex.getReason();
+        log.warn("ResponseStatusException status={} reason={}", status.value(), reason);
+        return ResponseEntity.status(status).body(ApiResult.error(status, reason));
     }
 
     /**

@@ -10,6 +10,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -86,6 +87,24 @@ public class GlobalExceptionHandler {
         log.info("Not found: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(ApiResult.error(HttpStatus.NOT_FOUND, ex.getMessage()));
+    }
+
+    /**
+     * Spring's {@link ResponseStatusException} extends RuntimeException, so
+     * without this handler it would be swallowed by the {@code RuntimeException}
+     * catch-all below — which downgrades status to 400 and reflects whatever
+     * raw text the throw site picked. Honour the embedded status / reason
+     * instead. {@code ShopStaffService} still throws ResponseStatusException
+     * for 401/403/400 — those now reach the client correctly. Prefer the
+     * typed {@link NotFoundException} at new throw sites.
+     */
+    @ExceptionHandler(ResponseStatusException.class)
+    public ResponseEntity<ApiResult<Void>> handleResponseStatus(ResponseStatusException ex) {
+        HttpStatus status = HttpStatus.resolve(ex.getStatusCode().value());
+        if (status == null) status = HttpStatus.INTERNAL_SERVER_ERROR;
+        String reason = ex.getReason() == null ? status.getReasonPhrase() : ex.getReason();
+        log.warn("ResponseStatusException status={} reason={}", status.value(), reason);
+        return ResponseEntity.status(status).body(ApiResult.error(status, reason));
     }
 
     @ExceptionHandler(RuntimeException.class)
