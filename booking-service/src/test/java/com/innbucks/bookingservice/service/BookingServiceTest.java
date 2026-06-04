@@ -18,6 +18,7 @@ import com.innbucks.bookingservice.repository.BookingRepository;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -118,7 +119,8 @@ class BookingServiceTest {
         // applyLoyalty short-circuit means LoyaltyEarnRetryService is
         // never invoked, so null is safe here.
         return new BookingService(bookingRepo, itemRepo, seatClient, eventPublisher,
-                new QrCodeGenerator(), null, null, null);
+                new QrCodeGenerator(), null, null, null,
+                mock(PlatformTransactionManager.class));
     }
 
     @Test
@@ -792,7 +794,8 @@ class BookingServiceTest {
         when(provider.getIfAvailable()).thenReturn(eventClient);
         return new BookingService(bookingRepo, mock(BookingItemRepository.class),
                 mock(SeatServiceClient.class), publisher,
-                new QrCodeGenerator(), null, provider, null);
+                new QrCodeGenerator(), null, provider, null,
+                mock(PlatformTransactionManager.class));
     }
 
     private static AvailabilityResponseDTO availabilityResponse(int remaining) {
