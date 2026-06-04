@@ -183,10 +183,6 @@ public class EventController {
                     from, to, venue, page, size, sortBy);
             result = eventService.getAllActiveEvents(fromDateTime, toDateTime, venue, page, size, sortBy);
         }
-        if (result.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(ApiResult.error(HttpStatus.NOT_FOUND, "Not found"));
-        }
         return ResponseEntity.ok(ApiResult.ok("Events retrieved successfully", result));
     }
 
@@ -486,10 +482,6 @@ public class EventController {
                     from, to, venue, country, category, page, size, sortBy);
             result = eventService.getActiveOnlyEvents(fromDateTime, toDateTime, venue, country, category, page, size, sortBy);
         }
-        if (result.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(ApiResult.error(HttpStatus.NOT_FOUND, "Not found"));
-        }
         return ResponseEntity.ok(ApiResult.ok("Active events retrieved successfully", result));
     }
 
@@ -642,10 +634,6 @@ public class EventController {
     ) {
         log.debug("GET /events/by-country country={} page={} size={}", country, page, size);
         Page<EventResponseDTO> result = eventService.getEventsByCountry(country, page, size);
-        if (result.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(ApiResult.error(HttpStatus.NOT_FOUND, "Not found"));
-        }
         return ResponseEntity.ok(ApiResult.ok("Events retrieved successfully", result));
     }
 

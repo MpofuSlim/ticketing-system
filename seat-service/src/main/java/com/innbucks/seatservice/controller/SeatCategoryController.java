@@ -105,10 +105,6 @@ public class SeatCategoryController {
     ) {
         log.debug("GET /seat-categories eventId={}", eventId);
         List<CreateCategoryResponseDTO> result = categoryService.getCategoriesByEvent(eventId);
-        if (result.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(ApiResult.error(HttpStatus.NOT_FOUND, "Not found"));
-        }
         return ResponseEntity.ok(ApiResult.ok("Categories retrieved successfully", result));
     }
 
