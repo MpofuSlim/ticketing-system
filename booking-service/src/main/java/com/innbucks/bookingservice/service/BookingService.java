@@ -14,13 +14,14 @@ import com.innbucks.bookingservice.exception.TierRequirementException;
 import com.innbucks.bookingservice.util.MsisdnMasking;
 import com.innbucks.bookingservice.loyalty.LoyaltyEarnRetryService;
 import com.innbucks.bookingservice.repository.*;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -33,7 +34,6 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 
 @Service
-@RequiredArgsConstructor
 @Slf4j
 public class BookingService {
 
@@ -48,6 +48,7 @@ public class BookingService {
     private final ObjectProvider<LoyaltyServiceClient> loyaltyClientProvider;
     private final ObjectProvider<EventServiceClient> eventClientProvider;
     private final LoyaltyEarnRetryService loyaltyEarnRetryService;
+    private final TransactionTemplate txTemplate;
 
     // CSPRNG for ticket-number generation. A ticket number IS the QR-code
     // payload a gate scanner validates, so it's an entry credential, not a
@@ -78,7 +79,29 @@ public class BookingService {
     @org.springframework.beans.factory.annotation.Value("${innbucks.internal-api-token:}")
     private String eventInternalToken;
 
-    @Transactional
+    public BookingService(BookingRepository bookingRepository,
+                          BookingItemRepository bookingItemRepository,
+                          SeatServiceClient seatServiceClient,
+                          ApplicationEventPublisher eventPublisher,
+                          QrCodeGenerator qrCodeGenerator,
+                          ObjectProvider<LoyaltyServiceClient> loyaltyClientProvider,
+                          ObjectProvider<EventServiceClient> eventClientProvider,
+                          LoyaltyEarnRetryService loyaltyEarnRetryService,
+                          PlatformTransactionManager transactionManager) {
+        this.bookingRepository = bookingRepository;
+        this.bookingItemRepository = bookingItemRepository;
+        this.seatServiceClient = seatServiceClient;
+        this.eventPublisher = eventPublisher;
+        this.qrCodeGenerator = qrCodeGenerator;
+        this.loyaltyClientProvider = loyaltyClientProvider;
+        this.eventClientProvider = eventClientProvider;
+        this.loyaltyEarnRetryService = loyaltyEarnRetryService;
+        // Programmatic transaction wrapping ONLY the booking writes (see
+        // createBooking -> persistBooking). Mirrors the TransactionTemplate
+        // pattern in loyalty-service ShopService / user-service AuditService.
+        this.txTemplate = new TransactionTemplate(transactionManager);
+    }
+
     public BookingResponseDTO createBooking(
             String userEmail,
             int tier,
@@ -97,6 +120,18 @@ public class BookingService {
                     tier,
                     "Tier " + tier + " customers may book at most " + maxSeats + " seats per booking");
         }
+
+        // === Resolution phase — NO transaction, NO DB connection held. ===
+        // Every seat-service / event-service round trip below runs BEFORE the
+        // write transaction opens. This method used to be @Transactional, so a
+        // pooled DB connection sat idle across all three blocking upstream calls
+        // (getAvailableSeats + lookupSeat + lookupTenantId). Under load that
+        // pinned one connection for the whole ~seconds those calls took, capping
+        // throughput at (poolSize / callDuration): the Hikari pool drained,
+        // callers hit connection-timeout, and the booking path 5xx'd far below
+        // its real write capacity. Resolving first, then committing in a short
+        // transaction (persistBooking), shrinks the connection hold to the
+        // DB writes alone.
 
         // For each requested category, pick a random AVAILABLE seat from
         // seat-service. Cache the available pool per category so multiple
@@ -118,22 +153,6 @@ public class BookingService {
             }
             pickedInThisRequest.add(picked);
             assignedSeatIds.add(picked);
-        }
-
-        // Cross-check against our own DB. Catches the race where a seat that
-        // looked AVAILABLE in seat-service is already part of an active
-        // booking on our side (e.g. concurrent request just before
-        // seat-service was updated).
-        List<BookingItem> existingActive = bookingItemRepository.findActiveBySeatIds(
-                assignedSeatIds, Booking.BookingStatus.CANCELLED);
-        if (!existingActive.isEmpty()) {
-            List<UUID> clashingSeats = existingActive.stream()
-                    .map(BookingItem::getSeatId)
-                    .distinct()
-                    .toList();
-            log.warn("Booking create rejected, picked seats already booked userEmail={} seatIds={}",
-                    userEmail, clashingSeats);
-            throw new BookingConflictException("One or more seats are already booked: " + clashingSeats);
         }
 
         // Resolve full details (price, eventId, sectionLabel) from seat-service.
@@ -179,6 +198,38 @@ public class BookingService {
                 .expiresAt(expiresAt)
                 .build();
 
+        // === Write phase — the ONLY place a DB connection is held. ===
+        return txTemplate.execute(status -> persistBooking(booking, resolved, assignedSeatIds, userEmail));
+    }
+
+    /**
+     * Persists a fully-resolved booking and its per-seat items in one short
+     * transaction. Extracted from {@link #createBooking} so the DB connection
+     * is acquired only for these writes — never across the upstream seat- and
+     * event-service calls made during the resolution phase. Runs inside
+     * createBooking's {@code txTemplate.execute} callback.
+     */
+    private BookingResponseDTO persistBooking(Booking booking,
+                                              List<SeatLookupResponseDTO> resolved,
+                                              List<UUID> assignedSeatIds,
+                                              String userEmail) {
+        // Cross-check against our own DB. Catches the race where a seat that
+        // looked AVAILABLE in seat-service is already part of an active
+        // booking on our side (e.g. concurrent request just before
+        // seat-service was updated). Kept inside the write transaction so the
+        // pre-check and the insert share one consistent snapshot.
+        List<BookingItem> existingActive = bookingItemRepository.findActiveBySeatIds(
+                assignedSeatIds, Booking.BookingStatus.CANCELLED);
+        if (!existingActive.isEmpty()) {
+            List<UUID> clashingSeats = existingActive.stream()
+                    .map(BookingItem::getSeatId)
+                    .distinct()
+                    .toList();
+            log.warn("Booking create rejected, picked seats already booked userEmail={} seatIds={}",
+                    userEmail, clashingSeats);
+            throw new BookingConflictException("One or more seats are already booked: " + clashingSeats);
+        }
+
         bookingRepository.save(booking);
 
         // Each seat gets its own unique ticket number
@@ -221,8 +272,8 @@ public class BookingService {
         eventPublisher.publishEvent(BookingDomainEvent.BookingCreated.of(booking, assignedSeatIds));
 
         log.info("Booking created bookingId={} confirmation={} userEmail={} eventId={} total={} items={}",
-                booking.getId(), confirmationNumber, userEmail, request.getEventId(),
-                total, items.size());
+                booking.getId(), booking.getConfirmationNumber(), userEmail, booking.getEventId(),
+                booking.getTotalAmount(), items.size());
         return toDTO(booking);
     }
 
