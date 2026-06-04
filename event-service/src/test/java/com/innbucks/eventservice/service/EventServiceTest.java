@@ -281,16 +281,16 @@ class EventServiceTest {
                 .thenReturn(java.util.Map.of("rumbi@showtime.co.zw",
                         com.innbucks.eventservice.dto.OrganizerDTO.builder()
                                 .businessName("Showtime Events")
-                                .email("hello@showtime.co.zw")
-                                .address("5 Leopold Takawira St, Bulawayo")
+                                .businessAddress("5 Leopold Takawira St, Bulawayo")
+                                .businessEmail("hello@showtime.co.zw")
                                 .build()));
 
         EventResponseDTO result = service.getEventById(eventId);
 
         assertNotNull(result.getOrganizer());
         assertEquals("Showtime Events", result.getOrganizer().getBusinessName());
-        assertEquals("hello@showtime.co.zw", result.getOrganizer().getEmail());
-        assertEquals("5 Leopold Takawira St, Bulawayo", result.getOrganizer().getAddress());
+        assertEquals("5 Leopold Takawira St, Bulawayo", result.getOrganizer().getBusinessAddress());
+        assertEquals("hello@showtime.co.zw", result.getOrganizer().getBusinessEmail());
     }
 
     @Test
