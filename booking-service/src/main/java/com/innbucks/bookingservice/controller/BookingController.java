@@ -252,10 +252,6 @@ public class BookingController {
         String userEmail = authentication.getName();
         log.debug("GET /bookings/my userEmail={}", userEmail);
         List<BookingResponseDTO> result = bookingService.getMyBookings(userEmail);
-        if (result.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(ApiResult.error(HttpStatus.NOT_FOUND, "Not found"));
-        }
         return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully", result));
     }
 

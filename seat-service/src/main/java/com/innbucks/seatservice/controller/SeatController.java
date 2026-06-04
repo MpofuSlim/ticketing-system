@@ -78,10 +78,6 @@ public class SeatController {
     ) {
         log.debug("GET /seats categoryId={}", categoryId);
         List<SeatResponseDTO> result = seatService.getSeatsByCategory(categoryId);
-        if (result.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(ApiResult.error(HttpStatus.NOT_FOUND, "Not found"));
-        }
         return ResponseEntity.ok(ApiResult.ok("Seats retrieved successfully", result));
     }
 
@@ -126,10 +122,6 @@ public class SeatController {
     ) {
         log.debug("GET /seats/available categoryId={}", categoryId);
         List<SeatResponseDTO> result = seatService.getAvailableSeats(categoryId);
-        if (result.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                    .body(ApiResult.error(HttpStatus.NOT_FOUND, "Not found"));
-        }
         return ResponseEntity.ok(ApiResult.ok("Available seats retrieved successfully", result));
     }
 
