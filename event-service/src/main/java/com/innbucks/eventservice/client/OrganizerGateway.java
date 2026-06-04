@@ -22,7 +22,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Resolves organizer business details (businessName / email / address) from
+ * Resolves organizer business details (businessName / businessAddress / businessEmail) from
  * user-service for a batch of tenant ids (the JWT subject stamped on each
  * event as {@code tenantId}). event-service attaches the result to every event
  * response so listings carry the owning organizer's details inline.
@@ -113,18 +113,22 @@ public class OrganizerGateway {
             }
             result.put(row.tenantId, OrganizerDTO.builder()
                     .businessName(row.businessName)
-                    .email(row.email)
-                    .address(row.address)
+                    .businessAddress(row.businessAddress)
+                    .businessEmail(row.businessEmail)
                     .build());
         }
         return result;
     }
 
     // Wire shape of one element in user-service's lookup response data list.
+    // Field names mirror the /auth/register payload so the same vocabulary
+    // applies on registration (input) and event listings (output).
+    // bpoNumber is intentionally NOT here — it's a business registration
+    // identifier kept admin-only via /admin/users/merchants.
     private static final class TenantLookupRow {
         public String tenantId;
         public String businessName;
-        public String email;
-        public String address;
+        public String businessAddress;
+        public String businessEmail;
     }
 }

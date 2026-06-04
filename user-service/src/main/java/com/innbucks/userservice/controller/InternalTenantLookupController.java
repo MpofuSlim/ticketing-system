@@ -23,7 +23,7 @@ import java.util.stream.Collectors;
 
 /**
  * Service-to-service lookup consumed by event-service to attach an event's
- * owning organizer's business details (name / email / address) to event
+ * owning organizer's business details (businessName / businessAddress / businessEmail) to event
  * responses. Gated by the shared {@code X-Internal-Token} header rather than a
  * user JWT — the caller is another backend, not a logged-in user.
  *
@@ -78,8 +78,8 @@ public class InternalTenantLookupController {
                 .map(p -> TenantLookupDTO.builder()
                         .tenantId(emailByUserId.get(p.getUser().getId()))
                         .businessName(p.getBusinessName())
-                        .email(p.getBusinessEmail())
-                        .address(p.getBusinessAddress())
+                        .businessAddress(p.getBusinessAddress())
+                        .businessEmail(p.getBusinessEmail())
                         .build())
                 .filter(dto -> dto.getTenantId() != null)
                 .collect(Collectors.toList());
