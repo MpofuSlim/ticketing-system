@@ -54,7 +54,12 @@ innbucks:
   # /events/{id}/availability/consume call. Same env var as everywhere
   # else in the ticketing stack; ProductionSecretsGuard refuses the
   # `change-me-*` placeholder when SPRING_PROFILES_ACTIVE=prod.
-  internal-api-token: ${INTERNAL_API_TOKEN:change-me-change-me-change-me-change-me}
+  # NOTE: this placeholder default MUST be byte-identical across every
+  # service (user/event/seat/booking/payment/loyalty). It's the only thing
+  # that lets S2S calls authenticate in a dev/staging run with no
+  # INTERNAL_API_TOKEN env var set. A divergent default = silent 401 on
+  # cross-service calls (e.g. event->user organizer lookup).
+  internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
 
 server:
   port: 8082

@@ -306,8 +306,9 @@ class EventControllerTest {
     }
 
     // Test config inherits `innbucks.internal-api-token` default from
-    // application.yaml: change-me-change-me-change-me-change-me.
-    private static final String VALID_INTERNAL_TOKEN = "change-me-change-me-change-me-change-me";
+    // application.yaml: change-me-internal-token-change-me-internal-token
+    // (unified fleet-wide so cross-service S2S works without the env var).
+    private static final String VALID_INTERNAL_TOKEN = "change-me-internal-token-change-me-internal-token";
 
     @Test
     void consumeAvailability_withoutInternalToken_returns401_andDoesNotMutate() throws Exception {
