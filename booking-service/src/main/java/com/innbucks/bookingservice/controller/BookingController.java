@@ -136,25 +136,33 @@ public class BookingController {
             throw new BadRequestException("phoneNumber is required");
         }
 
-        // Look up the customer's current tier in user-service. A null result
-        // covers two cases that both mean the same thing here:
-        //   (a) the phone isn't registered — they're a true guest;
-        //   (b) user-service is unreachable / the circuit is open.
-        // In both cases we DO NOT block the booking — guests are allowed to
-        // book without registering (the registered-only requirement is on
-        // RETRIEVAL, enforced by the GET endpoints). The fallback tier is
-        // GUEST_TIER (2 = the existing minimum bookable rung, max 2 seats per
-        // booking). Registered customers with a higher real tier (3 or 4)
-        // get their actual tier when user-service answers, unlocking the
-        // larger per-booking seat caps.
-        com.innbucks.bookingservice.dto.CustomerTierResponseDTO tierData;
-        try {
-            com.innbucks.bookingservice.dto.ApiResult<com.innbucks.bookingservice.dto.CustomerTierResponseDTO> result =
-                    userServiceClient.getCustomerTier(phoneNumber);
-            tierData = result == null ? null : result.getData();
-        } catch (Exception ex) {
-            log.warn("user-service tier lookup failed phoneNumber={} cause={}", MsisdnMasking.mask(phoneNumber), ex.toString());
-            tierData = null;
+        // Look up the customer's current tier in user-service — but ONLY for
+        // AUTHENTICATED callers. An anonymous (phone-only) booking is a guest
+        // by definition: the phone is client-supplied and, for a true guest,
+        // will not resolve to a registered customer, so the lookup is a doomed
+        // round trip we already know the answer to (GUEST_TIER). Worse, on the
+        // booking hot path it's one user-service call PER guest booking —
+        // enough, under load, to saturate user-service and trip this client's
+        // circuit breaker. Skipping it keeps user-service off the guest path
+        // entirely (mirrors the event-service tenant-lookup skip in #168).
+        //
+        // For an authenticated caller we still look up the LIVE tier: the JWT's
+        // tier claim goes stale after an upgrade, and a tier 3/4 customer needs
+        // their real tier to unlock the larger per-booking seat caps. A null
+        // result there still falls back to GUEST_TIER and covers both the
+        // "phone not registered" and "user-service unreachable / circuit open"
+        // cases. Guests are never blocked either way — the registered-only
+        // requirement is on RETRIEVAL (the GET endpoints), not creation.
+        com.innbucks.bookingservice.dto.CustomerTierResponseDTO tierData = null;
+        if (authenticated) {
+            try {
+                com.innbucks.bookingservice.dto.ApiResult<com.innbucks.bookingservice.dto.CustomerTierResponseDTO> result =
+                        userServiceClient.getCustomerTier(phoneNumber);
+                tierData = result == null ? null : result.getData();
+            } catch (Exception ex) {
+                log.warn("user-service tier lookup failed phoneNumber={} cause={}", MsisdnMasking.mask(phoneNumber), ex.toString());
+                tierData = null;
+            }
         }
         int tier;
         String tierEmail;
