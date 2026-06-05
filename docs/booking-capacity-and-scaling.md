@@ -185,6 +185,40 @@ The load test showed the failure modes are quiet until they aren't. Alert on:
 - **Postgres**: active connections vs `max_connections`, and slow-query log.
 - **booking-service 5xx rate** and **p95 latency** — the user-facing SLO.
 
+### 4.7 Data growth & background-job load — write cost is not constant over time
+
+Sustained load testing surfaced a degradation that is **not in the booking
+code** and is worth planning for. As the `bookings`, `booking_items`, and
+`event_outbox` tables grew large and the **booking-expiration scheduler** worked
+through a big backlog of expired-PENDING bookings, per-booking write latency
+climbed and throughput fell — from **~300 req/s at p95 19 ms** (small tables) to
+**~250 req/s at multi-second p95** (after several hundred thousand accumulated
+rows) — **with no errors**: the system queued rather than failed.
+
+Mechanism: each booking does an indexed `seat_id` lookup + insert; on top of
+that the expiration job's bulk `UPDATE`s fire an `AFTER UPDATE` trigger that
+rewrites `booking_items.is_active` (write amplification), and every booking
+appends a row to `event_outbox`. All of this competes for the same Postgres
+connections as live bookings, so per-booking DB time rises with accumulated data
+and background-job volume, and the 20-connection pools cap throughput sooner.
+
+> **Caveat:** this was observed in a test environment with unusually heavy
+> synthetic accumulation and an oversized expiration backlog — treat it as a
+> **caution to design for**, not a clean production measurement. Validate against
+> real production data-growth rates.
+
+Recommended mitigations (data lifecycle is a DBA / infra concern):
+
+- **Archive or partition** `bookings` + `booking_items` by time so the hot set
+  stays small (e.g. monthly range partitions; detach and archive old partitions).
+- **Tune the expiration scheduler** — cap its batch size and run frequency so it
+  drains expired holds steadily instead of in large, lock-heavy bursts.
+- **Keep `event_outbox` small** — confirm the purge job keeps pace with insert
+  volume; partition or prune published rows aggressively.
+- **Monitor table sizes and per-booking DB latency over time**, not only at
+  launch. A write path that benchmarks at 19 ms on a near-empty database will
+  not stay there as volume grows without the above.
+
 ---
 
 ## 5. How to reproduce the load test
