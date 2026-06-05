@@ -19,6 +19,10 @@ public interface SeatServiceClient {
     @GetMapping("/seats/{id}/lookup")
     ApiResult<SeatLookupResponseDTO> lookupSeat(@PathVariable("id") UUID id);
 
+    // limit asks seat-service for at most N random AVAILABLE seats instead of
+    // the whole pool — pulling every seat of a large category overran the 1s
+    // circuit-breaker timeout and 503'd bookings. See BookingService.AVAILABLE_SAMPLE_SIZE.
     @GetMapping("/seats/available")
-    ApiResult<List<AvailableSeatDTO>> getAvailableSeats(@RequestParam("categoryId") UUID categoryId);
+    ApiResult<List<AvailableSeatDTO>> getAvailableSeats(@RequestParam("categoryId") UUID categoryId,
+                                                        @RequestParam("limit") int limit);
 }

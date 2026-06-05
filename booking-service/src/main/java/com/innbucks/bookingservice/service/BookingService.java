@@ -66,6 +66,14 @@ public class BookingService {
     private static final int TIER_3_MAX_SEATS = 6;
     private static final int TIER_4_MAX_SEATS = 10;
 
+    // How many candidate seats we ask seat-service for per category when
+    // assigning seats. A booking needs at most TIER_4_MAX_SEATS (10), so a
+    // small random sample is plenty — and, crucially, it keeps the response
+    // tiny no matter how large the category is. Requesting the WHOLE available
+    // pool (six figures for a big venue, ~MBs of JSON) overran the 1s
+    // circuit-breaker timeout on getAvailableSeats and 503'd every booking.
+    private static final int AVAILABLE_SAMPLE_SIZE = 50;
+
     // How long a PENDING booking holds its seats before the expiration
     // scheduler auto-cancels it. Java-side default of 5 means unit tests that
     // construct BookingService with `new` (no Spring) get a sensible value;
@@ -815,7 +823,8 @@ public class BookingService {
     }
 
     private List<UUID> fetchAvailableSeatIds(UUID categoryId) {
-        ApiResult<List<AvailableSeatDTO>> envelope = seatServiceClient.getAvailableSeats(categoryId);
+        ApiResult<List<AvailableSeatDTO>> envelope =
+                seatServiceClient.getAvailableSeats(categoryId, AVAILABLE_SAMPLE_SIZE);
         if (envelope == null || envelope.getData() == null || envelope.getData().isEmpty()) {
             log.warn("No available seats returned by seat-service categoryId={}", categoryId);
             throw new BadRequestException("No available seats in category " + categoryId);

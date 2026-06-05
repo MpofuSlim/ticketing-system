@@ -20,6 +20,20 @@ public interface SeatRepository extends JpaRepository<Seat, UUID> {
 
     List<Seat> findByCategoryIdAndStatus(UUID categoryId, Seat.SeatStatus status);
 
+    // A random sample of up to `limit` AVAILABLE seats in a category. Used by
+    // booking-service to pick a seat WITHOUT pulling the entire available pool:
+    // a six-figure category returned ~MBs of JSON per booking and blew past the
+    // caller's 1s circuit-breaker timeout (the per-booking cost scaled with
+    // total inventory). ORDER BY random() also spreads picks so concurrent
+    // bookings rarely sample the same seat, which cuts double-booking 409s.
+    // Native because JPQL has no random(); status is @Enumerated(STRING) so it
+    // compares against the literal 'AVAILABLE'.
+    @Query(value = "SELECT * FROM seats WHERE category_id = :categoryId "
+            + "AND status = 'AVAILABLE' ORDER BY random() LIMIT :limit",
+            nativeQuery = true)
+    List<Seat> findRandomAvailableByCategory(@Param("categoryId") UUID categoryId,
+                                             @Param("limit") int limit);
+
     Optional<Seat> findByCategoryIdAndSectionLabelAndSeatNumber(
             UUID categoryId, String sectionLabel, Integer seatNumber
     );

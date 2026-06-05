@@ -13,11 +13,14 @@ import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -32,8 +35,14 @@ import java.util.UUID;
 @RequestMapping("/seats")
 @RequiredArgsConstructor
 @Slf4j
+@Validated  // makes @Min/@Max fire on the @RequestParam `limit` below
 @Tag(name = "Seats", description = "Seat discovery, locking, confirmation, and release operations.")
 public class SeatController {
+
+    // Hard cap on the GET /seats/available `limit` sample size. Booking-service
+    // only needs a handful of candidate seats; this keeps the response small and
+    // stops a hostile limit=999999 from forcing a large random sort server-side.
+    private static final int MAX_AVAILABLE_LIMIT = 1000;
 
     private final SeatService seatService;
 
@@ -118,10 +127,16 @@ public class SeatController {
             )
     })
     public ResponseEntity<ApiResult<List<SeatResponseDTO>>> getAvailableSeats(
-            @Parameter(description = "Seat category UUID") @RequestParam UUID categoryId
+            @Parameter(description = "Seat category UUID") @RequestParam UUID categoryId,
+            @Parameter(description = "Optional cap: return at most this many AVAILABLE seats, chosen at random "
+                    + "(1.." + "1000). Booking-service uses it to sample a few candidates instead of pulling the "
+                    + "entire pool of a large category. Omit to return every available seat, e.g. for a seat map.")
+            @RequestParam(required = false) @Min(1) @Max(MAX_AVAILABLE_LIMIT) Integer limit
     ) {
-        log.debug("GET /seats/available categoryId={}", categoryId);
-        List<SeatResponseDTO> result = seatService.getAvailableSeats(categoryId);
+        log.debug("GET /seats/available categoryId={} limit={}", categoryId, limit);
+        List<SeatResponseDTO> result = (limit == null)
+                ? seatService.getAvailableSeats(categoryId)
+                : seatService.getAvailableSeats(categoryId, limit);
         return ResponseEntity.ok(ApiResult.ok("Available seats retrieved successfully", result));
     }
 

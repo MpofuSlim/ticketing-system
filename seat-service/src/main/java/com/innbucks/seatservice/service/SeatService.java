@@ -51,6 +51,19 @@ public class SeatService {
                 .collect(Collectors.toList());
     }
 
+    // Bounded, randomised variant. Returns at most `limit` AVAILABLE seats
+    // chosen at random, so a caller that only needs a handful (booking-service
+    // picking one seat) never has to transfer the whole pool of a large
+    // category. See SeatRepository.findRandomAvailableByCategory.
+    public List<SeatResponseDTO> getAvailableSeats(UUID categoryId, int limit) {
+        log.debug("Fetching up to {} random available seats categoryId={}", limit, categoryId);
+        return seatRepository
+                .findRandomAvailableByCategory(categoryId, limit)
+                .stream()
+                .map(this::toDTO)
+                .collect(Collectors.toList());
+    }
+
     // Authoritative lookup used by other services (e.g. booking-service) to
     // resolve a seat to its category, price, event, and status without
     // trusting client-supplied values.

@@ -13,7 +13,10 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -40,9 +43,26 @@ class SeatControllerEmptyTest {
         when(svc.getAvailableSeats(any())).thenReturn(List.of());
 
         ResponseEntity<ApiResult<List<SeatResponseDTO>>> resp =
-                new SeatController(svc).getAvailableSeats(UUID.randomUUID());
+                new SeatController(svc).getAvailableSeats(UUID.randomUUID(), null);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertTrue(resp.getBody().getData().isEmpty());
+    }
+
+    @Test
+    void getAvailableSeats_withLimit_usesBoundedRandomSample_notFullPool() {
+        // A non-null limit must route to the bounded random-sample service
+        // method, never the full-pool fetch. Pulling the entire pool of a large
+        // category is exactly what blew the caller's circuit-breaker timeout.
+        SeatService svc = mock(SeatService.class);
+        when(svc.getAvailableSeats(any(), anyInt())).thenReturn(List.of());
+        UUID categoryId = UUID.randomUUID();
+
+        ResponseEntity<ApiResult<List<SeatResponseDTO>>> resp =
+                new SeatController(svc).getAvailableSeats(categoryId, 25);
+
+        assertEquals(HttpStatus.OK, resp.getStatusCode());
+        verify(svc).getAvailableSeats(categoryId, 25);
+        verify(svc, never()).getAvailableSeats(any());
     }
 }
