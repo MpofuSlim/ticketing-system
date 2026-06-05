@@ -185,7 +185,16 @@ public class BookingService {
         // event-service round trip. Best-effort: an event-service outage
         // doesn't block bookings — the booking just won't earn loyalty
         // points until tenant is known.
-        String tenantId = lookupTenantId(request.getEventId());
+        //
+        // Skipped entirely for guest bookings (no userEmail): a guest has
+        // no loyalty account to credit at confirm, so the tenantId is
+        // never read. Saves an event-service round trip on the hot path —
+        // event-service's getEvent enriches with seat-categories synchronously
+        // (see SeatCategoryGateway), so this call was the long tail of
+        // create-booking latency under load.
+        String tenantId = userEmail == null
+                ? null
+                : lookupTenantId(request.getEventId());
 
         Booking booking = Booking.builder()
                 .userEmail(userEmail)
