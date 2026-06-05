@@ -782,6 +782,36 @@ class BookingServiceTest {
         assertInstanceOf(BookingDomainEvent.BookingCancelled.class, captor.getValue());
     }
 
+    @Test
+    void createBooking_guestPath_skipsTenantLookup() {
+        // Regression guard for the createBooking hot-path optimization:
+        // a booking with userEmail=null (guest checkout) MUST NOT call
+        // event-service for the tenant lookup. The tenantId is only read
+        // at /confirm time to attribute loyalty, and a guest has no
+        // customer account to credit — so the round trip is pure dead
+        // weight. Under load it was a major contributor to per-booking
+        // latency because event-service enriches /events/{id} with
+        // seat-categories synchronously.
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        RequestFixture fx = request(new BigDecimal("20.00"));
+        EventServiceClient eventClient = mock(EventServiceClient.class);
+        @SuppressWarnings("unchecked")
+        org.springframework.beans.factory.ObjectProvider<EventServiceClient> provider =
+                mock(org.springframework.beans.factory.ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(eventClient);
+
+        BookingService service = new BookingService(bookingRepo, itemRepo,
+                stubClient(fx.lookups), mock(ApplicationEventPublisher.class),
+                new QrCodeGenerator(), null, provider, null,
+                mock(PlatformTransactionManager.class));
+
+        // Guest path: userEmail = null.
+        service.createBooking(null, 2, "+263770000001", fx.request);
+
+        verify(eventClient, never()).getEvent(any());
+    }
+
     // ---- reverseConfirmedBooking (audit #3 — saga compensation) ----
 
     /** Build a BookingService with a stubbed EventServiceClient so the release path is reachable. */

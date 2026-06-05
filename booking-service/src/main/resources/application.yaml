@@ -73,6 +73,23 @@ spring:
             connect-timeout: ${FEIGN_CONNECT_TIMEOUT_MS:2000}
             read-timeout: ${FEIGN_READ_TIMEOUT_MS:5000}
             logger-level: basic
+          # Per-client tighter timeouts for best-effort hot-path calls.
+          # BookingController's pre-resolve tier lookup (user-service) and
+          # BookingService.createBooking's tenant lookup (event-service)
+          # both have safe fallbacks — GUEST_TIER and a null tenantId
+          # respectively — so a healthy call returns in <50ms and a
+          # degraded upstream should fail FAST rather than stall the
+          # booking for 5s on the global default. Without this, every
+          # booking pays the upstream's slowest response (observed
+          # ~1.3s end-to-end with event-service mid-degradation) and a
+          # single Tomcat worker is pinned for that duration, capping
+          # throughput at (workers / per-call latency).
+          UserServiceClient:
+            connect-timeout: ${USER_FEIGN_CONNECT_TIMEOUT_MS:300}
+            read-timeout: ${USER_FEIGN_READ_TIMEOUT_MS:300}
+          EventServiceClient:
+            connect-timeout: ${EVENT_FEIGN_CONNECT_TIMEOUT_MS:300}
+            read-timeout: ${EVENT_FEIGN_READ_TIMEOUT_MS:300}
 
 # Resilience4j configuration. The instance name MUST match the Feign client
 # class name (SeatServiceClient) — that's the convention Spring Cloud uses
