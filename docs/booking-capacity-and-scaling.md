@@ -25,13 +25,20 @@ application-level bottlenecks (merged in PRs #167–#171). After those fixes, th
 
 | Metric | Value |
 |---|---|
-| **Usable write throughput** (p95 < 20 ms, 0 errors) | **~300 req/s** |
-| **Saturation throughput** (hard max the box will push) | **~400–450 req/s** |
-| Behaviour past saturation | graceful — latency climbs, **no 5xx** until ~2× overload |
-| Equivalent daily volume at the usable rate | **~26 million bookings/day** |
+| **Usable write throughput** (validated, reproducible; p95 < 20 ms, 0 errors) | **~200 req/s** |
+| **Marginal / condition-dependent** | ~300 req/s — clean under light load, saturates under sustained pressure |
+| **Saturation range** (graceful — latency climbs, **no 5xx** until ~2× overload) | ~250–450 req/s |
+| Equivalent daily volume at the usable rate | **~17 million bookings/day** |
 
-To scale **beyond ~450 req/s**, application changes are done — what remains is
-**horizontal scaling + the Postgres connection budget**, detailed in §4.
+**Why 200, not 300:** 300 req/s benchmarked cleanly *once* (on a small seat
+category, early in testing) but was **not reproducible** — on larger categories
+and after sustained load it saturated into multi-second latency (still no
+errors). 200 req/s was clean and coasting (`vus` ≈ 6) on every attempt, so it is
+the number to plan around; treat 250–450 as a graceful-degradation band, not a
+service level. See §2 and §4.7.
+
+To scale **beyond the saturation band**, application changes are done — what
+remains is **horizontal scaling + the Postgres connection budget**, detailed in §4.
 
 There are also **three infrastructure issues** found along the way that are not
 yet fixed and need this team's attention: a broken public login route (§4.5), an
@@ -48,22 +55,32 @@ Test: constant arrival rate, guest bookings, 2-minute runs, 200k-seat category
 
 | Target rate | Achieved | p95 latency | 5xx | State |
 |---|---|---|---|---|
-| 150 req/s | 150 | 16 ms | 0% | coasting (3 VUs) |
-| **300 req/s** | **300** | **19 ms** | **0%** | **comfortable — recommended ceiling** |
+| 150 req/s | 150 | 16 ms | 0% | clean, coasting (3 VUs) |
+| **200 req/s** | **200** | **18 ms** | **0%** | **clean, coasting (6 VUs) — validated usable ceiling** |
+| 300 req/s | 250–300 | 19 ms … multi-s | 0% | **marginal** — clean once on a 50k category; saturated on repeats with a larger category / loaded seat tier |
 | 600 req/s | ~392 | 6.1 s | 0% | saturated, still no errors |
 | 1000 req/s | ~446 | 14.1 s | 56% | overloaded — errors appear |
 
-**How to read it:** throughput plateaus at ~400–450 req/s regardless of offered
-load (600→392, 1000→446). Below ~300 req/s the box is fast and clean. Between
-300 and 450 it still serves every request but latency climbs into seconds.
-Above ~600 req/s offered, queuing exceeds the 5 s connection / circuit-breaker
-timeouts and requests start returning 5xx.
+**How to read it:** 150–200 req/s is consistently fast and clean (`vus` in single
+digits — the box is coasting). 300 req/s is the **edge**: clean under light
+conditions, but it saturated repeatedly once the seat table had grown and the
+services were under sustained load, so it is not a number to commit to. Achieved
+throughput then plateaus at ~250–450 req/s regardless of offered load
+(600→~392, 1000→~446) — requests still all serve, but latency climbs into
+seconds. Above ~600 req/s offered, queuing eventually exceeds the 5 s connection
+/ circuit-breaker timeouts and a fraction return 5xx. Throughout, the system
+degrades by **slowing down, not erroring** — 5xx only appears under ~2× overload.
 
-**Bottleneck at saturation:** the single shared **Postgres**. Each booking drives
-~4 DB operations (booking insert + active-seat cross-check + 2 seat-service
-queries), so ~450 req/s ≈ ~1,800 DB ops/s against one instance with 20-connection
-pools per service. Latency climbs from connection-pool queuing, not CPU on the
-app tier (the app services stay near-idle — k6 needed only 3 VUs at 300 req/s).
+**Bottleneck at saturation:** connection-pool queuing across the booking + seat
+tiers against the single shared **Postgres** — not app-tier CPU (the services
+stay near-idle; k6 needed only 6 VUs at 200 req/s). Each booking drives ~4 DB
+operations, including **2 round-trips to seat-service** (sample + lookup) through
+its 20-connection pool, so seat-service handles ~2× the booking rate. The exact
+saturation point is **sensitive to seat-table size and accumulated booking data**
+(see §4.7): the same 300 req/s that was clean on a small, fresh dataset saturated
+once the seat table had grown to several hundred thousand rows across test
+categories. That sensitivity is why the usable figure is set conservatively at
+the reproducible 200 req/s.
 
 ---
 
