@@ -161,7 +161,7 @@ public class BookingController {
                 tierData = result == null ? null : result.getData();
             } catch (Exception ex) {
                 log.warn("user-service tier lookup failed phoneNumber={} cause={}", MsisdnMasking.mask(phoneNumber), ex.toString());
-                tierData = null;
+                // tierData stays null (its initial value) -> GUEST_TIER fallback below.
             }
         }
         int tier;
