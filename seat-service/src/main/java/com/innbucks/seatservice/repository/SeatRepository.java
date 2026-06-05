@@ -20,19 +20,25 @@ public interface SeatRepository extends JpaRepository<Seat, UUID> {
 
     List<Seat> findByCategoryIdAndStatus(UUID categoryId, Seat.SeatStatus status);
 
-    // A random sample of up to `limit` AVAILABLE seats in a category. Used by
-    // booking-service to pick a seat WITHOUT pulling the entire available pool:
-    // a six-figure category returned ~MBs of JSON per booking and blew past the
-    // caller's 1s circuit-breaker timeout (the per-booking cost scaled with
-    // total inventory). ORDER BY random() also spreads picks so concurrent
-    // bookings rarely sample the same seat, which cuts double-booking 409s.
-    // Native because JPQL has no random(); status is @Enumerated(STRING) so it
-    // compares against the literal 'AVAILABLE'.
-    @Query(value = "SELECT * FROM seats WHERE category_id = :categoryId "
-            + "AND status = 'AVAILABLE' ORDER BY random() LIMIT :limit",
-            nativeQuery = true)
-    List<Seat> findRandomAvailableByCategory(@Param("categoryId") UUID categoryId,
-                                             @Param("limit") int limit);
+    // Indexed random sampling of AVAILABLE seats (see SeatService.getAvailableSeats(id,limit)
+    // and V6's idx_seats_category_status_id). Seat PKs are random UUIDs, so taking the
+    // first `limit` available seats with id >= a random pivot yields a random window in
+    // O(log N + limit) — no full scan or sort, unlike the ORDER BY random() it replaced,
+    // which scaled O(N) with inventory and tripped the caller's circuit breaker under load.
+    // findAvailableBeforePivot wraps past the smallest ids when the pivot lands near the top.
+    @Query("SELECT s FROM Seat s WHERE s.category.id = :categoryId "
+            + "AND s.status = com.innbucks.seatservice.entity.Seat.SeatStatus.AVAILABLE "
+            + "AND s.id >= :pivot ORDER BY s.id")
+    List<Seat> findAvailableFromPivot(@Param("categoryId") UUID categoryId,
+                                      @Param("pivot") UUID pivot,
+                                      Pageable pageable);
+
+    @Query("SELECT s FROM Seat s WHERE s.category.id = :categoryId "
+            + "AND s.status = com.innbucks.seatservice.entity.Seat.SeatStatus.AVAILABLE "
+            + "AND s.id < :pivot ORDER BY s.id")
+    List<Seat> findAvailableBeforePivot(@Param("categoryId") UUID categoryId,
+                                        @Param("pivot") UUID pivot,
+                                        Pageable pageable);
 
     Optional<Seat> findByCategoryIdAndSectionLabelAndSeatNumber(
             UUID categoryId, String sectionLabel, Integer seatNumber

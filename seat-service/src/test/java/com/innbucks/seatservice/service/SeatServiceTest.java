@@ -1,6 +1,7 @@
 package com.innbucks.seatservice.service;
 
 import com.innbucks.seatservice.dto.SeatLockResponseDTO;
+import com.innbucks.seatservice.dto.SeatResponseDTO;
 import com.innbucks.seatservice.entity.Seat;
 import com.innbucks.seatservice.entity.SeatCategory;
 import com.innbucks.seatservice.repository.SeatCategoryRepository;
@@ -9,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -377,5 +379,47 @@ class SeatServiceTest {
 
         assertEquals(Seat.SeatStatus.AVAILABLE, seat.getStatus());
         verify(catRepo).incrementAvailableSeats(cat.getId());
+    }
+
+    @Test
+    void getAvailableSeats_withLimit_returnsForwardWindow_noWrap_whenFull() {
+        // The forward window (id >= random pivot) already yields the full `limit`,
+        // so the wrap-around query must not run.
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        SeatService service = new SeatService(seatRepo, mock(SeatCategoryRepository.class), mock(SeatLockStore.class));
+        UUID categoryId = UUID.randomUUID();
+        SeatCategory cat = category(100);
+        when(seatRepo.findAvailableFromPivot(eq(categoryId), any(UUID.class), any()))
+                .thenReturn(List.of(availableSeat(UUID.randomUUID(), cat),
+                        availableSeat(UUID.randomUUID(), cat),
+                        availableSeat(UUID.randomUUID(), cat)));
+
+        List<SeatResponseDTO> result = service.getAvailableSeats(categoryId, 3);
+
+        assertEquals(3, result.size());
+        verify(seatRepo, never()).findAvailableBeforePivot(any(), any(), any());
+    }
+
+    @Test
+    void getAvailableSeats_withLimit_wrapsPastSmallestIds_whenForwardWindowShort() {
+        // Pivot landed near the top of the id keyspace: the forward window returns
+        // fewer than `limit`, so the service tops up by wrapping to the smallest
+        // ids — callers must still get a full sample.
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        SeatService service = new SeatService(seatRepo, mock(SeatCategoryRepository.class), mock(SeatLockStore.class));
+        UUID categoryId = UUID.randomUUID();
+        SeatCategory cat = category(100);
+        when(seatRepo.findAvailableFromPivot(eq(categoryId), any(UUID.class), any()))
+                .thenReturn(List.of(availableSeat(UUID.randomUUID(), cat),
+                        availableSeat(UUID.randomUUID(), cat)));
+        when(seatRepo.findAvailableBeforePivot(eq(categoryId), any(UUID.class), any()))
+                .thenReturn(List.of(availableSeat(UUID.randomUUID(), cat),
+                        availableSeat(UUID.randomUUID(), cat),
+                        availableSeat(UUID.randomUUID(), cat)));
+
+        List<SeatResponseDTO> result = service.getAvailableSeats(categoryId, 5);
+
+        assertEquals(5, result.size());
+        verify(seatRepo).findAvailableBeforePivot(eq(categoryId), any(UUID.class), any());
     }
 }
