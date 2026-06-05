@@ -12,12 +12,14 @@ import com.innbucks.seatservice.repository.SeatCategoryRepository;
 import com.innbucks.seatservice.repository.SeatRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -53,13 +55,29 @@ public class SeatService {
 
     // Bounded, randomised variant. Returns at most `limit` AVAILABLE seats
     // chosen at random, so a caller that only needs a handful (booking-service
-    // picking one seat) never has to transfer the whole pool of a large
-    // category. See SeatRepository.findRandomAvailableByCategory.
+    // picking one seat) never has to transfer the whole pool of a large category.
+    //
+    // Indexed random sampling: pick a random UUID pivot and take the `limit`
+    // available seats with id >= pivot, wrapping past the smallest ids if the
+    // pivot lands near the top. Seat PKs are random UUIDs, so a random pivot
+    // yields a random window — O(log N + limit) via idx_seats_category_status_id,
+    // NOT the O(N) full scan + sort that ORDER BY random() required (which
+    // saturated seat-service under load and tripped the caller's 1s circuit
+    // breaker on large categories).
     public List<SeatResponseDTO> getAvailableSeats(UUID categoryId, int limit) {
-        log.debug("Fetching up to {} random available seats categoryId={}", limit, categoryId);
-        return seatRepository
-                .findRandomAvailableByCategory(categoryId, limit)
-                .stream()
+        log.debug("Sampling up to {} random available seats categoryId={}", limit, categoryId);
+        UUID pivot = UUID.randomUUID();
+        List<Seat> picked = seatRepository.findAvailableFromPivot(
+                categoryId, pivot, PageRequest.of(0, limit));
+        if (picked.size() < limit) {
+            // Pivot landed near the top of the id keyspace — top up by wrapping
+            // to the smallest ids so callers still get a full sample.
+            List<Seat> wrapped = seatRepository.findAvailableBeforePivot(
+                    categoryId, pivot, PageRequest.of(0, limit - picked.size()));
+            picked = new ArrayList<>(picked);
+            picked.addAll(wrapped);
+        }
+        return picked.stream()
                 .map(this::toDTO)
                 .collect(Collectors.toList());
     }
