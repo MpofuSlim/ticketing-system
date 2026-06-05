@@ -29,6 +29,7 @@ import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -96,7 +97,7 @@ class BookingServiceTest {
                         .status("AVAILABLE")
                         .build())
                 .toList();
-        when(client.getAvailableSeats(DEFAULT_CATEGORY_ID))
+        when(client.getAvailableSeats(eq(DEFAULT_CATEGORY_ID), anyInt()))
                 .thenReturn(ApiResult.ok("Available seats retrieved successfully", available));
         return client;
     }
@@ -258,7 +259,7 @@ class BookingServiceTest {
         RequestFixture fx = request(new BigDecimal("20.00"));
         // Override the available-seats stub: empty pool simulates a sold-out category.
         SeatServiceClient client = mock(SeatServiceClient.class);
-        when(client.getAvailableSeats(DEFAULT_CATEGORY_ID))
+        when(client.getAvailableSeats(eq(DEFAULT_CATEGORY_ID), anyInt()))
                 .thenReturn(ApiResult.ok("ok", List.of()));
         BookingService service = newService(bookingRepo, itemRepo, client);
 
