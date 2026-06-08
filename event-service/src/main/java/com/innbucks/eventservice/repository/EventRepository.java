@@ -42,11 +42,16 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
             Pageable pageable
     );
 
-    // Get only events flagged active=true (and non-deleted) with optional filters — paginated
+    // Get only events flagged active=true (and non-deleted, and not yet ended)
+    // with optional filters — paginated. The `e.endDateTime > :now` filter
+    // hides events whose end-time has already passed even if the expiry
+    // scheduler hasn't run yet, so the read is always correct regardless of
+    // scheduler timing.
     @Query("""
         SELECT e FROM Event e
         WHERE e.deleted = false
         AND e.active = true
+        AND e.endDateTime > :now
         AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
         AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
         AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
@@ -57,6 +62,7 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
             @Param("to") LocalDateTime to,
             @Param("venue") String venue,
             @Param("country") String country,
+            @Param("now") LocalDateTime now,
             Pageable pageable
     );
 
@@ -70,6 +76,7 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
         SELECT e FROM Event e
         WHERE e.deleted = false
         AND e.active = true
+        AND e.endDateTime > :now
         AND e.category = :category
         AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
         AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
@@ -82,6 +89,7 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
             @Param("venue") String venue,
             @Param("country") String country,
             @Param("category") EventCategory category,
+            @Param("now") LocalDateTime now,
             Pageable pageable
     );
 
@@ -106,12 +114,15 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
             Pageable pageable
     );
 
-    // Same as findByTenantId but additionally filters active=true. Used so an
-    // EVENT_ORGANIZER hitting /events/active only sees their own bookable events.
+    // Same as findByTenantId but additionally filters active=true and hides
+    // events whose endDateTime has passed (independent of the expiry scheduler
+    // so the read is always correct). Used so an EVENT_ORGANIZER hitting
+    // /events/active only sees their own bookable events.
     @Query("""
         SELECT e FROM Event e
         WHERE e.deleted = false
         AND e.active = true
+        AND e.endDateTime > :now
         AND e.tenantId = :tenantId
         AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
         AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
@@ -124,6 +135,7 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
             @Param("to") LocalDateTime to,
             @Param("venue") String venue,
             @Param("country") String country,
+            @Param("now") LocalDateTime now,
             Pageable pageable
     );
 
@@ -133,6 +145,7 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
         SELECT e FROM Event e
         WHERE e.deleted = false
         AND e.active = true
+        AND e.endDateTime > :now
         AND e.tenantId = :tenantId
         AND e.category = :category
         AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
@@ -147,6 +160,7 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
             @Param("venue") String venue,
             @Param("country") String country,
             @Param("category") EventCategory category,
+            @Param("now") LocalDateTime now,
             Pageable pageable
     );
 
@@ -173,13 +187,16 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
         SELECT e FROM Event e
         WHERE e.deleted = false
         AND e.active = true
+        AND e.endDateTime > :now
         AND (
             LOWER(e.title)       LIKE LOWER(CONCAT('%', CAST(:q AS string), '%'))
          OR LOWER(e.description) LIKE LOWER(CONCAT('%', CAST(:q AS string), '%'))
          OR LOWER(e.venue)       LIKE LOWER(CONCAT('%', CAST(:q AS string), '%'))
         )
     """)
-    Page<Event> searchByKeyword(@Param("q") String q, Pageable pageable);
+    Page<Event> searchByKeyword(@Param("q") String q,
+                                @Param("now") LocalDateTime now,
+                                Pageable pageable);
 
     // Bulk-expires events whose end time is before the given cutoff and are
     // still flagged active=true. Used by the nightly expiry scheduler — an

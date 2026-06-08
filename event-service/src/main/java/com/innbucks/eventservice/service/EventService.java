@@ -75,9 +75,10 @@ public class EventService {
         Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
         log.debug("Fetching active=true events from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
                 from, to, venue, country, category, page, size, sortBy);
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         Page<Event> events = category == null
-                ? eventRepository.findAllActiveOnly(from, to, venue, country, pageable)
-                : eventRepository.findAllActiveOnlyByCategory(from, to, venue, country, category, pageable);
+                ? eventRepository.findAllActiveOnly(from, to, venue, country, now, pageable)
+                : eventRepository.findAllActiveOnlyByCategory(from, to, venue, country, category, now, pageable);
         return enrichWithAvailability(events);
     }
 
@@ -121,9 +122,10 @@ public class EventService {
         Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
         log.debug("Fetching active events for tenantId={} from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
                 tenantId, from, to, venue, country, category, page, size, sortBy);
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         Page<Event> events = category == null
-                ? eventRepository.findByTenantIdActiveOnly(tenantId, from, to, venue, country, pageable)
-                : eventRepository.findByTenantIdActiveOnlyByCategory(tenantId, from, to, venue, country, category, pageable);
+                ? eventRepository.findByTenantIdActiveOnly(tenantId, from, to, venue, country, now, pageable)
+                : eventRepository.findByTenantIdActiveOnlyByCategory(tenantId, from, to, venue, country, category, now, pageable);
         return enrichWithAvailability(events);
     }
 
@@ -148,8 +150,9 @@ public class EventService {
     ) {
         Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
         log.debug("Searching events q={} page={} size={} sortBy={}", q, page, size, sortBy);
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         return enrichWithAvailability(
-                eventRepository.searchByKeyword(q == null ? "" : q.trim(), pageable));
+                eventRepository.searchByKeyword(q == null ? "" : q.trim(), now, pageable));
     }
 
     public Page<EventResponseDTO> getEventsByCountry(
