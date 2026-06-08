@@ -117,7 +117,7 @@
         <dependency>
             <groupId>com.stripe</groupId>
             <artifactId>stripe-java</artifactId>
-            <version>32.2.0</version>
+            <version>33.0.0</version>
         </dependency>
 
         <!-- JJWT — verify-only. payment-service does NOT mint tokens; it
