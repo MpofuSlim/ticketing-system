@@ -165,8 +165,10 @@ public class InnbucksPaymentService {
         switch (outcome) {
             case COMPLETED -> {
                 // Confirm the booking BEFORE markSucceeded — see class javadoc
-                // for the ordering rationale.
-                String confirmationNumber = null;
+                // for the ordering rationale. The catch returns early, so the
+                // markSucceeded call below only runs when confirmationNumber
+                // is definitely assigned.
+                String confirmationNumber;
                 try {
                     Map<String, Object> confirmed = bookingServiceClient.confirmBooking(bookingId);
                     confirmationNumber = asString(confirmed.get("confirmationNumber"));
