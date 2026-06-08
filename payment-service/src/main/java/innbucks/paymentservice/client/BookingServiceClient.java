@@ -67,6 +67,37 @@ public class BookingServiceClient {
     }
 
     /**
+     * Read-only fetch of a booking — used by the InnBucks payment path to
+     * resolve {@code totalAmount} + {@code currency} BEFORE debiting veengu
+     * (debit must know the amount; confirm cannot precede payment). Returns
+     * the parsed data map (same shape as confirmBooking) on 2xx, throws
+     * BookingConfirmationException on non-2xx so the caller can surface
+     * "Booking not found" / "Booking already confirmed" etc.
+     */
+    public Map<String, Object> getBooking(UUID bookingId) {
+        try {
+            String body = restClient.get()
+                    .uri("/bookings/{id}", bookingId)
+                    .header("X-Internal-Token", internalToken)
+                    .retrieve()
+                    .body(String.class);
+            ApiResult<Map<String, Object>> envelope = objectMapper.readValue(
+                    body, new TypeReference<ApiResult<Map<String, Object>>>() {});
+            return envelope.getData() != null ? envelope.getData() : Map.of();
+        } catch (RestClientResponseException e) {
+            String detail = parseErrorMessage(e.getResponseBodyAsString())
+                    .orElse(e.getStatusText());
+            log.warn("booking-service get failed bookingId={} status={} detail={}",
+                    bookingId, e.getStatusCode().value(), detail);
+            throw new BookingConfirmationException(detail, e.getStatusCode().value());
+        } catch (Exception e) {
+            log.warn("booking-service get errored bookingId={} cause={}", bookingId, e.toString());
+            throw new BookingConfirmationException(
+                    "Unable to reach booking-service to fetch the booking", 503);
+        }
+    }
+
+    /**
      * Returns the parsed envelope on a 2xx, or throws BookingConfirmationException
      * on a non-2xx so the caller can surface booking-service's reason
      * (e.g. "Seat hold expired", "Booking not found").

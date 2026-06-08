@@ -63,7 +63,8 @@ public class IdempotencyFilter extends OncePerRequestFilter {
      */
     static final Set<String> REQUIRED_PATHS = Set.of(
             "/payments/transfer",
-            "/payments/withdraw"
+            "/payments/withdraw",
+            "/payments/innbucks"
     );
 
     private final IdempotencyStore store;
