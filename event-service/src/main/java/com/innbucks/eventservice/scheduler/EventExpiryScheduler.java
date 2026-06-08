@@ -11,9 +11,19 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 
 /**
- * Nightly job that flips active=false on every event whose scheduled dateTime
- * has passed. Runs at midnight (00:00) server time so stale events never
- * appear in /events/active on the next calendar day.
+ * Sweeps events whose endDateTime has passed and flips active=false on them so
+ * they stop appearing in customer-facing listings. Cadence is configurable via
+ * {@code app.event-expiry.cron}; the default is every 30 minutes, which caps
+ * the lag between an event ending and the active flag flipping at ~30 min.
+ *
+ * <p>The listing queries also filter {@code endDateTime > :now} at read time
+ * (see {@link EventRepository}), so customers never see an expired event even
+ * between scheduler ticks. This job exists to keep the persisted {@code active}
+ * flag in sync — useful for analytics and admin views that filter on it.
+ *
+ * <p>The UPDATE is naturally idempotent ({@code WHERE active=true} short-circuits
+ * any second pass), so it is safe to run on multiple event-service replicas
+ * without distributed locking.
  */
 @Component
 @RequiredArgsConstructor
@@ -22,7 +32,7 @@ public class EventExpiryScheduler {
 
     private final EventRepository eventRepository;
 
-    @Scheduled(cron = "0 0 0 * * *")
+    @Scheduled(cron = "${app.event-expiry.cron:0 0/30 * * * *}", zone = "UTC")
     @Transactional
     public void expirePassedEvents() {
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);

@@ -56,7 +56,10 @@ class EventRepositoryPostgresIT extends PostgresIntegrationTestBase {
 
     @Test
     void findAllActiveOnly_nullVenue_doesNotTriggerLowerBytea() {
-        Page<Event> page = eventRepository.findAllActiveOnly(null, null, null, null, PageRequest.of(0, 10));
+        Page<Event> page = eventRepository.findAllActiveOnly(
+                null, null, null, null,
+                java.time.LocalDateTime.now(java.time.ZoneOffset.UTC),
+                PageRequest.of(0, 10));
         assertThat(page.getTotalElements()).isGreaterThanOrEqualTo(0);
     }
 
@@ -68,7 +71,10 @@ class EventRepositoryPostgresIT extends PostgresIntegrationTestBase {
 
     @Test
     void findByTenantIdActiveOnly_nullVenue_doesNotTriggerLowerBytea() {
-        Page<Event> page = eventRepository.findByTenantIdActiveOnly("t1", null, null, null, null, PageRequest.of(0, 10));
+        Page<Event> page = eventRepository.findByTenantIdActiveOnly(
+                "t1", null, null, null, null,
+                java.time.LocalDateTime.now(java.time.ZoneOffset.UTC),
+                PageRequest.of(0, 10));
         assertThat(page.getTotalElements()).isGreaterThanOrEqualTo(0);
     }
 
@@ -99,7 +105,57 @@ class EventRepositoryPostgresIT extends PostgresIntegrationTestBase {
         // a null q must not crash with lower(bytea). The result is undefined
         // (every row evaluates the LIKE branches to NULL → false → no match);
         // what matters is that the query plans + executes.
-        Page<Event> page = eventRepository.searchByKeyword(null, PageRequest.of(0, 10));
+        Page<Event> page = eventRepository.searchByKeyword(
+                null,
+                java.time.LocalDateTime.now(java.time.ZoneOffset.UTC),
+                PageRequest.of(0, 10));
         assertThat(page.getTotalElements()).isGreaterThanOrEqualTo(0);
+    }
+
+    @Test
+    void findAllActiveOnly_hidesEventsWhoseEndDateTimeHasPassed_evenIfStillFlaggedActive() {
+        // Regression guard for the "ended event still shows up in the customer
+        // listing" bug. An event whose endDateTime is in the past must NOT
+        // appear in the active listing — independent of whether the expiry
+        // scheduler has flipped active=false yet. We persist it with active=true
+        // on purpose to simulate the window between event-end and the next
+        // scheduler tick.
+        LocalDateTime now = LocalDateTime.now(java.time.ZoneOffset.UTC);
+
+        Event past = eventRepository.save(Event.builder()
+                .tenantId("t1")
+                .title("Sunday Show (ended)")
+                .venue("HICC")
+                .country("Zimbabwe")
+                .category(EventCategory.CONCERT)
+                .startDateTime(now.minusDays(2))
+                .endDateTime(now.minusHours(6))
+                .totalCapacity(100)
+                .availableTickets(100)
+                .active(true) // scheduler hasn't flipped this yet
+                .deleted(false)
+                .build());
+
+        Event future = eventRepository.save(Event.builder()
+                .tenantId("t1")
+                .title("Upcoming Show")
+                .venue("HICC")
+                .country("Zimbabwe")
+                .category(EventCategory.CONCERT)
+                .startDateTime(now.plusDays(1))
+                .endDateTime(now.plusDays(1).plusHours(3))
+                .totalCapacity(100)
+                .availableTickets(100)
+                .active(true)
+                .deleted(false)
+                .build());
+
+        Page<Event> page = eventRepository.findAllActiveOnly(
+                null, null, null, null, now, PageRequest.of(0, 10));
+
+        assertThat(page.getContent())
+                .extracting(Event::getEventId)
+                .contains(future.getEventId())
+                .doesNotContain(past.getEventId());
     }
 }
