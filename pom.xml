@@ -48,7 +48,7 @@
              4.2.12.Final has CVE-2026-42579 (HIGH, codec-dns). 4.2.13.Final fixes
              it. Spring Boot's BOM uses ${netty.version} across every netty-*
              artifact, so overriding the property here cascades cleanly. -->
-        <netty.version>4.2.14.Final</netty.version>
+        <netty.version>4.2.15.Final</netty.version>
         <spring.cloud.version>2025.1.1</spring.cloud.version>
         <springdoc.version>3.0.3</springdoc.version>
         <testcontainers.version>1.21.3</testcontainers.version>
