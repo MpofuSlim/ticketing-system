@@ -127,7 +127,10 @@ class InnbucksCoreGatewayClientContractTest {
                 .withRequestBody(matchingJsonPath("$.customerMsisdn", equalTo("+263782606983")))
                 .withRequestBody(matchingJsonPath("$.customerAccount", equalTo("CUST-WALLET-1")))
                 .withRequestBody(matchingJsonPath("$.merchantAccount", equalTo("MERCHANT-WALLET-1")))
-                .withRequestBody(matchingJsonPath("$.amount", equalTo("100.00")))
+                // Jackson serialises new BigDecimal("100.00") as JSON 100.0
+                // (drops insignificant trailing zeros). The numeric value is
+                // unchanged; we just have to match what's on the wire.
+                .withRequestBody(matchingJsonPath("$.amount", equalTo("100.0")))
                 .withRequestBody(matchingJsonPath("$.currency", equalTo("USD")))
                 .withRequestBody(matchingJsonPath("$.narration", equalTo("Ticketing payment"))));
     }
@@ -198,9 +201,14 @@ class InnbucksCoreGatewayClientContractTest {
                                 + "\"error\":\"veengu debit unreachable: connect timeout\""
                                 + "}")));
 
+        // Status preserved on the exception's getStatusCode(); the message
+        // mirrors OradianMiddlewareClient's shape and does NOT embed the
+        // status code, so we assert on the field directly.
         assertThatThrownBy(() -> client.debit(debitRequest(), IDEMPOTENCY_KEY))
                 .isInstanceOf(InnbucksCoreGatewayTransientException.class)
-                .hasMessageContaining("503");
+                .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.type(
+                        InnbucksCoreGatewayTransientException.class))
+                .satisfies(e -> assertThat(e.getStatusCode()).isEqualTo(503));
     }
 
     @Test
