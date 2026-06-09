@@ -6,6 +6,7 @@ import jakarta.servlet.http.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.jspecify.annotations.NonNull;
+import org.slf4j.MDC;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
@@ -21,6 +22,13 @@ import java.util.List;
 @RequiredArgsConstructor
 @Slf4j
 public class JwtFilter extends OncePerRequestFilter {
+
+    /** MDC key for the customer's home-country routing tag, sourced from
+     *  the {@code homeCountry} JWT claim minted by JwtUtil from the user's
+     *  MSISDN. Distinct from {@code CountryMdcConfig.MDC_KEY} ("country"),
+     *  which is the DEPLOYMENT pin — the two together let us spot
+     *  wrong-cell requests once edge routing lands. */
+    public static final String HOME_COUNTRY_MDC_KEY = "homeCountry";
 
     private final JwtUtil jwtUtil;
     @Lazy
@@ -107,7 +115,41 @@ public class JwtFilter extends OncePerRequestFilter {
             return;
         }
 
-        filterChain.doFilter(request, response);
+        // Push the customer's homeCountry into MDC for the lifetime of the
+        // downstream chain so every log line emitted by controllers /
+        // services downstream of this filter carries the customer's
+        // country alongside CorrelationIdFilter's correlationId and
+        // CountryMdcConfig's deployment country. Cleared in finally so a
+        // recycled request thread doesn't leak it into the next request.
+        // Claim may be absent (legacy tokens minted before step 1, staff
+        // tokens with no MSISDN, or customers whose phone prefix isn't a
+        // known InnBucks market) — we just skip the MDC put in that case
+        // rather than fabricate a value.
+        String homeCountry = safeExtractHomeCountry(token);
+        boolean mdcSet = false;
+        if (homeCountry != null && !homeCountry.isBlank()) {
+            MDC.put(HOME_COUNTRY_MDC_KEY, homeCountry);
+            mdcSet = true;
+        }
+        try {
+            filterChain.doFilter(request, response);
+        } finally {
+            if (mdcSet) {
+                MDC.remove(HOME_COUNTRY_MDC_KEY);
+            }
+        }
+    }
+
+    private String safeExtractHomeCountry(String token) {
+        try {
+            return jwtUtil.extractHomeCountry(token);
+        } catch (Exception e) {
+            // Tokens that pass isTokenValid above should never fail claim
+            // extraction, but if they do we'd rather lose the MDC tag than
+            // 500 the request — auth already succeeded, downstream should
+            // proceed without it.
+            return null;
+        }
     }
 
     private void writeUnauthorized(HttpServletResponse response, String code, String message) throws IOException {
