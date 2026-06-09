@@ -8,6 +8,7 @@ import com.innbucks.userservice.integration.LoyaltyServiceClient;
 import com.innbucks.userservice.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -52,6 +53,12 @@ public class ShopStaffService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final LoyaltyServiceClient loyaltyServiceClient;
+
+    /** Deployment country pin (ISO 3166-1 alpha-2). Shop staff are anchored
+     *  to this cell — home_country is the deployment country, not derived
+     *  from the staff member's MSISDN. Set via INNBUCKS_COUNTRY env var. */
+    @Value("${innbucks.country:ZW}")
+    private String deploymentCountry;
 
     @Transactional
     public UserResponseDTO createShopAdmin(CreateShopAdminDTO req) {
@@ -141,7 +148,9 @@ public class ShopStaffService {
         if (userRepository.existsByEmail(email)) {
             throw badRequest("Email already registered");
         }
-        if (userRepository.existsByPhoneNumber(phone)) {
+        // Step 4: composite (phone, home_country) check matching the new
+        // uk_users_phone_country constraint. Staff are anchored to this cell.
+        if (userRepository.existsByPhoneNumberAndHomeCountry(phone, deploymentCountry)) {
             throw badRequest("Phone number already registered");
         }
         return User.builder()
@@ -150,6 +159,7 @@ public class ShopStaffService {
                 .lastName(lastName)
                 .email(email)
                 .phoneNumber(phone)
+                .homeCountry(deploymentCountry)
                 .password(passwordEncoder.encode(DEFAULT_STAFF_PASSWORD))
                 .roles(EnumSet.of(role))
                 // Grants the loyalty bundle's microservices (loyalty + payments) on the JWT.

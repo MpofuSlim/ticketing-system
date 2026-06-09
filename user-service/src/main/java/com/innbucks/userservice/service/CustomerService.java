@@ -15,8 +15,10 @@ import com.innbucks.userservice.repository.CustomerProfileRepository;
 import com.innbucks.userservice.repository.DeviceRepository;
 import com.innbucks.userservice.repository.PendingRegistrationRepository;
 import com.innbucks.userservice.repository.UserRepository;
+import com.innbucks.userservice.util.MsisdnCountryResolver;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,6 +42,12 @@ public class CustomerService {
     private final OtpService otpService;
     private final OradianClient oradianClient;
 
+    /** Deployment country fallback for MSISDNs whose dialling prefix isn't an
+     *  InnBucks-market entry (rare; foreign numbers). Set via INNBUCKS_COUNTRY
+     *  env var; same key the rest of the service is pinned to. */
+    @Value("${innbucks.country:ZW}")
+    private String deploymentCountry;
+
     /**
      * Tier 1 no longer creates a User or CustomerProfile. It stashes the phone + hashed password
      * in a pending_registrations row and fires an OTP. The account is materialised later by
@@ -48,7 +56,13 @@ public class CustomerService {
     @Transactional
     public CustomerRegistrationResponseDTO registerTier1(CustomerTier1RegisterDTO request) {
         log.info("Customer tier 1 registration phone={}", MsisdnMasking.mask(request.getPhoneNumber()));
-        if (userRepository.existsByPhoneNumber(request.getPhoneNumber())) {
+        // Step 4: use the composite (phone, home_country) check rather than
+        // phone alone, matching the new uk_users_phone_country constraint.
+        // In a single-cell deployment every existing row's home_country is
+        // ZW, so this is behaviourally identical to existsByPhoneNumber today
+        // — but the right tuple keeps reading honest for cell #2 onwards.
+        String homeCountry = MsisdnCountryResolver.resolve(request.getPhoneNumber()).orElse(deploymentCountry);
+        if (userRepository.existsByPhoneNumberAndHomeCountry(request.getPhoneNumber(), homeCountry)) {
             throw new RuntimeException("Phone number already registered");
         }
 
