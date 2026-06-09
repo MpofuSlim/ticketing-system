@@ -5,7 +5,6 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
-import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
@@ -42,10 +41,16 @@ public class SecurityConfig {
 
     private final JwtFilter jwtFilter;
 
+    // CORS lives exclusively on the api-gateway (globalcors + RemoveResponseHeader
+    // filters per PR #182). Browsers only ever talk to the gateway, so a per-service
+    // CORS filter here would emit a second set of headers that collide with the
+    // gateway's and trip its DefaultCorsProcessor with "Invalid CORS request".
+    // Don't re-introduce a service-level CORS config without also un-doing the
+    // gateway-side strip.
+
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
-                .cors(Customizer.withDefaults())
                 .csrf(csrf -> csrf.disable())
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
