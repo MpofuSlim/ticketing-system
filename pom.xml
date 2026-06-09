@@ -44,11 +44,24 @@
              (HIGH): client-side DoS via malicious SCRAM-SHA-256 response. 42.7.11
              fixes it. Drop on Boot upgrade once BOM catches up. -->
         <postgresql.version>42.7.11</postgresql.version>
-        <!-- netty pulled in by api-gateway (Spring Cloud Gateway) and user-service.
-             4.2.12.Final has CVE-2026-42579 (HIGH, codec-dns). 4.2.13.Final fixes
-             it. Spring Boot's BOM uses ${netty.version} across every netty-*
-             artifact, so overriding the property here cascades cleanly. -->
-        <netty.version>4.2.14.Final</netty.version>
+        <!-- netty pulled in by api-gateway (Spring Cloud Gateway), user-service
+             (WebFlux DNS resolver) and reactor-netty paths in other services.
+             4.2.14.Final has four HIGH CVEs (all reported by Trivy 2026-06-09):
+               CVE-2026-44249  io.netty:netty-handler       IPv6 Subnet Filter
+                                                             Bypass via Incorrect
+                                                             Comparator Masking
+               CVE-2026-45416  io.netty:netty-handler       SNIHandler pre-allocates
+                                                             up to 16 MiB from nine
+                                                             attacker-controlled bytes
+               CVE-2026-45674  io.netty:netty-resolver-dns  DNS cache poisoning via
+                                                             missing CNAME bailiwick
+                                                             checks
+               CVE-2026-47691  io.netty:netty-resolver-dns  Insufficient bailiwick
+                                                             validation for NS records
+             4.2.15.Final fixes all four. The netty-bom imported below pins every
+             netty-* artifact to ${netty.version}, so this single property bump
+             cascades cleanly to every service. -->
+        <netty.version>4.2.15.Final</netty.version>
         <spring.cloud.version>2025.1.1</spring.cloud.version>
         <springdoc.version>3.0.3</springdoc.version>
         <testcontainers.version>1.21.3</testcontainers.version>
