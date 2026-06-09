@@ -30,13 +30,33 @@ public class User {
     @Column(nullable = false)
     private String lastName;
 
-    @Column(unique = true, nullable = false)
+    // No `unique = true` here as of step 4 — the actual constraint is
+    // composite (phone_number, home_country); see V18 migration. JPA's
+    // unique=true is a schema-generation hint only (ignored under
+    // ddl-auto: validate), so the change is cosmetic / honest, not
+    // load-bearing.
+    @Column(nullable = false)
     private String phoneNumber;
 
     @Column(unique = true)
     private String email;
 
+    /** Free-text registered country (e.g. "Zimbabwe"). Account metadata,
+     *  carried into the legacy `country` JWT claim. Distinct from
+     *  {@link #homeCountry} below, which is the ISO routing key. */
     private String country;
+
+    /**
+     * ISO 3166-1 alpha-2 routing key (e.g. {@code ZW}). The customer's
+     * home cell — for customer rows it's derived from the MSISDN prefix at
+     * registration; for system-user rows it's the deployment's
+     * {@code INNBUCKS_COUNTRY}. Defaulted to "ZW" in the builder so test
+     * fixtures don't break, but production paths always set it explicitly.
+     * Part of the composite {@code uk_users_phone_country} constraint.
+     */
+    @Column(name = "home_country", nullable = false, length = 2)
+    @Builder.Default
+    private String homeCountry = "ZW";
 
     @Column(nullable = false)
     private String password;

@@ -27,6 +27,12 @@ spring:
     enabled: ${FLYWAY_ENABLED:true}
     baseline-on-migrate: false
     locations: classpath:db/migration
+    # Migration placeholders. V18 needs the deployment's INNBUCKS_COUNTRY as
+    # a fallback when backfilling home_country for users whose MSISDN prefix
+    # isn't in the InnBucks markets table (rare; foreign numbers registered
+    # before the cell model existed).
+    placeholders:
+      innbucks_country: ${INNBUCKS_COUNTRY:ZW}
 
   # Redis backs the auth-endpoint rate limiters. Same instance the
   # payment-service velocity counters use — different key prefix.

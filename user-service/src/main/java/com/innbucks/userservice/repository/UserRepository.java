@@ -16,6 +16,16 @@ public interface UserRepository extends JpaRepository<User, Long> {
     Optional<User> findByPhoneNumber(String phoneNumber);
     boolean existsByEmail(String email);
     boolean existsByPhoneNumber(String phoneNumber);
+    /**
+     * Composite uniqueness check matching the {@code uk_users_phone_country}
+     * constraint (V18). Use this from new-user paths so the existence check
+     * and the DB constraint agree on the identity tuple; the older
+     * {@link #existsByPhoneNumber(String)} stays for paths that legitimately
+     * want "is this phone in use anywhere in this cell" (in practice that's
+     * the same thing today, since one cell == one country, but the right
+     * tuple keeps reading honest).
+     */
+    boolean existsByPhoneNumberAndHomeCountry(String phoneNumber, String homeCountry);
     List<User> findByActive(boolean active);
     List<User> findByLoyaltyShopId(UUID loyaltyShopId);
     List<User> findByLoyaltyMerchantId(UUID loyaltyMerchantId);

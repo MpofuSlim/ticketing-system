@@ -14,8 +14,10 @@ import com.innbucks.userservice.repository.OtpRepository;
 import com.innbucks.userservice.repository.OtpRetryAttemptRepository;
 import com.innbucks.userservice.repository.PendingRegistrationRepository;
 import com.innbucks.userservice.repository.UserRepository;
+import com.innbucks.userservice.util.MsisdnCountryResolver;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -46,6 +48,12 @@ public class OtpService {
     private final com.innbucks.userservice.integration.LoyaltyServiceClient loyaltyServiceClient;
     private final WhatsAppNotificationClient whatsAppNotificationClient;
     private final SmsNotificationClient smsNotificationClient;
+
+    /** Deployment country fallback for the rare case where a pending
+     *  registration carries an MSISDN whose dialling prefix isn't in the
+     *  InnBucks markets table. Set via INNBUCKS_COUNTRY env var. */
+    @Value("${innbucks.country:ZW}")
+    private String deploymentCountry;
 
     /**
      * Send an OTP with rate-limit enforcement. Used by the public /auth/otp/request endpoint
@@ -184,6 +192,13 @@ public class OtpService {
             // OTP — there's no human approver in the customer onboarding flow,
             // unlike business roles (EVENT_ORGANIZER / MERCHANT_ADMIN) which
             // stay inactive until a SUPER_ADMIN approves them via /admin/users.
+            // Step 4: persist home_country on the row at materialisation
+            // time. Derived from the MSISDN prefix via MsisdnCountryResolver;
+            // foreign numbers fall back to the deployment country so the new
+            // NOT NULL column is satisfied without rejecting any historical
+            // registration shape.
+            String homeCountry = MsisdnCountryResolver.resolve(pending.getPhoneNumber())
+                    .orElse(deploymentCountry);
             User user = User.builder()
                     .firstName("Customer")
                     .lastName("Pending")
@@ -192,6 +207,7 @@ public class OtpService {
                     .roles(EnumSet.of(User.Role.CUSTOMER))
                     .mfaEnabled(false)
                     .active(true)
+                    .homeCountry(homeCountry)
                     .build();
             userRepository.save(user);
             CustomerProfile profile = CustomerProfile.builder()

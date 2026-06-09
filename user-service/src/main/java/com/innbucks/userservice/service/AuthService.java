@@ -42,6 +42,13 @@ public class AuthService {
     @Value("${innbucks.account-lockout.duration-minutes:30}")
     private int lockoutDurationMinutes;
 
+    /** Deployment country pin (ISO 3166-1 alpha-2). System users (EVENT_ORGANIZER,
+     *  MERCHANT_ADMIN) created here are by definition rooted in THIS cell, so
+     *  their home_country is the deployment country — no MSISDN derivation
+     *  for the staff path. Set via INNBUCKS_COUNTRY env var. */
+    @Value("${innbucks.country:ZW}")
+    private String deploymentCountry;
+
     // SUPER_ADMIN accounts are seeded without a country, but downstream
     // services (e.g. event-service createEvent) reject a token that carries
     // no country claim. Default superadmins to Zimbabwe. Scoped to
@@ -101,7 +108,10 @@ public class AuthService {
             log.warn("Registration failed, email already registered email={}", request.getEmail());
             throw new RuntimeException("Email already registered");
         }
-        if (userRepository.existsByPhoneNumber(request.getPhoneNumber())) {
+        // Step 4: use the composite (phone, home_country) check matching the
+        // new uk_users_phone_country constraint. System users are anchored
+        // to this cell's deployment country.
+        if (userRepository.existsByPhoneNumberAndHomeCountry(request.getPhoneNumber(), deploymentCountry)) {
             log.warn("Registration failed, phone already registered phone={}", MsisdnMasking.mask(request.getPhoneNumber()));
             throw new RuntimeException("Phone number already registered");
         }
@@ -118,6 +128,10 @@ public class AuthService {
                 .phoneNumber(request.getPhoneNumber())
                 .email(request.getEmail())
                 .country(request.getCountry())
+                // home_country is the cell-routing key — different from the
+                // free-text `country` field above. Staff are rooted in the
+                // cell they were created in.
+                .homeCountry(deploymentCountry)
                 .password(passwordEncoder.encode("!PENDING-" + java.util.UUID.randomUUID()))
                 .roles(roles)
                 .defaultServices(bundles)

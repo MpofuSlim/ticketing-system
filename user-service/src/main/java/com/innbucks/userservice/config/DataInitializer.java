@@ -39,6 +39,11 @@ public class DataInitializer implements CommandLineRunner {
     @Value("${BOOTSTRAP_ADMIN_PASSWORD:}")
     private String adminPassword;
 
+    /** Deployment country pin (ISO 3166-1 alpha-2). The seeded admin is
+     *  anchored to this cell; same key the rest of the service uses. */
+    @Value("${innbucks.country:ZW}")
+    private String deploymentCountry;
+
     @Override
     @Transactional
     public void run(String... args) {
@@ -59,6 +64,10 @@ public class DataInitializer implements CommandLineRunner {
                     .email(adminEmail)
                     .password(passwordEncoder.encode(password))
                     .phoneNumber("0000000000")
+                    // home_country = the deployment country. The seed phone is
+                    // a placeholder, not an MSISDN, so we can't derive — use
+                    // the cell pin instead.
+                    .homeCountry(deploymentCountry)
                     .roles(EnumSet.of(User.Role.SUPER_ADMIN))
                     .defaultServices(new LinkedHashSet<>(Services.ALL_BUNDLES))
                     .active(true)
