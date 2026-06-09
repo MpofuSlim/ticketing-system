@@ -384,12 +384,27 @@ services:
       retries: 10
       start_period: 45s
 
-  # Dummy payment-service: POST /payments confirms the matching booking via
-  # booking-service so the booking journey can complete end-to-end. No real
-  # processor — every call "succeeds" if booking-service accepts the confirm.
-  # Start with: docker compose --profile payments up
+  # payment-service: real money movement for wallet operations + a
+  # placeholder ticket-purchase confirm path.
+  #
+  # PRODUCTION-GRADE TODAY:
+  #   - Wallet transfers / withdrawals via Oradian middleware
+  #     (TransfersController + OradianMiddlewareClient with Retry +
+  #     CircuitBreaker, PENDING/SUCCEEDED/FAILED ledger in transactions
+  #     table, Redis idempotency-key replay cache, Kafka event publication,
+  #     ReconciliationJob safety net).
+  #   - Shop loyalty checkout — real points debit/credit via loyalty-service.
+  #
+  # STILL A STUB:
+  #   - POST /payments (the ticket-purchase confirm): no real charge — calls
+  #     booking-service /confirm and stamps a fake receipt. Waits on the
+  #     veengu integration to become a real merchant collection.
+  #
+  # NOT optional: this service is part of the default stack. (Used to live
+  # behind a "payments" docker compose profile when it was a pure dummy;
+  # the profile was removed so `docker compose up -d` brings it up with
+  # the rest of the fleet.)
   payment-service:
-    profiles: ["payments"]
     build:
       context: .
       dockerfile: payment-service/Dockerfile
