@@ -4,6 +4,7 @@ import jakarta.servlet.*;
 import jakarta.servlet.http.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -25,6 +26,11 @@ public class JwtFilter extends OncePerRequestFilter {
     // read it via @RequestAttribute without re-parsing the token. Only set
     // when a valid Bearer token carrying a `country` claim is present.
     public static final String COUNTRY_ATTRIBUTE = "jwtCountry";
+
+    /** MDC key for the customer's home-country routing tag, sourced from
+     *  the {@code homeCountry} JWT claim. Distinct from {@code
+     *  CountryMdcConfig.MDC_KEY} ("country"), which is the DEPLOYMENT pin. */
+    public static final String HOME_COUNTRY_MDC_KEY = "homeCountry";
 
     private static final List<String> EXCLUDED_PATHS = List.of(
             "/swagger-ui",
@@ -104,7 +110,24 @@ public class JwtFilter extends OncePerRequestFilter {
             return;
         }
 
-        filterChain.doFilter(request, response);
+        // Push the customer's homeCountry into MDC for the downstream chain.
+        // JwtUtil.extractHomeCountry returns null on any failure / missing
+        // claim (legacy tokens, staff tokens), so we just skip the put in
+        // those cases. Cleared in finally so request-thread recycling doesn't
+        // leak it into the next request.
+        String homeCountry = jwtUtil.extractHomeCountry(token);
+        boolean mdcSet = false;
+        if (homeCountry != null && !homeCountry.isBlank()) {
+            MDC.put(HOME_COUNTRY_MDC_KEY, homeCountry);
+            mdcSet = true;
+        }
+        try {
+            filterChain.doFilter(request, response);
+        } finally {
+            if (mdcSet) {
+                MDC.remove(HOME_COUNTRY_MDC_KEY);
+            }
+        }
     }
 
     private void writeUnauthorized(HttpServletResponse response, String code, String message) throws IOException {

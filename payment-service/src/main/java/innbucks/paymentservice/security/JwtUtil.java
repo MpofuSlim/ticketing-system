@@ -58,6 +58,23 @@ public class JwtUtil {
         return claims.get("tier", Integer.class);
     }
 
+    /**
+     * Extract the {@code homeCountry} claim (ISO 3166-1 alpha-2, e.g.
+     * {@code ZW}) — the customer's MSISDN-derived routing key set by
+     * user-service's JwtUtil at mint time. Returns null on any failure or
+     * when the claim is absent (legacy tokens minted before the step-1
+     * change; staff tokens with no MSISDN; customers whose phone prefix
+     * isn't a known InnBucks market). JwtFilter pushes the value into MDC
+     * for the request's lifetime so logs carry the customer's country
+     * alongside the deployment country.
+     */
+    public String extractHomeCountry(String token) {
+        Claims claims = parseOrNull(token);
+        if (claims == null) return null;
+        String home = claims.get("homeCountry", String.class);
+        return (home == null || home.isBlank()) ? null : home;
+    }
+
     /** True iff the token's signature, expiry, and structure are all valid. */
     public boolean isTokenValid(String token) {
         return parseOrNull(token) != null;
