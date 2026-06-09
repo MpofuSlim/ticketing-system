@@ -2,20 +2,13 @@ package com.innbucks.seatservice.config;
 
 import com.innbucks.seatservice.security.JwtFilter;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
-import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
-import org.springframework.web.cors.CorsConfiguration;
-import org.springframework.web.cors.CorsConfigurationSource;
-import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
-
-import java.util.List;
 
 @Configuration
 @EnableMethodSecurity
@@ -24,18 +17,16 @@ public class SecurityConfig {
 
     private final JwtFilter jwtFilter;
 
-    // Until the corresponding CorsConfigurationSource bean below landed,
-    // the `cors.allowed-origins` property declared in application.yaml
-    // was dead config — direct-to-port browser calls (anything bypassing
-    // the gateway) were silently rejected by the browser. Mirrors
-    // loyalty-service's pattern.
-    @Value("${cors.allowed-origins:*}")
-    private List<String> allowedOrigins;
+    // CORS lives exclusively on the api-gateway (globalcors + RemoveResponseHeader
+    // filters per PR #182). Browsers only ever talk to the gateway, so a per-service
+    // CorsConfigurationSource here would just emit a second set of headers that
+    // collide with the gateway's and trip its DefaultCorsProcessor with "Invalid
+    // CORS request". Don't re-introduce a service-level CORS config without also
+    // un-doing the gateway-side strip.
 
     @Bean
     public SecurityFilterChain apiChain(HttpSecurity http) throws Exception {
         http
-                .cors(Customizer.withDefaults())
                 .csrf(csrf -> csrf.disable())
                 .headers(headers -> headers.frameOptions(frame -> frame.sameOrigin()))
                 .authorizeHttpRequests(auth -> auth
@@ -67,25 +58,5 @@ public class SecurityConfig {
                 )
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
         return http.build();
-    }
-
-    @Bean
-    public CorsConfigurationSource corsConfigurationSource() {
-        CorsConfiguration config = new CorsConfiguration();
-        // Patterns (not literal origins) so a port-wildcard in `cors.allowed-origins`
-        // — e.g. http://localhost:[*] — works alongside allowCredentials=true,
-        // which would otherwise reject any wildcard via setAllowedOrigins.
-        // NB: do NOT add a host wildcard like https://*.vercel.app here — with
-        // credentials it trusts every attacker-controlled subdomain. Use exact origins.
-        config.setAllowedOriginPatterns(allowedOrigins);
-        config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        config.setAllowedHeaders(List.of("*"));
-        config.setExposedHeaders(List.of("*"));
-        config.setAllowCredentials(true);
-        config.setMaxAge(3600L);
-
-        UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
-        source.registerCorsConfiguration("/**", config);
-        return source;
     }
 }
