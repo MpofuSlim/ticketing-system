@@ -342,7 +342,32 @@ spring:
                     key-resolver: "#{@gatewayKeyResolver}"
 
           default-filters:
-            - DedupeResponseHeader=Access-Control-Allow-Credentials Access-Control-Allow-Origin Access-Control-Allow-Headers Access-Control-Allow-Methods, RETAIN_FIRST
+            # The gateway's globalcors is the SOLE source of CORS headers on
+            # responses. Every downstream service (event/seat/booking/payment/
+            # loyalty/user) also configures its own CorsConfigurationSource and
+            # decorates responses with Access-Control-* + Vary headers — so a
+            # proxied response carries CORS headers TWICE. Spring Cloud
+            # Gateway's DefaultCorsProcessor then sees the doubled response
+            # and rejects with HTTP 403 "Invalid CORS request" — visible in
+            # the browser as a generic CORS failure even though the origin is
+            # allowed. (DedupeResponseHeader=...,RETAIN_FIRST helps for exact
+            # duplicates but not the asymmetric Vary multiplication that
+            # actually trips the processor.)
+            #
+            # Strip every CORS-related header coming back from upstream so
+            # globalcors is the only writer. OPTIONS preflights are handled
+            # entirely by the gateway (never forwarded), so this affects only
+            # proxied responses — which is exactly where the duplication
+            # arises. The long-term cleanup is to delete the per-service CORS
+            # configs entirely; this filter is the immediate, no-deploy-risk
+            # fix that unblocks the FE today.
+            - RemoveResponseHeader=Access-Control-Allow-Origin
+            - RemoveResponseHeader=Access-Control-Allow-Credentials
+            - RemoveResponseHeader=Access-Control-Allow-Headers
+            - RemoveResponseHeader=Access-Control-Allow-Methods
+            - RemoveResponseHeader=Access-Control-Expose-Headers
+            - RemoveResponseHeader=Access-Control-Max-Age
+            - RemoveResponseHeader=Vary
 
           globalcors:
             add-to-simple-url-handler-mapping: true
