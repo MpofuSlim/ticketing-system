@@ -106,4 +106,35 @@ class JwtUtilTest {
         String legacy = jwtUtil.generateToken("u@example.com", "CUSTOMER", 2, true);
         assertEquals(0L, jwtUtil.extractTokenVersion(legacy));
     }
+
+    @Test
+    void generateToken_stampsHomeCountryFromMsisdn() {
+        // Step 1 of the multi-cell roadmap: every token minted with a
+        // recognised MSISDN carries an ISO 3166-1 alpha-2 routing key. ZW
+        // for +263, KE for +254 — the eventual edge will read this to send
+        // each customer to their home cell.
+        String zw = jwtUtil.generateToken("zw@example.com", "CUSTOMER", 2, true, "+263782606983");
+        assertEquals("ZW", jwtUtil.extractHomeCountry(zw));
+
+        String ke = jwtUtil.generateToken("ke@example.com", "CUSTOMER", 2, true, "+254712345678");
+        assertEquals("KE", jwtUtil.extractHomeCountry(ke));
+    }
+
+    @Test
+    void generateToken_omitsHomeCountryWhenPhoneIsAbsent() {
+        // Staff / admin tokens authenticate by email, not phone, so they
+        // have no MSISDN to derive from. The claim is omitted (null) — the
+        // resolver never invents a default cell.
+        String staff = jwtUtil.generateToken("admin@example.com", "SUPER_ADMIN", 4, true);
+        assertNull(jwtUtil.extractHomeCountry(staff));
+    }
+
+    @Test
+    void generateToken_omitsHomeCountryForUnknownPrefix() {
+        // A customer registered with a phone outside the InnBucks markets
+        // (here +1, North America) must NOT get a guessed homeCountry —
+        // routing them to a wrong cell would be worse than routing nowhere.
+        String foreign = jwtUtil.generateToken("foreign@example.com", "CUSTOMER", 2, true, "+15551234567");
+        assertNull(jwtUtil.extractHomeCountry(foreign));
+    }
 }

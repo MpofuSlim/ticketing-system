@@ -1,5 +1,6 @@
 package com.innbucks.userservice.security;
 
+import com.innbucks.userservice.util.MsisdnCountryResolver;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtBuilder;
 import io.jsonwebtoken.JwtException;
@@ -94,6 +95,18 @@ public class JwtUtil {
         if (phoneNumber != null && !phoneNumber.isBlank()) {
             builder.claim("phoneNumber", phoneNumber);
         }
+        // homeCountry: ISO 3166-1 alpha-2 derived from the MSISDN dialling
+        // prefix. Purpose-built routing key for the eventual per-country
+        // cell architecture — completely separate from the legacy `country`
+        // claim above (which is free-text account metadata from
+        // users.country, often blank for customers). Additive: every
+        // existing token consumer keeps reading `country`; new consumers
+        // that need the routing key read `homeCountry`. Resolver returns
+        // empty for unknown prefixes — we omit the claim rather than
+        // guess, because guessing on the auth path puts customers in the
+        // wrong cell.
+        MsisdnCountryResolver.resolve(phoneNumber)
+                .ifPresent(iso -> builder.claim("homeCountry", iso));
         if (merchantId != null) {
             builder.claim("merchantId", merchantId.toString());
         }
@@ -238,6 +251,20 @@ public class JwtUtil {
 
     public String extractCountry(String token) {
         return getClaims(token).get("country", String.class);
+    }
+
+    /**
+     * ISO 3166-1 alpha-2 country code derived from the MSISDN at mint
+     * time (e.g. {@code ZW}, {@code KE}). Routing key for the multi-cell
+     * deployment model — every service can read it from the verified
+     * token without a database lookup. Returns {@code null} for tokens
+     * minted before this claim landed, for users with no phone number
+     * (staff tokens), or for MSISDNs whose prefix isn't an InnBucks
+     * target market. Callers must treat null as "country unknown" —
+     * never as a fallback to a default cell.
+     */
+    public String extractHomeCountry(String token) {
+        return getClaims(token).get("homeCountry", String.class);
     }
 
     public UUID extractMerchantId(String token) {
