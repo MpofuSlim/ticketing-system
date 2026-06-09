@@ -76,6 +76,11 @@ loyalty:
 # (today: user-service at login) when calling /loyalty/internal/**. Must match
 # the value configured on the caller side. Empty disables internal endpoints.
 innbucks:
+  # Multi-cell country pin. Every running JVM is anchored to a single InnBucks
+  # market — startup refuses to boot with an unknown value (see CountryMdcConfig).
+  # Default ZW because the current deployment is the Zimbabwe home market;
+  # cell #2 onwards MUST set INNBUCKS_COUNTRY explicitly per deployment.
+  country: ${INNBUCKS_COUNTRY:ZW}
   internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
 
 springdoc:
@@ -130,8 +135,12 @@ management:
 
 
 logging:
+  # Log pattern carries two country tags:
+  #   country     — deployment pin (CountryMdcConfig, every request)
+  #   homeCountry — customer's JWT routing claim (JwtFilter, authenticated requests)
+  # A mismatch between the two (post step 7 edge routing) is a wrong-cell signal.
   pattern:
-    level: "%5p [${spring.application.name:-},%X{traceId:-},%X{spanId:-},%X{correlationId:-}]"
+    level: "%5p [${spring.application.name:-},%X{country:-},%X{homeCountry:-},%X{traceId:-},%X{spanId:-},%X{correlationId:-}]"
 
 # CORS is configured exclusively on the api-gateway (per PR #182 + the per-service
 # CORS removal). Don't reintroduce a `cors:` block here without first reverting
