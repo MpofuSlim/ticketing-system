@@ -36,16 +36,28 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Dummy payment endpoint. POSTing here flips the matching booking from
- * PENDING to CONFIRMED via booking-service so the booking journey can be
- * completed end-to-end. No real payment processor is involved — every call
- * "succeeds" as long as booking-service accepts the confirm.
+ * Customer-facing payment endpoints.
+ *
+ * <ul>
+ *   <li>{@code POST /payments} — ticket-purchase confirmation. <b>Stub</b>
+ *       pending the veengu real-money integration: confirms the matching
+ *       booking via booking-service without charging a card or moving
+ *       funds. Returns a receipt populated from booking-service's
+ *       {@code totalAmount}.</li>
+ *   <li>{@code POST /payments/shop-checkout} — pay at a shop with cash,
+ *       loyalty points, or a mix. <b>Moves real loyalty points</b> via
+ *       loyalty-service (earn on the cash leg, burn on the points leg —
+ *       both committed atomically). Wallet operations from
+ *       {@link TransfersController} are a separate surface and use real
+ *       Oradian-backed money.</li>
+ * </ul>
  */
 @RestController
 @RequestMapping("/payments")
 @RequiredArgsConstructor
 @Slf4j
-@Tag(name = "Payments", description = "Dummy payment processing — confirms bookings without taking real money.")
+@Tag(name = "Payments", description = "Customer payment endpoints. Shop checkout moves real loyalty points; "
+        + "ticket-purchase confirm is a stub pending the veengu real-money integration.")
 public class PaymentController {
 
     private final BookingServiceClient bookingServiceClient;
@@ -54,12 +66,13 @@ public class PaymentController {
 
     @PostMapping
     @Operation(
-            summary = "Process payment (dummy)",
+            summary = "Confirm a ticket purchase (stub — no real charge yet)",
             description = "Public endpoint — no Authorization header required. Confirms the booking referenced " +
                     "by `bookingId` by calling booking-service's PATCH /bookings/{id}/confirm. " +
-                    "No real charge is made; the receipt's `amountPaid` is read from booking-service's " +
-                    "`totalAmount` (the source of truth) — clients do not quote the amount. " +
-                    "`currency` (defaults to USD) and `cardLast4` are optional and echoed back on the receipt."
+                    "Stub pending the veengu real-money integration: no card is charged and no funds are moved. " +
+                    "The receipt's `amountPaid` is read from booking-service's `totalAmount` (the source of truth) " +
+                    "— clients do not quote the amount. `currency` (defaults to USD) and `cardLast4` are optional " +
+                    "and echoed back on the receipt."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -169,12 +182,13 @@ public class PaymentController {
 
     @PostMapping("/shop-checkout")
     @Operation(
-            summary = "Pay at a shop (cash / points / mixed) — dummy",
-            description = "Public endpoint. No real money changes hands; the call delegates straight to " +
-                    "loyalty-service's internal shop-checkout. " +
-                    "The cash portion earns points per the merchant's loyalty rules (the existing earn rule " +
-                    "+ any active campaign multiplier). The points portion is burned from the customer's " +
-                    "main wallet. Both legs commit atomically inside loyalty-service. " +
+            summary = "Pay at a shop (cash / points / mixed)",
+            description = "Authenticated endpoint. Delegates to loyalty-service's internal shop-checkout to " +
+                    "move REAL loyalty points: the cash portion earns points per the merchant's loyalty rules " +
+                    "(the existing earn rule + any active campaign multiplier); the points portion is burned " +
+                    "from the customer's main wallet. Both legs commit atomically inside loyalty-service. " +
+                    "The cash amount itself is not collected here — it is reported informationally (presumably " +
+                    "settled at the shop counter). " +
                     "Set the amounts according to `paymentMethod`: CASH → only `cashAmount`; POINTS → only " +
                     "`pointsAmount`; CASH_AND_POINTS → both."
     )
