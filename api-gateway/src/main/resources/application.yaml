@@ -341,33 +341,21 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
-          default-filters:
-            # The gateway's globalcors is the SOLE source of CORS headers on
-            # responses. Every downstream service (event/seat/booking/payment/
-            # loyalty/user) also configures its own CorsConfigurationSource and
-            # decorates responses with Access-Control-* + Vary headers — so a
-            # proxied response carries CORS headers TWICE. Spring Cloud
-            # Gateway's DefaultCorsProcessor then sees the doubled response
-            # and rejects with HTTP 403 "Invalid CORS request" — visible in
-            # the browser as a generic CORS failure even though the origin is
-            # allowed. (DedupeResponseHeader=...,RETAIN_FIRST helps for exact
-            # duplicates but not the asymmetric Vary multiplication that
-            # actually trips the processor.)
-            #
-            # Strip every CORS-related header coming back from upstream so
-            # globalcors is the only writer. OPTIONS preflights are handled
-            # entirely by the gateway (never forwarded), so this affects only
-            # proxied responses — which is exactly where the duplication
-            # arises. The long-term cleanup is to delete the per-service CORS
-            # configs entirely; this filter is the immediate, no-deploy-risk
-            # fix that unblocks the FE today.
-            - RemoveResponseHeader=Access-Control-Allow-Origin
-            - RemoveResponseHeader=Access-Control-Allow-Credentials
-            - RemoveResponseHeader=Access-Control-Allow-Headers
-            - RemoveResponseHeader=Access-Control-Allow-Methods
-            - RemoveResponseHeader=Access-Control-Expose-Headers
-            - RemoveResponseHeader=Access-Control-Max-Age
-            - RemoveResponseHeader=Vary
+          # No default-filters: PR #184 deleted the per-service CORS configs
+          # so the downstream services no longer emit Access-Control-* / Vary
+          # headers at all. The post-route RemoveResponseHeader filters PR #182
+          # added were running AFTER globalcors wrote its headers, so they
+          # stripped the gateway's own CORS output too — leaving proxied
+          # responses with no CORS headers at all, which then failed in the
+          # browser as "blocked by CORS policy: No 'Access-Control-Allow-Origin'
+          # header is present". Removing the filters lets globalcors be the
+          # sole writer it was always meant to be. The OPTIONS preflight path
+          # was unaffected because globalcors short-circuits before the
+          # default-filters chain ever runs.
+          #
+          # If a future service starts emitting CORS headers again, the right
+          # fix is to remove them there — NOT to reintroduce the strip here,
+          # which by definition would also strip the gateway's own headers.
 
           globalcors:
             add-to-simple-url-handler-mapping: true
