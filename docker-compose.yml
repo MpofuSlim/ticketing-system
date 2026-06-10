@@ -375,6 +375,12 @@ services:
       # Presented to event-service on the internal availability/consume call.
       # Must match INTERNAL_API_TOKEN on the event-service side.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
+      # WhatsApp + InnBucks-core gateways used by BookingConfirmedNotificationListener
+      # to deliver booking-confirm notifications (WhatsApp primary, SMS fallback).
+      # Same env vars user-service and payment-service already consume.
+      WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-https://maximum-implicitly-treefrog.ngrok-free.app}
+      WHATSAPP_API_KEY: ${WHATSAPP_API_KEY:?set WHATSAPP_API_KEY in .env}
+      INNBUCKS_GATEWAY_URL: ${INNBUCKS_GATEWAY_URL:-http://10.0.155.69:8088}
     ports:
       - "127.0.0.1:8084:8084"
     healthcheck:
