@@ -4,17 +4,17 @@ import com.innbucks.bookingservice.client.EventServiceClient;
 import com.innbucks.bookingservice.client.SeatServiceClient;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.AvailabilityResponseDTO;
-import com.innbucks.bookingservice.dto.AvailableSeatDTO;
 import com.innbucks.bookingservice.dto.BookingResponseDTO;
 import com.innbucks.bookingservice.dto.CategoryBookingDTO;
+import com.innbucks.bookingservice.dto.CategoryLookupDTO;
 import com.innbucks.bookingservice.dto.CreateBookingRequestDTO;
-import com.innbucks.bookingservice.dto.SeatLookupResponseDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
 import com.innbucks.bookingservice.event.BookingDomainEvent;
 import com.innbucks.bookingservice.exception.TierRequirementException;
 import com.innbucks.bookingservice.repository.BookingItemRepository;
 import com.innbucks.bookingservice.repository.BookingRepository;
+import com.innbucks.bookingservice.repository.CategoryInventoryRepository;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
@@ -37,13 +37,25 @@ class BookingServiceTest {
 
     private static final UUID DEFAULT_CATEGORY_ID = UUID.randomUUID();
 
-    /** Holds a request plus the matching seat lookup stubs so we can wire them into a mock client. */
+    private static final BigDecimal DEFAULT_PRICE = new BigDecimal("10.00");
+    private static final int DEFAULT_TOTAL_SEATS = 1000;
+
+    /**
+     * Holds a request plus the category capacity/price it resolves to (GA
+     * model). {@code prices.length} is the number of tickets requested; the
+     * category's single price is {@code prices[0]} (in GA a category has one
+     * price — multiple distinct prices in one category is not a thing).
+     */
     private static final class RequestFixture {
         final CreateBookingRequestDTO request;
-        final List<SeatLookupResponseDTO> lookups;
-        RequestFixture(CreateBookingRequestDTO request, List<SeatLookupResponseDTO> lookups) {
+        final UUID eventId;
+        final BigDecimal price;
+        final int qty;
+        RequestFixture(CreateBookingRequestDTO request, UUID eventId, BigDecimal price, int qty) {
             this.request = request;
-            this.lookups = lookups;
+            this.eventId = eventId;
+            this.price = price;
+            this.qty = qty;
         }
     }
 
@@ -51,55 +63,46 @@ class BookingServiceTest {
         UUID eventId = UUID.randomUUID();
         CreateBookingRequestDTO req = new CreateBookingRequestDTO();
         req.setEventId(eventId);
-
         List<CreateBookingRequestDTO.SeatItemRequest> seats = new ArrayList<>();
-        List<SeatLookupResponseDTO> lookups = new ArrayList<>();
-        int idx = 1;
-        for (BigDecimal price : prices) {
-            UUID seatId = UUID.randomUUID();
+        for (int i = 0; i < prices.length; i++) {
             CreateBookingRequestDTO.SeatItemRequest s = new CreateBookingRequestDTO.SeatItemRequest();
             s.setCategoryId(DEFAULT_CATEGORY_ID);
             seats.add(s);
-
-            lookups.add(SeatLookupResponseDTO.builder()
-                    .seatId(seatId)
-                    .eventId(eventId)
-                    .categoryId(DEFAULT_CATEGORY_ID)
-                    .categoryName("VIP")
-                    .sectionLabel("A")
-                    .seatNumber(idx++)
-                    .price(price)
-                    .status(SeatLookupResponseDTO.SeatStatus.LOCKED)
-                    .build());
         }
         req.setSeats(seats);
-        return new RequestFixture(req, lookups);
+        BigDecimal price = prices.length > 0 ? prices[0] : DEFAULT_PRICE;
+        return new RequestFixture(req, eventId, price, prices.length);
     }
 
-    // Wires up a mocked SeatServiceClient that:
-    //  - returns the given lookups by seatId for /seats/{id}/lookup, and
-    //  - returns the same seat IDs as the available pool for the
-    //    DEFAULT_CATEGORY_ID, so the random pick exhausts exactly the
-    //    fixture's seats (and pickRandomAvailable can't loop).
-    private SeatServiceClient stubClient(List<SeatLookupResponseDTO> lookups) {
+    // Mocked SeatServiceClient stubbing GET /seat-categories/{id} for the
+    // fixture's category — the GA model resolves capacity + price + eventId by
+    // category, not by picking a seat.
+    private SeatServiceClient stubClient(RequestFixture fx) {
         SeatServiceClient client = mock(SeatServiceClient.class);
-        for (SeatLookupResponseDTO lookup : lookups) {
-            when(client.lookupSeat(lookup.getSeatId()))
-                    .thenReturn(ApiResult.ok("Seat details retrieved successfully", lookup));
-        }
-        List<AvailableSeatDTO> available = lookups.stream()
-                .map(l -> AvailableSeatDTO.builder()
-                        .id(l.getSeatId())
-                        .categoryId(l.getCategoryId())
-                        .categoryName(l.getCategoryName())
-                        .sectionLabel(l.getSectionLabel())
-                        .seatNumber(l.getSeatNumber())
-                        .status("AVAILABLE")
-                        .build())
-                .toList();
-        when(client.getAvailableSeats(eq(DEFAULT_CATEGORY_ID), anyInt()))
-                .thenReturn(ApiResult.ok("Available seats retrieved successfully", available));
+        CategoryLookupDTO category = CategoryLookupDTO.builder()
+                .seatCategoryId(DEFAULT_CATEGORY_ID)
+                .eventId(fx.eventId)
+                .name("VIP")
+                .price(fx.price)
+                .totalSeats(DEFAULT_TOTAL_SEATS)
+                .availableSeats(DEFAULT_TOTAL_SEATS)
+                .build();
+        when(client.getCategory(DEFAULT_CATEGORY_ID))
+                .thenReturn(ApiResult.ok("Category retrieved successfully", category));
         return client;
+    }
+
+    /**
+     * Default per-category inventory mock: every seed/claim/release succeeds
+     * (tryClaim returns 1 = capacity available). Tests that need a sold-out
+     * category pass a custom mock whose tryClaim returns 0.
+     */
+    private CategoryInventoryRepository successfulInventory() {
+        CategoryInventoryRepository inv = mock(CategoryInventoryRepository.class);
+        when(inv.seedIfAbsent(any(), anyInt())).thenReturn(1);
+        when(inv.tryClaim(any(), anyInt())).thenReturn(1);
+        when(inv.release(any(), anyInt())).thenReturn(1);
+        return inv;
     }
 
     private BookingService newService(BookingRepository bookingRepo,
@@ -112,72 +115,51 @@ class BookingServiceTest {
                                        BookingItemRepository itemRepo,
                                        SeatServiceClient seatClient,
                                        ApplicationEventPublisher eventPublisher) {
+        return newService(bookingRepo, itemRepo, successfulInventory(), seatClient, eventPublisher);
+    }
+
+    private BookingService newService(BookingRepository bookingRepo,
+                                       BookingItemRepository itemRepo,
+                                       CategoryInventoryRepository inventoryRepo,
+                                       SeatServiceClient seatClient,
+                                       ApplicationEventPublisher eventPublisher) {
         // Real QrCodeGenerator — fast (in-memory ZXing) and lets us assert
-        // qrCode round-trips without mocking. Tests that don't care about
-        // QRs simply ignore the field.
-        // null loyalty/event providers — BookingService treats these as
-        // "loyalty not wired" and just confirms cash-only bookings. The
-        // applyLoyalty short-circuit means LoyaltyEarnRetryService is
-        // never invoked, so null is safe here.
-        return new BookingService(bookingRepo, itemRepo, seatClient, eventPublisher,
+        // qrCode round-trips without mocking. null loyalty/event providers —
+        // BookingService treats these as "loyalty not wired" and just confirms
+        // cash-only bookings.
+        return new BookingService(bookingRepo, itemRepo, inventoryRepo, seatClient, eventPublisher,
                 new QrCodeGenerator(), null, null, null,
                 mock(PlatformTransactionManager.class));
     }
 
     @Test
-    void createBooking_rejectsWhenPickedSeatIsAlreadyInActiveBooking() {
-        BookingRepository bookingRepo = mock(BookingRepository.class);
-        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
-        // Single-seat pool ⇒ the random pick is deterministic.
-        RequestFixture fx = request(new BigDecimal("20.00"));
-        BookingService service = newService(bookingRepo, itemRepo, stubClient(fx.lookups));
-
-        UUID clashingSeatId = fx.lookups.get(0).getSeatId();
-        BookingItem existing = BookingItem.builder().seatId(clashingSeatId).build();
-        when(itemRepo.findActiveBySeatIds(any(), eq(Booking.BookingStatus.CANCELLED)))
-                .thenReturn(List.of(existing));
-
-        RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> service.createBooking("user@example.com", 4, null, fx.request));
-        assertTrue(ex.getMessage().toLowerCase().contains("already booked"));
-        verify(bookingRepo, never()).save(any());
-        verify(itemRepo, never()).saveAllAndFlush(any());
-    }
-
-    @Test
-    void createBooking_inFlightSeatRace_translatesUniqueViolationTo409Conflict() {
-        // The findActiveBySeatIds pre-check can't see a competing booking whose
-        // transaction hasn't committed yet — that race is caught only by the DB
-        // partial unique index (uq_active_booking_item_per_seat, V5). When the
-        // loser's insert is rejected, saveAllAndFlush throws
-        // DataIntegrityViolationException. The service MUST translate that into
-        // BookingConflictException (→ 409 "already booked", retryable), NOT let
-        // it bubble to the RuntimeException catch-all as a generic 500.
+    void createBooking_rejectsWhenCategorySoldOut() {
+        // The per-category counter is the oversell guard: a claim that would
+        // push remaining below zero returns 0 rows (tryClaim), which the service
+        // turns into a 409 conflict. No booking row, no items.
         BookingRepository bookingRepo = mock(BookingRepository.class);
         BookingItemRepository itemRepo = mock(BookingItemRepository.class);
         RequestFixture fx = request(new BigDecimal("20.00"));
-        BookingService service = newService(bookingRepo, itemRepo, stubClient(fx.lookups));
 
-        // Pre-check sees nothing (the competing tx is still in-flight), so we
-        // proceed to the insert — where the DB index rejects us.
-        when(itemRepo.findActiveBySeatIds(any(), eq(Booking.BookingStatus.CANCELLED)))
-                .thenReturn(List.of());
-        when(itemRepo.saveAllAndFlush(any()))
-                .thenThrow(new org.springframework.dao.DataIntegrityViolationException(
-                        "duplicate key value violates unique constraint \"uq_active_booking_item_per_seat\""));
+        CategoryInventoryRepository soldOut = mock(CategoryInventoryRepository.class);
+        when(soldOut.seedIfAbsent(any(), anyInt())).thenReturn(0); // row already exists
+        when(soldOut.tryClaim(any(), anyInt())).thenReturn(0);     // nothing left to claim
+        BookingService service = newService(bookingRepo, itemRepo, soldOut,
+                stubClient(fx), mock(ApplicationEventPublisher.class));
 
         com.innbucks.bookingservice.exception.BookingConflictException ex = assertThrows(
                 com.innbucks.bookingservice.exception.BookingConflictException.class,
                 () -> service.createBooking("user@example.com", 4, null, fx.request));
-        assertTrue(ex.getMessage().toLowerCase().contains("already booked"),
-                "race-loser must get the retryable 'already booked' conflict, got: " + ex.getMessage());
+        assertTrue(ex.getMessage().toLowerCase().contains("not enough tickets"));
+        verify(bookingRepo, never()).save(any());
+        verify(itemRepo, never()).saveAllAndFlush(any());
     }
 
     @Test
     void createBooking_rejectsTier1CustomersOutright() {
         RequestFixture fx = request(BigDecimal.TEN);
         BookingService service = newService(mock(BookingRepository.class),
-                mock(BookingItemRepository.class), stubClient(fx.lookups));
+                mock(BookingItemRepository.class), stubClient(fx));
 
         TierRequirementException ex = assertThrows(TierRequirementException.class,
                 () -> service.createBooking("u@example.com", 1, null, fx.request));
@@ -190,7 +172,7 @@ class BookingServiceTest {
     void createBooking_rejectsWhenTier2ExceedsTwoSeats() {
         RequestFixture fx = request(BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE);
         BookingService service = newService(mock(BookingRepository.class),
-                mock(BookingItemRepository.class), stubClient(fx.lookups));
+                mock(BookingItemRepository.class), stubClient(fx));
 
         TierRequirementException ex = assertThrows(TierRequirementException.class,
                 () -> service.createBooking("u@example.com", 2, null, fx.request));
@@ -204,7 +186,7 @@ class BookingServiceTest {
         RequestFixture fx = request(BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE,
                 BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE);
         BookingService service = newService(mock(BookingRepository.class),
-                mock(BookingItemRepository.class), stubClient(fx.lookups));
+                mock(BookingItemRepository.class), stubClient(fx));
 
         BookingResponseDTO resp = service.createBooking("u@example.com", 3, null, fx.request);
 
@@ -212,18 +194,19 @@ class BookingServiceTest {
     }
 
     @Test
-    void createBooking_totalsAllSeatPrices_andCreatesOneItemPerSeat() {
+    void createBooking_totalsPricePerTicket_andCreatesOneItemPerTicket() {
         BookingRepository bookingRepo = mock(BookingRepository.class);
         BookingItemRepository itemRepo = mock(BookingItemRepository.class);
-        RequestFixture fx = request(new BigDecimal("20.00"), new BigDecimal("15.50"), new BigDecimal("4.50"));
-        BookingService service = newService(bookingRepo, itemRepo, stubClient(fx.lookups));
+        // GA: one category, one price. 3 tickets at 20.00 = 60.00.
+        RequestFixture fx = request(new BigDecimal("20.00"), new BigDecimal("20.00"), new BigDecimal("20.00"));
+        BookingService service = newService(bookingRepo, itemRepo, stubClient(fx));
 
         BookingResponseDTO resp = service.createBooking("user@example.com", 4, null, fx.request);
 
         ArgumentCaptor<Booking> savedBooking = ArgumentCaptor.forClass(Booking.class);
         verify(bookingRepo, atLeastOnce()).save(savedBooking.capture());
         Booking booking = savedBooking.getValue();
-        assertEquals(0, new BigDecimal("40.00").compareTo(booking.getTotalAmount()));
+        assertEquals(0, new BigDecimal("60.00").compareTo(booking.getTotalAmount()));
         assertEquals("user@example.com", booking.getUserEmail());
         assertEquals(Booking.BookingStatus.PENDING, booking.getStatus());
 
@@ -239,11 +222,18 @@ class BookingServiceTest {
         BookingRepository bookingRepo = mock(BookingRepository.class);
         BookingItemRepository itemRepo = mock(BookingItemRepository.class);
         RequestFixture fx = request(new BigDecimal("20.00"));
-        // Seat-service says the picked seat's category belongs to a different event
-        // than the one in the booking request.
-        SeatLookupResponseDTO mismatched = fx.lookups.get(0);
-        mismatched.setEventId(UUID.randomUUID());
-        BookingService service = newService(bookingRepo, itemRepo, stubClient(fx.lookups));
+        // seat-service says the category belongs to a different event than the
+        // one in the booking request.
+        SeatServiceClient client = mock(SeatServiceClient.class);
+        CategoryLookupDTO mismatched = CategoryLookupDTO.builder()
+                .seatCategoryId(DEFAULT_CATEGORY_ID)
+                .eventId(UUID.randomUUID()) // != fx.eventId
+                .name("VIP").price(fx.price)
+                .totalSeats(DEFAULT_TOTAL_SEATS).availableSeats(DEFAULT_TOTAL_SEATS)
+                .build();
+        when(client.getCategory(DEFAULT_CATEGORY_ID))
+                .thenReturn(ApiResult.ok("ok", mismatched));
+        BookingService service = newService(bookingRepo, itemRepo, client);
 
         RuntimeException ex = assertThrows(RuntimeException.class,
                 () -> service.createBooking("user@example.com", 4, null, fx.request));
@@ -253,39 +243,25 @@ class BookingServiceTest {
     }
 
     @Test
-    void createBooking_rejectsWhenCategoryHasNoAvailableSeats() {
-        BookingRepository bookingRepo = mock(BookingRepository.class);
-        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
-        RequestFixture fx = request(new BigDecimal("20.00"));
-        // Override the available-seats stub: empty pool simulates a sold-out category.
-        SeatServiceClient client = mock(SeatServiceClient.class);
-        when(client.getAvailableSeats(eq(DEFAULT_CATEGORY_ID), anyInt()))
-                .thenReturn(ApiResult.ok("ok", List.of()));
-        BookingService service = newService(bookingRepo, itemRepo, client);
-
-        RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> service.createBooking("user@example.com", 4, null, fx.request));
-        assertTrue(ex.getMessage().toLowerCase().contains("no available seats"));
-        verify(bookingRepo, never()).save(any());
-        verify(itemRepo, never()).saveAllAndFlush(any());
-    }
-
-    @Test
     void createBooking_derivesPriceAndCategoryFromSeatService() {
         BookingRepository bookingRepo = mock(BookingRepository.class);
         BookingItemRepository itemRepo = mock(BookingItemRepository.class);
         RequestFixture fx = request(new BigDecimal("99.99"));
-        fx.lookups.get(0).setCategoryName("Diamond");
-        fx.lookups.get(0).setSectionLabel("Z");
-        fx.lookups.get(0).setSeatNumber(42);
-        BookingService service = newService(bookingRepo, itemRepo, stubClient(fx.lookups));
+        SeatServiceClient client = mock(SeatServiceClient.class);
+        CategoryLookupDTO category = CategoryLookupDTO.builder()
+                .seatCategoryId(DEFAULT_CATEGORY_ID).eventId(fx.eventId)
+                .name("Diamond").price(new BigDecimal("99.99"))
+                .totalSeats(DEFAULT_TOTAL_SEATS).availableSeats(DEFAULT_TOTAL_SEATS)
+                .build();
+        when(client.getCategory(DEFAULT_CATEGORY_ID))
+                .thenReturn(ApiResult.ok("ok", category));
+        BookingService service = newService(bookingRepo, itemRepo, client);
 
         BookingResponseDTO resp = service.createBooking("user@example.com", 4, null, fx.request);
 
         assertEquals(0, new BigDecimal("99.99").compareTo(resp.getTotalAmount()));
         assertEquals("Diamond", resp.getItems().get(0).getCategoryName());
-        assertEquals("Z", resp.getItems().get(0).getRowLabel());
-        assertEquals(42, resp.getItems().get(0).getSeatNumber());
+        assertEquals("GA", resp.getItems().get(0).getRowLabel());
         assertEquals(0, new BigDecimal("99.99").compareTo(resp.getItems().get(0).getPriceAtBooking()));
     }
 
@@ -293,7 +269,7 @@ class BookingServiceTest {
     void createBooking_generatesUniqueTicketNumbersForEachSeat() {
         RequestFixture fx = request(BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE);
         BookingService service = newService(mock(BookingRepository.class),
-                mock(BookingItemRepository.class), stubClient(fx.lookups));
+                mock(BookingItemRepository.class), stubClient(fx));
 
         BookingResponseDTO resp = service.createBooking("u@example.com", 4, null, fx.request);
 
@@ -317,7 +293,7 @@ class BookingServiceTest {
         for (int i = 0; i < 200; i++) {
             RequestFixture fx = request(BigDecimal.ONE);
             BookingService perCall = newService(mock(BookingRepository.class),
-                    mock(BookingItemRepository.class), stubClient(fx.lookups));
+                    mock(BookingItemRepository.class), stubClient(fx));
             String ticket = perCall.createBooking("u@example.com", 4, null, fx.request)
                     .getItems().get(0).getTicketNumber();
             // Strip the leading "YYYYMMDD-" date prefix; keep the random tail.
@@ -334,7 +310,7 @@ class BookingServiceTest {
     void createBooking_producesConfirmationNumberWithExpectedFormat() {
         RequestFixture fx = request(BigDecimal.TEN);
         BookingService service = newService(mock(BookingRepository.class),
-                mock(BookingItemRepository.class), stubClient(fx.lookups));
+                mock(BookingItemRepository.class), stubClient(fx));
 
         BookingResponseDTO resp = service.createBooking("u@example.com", 4, null, fx.request);
 
@@ -503,7 +479,7 @@ class BookingServiceTest {
         ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
         RequestFixture fx = request(BigDecimal.TEN);
         BookingService service = newService(mock(BookingRepository.class),
-                mock(BookingItemRepository.class), stubClient(fx.lookups), publisher);
+                mock(BookingItemRepository.class), stubClient(fx), publisher);
 
         service.createBooking("u@example.com", 4, null, fx.request);
 
@@ -541,7 +517,7 @@ class BookingServiceTest {
         BookingRepository bookingRepo = mock(BookingRepository.class);
         BookingItemRepository itemRepo = mock(BookingItemRepository.class);
         RequestFixture fx = request(new BigDecimal("10.00"));
-        BookingService service = newService(bookingRepo, itemRepo, stubClient(fx.lookups));
+        BookingService service = newService(bookingRepo, itemRepo, stubClient(fx));
 
         java.time.LocalDateTime before = java.time.LocalDateTime.now();
         BookingResponseDTO resp = service.createBooking("u@example.com", 4, null, fx.request);
@@ -623,7 +599,7 @@ class BookingServiceTest {
         BookingRepository bookingRepo = mock(BookingRepository.class);
         BookingItemRepository itemRepo = mock(BookingItemRepository.class);
         RequestFixture fx = request(BigDecimal.TEN);
-        BookingService service = newService(bookingRepo, itemRepo, stubClient(fx.lookups));
+        BookingService service = newService(bookingRepo, itemRepo, stubClient(fx));
 
         BookingResponseDTO resp = service.createBooking(
                 "u@example.com", 4, "+254700000000", fx.request);
@@ -641,7 +617,7 @@ class BookingServiceTest {
         // System users / older JWTs don't carry the claim — booking still works.
         RequestFixture fx = request(BigDecimal.TEN);
         BookingService service = newService(mock(BookingRepository.class),
-                mock(BookingItemRepository.class), stubClient(fx.lookups));
+                mock(BookingItemRepository.class), stubClient(fx));
 
         BookingResponseDTO resp = service.createBooking("u@example.com", 4, null, fx.request);
 
@@ -692,7 +668,7 @@ class BookingServiceTest {
     void createBooking_attachesPerSeatQrCodeToEachItem() {
         RequestFixture fx = request(BigDecimal.TEN, BigDecimal.TEN);
         BookingService service = newService(mock(BookingRepository.class),
-                mock(BookingItemRepository.class), stubClient(fx.lookups));
+                mock(BookingItemRepository.class), stubClient(fx));
 
         BookingResponseDTO resp = service.createBooking("u@example.com", 4, null, fx.request);
 
@@ -803,7 +779,7 @@ class BookingServiceTest {
         when(provider.getIfAvailable()).thenReturn(eventClient);
 
         BookingService service = new BookingService(bookingRepo, itemRepo,
-                stubClient(fx.lookups), mock(ApplicationEventPublisher.class),
+                successfulInventory(), stubClient(fx), mock(ApplicationEventPublisher.class),
                 new QrCodeGenerator(), null, provider, null,
                 mock(PlatformTransactionManager.class));
 
@@ -824,7 +800,7 @@ class BookingServiceTest {
                 mock(org.springframework.beans.factory.ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(eventClient);
         return new BookingService(bookingRepo, mock(BookingItemRepository.class),
-                mock(SeatServiceClient.class), publisher,
+                successfulInventory(), mock(SeatServiceClient.class), publisher,
                 new QrCodeGenerator(), null, provider, null,
                 mock(PlatformTransactionManager.class));
     }
@@ -846,7 +822,10 @@ class BookingServiceTest {
                 .items(new ArrayList<>())
                 .build();
         for (int i = 0; i < itemCount; i++) {
-            b.getItems().add(BookingItem.builder().seatId(UUID.randomUUID()).build());
+            b.getItems().add(BookingItem.builder()
+                    .seatId(UUID.randomUUID())
+                    .categoryId(UUID.randomUUID()) // releaseInventory groups by category
+                    .build());
         }
         return b;
     }

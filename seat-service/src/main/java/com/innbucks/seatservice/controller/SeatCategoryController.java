@@ -1,6 +1,7 @@
 package com.innbucks.seatservice.controller;
 
 import com.innbucks.seatservice.dto.ApiResult;
+import com.innbucks.seatservice.dto.CategoryCapacityDTO;
 import com.innbucks.seatservice.dto.CreateCategoryRequestDTO;
 import com.innbucks.seatservice.dto.CreateCategoryResponseDTO;
 import com.innbucks.seatservice.dto.EventAnalyticsDTO;
@@ -106,6 +107,52 @@ public class SeatCategoryController {
         log.debug("GET /seat-categories eventId={}", eventId);
         List<CreateCategoryResponseDTO> result = categoryService.getCategoriesByEvent(eventId);
         return ResponseEntity.ok(ApiResult.ok("Categories retrieved successfully", result));
+    }
+
+    @GetMapping("/{id}")
+    @SecurityRequirements()
+    @Operation(summary = "Get category capacity",
+            description = "Returns a single category's capacity + pricing (totalSeats, availableSeats, price, "
+                    + "eventId). Used by booking-service to seed its per-category ticket inventory counter and "
+                    + "price a booking. Public read.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Category found",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = CategoryCapacityDTO.class),
+                            examples = @ExampleObject(name = "Category capacity", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Category retrieved successfully",
+                                      "data": {
+                                        "seatCategoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "name": "GA",
+                                        "price": 60.00,
+                                        "totalSeats": 500,
+                                        "availableSeats": 500
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "Category not found",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Not found", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "Seat category not found",
+                                      "data": null
+                                    }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<CategoryCapacityDTO>> getCategoryCapacity(
+            @Parameter(description = "Seat category UUID") @PathVariable UUID id
+    ) {
+        log.debug("GET /seat-categories/{}", id);
+        CategoryCapacityDTO result = categoryService.getCategoryCapacity(id);
+        return ResponseEntity.ok(ApiResult.ok("Category retrieved successfully", result));
     }
 
     @PostMapping

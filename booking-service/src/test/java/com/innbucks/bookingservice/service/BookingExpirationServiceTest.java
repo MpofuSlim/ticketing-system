@@ -3,6 +3,7 @@ package com.innbucks.bookingservice.service;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.event.BookingDomainEvent;
 import com.innbucks.bookingservice.repository.BookingRepository;
+import com.innbucks.bookingservice.repository.CategoryInventoryRepository;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.context.ApplicationEventPublisher;
@@ -36,7 +37,7 @@ class BookingExpirationServiceTest {
         ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
         when(repo.findExpiredPending(any())).thenReturn(List.of());
 
-        new BookingExpirationService(repo, publisher).expirePending();
+        new BookingExpirationService(repo, mock(CategoryInventoryRepository.class), publisher).expirePending();
 
         verify(repo, never()).save(any());
         verify(publisher, never()).publishEvent(any());
@@ -49,7 +50,7 @@ class BookingExpirationServiceTest {
         Booking expired = pendingBooking(LocalDateTime.now().minusMinutes(1));
         when(repo.findExpiredPending(any())).thenReturn(List.of(expired));
 
-        new BookingExpirationService(repo, publisher).expirePending();
+        new BookingExpirationService(repo, mock(CategoryInventoryRepository.class), publisher).expirePending();
 
         assertEquals(Booking.BookingStatus.CANCELLED, expired.getStatus());
         assertNull(expired.getExpiresAt());
@@ -64,7 +65,7 @@ class BookingExpirationServiceTest {
         Booking b = pendingBooking(LocalDateTime.now().minusMinutes(2));
         when(repo.findExpiredPending(any())).thenReturn(List.of(a, b));
 
-        new BookingExpirationService(repo, publisher).expirePending();
+        new BookingExpirationService(repo, mock(CategoryInventoryRepository.class), publisher).expirePending();
 
         ArgumentCaptor<Object> events = ArgumentCaptor.forClass(Object.class);
         verify(publisher, times(2)).publishEvent(events.capture());
@@ -83,7 +84,7 @@ class BookingExpirationServiceTest {
         confirmedRaceWinner.setStatus(Booking.BookingStatus.CONFIRMED); // changed under us
         when(repo.findExpiredPending(any())).thenReturn(List.of(confirmedRaceWinner));
 
-        new BookingExpirationService(repo, publisher).expirePending();
+        new BookingExpirationService(repo, mock(CategoryInventoryRepository.class), publisher).expirePending();
 
         // Status preserved, no save, no event.
         assertEquals(Booking.BookingStatus.CONFIRMED, confirmedRaceWinner.getStatus());

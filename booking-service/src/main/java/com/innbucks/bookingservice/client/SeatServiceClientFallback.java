@@ -2,6 +2,7 @@ package com.innbucks.bookingservice.client;
 
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.AvailableSeatDTO;
+import com.innbucks.bookingservice.dto.CategoryLookupDTO;
 import com.innbucks.bookingservice.dto.SeatLookupResponseDTO;
 import com.innbucks.bookingservice.exception.SeatServiceUnavailableException;
 import lombok.extern.slf4j.Slf4j;
@@ -23,6 +24,13 @@ public class SeatServiceClientFallback implements SeatServiceClient {
     @Override
     public ApiResult<SeatLookupResponseDTO> lookupSeat(UUID id) {
         log.warn("seat-service unavailable; circuit breaker / fallback engaged seatId={}", id);
+        throw new SeatServiceUnavailableException(
+                "seat-service is currently unavailable. Please retry the booking shortly.");
+    }
+
+    @Override
+    public ApiResult<CategoryLookupDTO> getCategory(UUID id) {
+        log.warn("seat-service unavailable; circuit breaker / fallback engaged categoryId={}", id);
         throw new SeatServiceUnavailableException(
                 "seat-service is currently unavailable. Please retry the booking shortly.");
     }

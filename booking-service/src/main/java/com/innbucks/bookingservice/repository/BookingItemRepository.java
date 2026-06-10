@@ -70,6 +70,21 @@ public interface BookingItemRepository extends JpaRepository<BookingItem, UUID> 
             @Param("cancelledStatus") Booking.BookingStatus cancelledStatus
     );
 
+    // Counts active (non-CANCELLED) booking items for one category. Used to
+    // seed the per-category inventory counter (remaining = total_seats −
+    // activeCount) the first time a category is booked after the GA counter
+    // landed — so an already-partially-booked category seeds to the correct
+    // remainder, not full capacity.
+    @Query("""
+        SELECT COUNT(i) FROM BookingItem i
+        WHERE i.categoryId = :categoryId
+          AND i.booking.status <> :cancelledStatus
+    """)
+    long countActiveByCategoryId(
+            @Param("categoryId") UUID categoryId,
+            @Param("cancelledStatus") Booking.BookingStatus cancelledStatus
+    );
+
     interface EventActiveItemCount {
         UUID getEventId();
         Long getCount();

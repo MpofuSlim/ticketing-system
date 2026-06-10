@@ -1,8 +1,10 @@
 package com.innbucks.bookingservice.service;
 
 import com.innbucks.bookingservice.entity.Booking;
+import com.innbucks.bookingservice.entity.BookingItem;
 import com.innbucks.bookingservice.event.BookingDomainEvent;
 import com.innbucks.bookingservice.repository.BookingRepository;
+import com.innbucks.bookingservice.repository.CategoryInventoryRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
@@ -14,6 +16,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.stream.Collectors;
 
 /**
  * Auto-cancels PENDING bookings whose seat hold has lapsed.
@@ -38,6 +43,7 @@ import java.util.List;
 public class BookingExpirationService {
 
     private final BookingRepository bookingRepository;
+    private final CategoryInventoryRepository categoryInventoryRepository;
     private final ApplicationEventPublisher eventPublisher;
 
     @Scheduled(fixedDelayString = "${app.booking.expiration-poll-interval-ms:30000}")
@@ -61,9 +67,24 @@ public class BookingExpirationService {
             booking.setStatus(Booking.BookingStatus.CANCELLED);
             booking.setExpiresAt(null);
             bookingRepository.save(booking);
+            // Return the held tickets to their category counters. Runs once per
+            // booking — the status re-check above skips an already-CANCELLED
+            // row, so no double-release.
+            releaseInventory(booking);
             eventPublisher.publishEvent(BookingDomainEvent.BookingCancelled.of(booking));
             log.info("Booking auto-cancelled, hold expired bookingId={} userEmail={}",
                     booking.getId(), booking.getUserEmail());
         }
+    }
+
+    /** Return an expired booking's tickets to their per-category counters. */
+    private void releaseInventory(Booking booking) {
+        if (booking.getItems() == null || booking.getItems().isEmpty()) {
+            return;
+        }
+        Map<UUID, Long> qtyByCategory = booking.getItems().stream()
+                .collect(Collectors.groupingBy(BookingItem::getCategoryId, Collectors.counting()));
+        qtyByCategory.forEach((categoryId, qty) ->
+                categoryInventoryRepository.release(categoryId, qty.intValue()));
     }
 }
