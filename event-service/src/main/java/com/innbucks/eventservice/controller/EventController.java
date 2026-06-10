@@ -405,6 +405,7 @@ public class EventController {
                                             "totalCapacity": 500,
                                             "availableTickets": 420,
                                             "active": true,
+                                            "rejected": false,
                                             "createdAt": "2026-04-25T08:00:00",
                                             "updatedAt": "2026-05-02T15:00:00",
                                             "seatCategories": [
@@ -483,6 +484,148 @@ public class EventController {
             result = eventService.getActiveOnlyEvents(fromDateTime, toDateTime, venue, country, category, page, size, sortBy);
         }
         return ResponseEntity.ok(ApiResult.ok("Active events retrieved successfully", result));
+    }
+
+    @GetMapping("/inactive")
+    @SecurityRequirements()
+    @Operation(
+            summary = "List events that are flagged inactive",
+            description = """
+                    Returns a paginated list of **non-deleted** events whose `active`
+                    flag is `false` — the mirror of `GET /events/active`. This is the
+                    set an organizer/admin works from: events not yet published,
+                    events deactivated after they ended, and events an admin has
+                    **rejected** (rejected events are always `active=false`, so they
+                    surface here for an admin to review and approve).
+
+                    Unlike `/events/active`, this listing intentionally **includes
+                    events whose end-time has already passed** (no upcoming-only
+                    cutoff), since "inactive" naturally covers finished events.
+
+                    Scope:
+                    - An authenticated **EVENT_ORGANIZER** sees only their own inactive events.
+                    - **SUPER_ADMIN** and anonymous/customer callers see every tenant's.
+
+                    Filtering and sorting follow the same rules as `GET /events/active`
+                    (from/to/venue/country/category).
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Paged list of inactive events",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = EventResponseDTO.class),
+                            examples = @ExampleObject(name = "Inactive events page", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Inactive events retrieved successfully",
+                                      "data": {
+                                        "content": [
+                                          {
+                                            "eventId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+                                            "eventNo": null,
+                                            "tenantId": "tenant-001",
+                                            "title": "Winter Gala (draft)",
+                                            "description": "Not yet published by the organizer.",
+                                            "venue": "Rainbow Towers",
+                                            "country": "Zimbabwe", "category": "CONCERT",
+                                            "location": { "latitude": -17.8311, "longitude": 31.0468 },
+                                            "bannerUrl": null,
+                                            "startDateTime": "2026-08-20T19:00:00", "endDateTime": "2026-08-20T23:00:00",
+                                            "totalCapacity": 800,
+                                            "availableTickets": 800,
+                                            "active": false,
+                                            "rejected": false,
+                                            "createdAt": "2026-06-01T09:00:00",
+                                            "updatedAt": "2026-06-01T09:00:00",
+                                            "seatCategories": []
+                                          },
+                                          {
+                                            "eventId": "9b2ffff0-3d0a-4b1e-8a2e-2f9b0c5d1a44",
+                                            "eventNo": null,
+                                            "tenantId": "tenant-007",
+                                            "title": "Unverified Pop-Up",
+                                            "description": "Rejected by an administrator during review.",
+                                            "venue": "Unknown Hall",
+                                            "country": "Zimbabwe", "category": "COMEDY",
+                                            "location": { "latitude": -17.8252, "longitude": 31.0335 },
+                                            "bannerUrl": null,
+                                            "startDateTime": "2026-07-10T18:00:00", "endDateTime": "2026-07-10T20:00:00",
+                                            "totalCapacity": 150,
+                                            "availableTickets": 150,
+                                            "active": false,
+                                            "rejected": true,
+                                            "createdAt": "2026-06-02T11:00:00",
+                                            "updatedAt": "2026-06-03T08:30:00",
+                                            "seatCategories": []
+                                          }
+                                        ],
+                                        "pageable": {
+                                          "pageNumber": 0,
+                                          "pageSize": 10,
+                                          "sort": { "sorted": true, "unsorted": false, "empty": false },
+                                          "offset": 0,
+                                          "paged": true,
+                                          "unpaged": false
+                                        },
+                                        "totalElements": 2,
+                                        "totalPages": 1,
+                                        "last": true,
+                                        "first": true,
+                                        "size": 10,
+                                        "number": 0,
+                                        "numberOfElements": 2,
+                                        "empty": false
+                                      }
+                                    }
+                                    """)
+                    )
+            )
+    })
+    public ResponseEntity<ApiResult<Page<EventResponseDTO>>> getInactiveEvents(
+            Authentication authentication,
+            @Parameter(description = "Inclusive lower bound date for events (maps to start of day)")
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+
+            @Parameter(description = "Inclusive upper bound date for events (maps to end of day)")
+            @RequestParam(required = false)
+            @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+
+            @Parameter(description = "Venue substring filter (case-insensitive)")
+            @RequestParam(required = false) String venue,
+
+            @Parameter(description = "Country filter (exact match, case-insensitive), e.g. Zimbabwe")
+            @RequestParam(required = false) String country,
+
+            @Parameter(description = "Category filter (BOOKS, COMEDY, HALF_MARATHON, MARATHON, CONCERT, SPORT)")
+            @RequestParam(required = false) EventCategory category,
+
+            @Parameter(description = "Zero-based page index")
+            @RequestParam(defaultValue = "0") @Min(0) int page,
+
+            @Parameter(description = "Page size")
+            @RequestParam(defaultValue = "10") @Min(1) @Max(MAX_PAGE_SIZE) int size,
+
+            @Parameter(description = "Sort field name (must match an entity property), ascending")
+            @RequestParam(defaultValue = "startDateTime") String sortBy
+    ) {
+        LocalDateTime fromDateTime = from == null ? null : from.atStartOfDay();
+        LocalDateTime toDateTime = to == null ? null : to.atTime(LocalTime.MAX);
+        Page<EventResponseDTO> result;
+        if (isOrganizerOnly(authentication)) {
+            String tenantId = authentication.getName();
+            log.debug("Listing inactive events (organizer scope) tenantId={} from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
+                    tenantId, from, to, venue, country, category, page, size, sortBy);
+            result = eventService.getMyInactiveEvents(tenantId, fromDateTime, toDateTime, venue, country, category, page, size, sortBy);
+        } else {
+            log.debug("Listing inactive events (public scope) from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
+                    from, to, venue, country, category, page, size, sortBy);
+            result = eventService.getInactiveOnlyEvents(fromDateTime, toDateTime, venue, country, category, page, size, sortBy);
+        }
+        return ResponseEntity.ok(ApiResult.ok("Inactive events retrieved successfully", result));
     }
 
 
@@ -982,6 +1125,204 @@ public class EventController {
         log.info("Activating event eventId={} tenantId={}", id, tenantId);
         EventResponseDTO activated = eventService.activateEvent(tenantId, role, id);
         return ResponseEntity.ok(ApiResult.ok("Event activated successfully", activated));
+    }
+
+    @PutMapping("/{id}/deactivate")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @Operation(
+            summary = "Deactivate event",
+            description = """
+                    Flips the event's `active` flag to `false` — the mirror of
+                    `PUT /events/{id}/activate`. The event drops out of
+                    `GET /events/active`, `GET /events/search` and
+                    `GET /events/by-country`, and reappears under
+                    `GET /events/inactive`.
+
+                    Authorization:
+                    - Requires **EVENT_ORGANIZER** or **SUPER_ADMIN**.
+                    - An EVENT_ORGANIZER can deactivate only their own event; a
+                      SUPER_ADMIN can deactivate any.
+
+                    This is the organizer's own "unpublish / take it down" action.
+                    It does **not** set the admin `rejected` flag — use
+                    `PUT /events/{id}/reject` for moderation.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Deactivated",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = EventResponseDTO.class),
+                            examples = @ExampleObject(name = "Event deactivated", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Event deactivated successfully",
+                                      "data": {
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "eventNo": null,
+                                        "tenantId": "tenant-001",
+                                        "title": "Summer Concert",
+                                        "description": "Open-air summer concert featuring local headliners.",
+                                        "venue": "Harare Gardens",
+                                        "country": "Zimbabwe", "category": "CONCERT",
+                                        "location": { "latitude": -17.8252, "longitude": 31.0335 },
+                                        "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+                                        "startDateTime": "2026-06-15T19:00:00", "endDateTime": "2026-06-15T22:00:00",
+                                        "totalCapacity": 500,
+                                        "availableTickets": 500,
+                                        "active": false,
+                                        "rejected": false,
+                                        "createdAt": "2026-04-25T08:00:00",
+                                        "updatedAt": "2026-05-02T16:30:00",
+                                        "seatCategories": []
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @ApiResponse(responseCode = "403", description = "Not the owner (and not SUPER_ADMIN)",
+                    content = @Content(schema = @Schema(example = "{\"code\":\"403 FORBIDDEN\",\"message\":\"You are not authorized to deactivate this event\",\"data\":null}"))),
+            @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @ApiResponse(responseCode = "404", description = "Event not found",
+                    content = @Content(schema = @Schema(example = "{\"code\":\"404 NOT_FOUND\",\"message\":\"Event not found\",\"data\":null}")))
+    })
+    public ResponseEntity<ApiResult<EventResponseDTO>> deactivateEvent(
+            @Parameter(description = "Event UUID") @PathVariable UUID id,
+            Authentication authentication
+    ) {
+        String tenantId = authentication.getName();
+        String role = getCurrentRole(authentication);
+        log.info("Deactivating event eventId={} tenantId={}", id, tenantId);
+        EventResponseDTO deactivated = eventService.deactivateEvent(tenantId, role, id);
+        return ResponseEntity.ok(ApiResult.ok("Event deactivated successfully", deactivated));
+    }
+
+    @PutMapping("/{id}/reject")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @Operation(
+            summary = "Reject event (admin moderation)",
+            description = """
+                    **SUPER_ADMIN only.** Marks the event as `rejected=true` and
+                    forces `active=false`, removing it from every public bookable
+                    listing (`/events/active`, `/events/search`,
+                    `/events/by-country`). The event remains visible under
+                    `GET /events/inactive` so an admin can later approve it.
+
+                    A rejected event **cannot be re-activated** by its organizer —
+                    `PUT /events/{id}/activate` returns 409 until an admin clears
+                    the flag via `PUT /events/{id}/approve`.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Rejected",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = EventResponseDTO.class),
+                            examples = @ExampleObject(name = "Event rejected", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Event rejected successfully",
+                                      "data": {
+                                        "eventId": "9b2ffff0-3d0a-4b1e-8a2e-2f9b0c5d1a44",
+                                        "eventNo": null,
+                                        "tenantId": "tenant-007",
+                                        "title": "Unverified Pop-Up",
+                                        "description": "Rejected by an administrator during review.",
+                                        "venue": "Unknown Hall",
+                                        "country": "Zimbabwe", "category": "COMEDY",
+                                        "location": { "latitude": -17.8252, "longitude": 31.0335 },
+                                        "bannerUrl": null,
+                                        "startDateTime": "2026-07-10T18:00:00", "endDateTime": "2026-07-10T20:00:00",
+                                        "totalCapacity": 150,
+                                        "availableTickets": 150,
+                                        "active": false,
+                                        "rejected": true,
+                                        "createdAt": "2026-06-02T11:00:00",
+                                        "updatedAt": "2026-06-03T08:30:00",
+                                        "seatCategories": []
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @ApiResponse(responseCode = "403", description = "Authenticated but not SUPER_ADMIN"),
+            @ApiResponse(responseCode = "404", description = "Event not found",
+                    content = @Content(schema = @Schema(example = "{\"code\":\"404 NOT_FOUND\",\"message\":\"Event not found\",\"data\":null}")))
+    })
+    public ResponseEntity<ApiResult<EventResponseDTO>> rejectEvent(
+            @Parameter(description = "Event UUID") @PathVariable UUID id,
+            Authentication authentication
+    ) {
+        log.info("Rejecting event eventId={} admin={}", id, authentication.getName());
+        EventResponseDTO rejected = eventService.rejectEvent(id);
+        return ResponseEntity.ok(ApiResult.ok("Event rejected successfully", rejected));
+    }
+
+    @PutMapping("/{id}/approve")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @Operation(
+            summary = "Approve (un-reject) event (admin moderation)",
+            description = """
+                    **SUPER_ADMIN only.** Clears a previous rejection
+                    (`rejected=false`). The event stays `active=false` — the owning
+                    organizer re-publishes it with `PUT /events/{id}/activate` when
+                    ready (now permitted again because the rejection is cleared).
+
+                    Calling approve on an event that was never rejected is a no-op
+                    that returns the event unchanged (still `rejected=false`).
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Approved (rejection cleared)",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = EventResponseDTO.class),
+                            examples = @ExampleObject(name = "Event approved", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Event approved successfully",
+                                      "data": {
+                                        "eventId": "9b2ffff0-3d0a-4b1e-8a2e-2f9b0c5d1a44",
+                                        "eventNo": null,
+                                        "tenantId": "tenant-007",
+                                        "title": "Unverified Pop-Up",
+                                        "description": "Cleared after a second review.",
+                                        "venue": "Unknown Hall",
+                                        "country": "Zimbabwe", "category": "COMEDY",
+                                        "location": { "latitude": -17.8252, "longitude": 31.0335 },
+                                        "bannerUrl": null,
+                                        "startDateTime": "2026-07-10T18:00:00", "endDateTime": "2026-07-10T20:00:00",
+                                        "totalCapacity": 150,
+                                        "availableTickets": 150,
+                                        "active": false,
+                                        "rejected": false,
+                                        "createdAt": "2026-06-02T11:00:00",
+                                        "updatedAt": "2026-06-04T07:15:00",
+                                        "seatCategories": []
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @ApiResponse(responseCode = "403", description = "Authenticated but not SUPER_ADMIN"),
+            @ApiResponse(responseCode = "404", description = "Event not found",
+                    content = @Content(schema = @Schema(example = "{\"code\":\"404 NOT_FOUND\",\"message\":\"Event not found\",\"data\":null}")))
+    })
+    public ResponseEntity<ApiResult<EventResponseDTO>> approveEvent(
+            @Parameter(description = "Event UUID") @PathVariable UUID id,
+            Authentication authentication
+    ) {
+        log.info("Approving event eventId={} admin={}", id, authentication.getName());
+        EventResponseDTO approved = eventService.approveEvent(id);
+        return ResponseEntity.ok(ApiResult.ok("Event approved successfully", approved));
     }
 
     @DeleteMapping("/{id}")

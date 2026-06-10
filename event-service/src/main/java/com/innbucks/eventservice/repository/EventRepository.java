@@ -42,15 +42,18 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
             Pageable pageable
     );
 
-    // Get only events flagged active=true (and non-deleted, and not yet ended)
-    // with optional filters — paginated. The `e.endDateTime > :now` filter
-    // hides events whose end-time has already passed even if the expiry
-    // scheduler hasn't run yet, so the read is always correct regardless of
-    // scheduler timing.
+    // Get only events flagged active=true (and non-deleted, not yet ended, and
+    // not admin-rejected) with optional filters — paginated. The
+    // `e.endDateTime > :now` filter hides events whose end-time has already
+    // passed even if the expiry scheduler hasn't run yet, so the read is always
+    // correct regardless of scheduler timing. `e.rejected = false` keeps an
+    // admin-rejected event out of the public listing (belt-and-suspenders on
+    // top of active=false, which reject also sets).
     @Query("""
         SELECT e FROM Event e
         WHERE e.deleted = false
         AND e.active = true
+        AND e.rejected = false
         AND e.endDateTime > :now
         AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
         AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
@@ -76,6 +79,7 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
         SELECT e FROM Event e
         WHERE e.deleted = false
         AND e.active = true
+        AND e.rejected = false
         AND e.endDateTime > :now
         AND e.category = :category
         AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
@@ -90,6 +94,49 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
             @Param("country") String country,
             @Param("category") EventCategory category,
             @Param("now") LocalDateTime now,
+            Pageable pageable
+    );
+
+    // Non-deleted events flagged active=false — the "inactive" listing
+    // (GET /events/inactive). Unlike the active queries this does NOT apply the
+    // endDateTime > :now filter (inactive intentionally includes events that
+    // have already ended) and does NOT filter on rejected (rejected events are
+    // active=false too, so they show up here for an admin to find and approve).
+    @Query("""
+        SELECT e FROM Event e
+        WHERE e.deleted = false
+        AND e.active = false
+        AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
+        AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
+        AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
+        AND (CAST(:country AS string) IS NULL OR LOWER(e.country) = LOWER(CAST(:country AS string)))
+    """)
+    Page<Event> findAllInactiveOnly(
+            @Param("from") LocalDateTime from,
+            @Param("to") LocalDateTime to,
+            @Param("venue") String venue,
+            @Param("country") String country,
+            Pageable pageable
+    );
+
+    // Category-filtered counterpart of findAllInactiveOnly. Separate method so
+    // the enum bind is always non-null (see findAllActiveOnlyByCategory).
+    @Query("""
+        SELECT e FROM Event e
+        WHERE e.deleted = false
+        AND e.active = false
+        AND e.category = :category
+        AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
+        AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
+        AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
+        AND (CAST(:country AS string) IS NULL OR LOWER(e.country) = LOWER(CAST(:country AS string)))
+    """)
+    Page<Event> findAllInactiveOnlyByCategory(
+            @Param("from") LocalDateTime from,
+            @Param("to") LocalDateTime to,
+            @Param("venue") String venue,
+            @Param("country") String country,
+            @Param("category") EventCategory category,
             Pageable pageable
     );
 
@@ -114,14 +161,15 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
             Pageable pageable
     );
 
-    // Same as findByTenantId but additionally filters active=true and hides
-    // events whose endDateTime has passed (independent of the expiry scheduler
-    // so the read is always correct). Used so an EVENT_ORGANIZER hitting
-    // /events/active only sees their own bookable events.
+    // Same as findByTenantId but additionally filters active=true, hides events
+    // whose endDateTime has passed (independent of the expiry scheduler so the
+    // read is always correct), and excludes admin-rejected events. Used so an
+    // EVENT_ORGANIZER hitting /events/active only sees their own bookable events.
     @Query("""
         SELECT e FROM Event e
         WHERE e.deleted = false
         AND e.active = true
+        AND e.rejected = false
         AND e.endDateTime > :now
         AND e.tenantId = :tenantId
         AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
@@ -145,6 +193,7 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
         SELECT e FROM Event e
         WHERE e.deleted = false
         AND e.active = true
+        AND e.rejected = false
         AND e.endDateTime > :now
         AND e.tenantId = :tenantId
         AND e.category = :category
@@ -164,11 +213,56 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
             Pageable pageable
     );
 
-    // Upcoming events in a country: non-deleted, tenant-active, and starting
-    // at or after the supplied cutoff (usually "now"). Country match is
-    // case-insensitive since it's free text carried over from the JWT claim.
+    // An organizer's own inactive (active=false) events. Counterpart of
+    // findAllInactiveOnly scoped to a single tenant, used so an EVENT_ORGANIZER
+    // hitting /events/inactive only sees their own. No endDateTime/rejected
+    // filter — same rationale as findAllInactiveOnly.
+    @Query("""
+        SELECT e FROM Event e
+        WHERE e.deleted = false
+        AND e.active = false
+        AND e.tenantId = :tenantId
+        AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
+        AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
+        AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
+        AND (CAST(:country AS string) IS NULL OR LOWER(e.country) = LOWER(CAST(:country AS string)))
+    """)
+    Page<Event> findByTenantIdInactiveOnly(
+            @Param("tenantId") String tenantId,
+            @Param("from") LocalDateTime from,
+            @Param("to") LocalDateTime to,
+            @Param("venue") String venue,
+            @Param("country") String country,
+            Pageable pageable
+    );
+
+    // Category-filtered counterpart of findByTenantIdInactiveOnly.
+    @Query("""
+        SELECT e FROM Event e
+        WHERE e.deleted = false
+        AND e.active = false
+        AND e.tenantId = :tenantId
+        AND e.category = :category
+        AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
+        AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
+        AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
+        AND (CAST(:country AS string) IS NULL OR LOWER(e.country) = LOWER(CAST(:country AS string)))
+    """)
+    Page<Event> findByTenantIdInactiveOnlyByCategory(
+            @Param("tenantId") String tenantId,
+            @Param("from") LocalDateTime from,
+            @Param("to") LocalDateTime to,
+            @Param("venue") String venue,
+            @Param("country") String country,
+            @Param("category") EventCategory category,
+            Pageable pageable
+    );
+
+    // Upcoming events in a country: non-deleted, tenant-active, not admin-rejected,
+    // and starting at or after the supplied cutoff (usually "now"). Country match
+    // is case-insensitive since it's free text carried over from the JWT claim.
     // Used by /events/by-country.
-    Page<Event> findByCountryIgnoreCaseAndDeletedFalseAndActiveTrueAndStartDateTimeGreaterThanEqual(
+    Page<Event> findByCountryIgnoreCaseAndDeletedFalseAndActiveTrueAndRejectedFalseAndStartDateTimeGreaterThanEqual(
             String country, LocalDateTime cutoff, Pageable pageable
     );
 
@@ -181,12 +275,14 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     // Free-text search across title, description and venue. Case-insensitive
     // substring match — typing "H" matches every event with H anywhere in
     // those fields; typing "Harare" narrows to events whose title/description/
-    // venue mentions Harare. Excludes soft-deleted and inactive events so the
-    // public search bar only surfaces bookable events.
+    // venue mentions Harare. Excludes soft-deleted, inactive, ended and
+    // admin-rejected events so the public search bar only surfaces bookable
+    // events.
     @Query("""
         SELECT e FROM Event e
         WHERE e.deleted = false
         AND e.active = true
+        AND e.rejected = false
         AND e.endDateTime > :now
         AND (
             LOWER(e.title)       LIKE LOWER(CONCAT('%', CAST(:q AS string), '%'))

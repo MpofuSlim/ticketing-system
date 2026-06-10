@@ -27,6 +27,7 @@ public class EventMapper {
                 .totalCapacity(event.getTotalCapacity())
                 .availableTickets(event.getAvailableTickets())
                 .active(event.isActive())
+                .rejected(event.isRejected())
                 .createdAt(event.getCreatedAt())
                 .updatedAt(event.getUpdatedAt())
                 .build();

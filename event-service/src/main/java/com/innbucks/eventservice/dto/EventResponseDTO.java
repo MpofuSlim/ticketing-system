@@ -72,6 +72,11 @@ public class EventResponseDTO {
     @Schema(description = "Whether the event is currently active (visible in /events/active and bookable).")
     private boolean active;
 
+    @Schema(description = "Whether an admin has rejected this event. Rejected events never appear in " +
+            "/events/active, /events/search or /events/by-country, and cannot be activated until an " +
+            "admin approves them.")
+    private boolean rejected;
+
     @Schema(description = "Creation timestamp (server time).")
     private LocalDateTime createdAt;
 
