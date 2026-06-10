@@ -346,4 +346,121 @@ class EventServiceTest {
         assertNotNull(result.getSeatCategories());
         assertTrue(result.getSeatCategories().isEmpty());
     }
+
+    // --- deactivate / reject / approve --------------------------------------
+
+    private static Event baseEvent(UUID eventId, String tenantId) {
+        return Event.builder()
+                .eventId(eventId).tenantId(tenantId).title("T").venue("V")
+                .country("Zimbabwe").category(EventCategory.CONCERT)
+                .startDateTime(LocalDateTime.now().plusDays(5))
+                .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2))
+                .totalCapacity(100).availableTickets(100).deleted(false).build();
+    }
+
+    @Test
+    void deactivateEvent_rejectsNonOwnerTenant() {
+        EventRepository repo = mock(EventRepository.class);
+        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class));
+
+        UUID eventId = UUID.randomUUID();
+        when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(baseEvent(eventId, "owner-tenant")));
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> service.deactivateEvent("other-tenant", "ROLE_EVENT_ORGANIZER", eventId));
+        assertEquals("You are not authorized to deactivate this event", ex.getMessage());
+        verify(repo, never()).save(any());
+    }
+
+    @Test
+    void deactivateEvent_ownerFlipsActiveFalse() {
+        EventRepository repo = mock(EventRepository.class);
+        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class));
+
+        UUID eventId = UUID.randomUUID();
+        Event existing = baseEvent(eventId, "tenant-1"); // active=true via @Builder.Default
+        when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
+        when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.deactivateEvent("tenant-1", "ROLE_EVENT_ORGANIZER", eventId);
+
+        verify(repo).save(argThat(e -> !e.isActive()));
+    }
+
+    @Test
+    void deactivateEvent_asAdmin_deactivatesEventOwnedByAnotherTenant() {
+        EventRepository repo = mock(EventRepository.class);
+        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class));
+
+        UUID eventId = UUID.randomUUID();
+        when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(baseEvent(eventId, "owner-tenant")));
+        when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.deactivateEvent("admin-user", "ROLE_SUPER_ADMIN", eventId);
+
+        verify(repo).save(argThat(e -> !e.isActive()));
+    }
+
+    @Test
+    void activateEvent_refusesAdminRejectedEvent() {
+        EventRepository repo = mock(EventRepository.class);
+        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class));
+
+        UUID eventId = UUID.randomUUID();
+        Event existing = baseEvent(eventId, "tenant-1");
+        existing.setActive(false);
+        existing.setRejected(true);
+        when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> service.activateEvent("tenant-1", "ROLE_EVENT_ORGANIZER", eventId));
+        assertTrue(ex.getMessage().toLowerCase().contains("rejected"));
+        verify(repo, never()).save(any());
+    }
+
+    @Test
+    void rejectEvent_setsRejectedTrueAndForcesActiveFalse() {
+        EventRepository repo = mock(EventRepository.class);
+        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class));
+
+        UUID eventId = UUID.randomUUID();
+        Event existing = baseEvent(eventId, "tenant-7"); // active=true, rejected=false
+        when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
+        when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.rejectEvent(eventId);
+
+        // Invariant: a rejected event is never left active.
+        verify(repo).save(argThat(e -> e.isRejected() && !e.isActive()));
+    }
+
+    @Test
+    void approveEvent_clearsRejectedFlagAndLeavesInactive() {
+        EventRepository repo = mock(EventRepository.class);
+        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class));
+
+        UUID eventId = UUID.randomUUID();
+        Event existing = baseEvent(eventId, "tenant-7");
+        existing.setActive(false);
+        existing.setRejected(true);
+        when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
+        when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.approveEvent(eventId);
+
+        // Approve clears rejected but does NOT republish — organizer re-activates.
+        verify(repo).save(argThat(e -> !e.isRejected() && !e.isActive()));
+    }
+
+    @Test
+    void rejectEvent_throwsWhenEventMissing() {
+        EventRepository repo = mock(EventRepository.class);
+        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class));
+        when(repo.findByEventIdAndDeletedFalse(any())).thenReturn(Optional.empty());
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> service.rejectEvent(UUID.randomUUID()));
+        assertEquals("Event not found", ex.getMessage());
+        verify(repo, never()).save(any());
+    }
 }

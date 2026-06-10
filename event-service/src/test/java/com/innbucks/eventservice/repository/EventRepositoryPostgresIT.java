@@ -158,4 +158,91 @@ class EventRepositoryPostgresIT extends PostgresIntegrationTestBase {
                 .contains(future.getEventId())
                 .doesNotContain(past.getEventId());
     }
+
+    @Test
+    void findAllActiveOnly_excludesAdminRejectedEvents() {
+        LocalDateTime now = LocalDateTime.now(java.time.ZoneOffset.UTC);
+
+        Event ok = eventRepository.save(Event.builder()
+                .tenantId("t-rej").title("Clean Show").venue("HICC")
+                .country("Zimbabwe").category(EventCategory.CONCERT)
+                .startDateTime(now.plusDays(1)).endDateTime(now.plusDays(1).plusHours(2))
+                .totalCapacity(100).availableTickets(100)
+                .active(true).rejected(false).deleted(false).build());
+
+        // active=true AND rejected=true on purpose: even though the service
+        // forces active=false on reject, the query's rejected=false filter must
+        // independently keep this out of the public listing.
+        Event rejected = eventRepository.save(Event.builder()
+                .tenantId("t-rej").title("Blocked Show").venue("HICC")
+                .country("Zimbabwe").category(EventCategory.CONCERT)
+                .startDateTime(now.plusDays(1)).endDateTime(now.plusDays(1).plusHours(2))
+                .totalCapacity(100).availableTickets(100)
+                .active(true).rejected(true).deleted(false).build());
+
+        Page<Event> page = eventRepository.findAllActiveOnly(null, null, null, null, now, PageRequest.of(0, 50));
+
+        assertThat(page.getContent()).extracting(Event::getEventId)
+                .contains(ok.getEventId())
+                .doesNotContain(rejected.getEventId());
+    }
+
+    @Test
+    void findAllInactiveOnly_returnsInactiveEvents_includingRejected_butNotActive() {
+        LocalDateTime now = LocalDateTime.now(java.time.ZoneOffset.UTC);
+
+        Event draft = eventRepository.save(Event.builder()
+                .tenantId("t-inact").title("Draft Show").venue("Reps")
+                .country("Zimbabwe").category(EventCategory.CONCERT)
+                .startDateTime(now.plusDays(3)).endDateTime(now.plusDays(3).plusHours(2))
+                .totalCapacity(50).availableTickets(50)
+                .active(false).rejected(false).deleted(false).build());
+
+        Event rejected = eventRepository.save(Event.builder()
+                .tenantId("t-inact").title("Rejected Show").venue("Reps")
+                .country("Zimbabwe").category(EventCategory.COMEDY)
+                .startDateTime(now.plusDays(4)).endDateTime(now.plusDays(4).plusHours(2))
+                .totalCapacity(50).availableTickets(50)
+                .active(false).rejected(true).deleted(false).build());
+
+        Event live = eventRepository.save(Event.builder()
+                .tenantId("t-inact").title("Live Show").venue("Reps")
+                .country("Zimbabwe").category(EventCategory.CONCERT)
+                .startDateTime(now.plusDays(5)).endDateTime(now.plusDays(5).plusHours(2))
+                .totalCapacity(50).availableTickets(50)
+                .active(true).rejected(false).deleted(false).build());
+
+        Page<Event> page = eventRepository.findAllInactiveOnly(null, null, null, null, PageRequest.of(0, 50));
+
+        assertThat(page.getContent()).extracting(Event::getEventId)
+                .contains(draft.getEventId(), rejected.getEventId())
+                .doesNotContain(live.getEventId());
+    }
+
+    @Test
+    void findByCountryActiveUpcoming_excludesRejectedEvents() {
+        LocalDateTime now = LocalDateTime.now(java.time.ZoneOffset.UTC);
+
+        Event ok = eventRepository.save(Event.builder()
+                .tenantId("t-c").title("KE Clean").venue("KICC")
+                .country("Kenya").category(EventCategory.CONCERT)
+                .startDateTime(now.plusDays(2)).endDateTime(now.plusDays(2).plusHours(2))
+                .totalCapacity(100).availableTickets(100)
+                .active(true).rejected(false).deleted(false).build());
+
+        Event rejected = eventRepository.save(Event.builder()
+                .tenantId("t-c").title("KE Blocked").venue("KICC")
+                .country("Kenya").category(EventCategory.CONCERT)
+                .startDateTime(now.plusDays(2)).endDateTime(now.plusDays(2).plusHours(2))
+                .totalCapacity(100).availableTickets(100)
+                .active(true).rejected(true).deleted(false).build());
+
+        Page<Event> page = eventRepository
+                .findByCountryIgnoreCaseAndDeletedFalseAndActiveTrueAndRejectedFalseAndStartDateTimeGreaterThanEqual(
+                        "kenya", now, PageRequest.of(0, 50));
+
+        assertThat(page.getContent()).extracting(Event::getEventId)
+                .contains(ok.getEventId())
+                .doesNotContain(rejected.getEventId());
+    }
 }

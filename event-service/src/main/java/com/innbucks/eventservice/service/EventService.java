@@ -129,6 +129,58 @@ public class EventService {
         return enrichWithAvailability(events);
     }
 
+    /**
+     * Public/admin-scoped listing of events flagged {@code active=false} — the
+     * inactive listing behind {@code GET /events/inactive}. Mirrors
+     * {@link #getActiveOnlyEvents} but intentionally includes events that have
+     * already ended (no {@code endDateTime > now} cutoff) and admin-rejected
+     * events (which are always {@code active=false}), so an admin can find a
+     * rejected event here to approve it.
+     */
+    public Page<EventResponseDTO> getInactiveOnlyEvents(
+            LocalDateTime from,
+            LocalDateTime to,
+            String venue,
+            String country,
+            EventCategory category,
+            int page,
+            int size,
+            String sortBy
+    ) {
+        Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
+        log.debug("Fetching active=false events from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
+                from, to, venue, country, category, page, size, sortBy);
+        Page<Event> events = category == null
+                ? eventRepository.findAllInactiveOnly(from, to, venue, country, pageable)
+                : eventRepository.findAllInactiveOnlyByCategory(from, to, venue, country, category, pageable);
+        return enrichWithAvailability(events);
+    }
+
+    /**
+     * Same as {@link #getInactiveOnlyEvents} but scoped to a single tenant, so
+     * an EVENT_ORGANIZER hitting {@code /events/inactive} only sees their own
+     * inactive events.
+     */
+    public Page<EventResponseDTO> getMyInactiveEvents(
+            String tenantId,
+            LocalDateTime from,
+            LocalDateTime to,
+            String venue,
+            String country,
+            EventCategory category,
+            int page,
+            int size,
+            String sortBy
+    ) {
+        Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
+        log.debug("Fetching inactive events for tenantId={} from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
+                tenantId, from, to, venue, country, category, page, size, sortBy);
+        Page<Event> events = category == null
+                ? eventRepository.findByTenantIdInactiveOnly(tenantId, from, to, venue, country, pageable)
+                : eventRepository.findByTenantIdInactiveOnlyByCategory(tenantId, from, to, venue, country, category, pageable);
+        return enrichWithAvailability(events);
+    }
+
     public EventResponseDTO getEventById(UUID eventId) {
         log.debug("Fetching event eventId={}", eventId);
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
@@ -166,7 +218,7 @@ public class EventService {
                 country, now, page, size);
 
         Page<Event> entities = eventRepository
-                .findByCountryIgnoreCaseAndDeletedFalseAndActiveTrueAndStartDateTimeGreaterThanEqual(
+                .findByCountryIgnoreCaseAndDeletedFalseAndActiveTrueAndRejectedFalseAndStartDateTimeGreaterThanEqual(
                         country, now, pageable);
 
         Map<UUID, Long> activeCounts = bookingGateway.activeCountsByEventIds(
@@ -454,9 +506,82 @@ public class EventService {
             throw new ForbiddenException("You are not authorized to activate this event");
         }
 
+        // An admin-rejected event cannot be (re)published — not even by its
+        // owner — until a SUPER_ADMIN approves it (PUT /events/{id}/approve).
+        // This keeps the invariant active=true => rejected=false, which is what
+        // lets the inactive listing reliably surface every rejected event.
+        if (event.isRejected()) {
+            log.warn("Activate refused, event is admin-rejected eventId={} tenantId={}", eventId, tenantId);
+            throw new ConflictException("This event has been rejected by an administrator and cannot be activated");
+        }
+
         event.setActive(true);
         Event saved = eventRepository.save(event);
         log.info("Event activated eventId={} tenantId={}", eventId, tenantId);
+        return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
+    }
+
+    @Transactional
+    public EventResponseDTO deactivateEvent(String tenantId, String role, UUID eventId) {
+        log.info("Deactivating event eventId={} tenantId={} role={}", eventId, tenantId, role);
+        Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
+                .orElseThrow(() -> {
+                    log.warn("Deactivate failed, event not found eventId={} tenantId={}", eventId, tenantId);
+                    return new NotFoundException("Event not found");
+                });
+
+        boolean isAdmin = "ROLE_SUPER_ADMIN".equals(role);
+        if (!isAdmin && !event.getTenantId().equals(tenantId)) {
+            log.warn("Unauthorized deactivate attempt eventId={} tenantId={} ownerTenantId={}",
+                    eventId, tenantId, event.getTenantId());
+            throw new ForbiddenException("You are not authorized to deactivate this event");
+        }
+
+        event.setActive(false);
+        Event saved = eventRepository.save(event);
+        log.info("Event deactivated eventId={} tenantId={}", eventId, tenantId);
+        return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
+    }
+
+    /**
+     * Admin moderation: flag an event as rejected so it is removed from every
+     * public bookable listing. Also flips {@code active=false} so the event
+     * drops into the inactive listing (where an admin can still find it) and so
+     * the invariant {@code active=true => rejected=false} holds. SUPER_ADMIN-gated
+     * at the controller; acts on any tenant's event by design.
+     */
+    @Transactional
+    public EventResponseDTO rejectEvent(UUID eventId) {
+        log.info("Rejecting event eventId={}", eventId);
+        Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
+                .orElseThrow(() -> {
+                    log.warn("Reject failed, event not found eventId={}", eventId);
+                    return new NotFoundException("Event not found");
+                });
+        event.setRejected(true);
+        event.setActive(false);
+        Event saved = eventRepository.save(event);
+        log.info("Event rejected eventId={} tenantId={}", eventId, saved.getTenantId());
+        return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
+    }
+
+    /**
+     * Admin moderation: clear a previous rejection. Leaves {@code active=false}
+     * — the owning organizer re-publishes via PUT /events/{id}/activate when
+     * ready (now permitted again since rejected is false). SUPER_ADMIN-gated at
+     * the controller.
+     */
+    @Transactional
+    public EventResponseDTO approveEvent(UUID eventId) {
+        log.info("Approving (un-rejecting) event eventId={}", eventId);
+        Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
+                .orElseThrow(() -> {
+                    log.warn("Approve failed, event not found eventId={}", eventId);
+                    return new NotFoundException("Event not found");
+                });
+        event.setRejected(false);
+        Event saved = eventRepository.save(event);
+        log.info("Event approved eventId={} tenantId={}", eventId, saved.getTenantId());
         return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
     }
 

@@ -86,6 +86,17 @@ public class Event {
     @Builder.Default
     private boolean active = true;
 
+    // Admin moderation flag, independent of `active`. A SUPER_ADMIN sets this
+    // true via PUT /events/{id}/reject (which also flips active=false) to keep
+    // an event out of every public bookable listing — /events/active,
+    // /events/search, /events/by-country — while leaving it discoverable in the
+    // inactive listing so an admin can later approve it. PUT /events/{id}/approve
+    // clears it. activateEvent() refuses to publish while this is true, so the
+    // invariant active=true => rejected=false always holds. Defaults false.
+    @Column(nullable = false)
+    @Builder.Default
+    private boolean rejected = false;
+
     @Column(updatable = false)
     private LocalDateTime createdAt;
 
