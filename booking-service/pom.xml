@@ -210,6 +210,17 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- WireMock for client contract tests against the external WhatsApp
+             gateway and the innbucks-core-gateway SMS adapter. Pure-JUnit
+             pattern per CLAUDE.md; the shaded standalone classifier avoids
+             dep conflicts with the project's Jetty/Jackson versions. -->
+        <dependency>
+            <groupId>org.wiremock</groupId>
+            <artifactId>wiremock-standalone</artifactId>
+            <version>3.13.2</version>
+            <scope>test</scope>
+        </dependency>
+
     </dependencies>
 
     <build>
