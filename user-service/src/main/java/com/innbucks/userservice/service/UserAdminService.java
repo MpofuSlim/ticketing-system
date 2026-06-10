@@ -1,5 +1,6 @@
 package com.innbucks.userservice.service;
 
+import com.innbucks.userservice.client.EmailNotificationClient;
 import com.innbucks.userservice.client.SmsNotificationClient;
 import com.innbucks.userservice.client.WhatsAppNotificationClient;
 import com.innbucks.userservice.entity.User;
@@ -10,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.util.HtmlUtils;
 
 import java.util.Map;
 
@@ -38,6 +40,7 @@ public class UserAdminService {
     private final PasswordEncoder passwordEncoder;
     private final WhatsAppNotificationClient whatsAppNotificationClient;
     private final SmsNotificationClient smsNotificationClient;
+    private final EmailNotificationClient emailNotificationClient;
     private final AuditService auditService;
 
     /**
@@ -120,19 +123,39 @@ public class UserAdminService {
     /**
      * Notify the freshly-approved user of their first-time password. Best-effort:
      * a delivery failure must NOT block the approval — the account is already
-     * approved and the password set. Tries SMS first (InnBucks messenger),
-     * falls back to WhatsApp if SMS is unavailable. Never logs the password.
+     * approved and the password set. Email is the primary channel (system users
+     * authenticate by email and a credential belongs in an inbox, not an SMS);
+     * SMS then WhatsApp are the phone-based fallbacks for when no address is on
+     * file or the email gateway is unreachable. Never logs the password.
      */
     private void notifyApproval(User user) {
-        String phone = user.getPhoneNumber();
-        if (phone == null || phone.isBlank()) {
-            log.warn("Approved user has no phone number; skipping first-password notification userId={}",
-                    user.getId());
-            return;
-        }
         String message = "Your InnBucks account has been approved. Your temporary password is "
                 + DEFAULT_PASSWORD
                 + ". Please log in and change it immediately.";
+
+        // Email primary — the credential belongs in an inbox.
+        String email = user.getEmail();
+        if (email != null && !email.isBlank()) {
+            try {
+                emailNotificationClient.sendEmail(
+                        email,
+                        "Your InnBucks account has been approved",
+                        buildApprovalHtml(user.getFirstName(), email),
+                        "APPROVAL-" + user.getId());
+                log.info("Approval email sent userId={}", user.getId());
+                return;
+            } catch (RuntimeException emailEx) {
+                log.warn("Approval email failed userId={}, trying SMS: {}", user.getId(), emailEx.getMessage());
+            }
+        }
+
+        // Phone-based fallback: SMS first, then WhatsApp.
+        String phone = user.getPhoneNumber();
+        if (phone == null || phone.isBlank()) {
+            log.warn("Approved user has no reachable email or phone; skipping first-password notification userId={}",
+                    user.getId());
+            return;
+        }
         try {
             smsNotificationClient.sendSms(phone, message, "APPROVAL-" + user.getId());
             log.info("Approval SMS sent userId={}", user.getId());
@@ -147,5 +170,23 @@ public class UserAdminService {
             log.warn("Approval notification failed userId={} (account still approved): {}",
                     user.getId(), ex.getMessage());
         }
+    }
+
+    /**
+     * Renders the approval email body. Dynamic values are HTML-escaped; the
+     * temporary password is a fixed internal constant, not caller-supplied.
+     */
+    private String buildApprovalHtml(String firstName, String email) {
+        String name = (firstName != null && !firstName.isBlank())
+                ? HtmlUtils.htmlEscape(firstName) : "there";
+        return "<p>Hi " + name + ",</p>"
+                + "<p>Good news — your InnBucks account has been approved and is now active.</p>"
+                + "<p>Use these credentials to sign in:</p>"
+                + "<ul>"
+                + "<li><strong>Username:</strong> " + HtmlUtils.htmlEscape(email) + "</li>"
+                + "<li><strong>Temporary password:</strong> " + DEFAULT_PASSWORD + "</li>"
+                + "</ul>"
+                + "<p>For your security, please log in and change your password immediately.</p>"
+                + "<p>— The InnBucks Team</p>";
     }
 }
