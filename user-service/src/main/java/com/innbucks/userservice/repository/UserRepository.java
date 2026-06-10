@@ -61,6 +61,20 @@ public interface UserRepository extends JpaRepository<User, Long> {
     List<User> findByActiveAndAnyRole(@Param("active") boolean active, @Param("roles") Collection<User.Role> roles);
 
     /**
+     * Distinct {@code loyalty_merchant_id} values from every user carrying
+     * {@code role}, skipping the unassigned ones. Used by loyalty-service's
+     * "list unassigned merchants" filter — the result is the deny-list it
+     * excludes when {@code /loyalty/merchants?unassigned=true} is called.
+     *
+     * <p>{@code DISTINCT} collapses the duplicates a multi-admin merchant
+     * would produce; the {@code IS NOT NULL} guard skips MERCHANT_ADMIN rows
+     * created without a merchant binding yet.
+     */
+    @Query("SELECT DISTINCT u.loyaltyMerchantId FROM User u JOIN u.roles r "
+            + "WHERE r = :role AND u.loyaltyMerchantId IS NOT NULL")
+    List<UUID> findDistinctLoyaltyMerchantIdsByRole(@Param("role") User.Role role);
+
+    /**
      * Project-only lookup for the token_version column. JwtFilter calls this
      * on every authenticated request to validate the JWT's session epoch
      * against the current DB value — fetching the column directly avoids
