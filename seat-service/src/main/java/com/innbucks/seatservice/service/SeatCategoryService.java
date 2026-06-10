@@ -121,6 +121,33 @@ public class SeatCategoryService {
         return toCreateResponseDTO(category, request.getSections());
     }
 
+    /**
+     * Capacity + pricing of a single category, for booking-service's GA
+     * inventory model. booking-service seeds its own per-category counter from
+     * {@code totalSeats}, prices the booking from {@code price}, and validates
+     * the category belongs to the event from {@code eventId} — all without
+     * picking an individual seat. Read-only S2S call (the {@code /seat-categories/**}
+     * GETs are permitAll in SecurityConfig).
+     */
+    @Transactional(readOnly = true)
+    public CategoryCapacityDTO getCategoryCapacity(UUID categoryId) {
+        log.debug("Fetching category capacity categoryId={}", categoryId);
+        SeatCategory category = categoryRepository.findById(categoryId)
+                .filter(c -> !c.isDeleted())
+                .orElseThrow(() -> {
+                    log.warn("Category capacity lookup failed, not found categoryId={}", categoryId);
+                    return new NotFoundException("Seat category not found");
+                });
+        return CategoryCapacityDTO.builder()
+                .seatCategoryId(category.getId())
+                .eventId(category.getEventId())
+                .name(category.getName())
+                .price(category.getPrice())
+                .totalSeats(category.getTotalSeats())
+                .availableSeats(category.getAvailableSeats())
+                .build();
+    }
+
     // Get all categories for an event
     public List<CreateCategoryResponseDTO> getCategoriesByEvent(UUID eventId) {
         log.debug("Fetching seat categories eventId={}", eventId);

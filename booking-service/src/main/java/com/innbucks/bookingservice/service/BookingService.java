@@ -17,7 +17,6 @@ import com.innbucks.bookingservice.repository.*;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.ApplicationEventPublisher;
-import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,7 +29,6 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 
 @Service
@@ -39,6 +37,7 @@ public class BookingService {
 
     private final BookingRepository bookingRepository;
     private final BookingItemRepository bookingItemRepository;
+    private final CategoryInventoryRepository categoryInventoryRepository;
     private final SeatServiceClient seatServiceClient;
     private final ApplicationEventPublisher eventPublisher;
     private final QrCodeGenerator qrCodeGenerator;
@@ -66,14 +65,6 @@ public class BookingService {
     private static final int TIER_3_MAX_SEATS = 6;
     private static final int TIER_4_MAX_SEATS = 10;
 
-    // How many candidate seats we ask seat-service for per category when
-    // assigning seats. A booking needs at most TIER_4_MAX_SEATS (10), so a
-    // small random sample is plenty — and, crucially, it keeps the response
-    // tiny no matter how large the category is. Requesting the WHOLE available
-    // pool (six figures for a big venue, ~MBs of JSON) overran the 1s
-    // circuit-breaker timeout on getAvailableSeats and 503'd every booking.
-    private static final int AVAILABLE_SAMPLE_SIZE = 50;
-
     // How long a PENDING booking holds its seats before the expiration
     // scheduler auto-cancels it. Java-side default of 5 means unit tests that
     // construct BookingService with `new` (no Spring) get a sensible value;
@@ -89,6 +80,7 @@ public class BookingService {
 
     public BookingService(BookingRepository bookingRepository,
                           BookingItemRepository bookingItemRepository,
+                          CategoryInventoryRepository categoryInventoryRepository,
                           SeatServiceClient seatServiceClient,
                           ApplicationEventPublisher eventPublisher,
                           QrCodeGenerator qrCodeGenerator,
@@ -98,6 +90,7 @@ public class BookingService {
                           PlatformTransactionManager transactionManager) {
         this.bookingRepository = bookingRepository;
         this.bookingItemRepository = bookingItemRepository;
+        this.categoryInventoryRepository = categoryInventoryRepository;
         this.seatServiceClient = seatServiceClient;
         this.eventPublisher = eventPublisher;
         this.qrCodeGenerator = qrCodeGenerator;
@@ -131,75 +124,54 @@ public class BookingService {
 
         // === Resolution phase — NO transaction, NO DB connection held. ===
         // Every seat-service / event-service round trip below runs BEFORE the
-        // write transaction opens. This method used to be @Transactional, so a
-        // pooled DB connection sat idle across all three blocking upstream calls
-        // (getAvailableSeats + lookupSeat + lookupTenantId). Under load that
-        // pinned one connection for the whole ~seconds those calls took, capping
-        // throughput at (poolSize / callDuration): the Hikari pool drained,
-        // callers hit connection-timeout, and the booking path 5xx'd far below
-        // its real write capacity. Resolving first, then committing in a short
-        // transaction (persistBooking), shrinks the connection hold to the
-        // DB writes alone.
+        // write transaction opens, so a pooled DB connection is never held
+        // across a blocking upstream call (that capped throughput at
+        // poolSize/callDuration and drained Hikari under load).
+        //
+        // GA inventory model: tickets in a category are fungible — we work in
+        // quantities per category, not specific seats. Capacity is enforced by
+        // an atomic per-category counter in persistBooking, NOT by picking a
+        // synthetic seat row (which caused the hot-event 409 storm where
+        // concurrent bookers randomly collided on the same seat UUIDs even
+        // when capacity remained).
 
-        // For each requested category, pick a random AVAILABLE seat from
-        // seat-service. Cache the available pool per category so multiple
-        // seats in the same category share one upstream call, and track
-        // already-picked seats so the same seat isn't assigned twice in
-        // one request.
-        Map<UUID, List<UUID>> availablePoolByCategory = new HashMap<>();
-        Set<UUID> pickedInThisRequest = new HashSet<>();
-        List<UUID> assignedSeatIds = new ArrayList<>(request.getSeats().size());
+        // Collapse the per-ticket request into a quantity per category.
+        Map<UUID, Integer> qtyByCategory = new LinkedHashMap<>();
         for (CreateBookingRequestDTO.SeatItemRequest item : request.getSeats()) {
-            UUID categoryId = item.getCategoryId();
-            List<UUID> pool = availablePoolByCategory.computeIfAbsent(
-                    categoryId, this::fetchAvailableSeatIds);
-
-            UUID picked = pickRandomAvailable(pool, pickedInThisRequest);
-            if (picked == null) {
-                log.warn("Booking rejected, no available seats userEmail={} categoryId={}", userEmail, categoryId);
-                throw new BadRequestException("No available seats in category " + categoryId);
-            }
-            pickedInThisRequest.add(picked);
-            assignedSeatIds.add(picked);
+            qtyByCategory.merge(item.getCategoryId(), 1, Integer::sum);
         }
 
-        // Resolve full details (price, eventId, sectionLabel) from seat-service.
-        // The available-seats endpoint omits these fields by design.
-        List<SeatLookupResponseDTO> resolved = new ArrayList<>(assignedSeatIds.size());
-        for (UUID seatId : assignedSeatIds) {
-            SeatLookupResponseDTO seat = lookupSeat(seatId);
-            if (!request.getEventId().equals(seat.getEventId())) {
-                log.warn("Booking rejected, category does not belong to event userEmail={} seatId={} requestEventId={} actualEventId={}",
-                        userEmail, seatId, request.getEventId(), seat.getEventId());
+        // Resolve each category's capacity + price + owning event from
+        // seat-service, and validate the category belongs to the event.
+        Map<UUID, CategoryLookupDTO> categoryById = new LinkedHashMap<>();
+        for (UUID categoryId : qtyByCategory.keySet()) {
+            CategoryLookupDTO category = lookupCategory(categoryId);
+            if (!request.getEventId().equals(category.getEventId())) {
+                log.warn("Booking rejected, category does not belong to event userEmail={} categoryId={} requestEventId={} actualEventId={}",
+                        userEmail, categoryId, request.getEventId(), category.getEventId());
                 throw new BadRequestException(
-                        "Category " + seat.getCategoryId() + " does not belong to event " + request.getEventId());
+                        "Category " + categoryId + " does not belong to event " + request.getEventId());
             }
-            resolved.add(seat);
+            categoryById.put(categoryId, category);
         }
 
-        BigDecimal total = resolved.stream()
-                .map(SeatLookupResponseDTO::getPrice)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        // Total = sum over categories of price × quantity.
+        BigDecimal total = BigDecimal.ZERO;
+        for (Map.Entry<UUID, Integer> e : qtyByCategory.entrySet()) {
+            BigDecimal price = categoryById.get(e.getKey()).getPrice();
+            total = total.add(price.multiply(BigDecimal.valueOf(e.getValue())));
+        }
 
         String confirmationNumber = generateConfirmationNumber();
 
-        // Seats are held for holdTtlMinutes; if no /confirm (= payment) lands
-        // by then, the expiration scheduler flips the booking to CANCELLED
-        // so the seats are usable by other customers again.
+        // Tickets are held for holdTtlMinutes; if no /confirm (= payment) lands
+        // by then, the expiration scheduler flips the booking to CANCELLED and
+        // releases the held tickets back to the category counter.
         LocalDateTime expiresAt = LocalDateTime.now(ZoneOffset.UTC).plusMinutes(holdTtlMinutes);
 
-        // Resolve the owning tenant once at booking creation so the loyalty
-        // service can attribute earn/redeem at confirm time without another
-        // event-service round trip. Best-effort: an event-service outage
-        // doesn't block bookings — the booking just won't earn loyalty
-        // points until tenant is known.
-        //
-        // Skipped entirely for guest bookings (no userEmail): a guest has
-        // no loyalty account to credit at confirm, so the tenantId is
-        // never read. Saves an event-service round trip on the hot path —
-        // event-service's getEvent enriches with seat-categories synchronously
-        // (see SeatCategoryGateway), so this call was the long tail of
-        // create-booking latency under load.
+        // Resolve the owning tenant once so loyalty earn/redeem can be
+        // attributed at confirm without another event-service round trip.
+        // Best-effort; skipped for guest bookings (no loyalty account).
         String tenantId = userEmail == null
                 ? null
                 : lookupTenantId(request.getEventId());
@@ -216,7 +188,7 @@ public class BookingService {
                 .build();
 
         // === Write phase — the ONLY place a DB connection is held. ===
-        return txTemplate.execute(status -> persistBooking(booking, resolved, assignedSeatIds, userEmail));
+        return txTemplate.execute(status -> persistBooking(booking, qtyByCategory, categoryById, userEmail));
     }
 
     /**
@@ -227,71 +199,103 @@ public class BookingService {
      * createBooking's {@code txTemplate.execute} callback.
      */
     private BookingResponseDTO persistBooking(Booking booking,
-                                              List<SeatLookupResponseDTO> resolved,
-                                              List<UUID> assignedSeatIds,
+                                              Map<UUID, Integer> qtyByCategory,
+                                              Map<UUID, CategoryLookupDTO> categoryById,
                                               String userEmail) {
-        // Cross-check against our own DB. Catches the race where a seat that
-        // looked AVAILABLE in seat-service is already part of an active
-        // booking on our side (e.g. concurrent request just before
-        // seat-service was updated). Kept inside the write transaction so the
-        // pre-check and the insert share one consistent snapshot.
-        List<BookingItem> existingActive = bookingItemRepository.findActiveBySeatIds(
-                assignedSeatIds, Booking.BookingStatus.CANCELLED);
-        if (!existingActive.isEmpty()) {
-            List<UUID> clashingSeats = existingActive.stream()
-                    .map(BookingItem::getSeatId)
-                    .distinct()
-                    .toList();
-            log.warn("Booking create rejected, picked seats already booked userEmail={} seatIds={}",
-                    userEmail, clashingSeats);
-            throw new BookingConflictException("One or more seats are already booked: " + clashingSeats);
+        // Claim capacity atomically, per category, in THIS transaction. The
+        // per-category counter — not a seat row — is the oversell guard now.
+        // Seed the counter once per category (remaining = total_seats −
+        // existing active items) then decrement by the requested quantity under
+        // the row lock. A failed claim (sold out) throws, rolling back the
+        // whole transaction and releasing any categories already claimed in
+        // this same request — no manual compensation needed within a request.
+        for (Map.Entry<UUID, Integer> e : qtyByCategory.entrySet()) {
+            UUID categoryId = e.getKey();
+            int qty = e.getValue();
+            CategoryLookupDTO category = categoryById.get(categoryId);
+
+            // Seed is exact, not racy: seeding precedes the booking_items
+            // insert below, so the active-item count is a stable committed
+            // baseline. INSERT ... ON CONFLICT DO NOTHING means only the first
+            // booking for a category sets the value; everyone after uses the
+            // existing row + the atomic decrement.
+            long activeItems = bookingItemRepository.countActiveByCategoryId(
+                    categoryId, Booking.BookingStatus.CANCELLED);
+            int totalSeats = category.getTotalSeats() == null ? 0 : category.getTotalSeats();
+            int seed = Math.max(0, totalSeats - (int) activeItems);
+            categoryInventoryRepository.seedIfAbsent(categoryId, seed);
+
+            int claimed = categoryInventoryRepository.tryClaim(categoryId, qty);
+            if (claimed == 0) {
+                log.warn("Booking rejected, category sold out userEmail={} categoryId={} qty={}",
+                        userEmail, categoryId, qty);
+                throw new BookingConflictException(
+                        "Not enough tickets remaining in category " + category.getName());
+            }
         }
 
         bookingRepository.save(booking);
 
-        // Each seat gets its own unique ticket number
-        List<BookingItem> items = resolved.stream()
-                .map(s -> BookingItem.builder()
+        // One booking_item per ticket — each carries its own unique ticket
+        // number (the QR credential a gate scanner validates). GA tickets have
+        // no assigned seat, so seatId is a synthetic per-ticket UUID (keeps the
+        // column non-null and the legacy uq_active_booking_item_per_seat index
+        // trivially satisfied) and row/seat labels are GA placeholders.
+        List<BookingItem> items = new ArrayList<>();
+        int ticketIndex = 1;
+        for (Map.Entry<UUID, Integer> e : qtyByCategory.entrySet()) {
+            UUID categoryId = e.getKey();
+            CategoryLookupDTO category = categoryById.get(categoryId);
+            for (int i = 0; i < e.getValue(); i++) {
+                items.add(BookingItem.builder()
                         .booking(booking)
-                        .seatId(s.getSeatId())
-                        .categoryId(s.getCategoryId())
-                        .rowLabel(s.getSectionLabel())
-                        .seatNumber(s.getSeatNumber())
-                        .categoryName(s.getCategoryName())
-                        .priceAtBooking(s.getPrice())
-                        .ticketNumber(generateTicketNumber()) // unique per seat
-                        .build())
-                .collect(Collectors.toList());
-
-        // saveAllAndFlush (not saveAll) forces the INSERT to hit the DB now,
-        // inside this try-block, instead of deferring to transaction commit
-        // where we couldn't catch the result. The partial unique index
-        // uq_active_booking_item_per_seat (V5) is the last line of defence
-        // against the in-flight seat race the findActiveBySeatIds pre-check
-        // above can't see: two concurrent createBooking calls picking the
-        // same seat are serialised on the index, and the loser's insert is
-        // rejected. Translate that into the SAME 409 the pre-check uses, so a
-        // race-loser gets "seat already booked" (retryable) rather than the
-        // generic 500 the DataIntegrityViolationException would otherwise
-        // become via the RuntimeException catch-all — and so peak-contention
-        // log noise stays at WARN, not ERROR.
-        try {
-            bookingItemRepository.saveAllAndFlush(items);
-        } catch (DataIntegrityViolationException e) {
-            log.warn("Booking create lost the seat race (DB unique constraint) userEmail={} seatIds={}",
-                    userEmail, assignedSeatIds);
-            throw new BookingConflictException(
-                    "One or more seats are already booked: " + assignedSeatIds);
+                        .seatId(UUID.randomUUID())
+                        .categoryId(categoryId)
+                        .rowLabel("GA")
+                        .seatNumber(ticketIndex++)
+                        .categoryName(category.getName())
+                        .priceAtBooking(category.getPrice())
+                        .ticketNumber(generateTicketNumber())
+                        .build());
+            }
         }
+        bookingItemRepository.saveAllAndFlush(items);
         booking.setItems(items);
         bookingRepository.save(booking);
 
-        eventPublisher.publishEvent(BookingDomainEvent.BookingCreated.of(booking, assignedSeatIds));
+        List<UUID> ticketIds = items.stream().map(BookingItem::getSeatId).toList();
+        eventPublisher.publishEvent(BookingDomainEvent.BookingCreated.of(booking, ticketIds));
 
         log.info("Booking created bookingId={} confirmation={} userEmail={} eventId={} total={} items={}",
                 booking.getId(), booking.getConfirmationNumber(), userEmail, booking.getEventId(),
                 booking.getTotalAmount(), items.size());
         return toDTO(booking);
+    }
+
+    /** Fetch a category's capacity + price + owning event from seat-service. */
+    private CategoryLookupDTO lookupCategory(UUID categoryId) {
+        ApiResult<CategoryLookupDTO> envelope = seatServiceClient.getCategory(categoryId);
+        if (envelope == null || envelope.getData() == null) {
+            log.warn("Category lookup returned no data categoryId={}", categoryId);
+            throw new NotFoundException("Seat category " + categoryId + " not found");
+        }
+        return envelope.getData();
+    }
+
+    /**
+     * Return a cancelled/expired/reversed booking's tickets to their category
+     * counters. Idempotent on the normal paths because each booking transitions
+     * to CANCELLED exactly once (the status guards in cancel/expire/reverse),
+     * so release runs once per booking.
+     */
+    private void releaseInventory(Booking booking) {
+        if (booking.getItems() == null || booking.getItems().isEmpty()) {
+            return;
+        }
+        Map<UUID, Long> qtyByCategory = booking.getItems().stream()
+                .collect(Collectors.groupingBy(BookingItem::getCategoryId, Collectors.counting()));
+        qtyByCategory.forEach((categoryId, qty) ->
+                categoryInventoryRepository.release(categoryId, qty.intValue()));
     }
 
     // Returns one DTO per booked seat in the category, regardless of booking
@@ -516,6 +520,11 @@ public class BookingService {
         booking.setExpiresAt(null); // hold no longer applicable
         bookingRepository.save(booking);
 
+        // Return the held tickets to their category counters. Runs once: a
+        // booking can only transition PENDING -> CANCELLED here (the guards
+        // above reject an already-CANCELLED booking), so no double-release.
+        releaseInventory(booking);
+
         eventPublisher.publishEvent(BookingDomainEvent.BookingCancelled.of(booking));
 
         log.info("Booking cancelled bookingId={} userEmail={}", bookingId, userEmail);
@@ -556,7 +565,15 @@ public class BookingService {
         }
 
         if (!booking.isAvailabilityReleased()) {
+            // Event-service release FIRST (remote, may throw → admin retries
+            // with nothing yet mutated). Then the local category-counter
+            // release. Both guarded by the one-shot availabilityReleased flag.
+            // Known rare edge: if the local release threw after the remote one
+            // succeeded, a retry would hit the event-service over-cap clamp;
+            // that's a manual-fix case for this rare admin path (a follow-up
+            // can add a per-booking release ledger to make both idempotent).
             releaseEventAvailability(booking); // throws on failure → admin retries → no partial state
+            releaseInventory(booking);
             booking.setAvailabilityReleased(true);
         } else {
             log.info("Skipping release call, already released bookingId={}", bookingId);
@@ -813,44 +830,6 @@ public class BookingService {
 
     // ==================== HELPERS ====================
 
-    private SeatLookupResponseDTO lookupSeat(UUID seatId) {
-        ApiResult<SeatLookupResponseDTO> envelope = seatServiceClient.lookupSeat(seatId);
-        if (envelope == null || envelope.getData() == null) {
-            log.warn("Seat lookup returned no data seatId={}", seatId);
-            throw new NotFoundException("Seat " + seatId + " not found");
-        }
-        return envelope.getData();
-    }
-
-    private List<UUID> fetchAvailableSeatIds(UUID categoryId) {
-        ApiResult<List<AvailableSeatDTO>> envelope =
-                seatServiceClient.getAvailableSeats(categoryId, AVAILABLE_SAMPLE_SIZE);
-        if (envelope == null || envelope.getData() == null || envelope.getData().isEmpty()) {
-            log.warn("No available seats returned by seat-service categoryId={}", categoryId);
-            throw new BadRequestException("No available seats in category " + categoryId);
-        }
-        return envelope.getData().stream()
-                .map(AvailableSeatDTO::getId)
-                .collect(Collectors.toCollection(ArrayList::new));
-    }
-
-    // Returns a uniformly random seatId from the pool, skipping any already
-    // claimed by an earlier item in the same booking request. Returns null if
-    // the pool has no candidates left.
-    private UUID pickRandomAvailable(List<UUID> pool, Set<UUID> alreadyPicked) {
-        List<UUID> candidates = pool.stream()
-                .filter(id -> !alreadyPicked.contains(id))
-                .toList();
-        if (candidates.isEmpty()) {
-            return null;
-        }
-        return candidates.get(ThreadLocalRandom.current().nextInt(candidates.size()));
-    }
-
-    /**
-     * Generates a booking confirmation number
-     * Format: INN-20260419-A3F9B2
-     */
     private int maxSeatsForTier(int tier) {
         return switch (tier) {
             case 2 -> TIER_2_MAX_SEATS;

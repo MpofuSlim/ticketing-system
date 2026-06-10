@@ -2,6 +2,7 @@ package com.innbucks.bookingservice.client;
 
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.AvailableSeatDTO;
+import com.innbucks.bookingservice.dto.CategoryLookupDTO;
 import com.innbucks.bookingservice.dto.SeatLookupResponseDTO;
 import org.springframework.cloud.openfeign.FeignClient;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -18,6 +19,12 @@ public interface SeatServiceClient {
 
     @GetMapping("/seats/{id}/lookup")
     ApiResult<SeatLookupResponseDTO> lookupSeat(@PathVariable("id") UUID id);
+
+    // GA inventory model: fetch a category's capacity + price + eventId so
+    // booking-service can seed its per-category counter, price the booking,
+    // and validate the category belongs to the event — without picking a seat.
+    @GetMapping("/seat-categories/{id}")
+    ApiResult<CategoryLookupDTO> getCategory(@PathVariable("id") UUID id);
 
     // limit asks seat-service for at most N random AVAILABLE seats instead of
     // the whole pool — pulling every seat of a large category overran the 1s
