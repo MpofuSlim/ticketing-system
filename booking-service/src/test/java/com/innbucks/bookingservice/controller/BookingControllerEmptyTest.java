@@ -31,7 +31,9 @@ class BookingControllerEmptyTest {
         when(auth.getName()).thenReturn("u@example.com");
 
         ResponseEntity<ApiResult<List<BookingResponseDTO>>> resp =
-                new BookingController(svc, mock(UserServiceClient.class)).getMyBookings(auth);
+                new BookingController(svc, mock(UserServiceClient.class),
+                        mock(com.innbucks.bookingservice.service.EventChangeNotificationService.class))
+                        .getMyBookings(auth);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertTrue(resp.getBody().getData().isEmpty());

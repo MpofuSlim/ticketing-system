@@ -1,6 +1,7 @@
 package com.innbucks.eventservice.service;
 
 import com.innbucks.eventservice.client.BookingGateway;
+import com.innbucks.eventservice.client.BookingNotificationGateway;
 import com.innbucks.eventservice.client.OrganizerGateway;
 import com.innbucks.eventservice.client.SeatCategoryGateway;
 import com.innbucks.eventservice.dto.*;
@@ -47,6 +48,7 @@ public class EventService {
     private final SeatCategoryGateway seatCategoryGateway;
     private final BookingGateway bookingGateway;
     private final OrganizerGateway organizerGateway;
+    private final BookingNotificationGateway bookingNotificationGateway;
 
     public Page<EventResponseDTO> getAllActiveEvents(
             LocalDateTime from,
@@ -406,6 +408,12 @@ public class EventService {
             throw new ForbiddenException("You are not authorized to update this event");
         }
 
+        // Capture pre-patch values so we can tell whether a customer-affecting
+        // field (start time / venue) actually changed. Only those trigger an
+        // attendee notification — a description/category/capacity tweak does not.
+        java.time.LocalDateTime oldStartDateTime = event.getStartDateTime();
+        String oldVenue = event.getVenue();
+
         if (request.getTitle() != null)        event.setTitle(request.getTitle());
         if (request.getDescription() != null)  event.setDescription(request.getDescription());
         if (request.getVenue() != null)        event.setVenue(request.getVenue());
@@ -429,6 +437,22 @@ public class EventService {
         Event saved = eventRepository.save(event);
         log.info("Event updated eventId={} tenantId={} title={} venue={} startDateTime={} endDateTime={}",
                 eventId, tenantId, saved.getTitle(), saved.getVenue(), saved.getStartDateTime(), saved.getEndDateTime());
+
+        // Notify confirmed attendees only when the start time or venue moved —
+        // best-effort, never blocks the update (the gateway swallows failures).
+        boolean startChanged = request.getStartDateTime() != null
+                && !java.util.Objects.equals(oldStartDateTime, saved.getStartDateTime());
+        boolean venueChanged = request.getVenue() != null
+                && !java.util.Objects.equals(oldVenue, saved.getVenue());
+        if (startChanged || venueChanged) {
+            bookingNotificationGateway.notifyEventChange(
+                    saved.getEventId(),
+                    BookingNotificationGateway.CHANGE_UPDATED,
+                    saved.getTitle(),
+                    startChanged ? String.valueOf(saved.getStartDateTime()) : null,
+                    venueChanged ? saved.getVenue() : null);
+        }
+
         return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
     }
 
@@ -606,6 +630,13 @@ public class EventService {
         event.setDeleted(true);
         eventRepository.save(event);
         log.info("Event deleted (soft) eventId={} tenantId={}", eventId, tenantId);
+
+        // A soft-delete is a cancellation — tell confirmed attendees. Best-effort.
+        bookingNotificationGateway.notifyEventChange(
+                event.getEventId(),
+                BookingNotificationGateway.CHANGE_CANCELLED,
+                event.getTitle(),
+                null, null);
     }
 
     public void deleteEvent(String tenantId, UUID eventId) {

@@ -53,6 +53,12 @@ public class SecurityConfig {
                         // Spring layer so the controller can return a clean
                         // ApiResult body instead of Spring's opaque default 401.
                         .requestMatchers(HttpMethod.PATCH, "/bookings/*/confirm").permitAll()
+                        // Internal-only: event-service triggers the attendee
+                        // notification fan-out here. The controller enforces the
+                        // shared X-Internal-Token; we permit at the Spring layer
+                        // so it can return a clean 401 body. The gateway also
+                        // denies /bookings/internal/** at the edge.
+                        .requestMatchers(HttpMethod.POST, "/bookings/internal/**").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                         // Everything else requires authentication
                         .anyRequest().authenticated()

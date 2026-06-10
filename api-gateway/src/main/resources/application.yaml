@@ -164,6 +164,17 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
+            # Block /bookings/internal/** at the edge. event-service calls it
+            # service-to-service to trigger the event-change attendee fan-out;
+            # it carries the shared X-Internal-Token and has no business being
+            # reachable from the public internet. MUST precede the catch-all
+            # booking-service-route so SCG matches it first (mirrors
+            # event-availability-deny / user-internal-deny).
+            - id: booking-internal-deny
+              uri: forward:/__edge_deny__
+              predicates:
+                - Path=/bookings/internal/**
+
             - id: booking-service-route
               uri: lb://booking-service
               predicates:
