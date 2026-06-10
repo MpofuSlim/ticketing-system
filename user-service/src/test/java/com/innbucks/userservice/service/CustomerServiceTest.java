@@ -1,8 +1,8 @@
 package com.innbucks.userservice.service;
 
-import com.innbucks.userservice.client.OradianClient;
-import com.innbucks.userservice.client.OradianCustomerRequest;
-import com.innbucks.userservice.client.OradianCustomerResponse;
+import com.innbucks.userservice.corebanking.CoreBankingCreateCustomerCommand;
+import com.innbucks.userservice.corebanking.CoreBankingCustomerResult;
+import com.innbucks.userservice.corebanking.CoreBankingPort;
 import com.innbucks.userservice.dto.CustomerRegistrationResponseDTO;
 import com.innbucks.userservice.dto.CustomerTier2RegisterDTO;
 import com.innbucks.userservice.dto.CustomerTier4RegisterDTO;
@@ -31,12 +31,12 @@ class CustomerServiceTest {
 
     private CustomerService newService(UserRepository userRepo,
                                        CustomerProfileRepository profileRepo) {
-        return newService(userRepo, profileRepo, mock(OradianClient.class));
+        return newService(userRepo, profileRepo, mock(CoreBankingPort.class));
     }
 
     private CustomerService newService(UserRepository userRepo,
                                        CustomerProfileRepository profileRepo,
-                                       OradianClient oradianClient) {
+                                       CoreBankingPort coreBanking) {
         return new CustomerService(
                 userRepo,
                 profileRepo,
@@ -44,7 +44,7 @@ class CustomerServiceTest {
                 mock(PendingRegistrationRepository.class),
                 mock(PasswordEncoder.class),
                 mock(OtpService.class),
-                oradianClient
+                coreBanking
         );
     }
 
@@ -68,12 +68,14 @@ class CustomerServiceTest {
         return dto;
     }
 
-    private OradianCustomerResponse fakeOradianResponse() {
-        OradianCustomerResponse r = new OradianCustomerResponse();
-        r.setCustomerId(java.util.UUID.randomUUID().toString());
-        r.setOradianClientId(1001L);
-        r.setOradianExternalId("oradian-ext-1");
-        return r;
+    private CoreBankingCustomerResult fakeCoreBankingResult() {
+        return CoreBankingCustomerResult.builder()
+                .profileRef("oradian-ext-1")
+                .oradianExternalId("oradian-ext-1")
+                .oradianClientId(1001L)
+                .status("PENDING_APPROVAL")
+                .country("KE")
+                .build();
     }
 
     private User customerUser(long id, String phone) {
@@ -162,10 +164,11 @@ class CustomerServiceTest {
         // back with the local profile.
         UserRepository userRepo = mock(UserRepository.class);
         CustomerProfileRepository profileRepo = mock(CustomerProfileRepository.class);
-        OradianClient oradianClient = mock(OradianClient.class);
-        when(oradianClient.createCustomer(any(OradianCustomerRequest.class), anyString()))
-                .thenReturn(fakeOradianResponse());
-        CustomerService service = newService(userRepo, profileRepo, oradianClient);
+        CoreBankingPort coreBanking = mock(CoreBankingPort.class);
+        when(coreBanking.provider()).thenReturn("ORADIAN");
+        when(coreBanking.createCustomer(any(CoreBankingCreateCustomerCommand.class), anyString()))
+                .thenReturn(fakeCoreBankingResult());
+        CustomerService service = newService(userRepo, profileRepo, coreBanking);
 
         User user = customerUser(42L, "+263770000001");
         CustomerProfile profile = CustomerProfile.builder()
@@ -178,11 +181,18 @@ class CustomerServiceTest {
         service.registerTier2(tier2Request("+263770000001"));
 
         ArgumentCaptor<String> keyCaptor = ArgumentCaptor.forClass(String.class);
-        verify(oradianClient).createCustomer(any(OradianCustomerRequest.class), keyCaptor.capture());
+        verify(coreBanking).createCustomer(any(CoreBankingCreateCustomerCommand.class), keyCaptor.capture());
         String key = keyCaptor.getValue();
 
         assertEquals("customer-tier-2:42", key,
-                "idempotency key must be derived from User.id so retries replay Oradian's cached response");
+                "idempotency key must be derived from User.id so retries replay the provider's cached response");
+
+        // The provider-agnostic linkage AND the legacy oradian columns must
+        // both land on the profile (dual-write during the provider split).
+        assertEquals("ORADIAN", profile.getCoreBankingProvider());
+        assertEquals("oradian-ext-1", profile.getCoreBankingProfileId());
+        assertEquals("oradian-ext-1", profile.getOradianExternalId());
+        assertEquals(1001L, profile.getOradianClientId());
     }
 
     @Test
@@ -196,10 +206,11 @@ class CustomerServiceTest {
         // making a second one.
         UserRepository userRepo = mock(UserRepository.class);
         CustomerProfileRepository profileRepo = mock(CustomerProfileRepository.class);
-        OradianClient oradianClient = mock(OradianClient.class);
-        when(oradianClient.createCustomer(any(OradianCustomerRequest.class), anyString()))
-                .thenReturn(fakeOradianResponse());
-        CustomerService service = newService(userRepo, profileRepo, oradianClient);
+        CoreBankingPort coreBanking = mock(CoreBankingPort.class);
+        when(coreBanking.provider()).thenReturn("ORADIAN");
+        when(coreBanking.createCustomer(any(CoreBankingCreateCustomerCommand.class), anyString()))
+                .thenReturn(fakeCoreBankingResult());
+        CustomerService service = newService(userRepo, profileRepo, coreBanking);
 
         User user = customerUser(99L, "+263770000099");
         CustomerProfile profile = CustomerProfile.builder()
@@ -209,9 +220,9 @@ class CustomerServiceTest {
         when(userRepo.findByPhoneNumber("+263770000099")).thenReturn(Optional.of(user));
         when(profileRepo.findByUserId(99L)).thenReturn(Optional.of(profile));
 
-        // First attempt — Oradian commits, then imagine local rollback. After
-        // rollback the in-memory profile keeps its mutations, so reset its
-        // tier back to 1 to model the on-disk state the retry would observe.
+        // First attempt — the provider commits, then imagine local rollback.
+        // After rollback the in-memory profile keeps its mutations, so reset
+        // its tier back to 1 to model the on-disk state the retry would observe.
         service.registerTier2(tier2Request("+263770000099"));
         profile.setRegistrationTier(1);
 
@@ -219,8 +230,8 @@ class CustomerServiceTest {
         service.registerTier2(tier2Request("+263770000099"));
 
         ArgumentCaptor<String> keyCaptor = ArgumentCaptor.forClass(String.class);
-        verify(oradianClient, times(2))
-                .createCustomer(any(OradianCustomerRequest.class), keyCaptor.capture());
+        verify(coreBanking, times(2))
+                .createCustomer(any(CoreBankingCreateCustomerCommand.class), keyCaptor.capture());
         assertEquals(2, keyCaptor.getAllValues().size());
         assertEquals(keyCaptor.getAllValues().get(0), keyCaptor.getAllValues().get(1),
                 "two attempts for the same user must use the same idempotency key");

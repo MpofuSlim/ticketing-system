@@ -216,6 +216,11 @@ services:
       # to bootstrap the first admin; it is forced to change password on first login.
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      # Per-cell core-banking provider behind CoreBankingPort. Default
+      # `oradian` = current behaviour; the ZW cell env flips this to `veengu`
+      # once that adapter lands (phase 2 of the provider split). KE stays
+      # `oradian` permanently.
+      INNBUCKS_CORE_BANKING: ${INNBUCKS_CORE_BANKING:-oradian}
       # Oradian middleware lives in the sibling stack on the shared
       # innbucks-shared docker network — reachable by service name.
       ORADIAN_BASE_URL: http://oradian-middleware:8090

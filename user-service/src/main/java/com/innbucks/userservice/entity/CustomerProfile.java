@@ -68,6 +68,18 @@ public class CustomerProfile {
     @Column(name = "oradian_client_id")
     private Long oradianClientId;
 
+    // Provider-agnostic core-banking linkage (V19). The provider tag is the
+    // CoreBankingPort.provider() of the cell that created the record
+    // ("ORADIAN" / "VEENGU"); profileId is that provider's stable customer
+    // reference (Oradian externalID / Veengu individual id). Written
+    // alongside the oradian_* columns above — those stay in lockstep on
+    // Oradian cells for existing tooling, and stay null on Veengu cells.
+    @Column(name = "core_banking_provider", length = 16)
+    private String coreBankingProvider;
+
+    @Column(name = "core_banking_profile_id", length = 64)
+    private String coreBankingProfileId;
+
     @Column(nullable = false)
     @Builder.Default
     private boolean verified = false;
