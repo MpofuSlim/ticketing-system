@@ -1,5 +1,7 @@
 package com.innbucks.userservice.service;
 
+import com.innbucks.userservice.client.EmailNotificationClient;
+import com.innbucks.userservice.client.SmsNotificationClient;
 import com.innbucks.userservice.dto.CreateShopAdminDTO;
 import com.innbucks.userservice.dto.CreateShopUserDTO;
 import com.innbucks.userservice.dto.UserResponseDTO;
@@ -16,6 +18,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.util.HtmlUtils;
 
 import java.util.EnumSet;
 import java.util.LinkedHashSet;
@@ -44,15 +47,19 @@ import java.util.UUID;
 public class ShopStaffService {
 
     /**
-     * Default password stamped on every new shop staff member until a notification engine
-     * is in place to send them their own onboarding link. They must rotate it via
-     * POST /auth/change-password on first login.
+     * Temporary password stamped on every new shop staff member and emailed to
+     * them on creation (best-effort, with an SMS fallback) so they can sign in.
+     * They must rotate it via POST /auth/change-password on first login. A
+     * proper one-time set-password link is the eventual upgrade; until then this
+     * shared default + forced rotation is the onboarding mechanism.
      */
     static final String DEFAULT_STAFF_PASSWORD = "#Pass123";
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final LoyaltyServiceClient loyaltyServiceClient;
+    private final EmailNotificationClient emailNotificationClient;
+    private final SmsNotificationClient smsNotificationClient;
 
     /** Deployment country pin (ISO 3166-1 alpha-2). Shop staff are anchored
      *  to this cell — home_country is the deployment country, not derived
@@ -79,6 +86,7 @@ public class ShopStaffService {
         userRepository.save(staff);
         log.info("Created SHOP_ADMIN userId={} email={} shopId={} merchantId={} by={}",
                 staff.getId(), staff.getEmail(), req.getShopId(), merchantId, caller.getEmail());
+        notifyOnboarding(staff);
         return UserResponseDTO.from(staff);
     }
 
@@ -100,6 +108,7 @@ public class ShopStaffService {
         userRepository.save(staff);
         log.info("Created SHOP_USER userId={} email={} shopId={} by={}",
                 staff.getId(), staff.getEmail(), callerShopId, caller.getEmail());
+        notifyOnboarding(staff);
         return UserResponseDTO.from(staff);
     }
 
@@ -168,6 +177,74 @@ public class ShopStaffService {
                 .loyaltyMerchantId(merchantId)
                 .loyaltyShopId(shopId)
                 .build();
+    }
+
+    /**
+     * Deliver the new staff member their onboarding credentials. Best-effort: a
+     * delivery failure must NOT block creation — the account is already
+     * persisted and usable. Email is the primary channel (staff always onboard
+     * with an email address, and credentials belong in an inbox rather than an
+     * SMS); SMS is the fallback when the email gateway rejects the message or no
+     * address is on file. Mirrors {@code UserAdminService#notifyApproval}. Never
+     * logs the temporary password.
+     */
+    private void notifyOnboarding(User staff) {
+        String roleLabel = staff.hasRole(User.Role.SHOP_ADMIN) ? "Shop Administrator" : "Shop User";
+        String email = staff.getEmail();
+        if (email != null && !email.isBlank()) {
+            try {
+                emailNotificationClient.sendEmail(
+                        email,
+                        "Welcome to InnBucks — your account is ready",
+                        buildOnboardingHtml(staff.getFirstName(), email, roleLabel),
+                        "STAFF-ONBOARD-" + staff.getId());
+                log.info("Onboarding email sent userId={} role={}", staff.getId(), roleLabel);
+                return;
+            } catch (RuntimeException emailEx) {
+                log.warn("Onboarding email failed userId={}, trying SMS: {}",
+                        staff.getId(), emailEx.getMessage());
+            }
+        } else {
+            log.warn("New staff has no email; trying SMS for onboarding userId={}", staff.getId());
+        }
+
+        String phone = staff.getPhoneNumber();
+        if (phone == null || phone.isBlank()) {
+            log.warn("New staff has no email or phone; skipping onboarding notification userId={}",
+                    staff.getId());
+            return;
+        }
+        String account = (email != null && !email.isBlank()) ? " (" + email + ")" : "";
+        String sms = "Welcome to InnBucks. Your account" + account + " is ready. Temporary password: "
+                + DEFAULT_STAFF_PASSWORD + ". Log in and change it immediately.";
+        try {
+            smsNotificationClient.sendSms(phone, sms, "STAFF-ONBOARD-" + staff.getId());
+            log.info("Onboarding SMS sent userId={}", staff.getId());
+        } catch (RuntimeException smsEx) {
+            log.warn("Onboarding notification failed userId={} (account still created): {}",
+                    staff.getId(), smsEx.getMessage());
+        }
+    }
+
+    /**
+     * Renders the onboarding email body. Dynamic values are HTML-escaped so a
+     * name or address containing markup can't break (or inject into) the
+     * message. The temporary password is a fixed internal constant, not
+     * caller-supplied.
+     */
+    private String buildOnboardingHtml(String firstName, String email, String roleLabel) {
+        String name = (firstName != null && !firstName.isBlank())
+                ? HtmlUtils.htmlEscape(firstName) : "there";
+        return "<p>Hi " + name + ",</p>"
+                + "<p>An InnBucks account has been created for you as a <strong>"
+                + roleLabel + "</strong>.</p>"
+                + "<p>Use these credentials to sign in:</p>"
+                + "<ul>"
+                + "<li><strong>Username:</strong> " + HtmlUtils.htmlEscape(email) + "</li>"
+                + "<li><strong>Temporary password:</strong> " + DEFAULT_STAFF_PASSWORD + "</li>"
+                + "</ul>"
+                + "<p>For your security, please log in and change your password immediately.</p>"
+                + "<p>— The InnBucks Team</p>";
     }
 
     private User requireCaller() {
