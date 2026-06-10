@@ -109,6 +109,13 @@ innbucks:
   # cell #2 onwards MUST set INNBUCKS_COUNTRY explicitly per deployment.
   country: ${INNBUCKS_COUNTRY:ZW}
   internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
+  # Per-cell core-banking provider behind CoreBankingPort. `oradian` is the
+  # committed default (current behaviour everywhere); the ZW cell flips to
+  # `veengu` once that adapter lands (phase 2 of the provider split).
+  # Validated at startup by CoreBankingProviderConfig — an unknown value
+  # refuses to boot rather than half-wire the context.
+  core-banking:
+    provider: ${INNBUCKS_CORE_BANKING:oradian}
   # Rate limits on the public auth endpoints. The gateway exempts
   # /auth/** from its token-keyed limiter on purpose (no token exists
   # at login time), so the floor against credential-stuffing /
