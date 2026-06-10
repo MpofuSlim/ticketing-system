@@ -128,10 +128,13 @@ public class UserServiceClient {
                 }
             }
             return out;
-        } catch (RuntimeException e) {
-            log.warn("user-service /merchants/assigned lookup failed cause={}", e.toString());
-            throw new IllegalStateException("user-service unavailable: " + e.getMessage(), e);
         } catch (Exception e) {
+            // One catch covers both: restClient throws RuntimeException on the
+            // HTTP path; ObjectMapper.readValue throws checked IOException on
+            // parse failures. The unassigned-merchants picker treats both the
+            // same way — surface so the controller can map to 503. A silent
+            // empty fallback would show the FE every merchant (including
+            // already-claimed ones) and defeat the whole picker.
             log.warn("user-service /merchants/assigned lookup failed cause={}", e.toString());
             throw new IllegalStateException("user-service unavailable: " + e.getMessage(), e);
         }
