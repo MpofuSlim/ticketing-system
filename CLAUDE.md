@@ -168,3 +168,60 @@ Schema changes go in `src/main/resources/db/migration/V<N>__*.sql`
 loyalty platform landed via `claude/add-loyalty-service` (merged in #91) and
 the old H2 sibling branch was deleted — the legacy `claude/*` branch names
 are history; use `feature/*` from now on.
+
+## Veengu API reference — source of truth for payment integrations
+
+**The canonical spec for every veengu-backed payment integration in this
+repo is `docs/api/veengu-openapi.json`.** That file is the official
+**Veengu Platform Frontend API v3.1.0** (168 endpoints, 50 tags, contact
+`dev@veengu.com`, sandbox base URL `https://demo.veengu.cloud/api/`). Any
+new payment, transfer, beneficiary, top-up, statement, KYC or
+profile-related client we add to talk to veengu MUST be modelled against
+this spec — not against ad-hoc field names from a chat or a Postman
+export. If the wire shape we observe in production diverges, update the
+JSON in-tree and ship the change in the same PR as the client change so
+the contract test (per the WireMock convention above) is anchored to a
+versioned source.
+
+The spec is ~1 MB — too large to inline anywhere or grep usefully. Use
+the snippets below (same shape as `OradianMiddleware/docs/oradian-swagger.json`)
+to inspect it:
+
+```bash
+# List endpoints under a tag (try: "P2P", "Purchase", "Payout", "Top-Up account",
+# "Outgoing transfer", "Direct transfer", "Cash Withdrawal", "Authentication management"):
+python3 -c "
+import json
+spec = json.load(open('docs/api/veengu-openapi.json'))
+TAG = 'P2P'
+for p, ops in sorted(spec['paths'].items()):
+    for m, op in ops.items():
+        if m in {'get','post','put','patch','delete'} and TAG in op.get('tags', []):
+            print(m.upper(), p, '->', op.get('summary'))
+"
+
+# Inspect a specific request / response schema by name:
+python3 -c "
+import json
+spec = json.load(open('docs/api/veengu-openapi.json'))
+print(json.dumps(spec['components']['schemas']['<SchemaName>'], indent=2))
+"
+
+# Dump every tag with its endpoint count (handy for orienting on a new area):
+python3 -c "
+import json, collections
+spec = json.load(open('docs/api/veengu-openapi.json'))
+c = collections.Counter()
+for p, ops in spec['paths'].items():
+    for m, op in ops.items():
+        if m in {'get','post','put','patch','delete'}:
+            for t in op.get('tags', []): c[t] += 1
+for t, n in c.most_common(): print(f'{n:4d}  {t}')
+"
+```
+
+As with Oradian, do NOT try to model every field of every veengu DTO —
+trim aggressively to only what we actually consume on the wire, and let
+the unknown fields fall through as ignored JSON. The pinned spec exists
+so anyone can re-derive the shape they need without rediscovering it
+from runtime traces.
