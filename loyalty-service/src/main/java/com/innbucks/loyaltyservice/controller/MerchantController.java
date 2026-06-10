@@ -97,7 +97,11 @@ public class MerchantController {
     @GetMapping
     @Operation(summary = "List merchants for the current tenant",
             description = "Returns every merchant belonging to the X-Tenant-Id tenant. Used by the " +
-                          "tenant admin UI to populate merchant pickers.")
+                          "tenant admin UI to populate merchant pickers. Pass `unassigned=true` to " +
+                          "filter to merchants that do NOT yet have any MERCHANT_ADMIN user attached " +
+                          "— used by the new-merchant-admin onboarding flow so the FE can show only " +
+                          "yet-unclaimed merchants. The unassigned filter calls user-service; a 503 " +
+                          "means user-service is unreachable and the caller should retry.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -143,10 +147,27 @@ public class MerchantController {
             )
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
-    public ResponseEntity<ApiResult<PageResponse<Dtos.MerchantResponse>>> list(@ParameterObject Pageable pageable) {
-        PageResponse<Dtos.MerchantResponse> data = PageResponse.from(
-                merchants.list(tenantContext.requireTenantId(), pageable));
-        return ResponseEntity.ok(ApiResult.ok("Merchants retrieved successfully", data));
+    public ResponseEntity<ApiResult<PageResponse<Dtos.MerchantResponse>>> list(
+            @ParameterObject Pageable pageable,
+            @RequestParam(value = "unassigned", defaultValue = "false") boolean unassigned) {
+        try {
+            PageResponse<Dtos.MerchantResponse> data = PageResponse.from(
+                    merchants.list(tenantContext.requireTenantId(), pageable, unassigned));
+            return ResponseEntity.ok(ApiResult.ok("Merchants retrieved successfully", data));
+        } catch (IllegalStateException upstream) {
+            // The unassigned filter needs user-service to identify the
+            // exclusion set. Surface a 503 so the FE knows to retry — the
+            // alternative (silently returning every merchant) would hand
+            // the registering admin already-claimed merchants and defeat
+            // the picker.
+            log.warn("Unassigned-merchants lookup failed: {}", upstream.getMessage());
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(ApiResult.<PageResponse<Dtos.MerchantResponse>>builder()
+                            .code("503 SERVICE_UNAVAILABLE")
+                            .message("Could not determine assigned merchants; please retry")
+                            .data(null)
+                            .build());
+        }
     }
 
     @PostMapping("/{id}/activate")

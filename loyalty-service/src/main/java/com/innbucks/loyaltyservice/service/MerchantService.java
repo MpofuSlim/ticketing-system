@@ -1,5 +1,6 @@
 package com.innbucks.loyaltyservice.service;
 
+import com.innbucks.loyaltyservice.client.UserServiceClient;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.Merchant;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
@@ -12,6 +13,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -19,9 +21,11 @@ import java.util.UUID;
 public class MerchantService {
 
     private final MerchantRepository merchants;
+    private final UserServiceClient userServiceClient;
 
-    public MerchantService(MerchantRepository merchants) {
+    public MerchantService(MerchantRepository merchants, UserServiceClient userServiceClient) {
         this.merchants = merchants;
+        this.userServiceClient = userServiceClient;
     }
 
     public Dtos.MerchantResponse create(UUID tenantId, Dtos.MerchantRequest req) {
@@ -52,7 +56,33 @@ public class MerchantService {
 
     @Transactional(readOnly = true)
     public Page<Dtos.MerchantResponse> list(UUID tenantId, Pageable pageable) {
-        return merchants.findByTenantId(tenantId, pageable).map(MerchantService::toResponse);
+        return list(tenantId, pageable, false);
+    }
+
+    /**
+     * Tenant-scoped merchant page. When {@code unassigned} is true, the result
+     * is filtered to merchants that do NOT yet have any MERCHANT_ADMIN user
+     * attached — what the FE shows a registering merchant admin so they can
+     * pick a yet-unclaimed merchant to bind themselves to.
+     *
+     * <p>The exclusion list is fetched from user-service on demand
+     * ({@code GET /users/internal/merchants/assigned}). If user-service is
+     * unreachable, we let the exception bubble — silently falling back to "all
+     * merchants" would show the FE merchants that already have admins and
+     * defeat the picker's whole purpose.
+     */
+    @Transactional(readOnly = true)
+    public Page<Dtos.MerchantResponse> list(UUID tenantId, Pageable pageable, boolean unassigned) {
+        if (!unassigned) {
+            return merchants.findByTenantId(tenantId, pageable).map(MerchantService::toResponse);
+        }
+        Set<UUID> assigned = userServiceClient.assignedMerchantIds();
+        Page<Merchant> page = assigned.isEmpty()
+                // Hibernate refuses to emit `IN ()`; the no-exclusion case is
+                // semantically identical to the unfiltered listing.
+                ? merchants.findByTenantId(tenantId, pageable)
+                : merchants.findByTenantIdAndIdNotIn(tenantId, assigned, pageable);
+        return page.map(MerchantService::toResponse);
     }
 
     public Merchant requireMerchant(UUID tenantId, UUID merchantId) {

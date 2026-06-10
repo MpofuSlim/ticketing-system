@@ -5,6 +5,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -13,6 +14,13 @@ public interface MerchantRepository extends JpaRepository<Merchant, UUID> {
     List<Merchant> findByTenantId(UUID tenantId);
     Page<Merchant> findByTenantId(UUID tenantId, Pageable pageable);
     long countByTenantIdAndStatus(UUID tenantId, Merchant.Status status);
+
+    // Powers /loyalty/merchants?unassigned=true — the service supplies the
+    // ids of merchants that already have a MERCHANT_ADMIN (fetched from
+    // user-service) and this page excludes them. The service must only call
+    // this with a non-empty collection (Hibernate's `IN ()` is illegal SQL);
+    // when the exclusion set is empty, fall through to findByTenantId.
+    Page<Merchant> findByTenantIdAndIdNotIn(UUID tenantId, Collection<UUID> ids, Pageable pageable);
 
     // Used by user-service via the internal lookup endpoint to resolve a
     // MERCHANT_ADMIN's merchantId from their email at login. If a user happens
