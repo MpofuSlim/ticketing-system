@@ -23,21 +23,22 @@ public class SeatServiceClientFallback implements SeatServiceClient {
 
     @Override
     public ApiResult<SeatLookupResponseDTO> lookupSeat(UUID id) {
-        log.warn("seat-service unavailable; circuit breaker / fallback engaged seatId={}", id);
+        log.warn("seat-service lookupSeat fallback engaged (circuit breaker / call failure) seatId={}", id);
         throw new SeatServiceUnavailableException(
                 "seat-service is currently unavailable. Please retry the booking shortly.");
     }
 
     @Override
     public ApiResult<CategoryLookupDTO> getCategory(UUID id) {
-        log.warn("seat-service unavailable; circuit breaker / fallback engaged categoryId={}", id);
+        log.warn("seat-service getCategory fallback engaged (circuit breaker / call failure) categoryId={}", id);
         throw new SeatServiceUnavailableException(
                 "seat-service is currently unavailable. Please retry the booking shortly.");
     }
 
     @Override
     public ApiResult<List<AvailableSeatDTO>> getAvailableSeats(UUID categoryId, int limit) {
-        log.warn("seat-service unavailable; circuit breaker / fallback engaged categoryId={}", categoryId);
+        log.warn("seat-service getAvailableSeats fallback engaged (circuit breaker / call failure) categoryId={} limit={}",
+                categoryId, limit);
         throw new SeatServiceUnavailableException(
                 "seat-service is currently unavailable. Please retry the booking shortly.");
     }
