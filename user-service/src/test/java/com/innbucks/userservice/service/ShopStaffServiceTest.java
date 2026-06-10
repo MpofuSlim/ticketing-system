@@ -1,0 +1,182 @@
+package com.innbucks.userservice.service;
+
+import com.innbucks.userservice.client.EmailNotificationClient;
+import com.innbucks.userservice.client.NotificationDeliveryException;
+import com.innbucks.userservice.client.SmsNotificationClient;
+import com.innbucks.userservice.dto.CreateShopAdminDTO;
+import com.innbucks.userservice.dto.CreateShopUserDTO;
+import com.innbucks.userservice.dto.UserResponseDTO;
+import com.innbucks.userservice.entity.User;
+import com.innbucks.userservice.integration.LoyaltyServiceClient;
+import com.innbucks.userservice.repository.UserRepository;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.test.util.ReflectionTestUtils;
+
+import java.util.EnumSet;
+import java.util.Optional;
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+
+/**
+ * Unit tests for {@link ShopStaffService}'s onboarding-notification wiring.
+ *
+ * <p>Pins the behaviour added when the email channel was wired in: a newly
+ * created SHOP_ADMIN / SHOP_USER is emailed their credentials (email is the
+ * primary channel — staff always onboard with an address), SMS is the
+ * fallback when the email gateway rejects the message, and a delivery failure
+ * on BOTH channels must never roll back or fail the creation (best-effort,
+ * mirroring {@code UserAdminService#notifyApproval}).
+ *
+ * <p>Pure Mockito, no Spring context — the {@code @Value} deployment-country
+ * field is set via reflection since it isn't a constructor dependency.
+ */
+@ExtendWith(MockitoExtension.class)
+class ShopStaffServiceTest {
+
+    @Mock private UserRepository userRepository;
+    @Mock private PasswordEncoder passwordEncoder;
+    @Mock private LoyaltyServiceClient loyaltyServiceClient;
+    @Mock private EmailNotificationClient emailNotificationClient;
+    @Mock private SmsNotificationClient smsNotificationClient;
+
+    @InjectMocks private ShopStaffService service;
+
+    @BeforeEach
+    void setUp() {
+        ReflectionTestUtils.setField(service, "deploymentCountry", "ZW");
+    }
+
+    @AfterEach
+    void clearContext() {
+        SecurityContextHolder.clearContext();
+    }
+
+    private void authenticateAs(User caller) {
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(caller.getEmail(), null));
+        when(userRepository.findByEmail(caller.getEmail())).thenReturn(Optional.of(caller));
+    }
+
+    private CreateShopAdminDTO shopAdminDto(UUID shopId) {
+        CreateShopAdminDTO dto = new CreateShopAdminDTO();
+        dto.setFirstName("Tendai");
+        dto.setLastName("Moyo");
+        dto.setEmail("tendai@shop.co.zw");
+        dto.setPhoneNumber("+263771234567");
+        dto.setShopId(shopId);
+        return dto;
+    }
+
+    private void stubShopAdminHappyPath(UUID shopId, UUID merchantId) {
+        when(loyaltyServiceClient.findShop(shopId)).thenReturn(Optional.of(
+                new LoyaltyServiceClient.ShopLookupResponse(
+                        shopId.toString(), merchantId.toString(), "tenant-1", "ACTIVE")));
+        when(userRepository.existsByEmail("tendai@shop.co.zw")).thenReturn(false);
+        when(userRepository.existsByPhoneNumberAndHomeCountry("+263771234567", "ZW")).thenReturn(false);
+        when(passwordEncoder.encode(anyString())).thenReturn("hashed");
+    }
+
+    @Test
+    void createShopAdmin_emailsCredentialsToTheNewAdmin() {
+        authenticateAs(User.builder().email("merchant@x.com")
+                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN)).build());
+        UUID shopId = UUID.randomUUID();
+        UUID merchantId = UUID.randomUUID();
+        stubShopAdminHappyPath(shopId, merchantId);
+
+        UserResponseDTO result = service.createShopAdmin(shopAdminDto(shopId));
+
+        assertThat(result).isNotNull();
+
+        ArgumentCaptor<String> to = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> ref = ArgumentCaptor.forClass(String.class);
+        verify(emailNotificationClient).sendEmail(to.capture(), subject.capture(), body.capture(), ref.capture());
+
+        assertThat(to.getValue()).isEqualTo("tendai@shop.co.zw");
+        assertThat(subject.getValue()).contains("Welcome to InnBucks");
+        assertThat(body.getValue())
+                .contains("Shop Administrator")
+                .contains("Tendai")
+                .contains(ShopStaffService.DEFAULT_STAFF_PASSWORD);
+        assertThat(ref.getValue()).startsWith("STAFF-ONBOARD-");
+
+        // Email succeeded → SMS fallback must not fire.
+        verifyNoInteractions(smsNotificationClient);
+    }
+
+    @Test
+    void createShopUser_emailsCredentialsWithShopUserRoleLabel() {
+        UUID shopId = UUID.randomUUID();
+        UUID merchantId = UUID.randomUUID();
+        authenticateAs(User.builder().email("shopadmin@x.com")
+                .roles(EnumSet.of(User.Role.SHOP_ADMIN))
+                .loyaltyShopId(shopId).loyaltyMerchantId(merchantId).build());
+        when(userRepository.existsByEmail("rufaro@shop.co.zw")).thenReturn(false);
+        when(userRepository.existsByPhoneNumberAndHomeCountry("+263772345678", "ZW")).thenReturn(false);
+        when(passwordEncoder.encode(anyString())).thenReturn("hashed");
+
+        CreateShopUserDTO dto = new CreateShopUserDTO();
+        dto.setFirstName("Rufaro");
+        dto.setLastName("Ncube");
+        dto.setEmail("rufaro@shop.co.zw");
+        dto.setPhoneNumber("+263772345678");
+
+        service.createShopUser(dto);
+
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(emailNotificationClient).sendEmail(eq("rufaro@shop.co.zw"), anyString(), body.capture(), anyString());
+        assertThat(body.getValue()).contains("Shop User");
+        verifyNoInteractions(smsNotificationClient);
+    }
+
+    @Test
+    void createShopAdmin_whenEmailGatewayRejects_fallsBackToSms() {
+        authenticateAs(User.builder().email("merchant@x.com")
+                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN)).build());
+        UUID shopId = UUID.randomUUID();
+        stubShopAdminHappyPath(shopId, UUID.randomUUID());
+        doThrow(new NotificationDeliveryException("gateway 503"))
+                .when(emailNotificationClient).sendEmail(anyString(), anyString(), anyString(), anyString());
+
+        UserResponseDTO result = service.createShopAdmin(shopAdminDto(shopId));
+
+        assertThat(result).isNotNull();
+        ArgumentCaptor<String> msg = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> ref = ArgumentCaptor.forClass(String.class);
+        verify(smsNotificationClient).sendSms(eq("+263771234567"), msg.capture(), ref.capture());
+        assertThat(msg.getValue()).contains(ShopStaffService.DEFAULT_STAFF_PASSWORD);
+        assertThat(ref.getValue()).startsWith("STAFF-ONBOARD-");
+    }
+
+    @Test
+    void createShopAdmin_whenBothChannelsFail_creationStillSucceeds() {
+        authenticateAs(User.builder().email("merchant@x.com")
+                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN)).build());
+        UUID shopId = UUID.randomUUID();
+        stubShopAdminHappyPath(shopId, UUID.randomUUID());
+        doThrow(new NotificationDeliveryException("email down"))
+                .when(emailNotificationClient).sendEmail(anyString(), anyString(), anyString(), anyString());
+        doThrow(new NotificationDeliveryException("sms down"))
+                .when(smsNotificationClient).sendSms(anyString(), anyString(), anyString());
+
+        // Best-effort: a total notification outage must NOT fail the creation.
+        assertThatCode(() -> service.createShopAdmin(shopAdminDto(shopId))).doesNotThrowAnyException();
+        verify(userRepository).save(any(User.class));
+    }
+}
