@@ -52,6 +52,7 @@ public class BookingController {
 
     private final BookingService bookingService;
     private final com.innbucks.bookingservice.client.UserServiceClient userServiceClient;
+    private final com.innbucks.bookingservice.service.EventChangeNotificationService eventChangeNotificationService;
 
     /**
      * Default tier applied to a booking when the caller's phone isn't
@@ -819,6 +820,49 @@ public class BookingController {
                             .data(null)
                             .build());
         }
+    }
+
+    @PostMapping("/internal/events/{eventId}/change-notification")
+    @Operation(summary = "Notify confirmed attendees of an event change/cancel (internal)",
+            description = "Service-to-service only — event-service calls this after an organizer changes "
+                    + "an event's time/venue or cancels it. Fans the notification out to the event's "
+                    + "CONFIRMED attendees (SMS primary, WhatsApp fallback) asynchronously and returns 202. "
+                    + "Authenticated with the shared X-Internal-Token; denied at the gateway edge.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "202",
+                    description = "Broadcast accepted; attendees are notified asynchronously"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
+                    description = "Missing or invalid X-Internal-Token")
+    })
+    public ResponseEntity<ApiResult<Void>> notifyEventChange(
+            @PathVariable UUID eventId,
+            @RequestHeader(value = "X-Internal-Token", required = false) String internalToken,
+            @RequestBody(required = false) com.innbucks.bookingservice.dto.EventChangeNotificationRequest request
+    ) {
+        if (!authorizedInternal(internalToken)) {
+            log.warn("Unauthorized POST /bookings/internal/events/{}/change-notification — bad X-Internal-Token",
+                    eventId);
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.<Void>builder()
+                            .code("401 UNAUTHORIZED")
+                            .message("Missing or invalid X-Internal-Token")
+                            .data(null)
+                            .build());
+        }
+        log.info("POST /bookings/internal/events/{}/change-notification changeType={}",
+                eventId, request == null ? null : request.changeType());
+        eventChangeNotificationService.broadcast(
+                eventId,
+                request == null ? null : request.changeType(),
+                request == null ? null : request.eventTitle(),
+                request == null ? null : request.newStartDateTime(),
+                request == null ? null : request.newVenue());
+        return ResponseEntity.accepted()
+                .body(ApiResult.<Void>builder()
+                        .code("202 ACCEPTED")
+                        .message("Event-change notification accepted")
+                        .data(null)
+                        .build());
     }
 
     /**

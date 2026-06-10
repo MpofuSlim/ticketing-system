@@ -52,7 +52,8 @@ class BookingControllerGuestTierTest {
         seat.setCategoryId(UUID.randomUUID());
         req.setSeats(List.of(seat));
 
-        BookingController controller = new BookingController(bookingService, userServiceClient);
+        BookingController controller = new BookingController(bookingService, userServiceClient,
+                mock(com.innbucks.bookingservice.service.EventChangeNotificationService.class));
 
         // Guest path: authentication == null.
         ResponseEntity<ApiResult<BookingResponseDTO>> resp =

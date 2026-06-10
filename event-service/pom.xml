@@ -157,6 +157,16 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- WireMock for the BookingNotificationGateway contract test (per
+             CLAUDE.md: every cross-service client gets a pinned wire contract).
+             Shaded standalone classifier to avoid Jetty/Jackson conflicts. -->
+        <dependency>
+            <groupId>org.wiremock</groupId>
+            <artifactId>wiremock-standalone</artifactId>
+            <version>3.13.2</version>
+            <scope>test</scope>
+        </dependency>
+
     </dependencies>
 
     <build>

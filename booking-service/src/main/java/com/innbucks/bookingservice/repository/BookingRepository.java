@@ -18,6 +18,10 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
 
     List<Booking> findByEventId(UUID eventId);
 
+    // Attendees to notify on an event change/cancel: only CONFIRMED bookings
+    // (PENDING holds and CANCELLED bookings aren't ticket holders).
+    List<Booking> findByEventIdAndStatus(UUID eventId, Booking.BookingStatus status);
+
     // Phone-number lookup (most-recent first). One phone may have many
     // bookings across events / over time, so this returns a list rather than
     // an Optional. See GET /bookings/phone/{phoneNumber}.
