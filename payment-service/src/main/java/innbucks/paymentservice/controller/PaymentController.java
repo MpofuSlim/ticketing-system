@@ -211,7 +211,6 @@ public class PaymentController {
                                         "cashAmount": 10.00,
                                         "pointsRedeemed": 200.0000,
                                         "pointsEarned": 12.5000,
-                                        "walletBalanceAfter": 1812.5000,
                                         "processedAt": "2026-05-14T10:30:00",
                                         "reference": "SHOP-7c9e6679-7425-40de-944b-e07fc1f90ae7"
                                       }
@@ -352,17 +351,23 @@ public class PaymentController {
                 .cashAmount(result.cashAmount())
                 .pointsRedeemed(result.pointsRedeemed())
                 .pointsEarned(result.pointsEarned())
-                .walletBalanceAfter(result.walletBalanceAfter())
+                // walletBalanceAfter is intentionally NOT propagated to the response.
+                // See the ShopCheckoutResponse field comment for the rationale —
+                // keeping the balance off the customer-facing API stops POS systems
+                // from printing it on the receipt.
                 .processedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .reference(reference)
                 .build();
 
         metrics.incShopCheckout("success", mode);
         metrics.shopCheckoutDuration().record(System.nanoTime() - startNanos, java.util.concurrent.TimeUnit.NANOSECONDS);
+        // Log the post-transaction balance (from the loyalty checkout result,
+        // not from the response — the field is intentionally off the response).
+        // Server logs are an operational audit trail, not a customer artefact.
         log.info("Shop checkout processed transactionId={} shopId={} reference={} pointsEarned={} pointsRedeemed={} balance={}",
                 response.getTransactionId(), response.getShopId(), reference,
                 response.getPointsEarned(), response.getPointsRedeemed(),
-                response.getWalletBalanceAfter());
+                result.walletBalanceAfter());
         return ResponseEntity.ok(ApiResult.ok("Shop checkout processed successfully", response));
     }
 

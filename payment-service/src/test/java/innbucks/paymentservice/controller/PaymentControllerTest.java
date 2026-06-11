@@ -190,7 +190,9 @@ class PaymentControllerTest {
         ShopCheckoutResponse data = resp.getBody().getData();
         assertEquals(0, new BigDecimal("200.0000").compareTo(data.getPointsRedeemed()));
         assertEquals(0, new BigDecimal("12.5000").compareTo(data.getPointsEarned()));
-        assertEquals(0, new BigDecimal("1612.5000").compareTo(data.getWalletBalanceAfter()));
+        // walletBalanceAfter is intentionally OFF the response — see the field
+        // comment on ShopCheckoutResponse. Don't reintroduce an assertion here
+        // unless the field is being added back.
         assertNotNull(data.getReference());
         assertTrue(data.getReference().startsWith("SHOP-"));
     }
