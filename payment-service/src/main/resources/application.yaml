@@ -175,17 +175,18 @@ resilience4j:
         exponential-backoff-multiplier: 2
         retry-exceptions:
           - innbucks.paymentservice.client.OradianMiddlewareTransientException
-      # Mirror of the oradian-middleware config for the innbucks-core-gateway
-      # client. The gateway fronts veengu; its 503 means veengu was unreachable
-      # (retryable). Veengu's own REJECTED_* outcomes are returned as HTTP 200
-      # with the outcome in the body — those bypass this retry entirely.
-      innbucks-core-gateway:
+      # Public InnBucks Bank API. IMPORTANT: this retry instance is applied
+      # ONLY to the idempotent operations (login, linked-account lookup,
+      # transaction inquiry). The payment submission itself is NEVER retried —
+      # it isn't provably idempotent upstream, so a transient failure parks
+      # the ledger row IN_DOUBT and the reconciler resolves it by inquiry.
+      bank-api:
         max-attempts: 3
         wait-duration: 500ms
         enable-exponential-backoff: true
         exponential-backoff-multiplier: 2
         retry-exceptions:
-          - innbucks.paymentservice.client.InnbucksCoreGatewayTransientException
+          - innbucks.paymentservice.client.BankApiTransientException
   circuitbreaker:
     instances:
       oradian-middleware:
@@ -205,7 +206,7 @@ resilience4j:
         # is a customer-side problem, not an upstream-down signal.
         record-exceptions:
           - innbucks.paymentservice.client.OradianMiddlewareTransientException
-      innbucks-core-gateway:
+      bank-api:
         register-health-indicator: true
         sliding-window-type: COUNT_BASED
         sliding-window-size: 20
@@ -215,29 +216,37 @@ resilience4j:
         permitted-number-of-calls-in-half-open-state: 3
         automatic-transition-from-open-to-half-open-enabled: true
         record-exceptions:
-          - innbucks.paymentservice.client.InnbucksCoreGatewayTransientException
+          - innbucks.paymentservice.client.BankApiTransientException
 
-# innbucks-core-gateway is the Boot-3 bridge to InnBucks veengu used by
-# /payments/innbucks. Direct pod-to-pod (NOT in our Eureka registry — it
-# registers in the InnBucks Eureka cluster instead), so a plain RestClient
-# with an explicit URL. The read timeout is generous because veengu's debit
-# endpoint can wait on participant-side checks.
-innbucks-core-gateway:
-  base-url: ${INNBUCKS_CORE_GATEWAY_URL:http://localhost:8088}
-  connect-timeout-ms: ${INNBUCKS_CORE_GATEWAY_CONNECT_TIMEOUT_MS:2000}
-  read-timeout-ms: ${INNBUCKS_CORE_GATEWAY_READ_TIMEOUT_MS:15000}
+# Public InnBucks Bank API — the direct integration that replaced the
+# innbucks-core-gateway s2s hop for ticket payments. Auth: X-Api-Key on every
+# call + Bearer token from POST /auth/third-party (cached, refreshed on
+# expiry/401). All three credentials are secrets: env-only, never committed.
+# Spec pinned at docs/api/innbucks-bank-api.postman_collection.json (scrubbed).
+bank-api:
+  base-url: ${BANK_API_URL:https://staging.innbucks.co.zw}
+  api-key: ${BANK_API_KEY:}
+  username: ${BANK_API_USERNAME:}
+  password: ${BANK_API_PASSWORD:}
+  # Transaction `type` on POST /bank/api/payment. CARD_ON_US per the Postman
+  # example — confirm the correct value for wallet→merchant ticket payments
+  # with the InnBucks team and override if it differs.
+  payment-type: ${BANK_API_PAYMENT_TYPE:CARD_ON_US}
+  connect-timeout-ms: ${BANK_API_CONNECT_TIMEOUT_MS:3000}
+  read-timeout-ms: ${BANK_API_READ_TIMEOUT_MS:20000}
+  token-ttl: ${BANK_API_TOKEN_TTL:PT8M}
 
-# Feature flag + merchant config for the real InnBucks payment path. Default
-# OFF: the dummy POST /payments stays the only payment route until the new
-# path has been smoked against a veengu sandbox. Flip per-environment by
-# setting PAYMENTS_INNBUCKS_ENABLED=true. The merchant-account is the
-# ticketing merchant's veengu wallet account number — REQUIRED when enabled;
-# the service refuses to debit without it.
+# The real InnBucks payment path — the FE's public payment entry
+# (POST /payments/innbucks via the api-gateway). Enabled by default now that
+# it talks to the public Bank API directly; disable per-cell with
+# PAYMENTS_INNBUCKS_ENABLED=false (e.g. a cell whose Bank credentials aren't
+# provisioned yet). The merchant-account is the ticketing merchant's InnBucks
+# account number (payment destination) — REQUIRED; the service refuses to
+# debit without it.
 payments:
   innbucks:
-    enabled: ${PAYMENTS_INNBUCKS_ENABLED:false}
+    enabled: ${PAYMENTS_INNBUCKS_ENABLED:true}
     merchant-account: ${PAYMENTS_INNBUCKS_MERCHANT_ACCOUNT:}
-    participant-id: ${PAYMENTS_INNBUCKS_PARTICIPANT_ID:}
 
 springdoc:
   swagger-ui:

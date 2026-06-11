@@ -100,4 +100,20 @@ public class PaymentMetrics {
                 .register(registry)
                 .increment();
     }
+
+    /**
+     * Outcome of the reconciler's Bank-API transaction inquiry for stale
+     * PENDING / IN_DOUBT rows. outcome={completed, failed, not_found,
+     * unknown, error}. `completed` flips the row to COMPLETED_UNCONFIRMED
+     * (the confirm-retry loop finishes the job); `failed`/`not_found` close
+     * it FAILED; `unknown`/`error` leave it for the next sweep — a sustained
+     * drip of those means the inquiry contract needs attention.
+     */
+    public void incInDoubtResolution(String outcome) {
+        Counter.builder("payment.payments.indoubt_resolution")
+                .description("Reconciler Bank-API inquiry resolutions of stale PENDING/IN_DOUBT payments, by outcome")
+                .tag("outcome", outcome)
+                .register(registry)
+                .increment();
+    }
 }

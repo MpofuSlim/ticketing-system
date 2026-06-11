@@ -1,5 +1,7 @@
 package innbucks.paymentservice.reconciliation;
 
+import innbucks.paymentservice.client.BankApiClient;
+import innbucks.paymentservice.client.BankInquiryResult;
 import innbucks.paymentservice.client.BookingServiceClient;
 import innbucks.paymentservice.config.PaymentMetrics;
 import innbucks.paymentservice.entity.Payment;
@@ -32,12 +34,12 @@ import java.util.Map;
  * <ul>
  *   <li><b>Stale PENDING / IN_DOUBT:</b> rows past the staleness threshold.
  *       IN_DOUBT means an upstream call timed out — money MAY have moved.
- *       Observe-only today because the s2s gateway exposes no
- *       query-by-reference; the direct veengu Purchase flow adds
- *       {@code GET /paymentDetails/{token}/transaction} and upgrades this
- *       sweep to resolve-by-query. Never auto-fail: flipping an IN_DOUBT
- *       row to FAILED would tell the customer a payment failed when their
- *       money may already have moved.</li>
+ *       Resolved by QUERYING the bank ({@code GET /bank/api/transaction/
+ *       inquiry} keyed by our paymentReference) — see
+ *       {@link #resolveByInquiry}. Never guessed: an unclassifiable inquiry
+ *       leaves the row for the next sweep, because flipping an IN_DOUBT row
+ *       to FAILED on a hunch would tell the customer a payment failed when
+ *       their money may already have moved.</li>
  *   <li><b>COMPLETED_UNCONFIRMED (self-heal):</b> money definitely moved but
  *       the booking confirm failed at payment time. Booking-side confirm is
  *       an idempotent replay, so this sweep RETRIES it; on success the row
@@ -60,6 +62,7 @@ public class ReconciliationJob {
     private final PaymentRepository paymentRepository;
     private final PaymentRecordService paymentRecordService;
     private final BookingServiceClient bookingServiceClient;
+    private final BankApiClient bankApiClient;
     private final PaymentMetrics metrics;
     private final Duration stalePendingThreshold;
     private final int batchSize;
@@ -69,6 +72,7 @@ public class ReconciliationJob {
             PaymentRepository paymentRepository,
             PaymentRecordService paymentRecordService,
             BookingServiceClient bookingServiceClient,
+            BankApiClient bankApiClient,
             PaymentMetrics metrics,
             @Value("${payment-service.reconciliation.stale-pending-threshold:PT5M}") Duration stalePendingThreshold,
             @Value("${payment-service.reconciliation.batch-size:100}") int batchSize) {
@@ -76,6 +80,7 @@ public class ReconciliationJob {
         this.paymentRepository = paymentRepository;
         this.paymentRecordService = paymentRecordService;
         this.bookingServiceClient = bookingServiceClient;
+        this.bankApiClient = bankApiClient;
         this.metrics = metrics;
         this.stalePendingThreshold = stalePendingThreshold;
         this.batchSize = batchSize;
@@ -133,6 +138,7 @@ public class ReconciliationJob {
         Instant cutoff = Instant.now().minus(stalePendingThreshold);
         List<Payment> stale = paymentRepository.findByStatusInAndCreatedAtBefore(
                 STALE_WATCH, cutoff, PageRequest.of(0, batchSize));
+        boolean canInquire = bankApiClient.isConfigured();
         Instant now = Instant.now();
         for (Payment p : stale) {
             long ageSeconds = Duration.between(p.getCreatedAt(), now).toSeconds();
@@ -140,9 +146,60 @@ public class ReconciliationJob {
                     p.getStatus(), p.getId(), p.getPaymentReference(),
                     p.getBookingId(), p.getAmount(), ageSeconds);
             metrics.incStalePayment(p.getStatus().name());
+            if (canInquire) {
+                resolveByInquiry(p);
+            }
         }
         if (stale.size() == batchSize) {
             log.warn("Payment staleness sweep hit batch cap ({}); more rows likely behind it.", batchSize);
+        }
+    }
+
+    /**
+     * Resolve a stale PENDING / IN_DOUBT row by asking the bank what actually
+     * happened ({@code GET /bank/api/transaction/inquiry} keyed by our
+     * paymentReference). NEVER guesses:
+     * <ul>
+     *   <li>COMPLETED — money moved: park as COMPLETED_UNCONFIRMED with the
+     *       bank's reference; the confirm-retry loop promotes to SUCCEEDED
+     *       (next pass) once the booking is confirmed.</li>
+     *   <li>FAILED / NOT_FOUND — no money moved (declined, or the submission
+     *       never landed): close FAILED, freeing the booking slot for a
+     *       retry payment.</li>
+     *   <li>UNKNOWN or inquiry error — leave the row alone; next sweep
+     *       tries again. Sustained UNKNOWNs surface via
+     *       {@code payment.payments.indoubt_resolution{outcome=unknown}}.</li>
+     * </ul>
+     */
+    private void resolveByInquiry(Payment p) {
+        try {
+            BankInquiryResult result = bankApiClient.inquireTransaction(
+                    p.getCustomerAccount(), p.getPaymentReference());
+            switch (result.outcome()) {
+                case COMPLETED -> {
+                    paymentRecordService.markCompletedUnconfirmed(p.getId(), result.reference(),
+                            "Resolved by bank inquiry: transaction COMPLETED upstream");
+                    metrics.incInDoubtResolution("completed");
+                    log.info("Inquiry resolved paymentReference={} as COMPLETED upstream (bankRef={}) — confirm-retry will finish",
+                            p.getPaymentReference(), result.reference());
+                }
+                case FAILED -> {
+                    paymentRecordService.markFailed(p.getId(),
+                            result.code() != null ? result.code() : "upstream_failed",
+                            result.message() != null ? result.message() : "Bank inquiry reported the transaction failed");
+                    metrics.incInDoubtResolution("failed");
+                }
+                case NOT_FOUND -> {
+                    paymentRecordService.markFailed(p.getId(), "not_found_upstream",
+                            "Bank inquiry has no record of this reference — submission never landed");
+                    metrics.incInDoubtResolution("not_found");
+                }
+                case UNKNOWN -> metrics.incInDoubtResolution("unknown");
+            }
+        } catch (RuntimeException e) {
+            metrics.incInDoubtResolution("error");
+            log.warn("Bank inquiry failed for paymentReference={} — leaving row for next sweep: {}",
+                    p.getPaymentReference(), e.getMessage());
         }
     }
 

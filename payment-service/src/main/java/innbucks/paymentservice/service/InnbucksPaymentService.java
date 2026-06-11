@@ -1,15 +1,13 @@
 package innbucks.paymentservice.service;
 
+import innbucks.paymentservice.client.BankApiClient;
+import innbucks.paymentservice.client.BankApiException;
+import innbucks.paymentservice.client.BankApiTransientException;
+import innbucks.paymentservice.client.BankPaymentCommand;
+import innbucks.paymentservice.client.BankPaymentResult;
 import innbucks.paymentservice.client.BookingServiceClient;
 import innbucks.paymentservice.client.BookingServiceClient.BookingConfirmationException;
-import innbucks.paymentservice.client.InnbucksCoreGatewayClient;
-import innbucks.paymentservice.client.InnbucksCoreGatewayDebitRequest;
-import innbucks.paymentservice.client.InnbucksCoreGatewayException;
-import innbucks.paymentservice.client.InnbucksCoreGatewayResponse;
-import innbucks.paymentservice.client.InnbucksCoreGatewayTransientException;
-import innbucks.paymentservice.client.OradianMiddlewareClient;
 import innbucks.paymentservice.client.PaymentOutcome;
-import innbucks.paymentservice.dto.DepositAccount;
 import innbucks.paymentservice.dto.InnbucksPaymentResponse;
 import innbucks.paymentservice.dto.InnbucksPaymentResponse.Status;
 import innbucks.paymentservice.entity.Payment;
@@ -22,20 +20,20 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
-import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Orchestrates a real InnBucks/veengu-backed ticketing payment:
+ * Orchestrates a real InnBucks-backed ticketing payment over the PUBLIC
+ * Bank API (the s2s innbucks-core-gateway hop is gone):
  *
  * <pre>
- *   1. Resolve the customer's main InnBucks wallet (Oradian deposits lookup)
+ *   1. Resolve the customer's wallet (Bank API linked-account by MSISDN)
  *   2. Fetch the booking's totalAmount + currency (booking-service GET)
  *   3. Open a PENDING payment ledger row (REQUIRES_NEW commit)
- *   4. POST /payments/debit to innbucks-core-gateway -> veengu
- *   5. Classify the gateway envelope's outcome
+ *   4. POST /bank/api/payment (participantReference = our paymentReference)
+ *   5. Classify the bank's response
  *      - COMPLETED  -> confirm the booking, then markSucceeded, return SUCCESS
  *      - COMPLETED but confirm fails -> markCompletedUnconfirmed (money moved;
  *        reconciler retries the confirm), return PROCESSING
@@ -72,17 +70,12 @@ public class InnbucksPaymentService {
     private static final String DEFAULT_CURRENCY = "USD";
 
     private final PaymentRecordService paymentRecordService;
-    private final InnbucksCoreGatewayClient gatewayClient;
-    private final OradianMiddlewareClient oradianClient;
+    private final BankApiClient bankApiClient;
     private final BookingServiceClient bookingServiceClient;
 
-    /** Ticketing merchant's veengu wallet account number — per-deployment env var. */
+    /** Ticketing merchant's InnBucks account number (payment destination) — per-deployment env var. */
     @Value("${payments.innbucks.merchant-account:}")
     private String merchantAccount;
-
-    /** Optional veengu participantId; some merchant configs require it. */
-    @Value("${payments.innbucks.participant-id:}")
-    private String participantId;
 
     public InnbucksPaymentResponse processPayment(UUID bookingId,
                                                   String customerMsisdn,
@@ -140,59 +133,52 @@ public class InnbucksPaymentService {
                     "A payment for this booking is already in progress or completed", 409);
         }
 
-        // ---- Step 4: debit veengu via the gateway ----------------------------
-        InnbucksCoreGatewayDebitRequest gatewayRequest = InnbucksCoreGatewayDebitRequest.builder()
-                .paymentReference(paymentReference)
-                .customerMsisdn(customerMsisdn)
-                .customerAccount(customerAccount)
-                .merchantAccount(merchantAccount)
-                .amount(amount)
-                .currency(currency)
-                .narration("Ticketing payment " + paymentReference)
-                .participantId(blankToNull(participantId))
-                .build();
+        // ---- Step 4: debit via the public Bank API ----------------------------
+        BankPaymentCommand command = new BankPaymentCommand(
+                amount, currency,
+                "Ticketing payment " + paymentReference,
+                customerAccount, merchantAccount, paymentReference);
 
-        InnbucksCoreGatewayResponse gatewayResponse;
+        BankPaymentResult bankResult;
         try {
-            gatewayResponse = gatewayClient.debit(gatewayRequest, idempotencyKey);
-        } catch (InnbucksCoreGatewayTransientException e) {
-            // Gateway/veengu unreachable AFTER the request may have left us —
-            // money MAY have moved. IN_DOUBT, never FAILED; the reconciler (or
-            // an operator checking the processor) resolves. FE sees PROCESSING.
-            log.warn("[innbucks-payment] gateway transient for paymentReference={} msisdn={} status={}",
+            bankResult = bankApiClient.pay(command);
+        } catch (BankApiTransientException e) {
+            // Timeout / 5xx / circuit open AFTER the request may have left us —
+            // money MAY have moved. IN_DOUBT, never FAILED; the reconciler
+            // resolves via transaction inquiry. FE sees PROCESSING.
+            log.warn("[innbucks-payment] bank-api transient for paymentReference={} msisdn={} status={}",
                     paymentReference, MsisdnMasking.mask(customerMsisdn), e.getStatusCode());
             paymentRecordService.markInDoubt(opened.getId(),
-                    "Gateway transient failure: HTTP " + e.getStatusCode());
+                    "Bank API transient failure: HTTP " + e.getStatusCode());
             return buildResponse(opened, Status.PROCESSING, null, null,
-                    "InnBucks core temporarily unavailable; your payment is still being processed");
-        } catch (InnbucksCoreGatewayException e) {
-            // 4xx from the gateway — request-shape error. This is our bug.
-            // Mark FAILED so the row is closed; surface a generic message.
-            log.error("[innbucks-payment] gateway rejected request paymentReference={} status={}",
+                    "InnBucks temporarily unavailable; your payment is still being processed");
+        } catch (BankApiException e) {
+            // Non-decline 4xx / credential failure — the bank actively refused
+            // the REQUEST (no money moved). Close the row; ops bug, not customer.
+            log.error("[innbucks-payment] bank-api rejected request paymentReference={} status={}",
                     paymentReference, e.getStatusCode(), e);
-            paymentRecordService.markFailed(opened.getId(), "gateway_rejected", e.getMessage());
+            paymentRecordService.markFailed(opened.getId(), "bank_rejected", e.getMessage());
             throw new InvalidPaymentRequestException(
-                    "Payment request was rejected by the gateway", 500);
+                    "Payment request was rejected by InnBucks", 500);
         }
 
         // ---- Step 5: classify outcome -----------------------------------------
-        return handleOutcome(opened, gatewayResponse, bookingId);
+        return handleOutcome(opened, bankResult, bookingId);
     }
 
     private InnbucksPaymentResponse handleOutcome(Payment opened,
-                                                  InnbucksCoreGatewayResponse gatewayResponse,
+                                                  BankPaymentResult bankResult,
                                                   UUID bookingId) {
-        PaymentOutcome outcome = gatewayResponse.outcome();
+        PaymentOutcome outcome = bankResult.outcome();
         if (outcome == null) {
             // Unclassifiable envelope: money MAY have moved. Park IN_DOUBT
             // with whatever reference we got — that's the recovery handle.
-            log.error("[innbucks-payment] gateway returned null outcome paymentReference={}",
+            log.error("[innbucks-payment] bank-api returned null outcome paymentReference={}",
                     opened.getPaymentReference());
             paymentRecordService.markInDoubt(opened.getId(),
-                    "Gateway returned null outcome; upstreamRef="
-                            + gatewayResponse.upstreamReference());
+                    "Bank API returned null outcome; bankRef=" + bankResult.reference());
             return buildResponse(opened, Status.PROCESSING,
-                    gatewayResponse.upstreamReference(), null,
+                    bankResult.reference(), null,
                     "Outcome unknown; reconciler will resolve");
         }
 
@@ -216,11 +202,11 @@ public class InnbucksPaymentService {
                     // confirm is an idempotent replay) and promotes to
                     // SUCCEEDED. Sustained presence in this state is a page.
                     log.error("[innbucks-payment] BOOKING CONFIRM FAILED AFTER DEBIT — reconciler will retry " +
-                                    "paymentReference={} veenguRef={} bookingStatus={} reason={}",
-                            opened.getPaymentReference(), gatewayResponse.upstreamReference(),
+                                    "paymentReference={} bankRef={} bookingStatus={} reason={}",
+                            opened.getPaymentReference(), bankResult.reference(),
                             e.getStatusCode(), e.getMessage());
                     paymentRecordService.markCompletedUnconfirmed(opened.getId(),
-                            gatewayResponse.upstreamReference(),
+                            bankResult.reference(),
                             "Debit COMPLETED but booking confirm rejected (HTTP "
                                     + e.getStatusCode() + "): " + e.getMessage());
                     // FE-visible status is PROCESSING (an existing value on
@@ -228,68 +214,62 @@ public class InnbucksPaymentService {
                     // booking is being finalised, very likely automatically
                     // on the next reconciler pass.
                     return buildResponse(opened, Status.PROCESSING,
-                            gatewayResponse.upstreamReference(), "booking_confirm_pending",
+                            bankResult.reference(), "booking_confirm_pending",
                             "Payment received; we're finalising your booking. " +
                                     "Reference " + opened.getPaymentReference() +
                                     " — your confirmation will follow shortly.");
                 }
                 paymentRecordService.markSucceeded(opened.getId(),
-                        gatewayResponse.upstreamReference(), confirmationNumber);
+                        bankResult.reference(), confirmationNumber);
                 opened.setConfirmationNumber(confirmationNumber);
                 return buildResponse(opened, Status.SUCCESS,
-                        gatewayResponse.upstreamReference(), null, null);
+                        bankResult.reference(), null, null);
             }
             case PROCESSING, DUPLICATE_DETECTED -> {
-                // Leave PENDING. DUPLICATE_DETECTED means the first attempt
-                // already landed in veengu; without GET-by-reference on
-                // VeenguClient we can't yet query the authoritative state, so
-                // reconciler will resolve on the next pass.
-                log.info("[innbucks-payment] {} paymentReference={} veenguRef={}",
-                        outcome, opened.getPaymentReference(), gatewayResponse.upstreamReference());
+                // Leave PENDING: the bank answered 2xx but the body didn't
+                // classify (or flagged a duplicate). The reconciler resolves
+                // by transaction inquiry on its next pass.
+                log.info("[innbucks-payment] {} paymentReference={} bankRef={}",
+                        outcome, opened.getPaymentReference(), bankResult.reference());
                 return buildResponse(opened, Status.PROCESSING,
-                        gatewayResponse.upstreamReference(), null,
+                        bankResult.reference(), null,
                         "Payment accepted by InnBucks; awaiting confirmation");
             }
             case UPSTREAM_UNAVAILABLE -> {
-                // Gateway reached veengu's doorstep and got turned away — but
-                // whether the debit was applied before the failure is unknown.
-                // Same discipline as the transient path: IN_DOUBT, never FAILED.
+                // Defensive: the classifier doesn't emit this today (transport
+                // failures throw BankApiTransientException instead), but the
+                // discipline is identical — outcome unknown, IN_DOUBT.
                 log.warn("[innbucks-payment] upstream unavailable paymentReference={}",
                         opened.getPaymentReference());
                 paymentRecordService.markInDoubt(opened.getId(),
-                        "Gateway reported upstream (veengu) unavailable");
+                        "Bank reported upstream unavailable");
                 return buildResponse(opened, Status.PROCESSING, null, null,
-                        "InnBucks core temporarily unavailable; your payment is still being processed");
+                        "InnBucks temporarily unavailable; your payment is still being processed");
             }
             default -> {
-                // All REJECTED_* outcomes -> mark FAILED with the veengu code.
+                // All REJECTED_* outcomes -> mark FAILED with the bank's code.
                 paymentRecordService.markFailed(opened.getId(),
-                        gatewayResponse.upstreamCode(), gatewayResponse.upstreamMessage());
+                        bankResult.code(), bankResult.message());
                 return buildResponse(opened, Status.FAILED,
-                        null, gatewayResponse.upstreamCode(),
-                        humanMessage(outcome, gatewayResponse.upstreamMessage()));
+                        null, bankResult.code(),
+                        humanMessage(outcome, bankResult.message()));
             }
         }
     }
 
     private String resolveMainWallet(String customerMsisdn) {
-        List<DepositAccount> accounts = oradianClient.getDepositsForMsisdn(customerMsisdn);
-        if (accounts == null || accounts.isEmpty()) {
+        // Linked-account inquiry on the public Bank API: MSISDN -> wallet
+        // account number. Replaces the old Oradian-middleware deposits hop.
+        try {
+            return bankApiClient.findWalletAccount(customerMsisdn)
+                    .orElseThrow(() -> new InvalidPaymentRequestException(
+                            "No InnBucks wallet found for this customer", 422));
+        } catch (BankApiTransientException e) {
+            // Pre-debit lookup failure: nothing has moved; safe to surface a
+            // retryable 503 to the FE without touching the ledger.
             throw new InvalidPaymentRequestException(
-                    "No InnBucks wallet found for this customer", 422);
+                    "InnBucks temporarily unavailable; please retry shortly", 503);
         }
-        // Pick the customer's main, active deposit account. The
-        // isMainAccount / status flags arrive as strings from Oradian (the
-        // middleware preserves the wire shape verbatim) — match on the
-        // literal "true" / "Active" the middleware emits.
-        return accounts.stream()
-                .filter(a -> "true".equalsIgnoreCase(a.getIsMainAccount()))
-                .filter(a -> "Active".equalsIgnoreCase(a.getStatus()))
-                .map(DepositAccount::getInternalID)
-                .filter(id -> id != null && !id.isBlank())
-                .findFirst()
-                .orElseThrow(() -> new InvalidPaymentRequestException(
-                        "No active main InnBucks wallet found for this customer", 422));
     }
 
     private InnbucksPaymentResponse buildResponse(Payment payment,
@@ -333,10 +313,6 @@ public class InnbucksPaymentService {
 
     private static String asString(Object value) {
         return value == null ? null : value.toString();
-    }
-
-    private static String blankToNull(String s) {
-        return s == null || s.isBlank() ? null : s;
     }
 
     /** Thrown by the service for validation failures the controller maps to 4xx. */

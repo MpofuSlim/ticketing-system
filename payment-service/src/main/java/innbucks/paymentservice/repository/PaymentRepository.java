@@ -41,4 +41,13 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
 
     /** Reconciler sweep: money-moved-but-booking-unconfirmed rows to retry. */
     List<Payment> findByStatus(Payment.PaymentStatus status, Pageable pageable);
+
+    /**
+     * Replay lookup for the public {@code POST /payments} entry: when a
+     * booking already has an active-or-successful payment, the endpoint
+     * returns THAT row's receipt (idempotent-replay semantics — a double-tap
+     * must never surface as an error to the FE).
+     */
+    Optional<Payment> findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(
+            UUID bookingId, Collection<Payment.PaymentStatus> statuses);
 }

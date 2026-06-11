@@ -10,8 +10,14 @@ import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import innbucks.paymentservice.dto.PaymentMethod;
 import innbucks.paymentservice.dto.PaymentRequest;
 import innbucks.paymentservice.dto.PaymentResponse;
+import innbucks.paymentservice.dto.InnbucksPaymentResponse;
 import innbucks.paymentservice.dto.ShopCheckoutRequest;
 import innbucks.paymentservice.dto.ShopCheckoutResponse;
+import innbucks.paymentservice.entity.Payment;
+import innbucks.paymentservice.repository.PaymentRepository;
+import innbucks.paymentservice.service.InnbucksPaymentService;
+import innbucks.paymentservice.service.InnbucksPaymentService.InvalidPaymentRequestException;
+import innbucks.paymentservice.service.PaymentRecordService;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -20,6 +26,7 @@ import org.springframework.security.core.Authentication;
 
 import java.math.BigDecimal;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -50,19 +57,47 @@ class PaymentControllerTest {
         return r;
     }
 
-    @Test
-    void processPayment_usesBookingTotalAmountForReceipt() {
-        BookingServiceClient client = mock(BookingServiceClient.class);
-        UUID bookingId = UUID.randomUUID();
-        when(client.confirmBooking(eq(bookingId))).thenReturn(Map.of(
-                "id", bookingId.toString(),
-                "status", "CONFIRMED",
-                "totalAmount", 100.00,
-                "confirmationNumber", "INN-20260502-AB12CD"
-        ));
+    /** Controller with mockable real-flow collaborators. */
+    private record Fixture(PaymentController controller, BookingServiceClient bookings,
+                           InnbucksPaymentService innbucks, PaymentRepository payments) {}
 
-        ResponseEntity<ApiResult<PaymentResponse>> resp = new PaymentController(client, mock(innbucks.paymentservice.client.LoyaltyServiceClient.class), newMetrics())
-                .processPayment(paymentFor(bookingId));
+    private static Fixture fixture() {
+        BookingServiceClient bookings = mock(BookingServiceClient.class);
+        InnbucksPaymentService innbucks = mock(InnbucksPaymentService.class);
+        PaymentRepository payments = mock(PaymentRepository.class);
+        PaymentController controller = new PaymentController(
+                bookings, mock(LoyaltyServiceClient.class), newMetrics(),
+                innbucks, mock(PaymentRecordService.class), payments);
+        return new Fixture(controller, bookings, innbucks, payments);
+    }
+
+    private static InnbucksPaymentResponse outcome(UUID bookingId, InnbucksPaymentResponse.Status status,
+                                                   String paymentReference, String confirmation) {
+        return InnbucksPaymentResponse.builder()
+                .paymentReference(paymentReference)
+                .bookingId(bookingId)
+                .status(status)
+                .amountPaid(new BigDecimal("100.00"))
+                .currency("USD")
+                .confirmationNumber(confirmation)
+                .build();
+    }
+
+    @Test
+    void processPayment_success_keepsStubReceiptShape() {
+        Fixture f = fixture();
+        UUID bookingId = UUID.randomUUID();
+        UUID refUuid = UUID.randomUUID();
+        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
+                .thenReturn(Optional.empty());
+        when(f.bookings().getBooking(bookingId)).thenReturn(Map.of(
+                "phoneNumber", "+263770000001", "totalAmount", 100.00));
+        when(f.innbucks().processPayment(eq(bookingId), eq("+263770000001"), isNull()))
+                .thenReturn(outcome(bookingId, InnbucksPaymentResponse.Status.SUCCESS,
+                        "TKT-PMT-" + refUuid, "INN-20260502-AB12CD"));
+
+        ResponseEntity<ApiResult<PaymentResponse>> resp =
+                f.controller().processPayment(paymentFor(bookingId));
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         PaymentResponse data = resp.getBody().getData();
@@ -72,56 +107,107 @@ class PaymentControllerTest {
         assertEquals("USD", data.getCurrency());
         assertEquals("4242", data.getCardLast4());
         assertEquals("INN-20260502-AB12CD", data.getConfirmationNumber());
-        assertNotNull(data.getTransactionId());
+        // transactionId is the UUID inside our TKT-PMT-<uuid> reference — stable, not random.
+        assertEquals(refUuid, data.getTransactionId());
         assertNotNull(data.getProcessedAt());
-        verify(client).confirmBooking(eq(bookingId));
     }
 
     @Test
-    void processPayment_defaultsCurrencyToUsdWhenRequestOmitsIt() {
-        BookingServiceClient client = mock(BookingServiceClient.class);
+    void processPayment_processingOutcome_returns200WithProcessingStatus() {
+        Fixture f = fixture();
         UUID bookingId = UUID.randomUUID();
-        when(client.confirmBooking(eq(bookingId))).thenReturn(Map.of(
-                "totalAmount", 50.00,
-                "confirmationNumber", "INN-Y"
-        ));
+        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
+                .thenReturn(Optional.empty());
+        when(f.bookings().getBooking(bookingId)).thenReturn(Map.of(
+                "phoneNumber", "+263770000001", "totalAmount", 100.00));
+        when(f.innbucks().processPayment(eq(bookingId), eq("+263770000001"), isNull()))
+                .thenReturn(outcome(bookingId, InnbucksPaymentResponse.Status.PROCESSING,
+                        "TKT-PMT-" + UUID.randomUUID(), null));
 
-        PaymentRequest req = new PaymentRequest();
-        req.setBookingId(bookingId);
+        ResponseEntity<ApiResult<PaymentResponse>> resp =
+                f.controller().processPayment(paymentFor(bookingId));
 
-        ResponseEntity<ApiResult<PaymentResponse>> resp = new PaymentController(client, mock(innbucks.paymentservice.client.LoyaltyServiceClient.class), newMetrics())
-                .processPayment(req);
-
-        assertEquals("USD", resp.getBody().getData().getCurrency());
+        // 200 (not 202): the FE's stub contract treats non-200 as error.
+        assertEquals(HttpStatus.OK, resp.getStatusCode());
+        assertEquals(PaymentResponse.Status.PROCESSING, resp.getBody().getData().getStatus());
     }
 
     @Test
-    void processPayment_handlesBookingsWithFractionalTotalAmount() {
-        BookingServiceClient client = mock(BookingServiceClient.class);
+    void processPayment_decline_surfacesAs400WithReason() {
+        Fixture f = fixture();
         UUID bookingId = UUID.randomUUID();
-        when(client.confirmBooking(eq(bookingId))).thenReturn(Map.of(
-                "totalAmount", 75.50,
-                "confirmationNumber", "INN-X"
-        ));
+        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
+                .thenReturn(Optional.empty());
+        when(f.bookings().getBooking(bookingId)).thenReturn(Map.of(
+                "phoneNumber", "+263770000001", "totalAmount", 100.00));
+        when(f.innbucks().processPayment(eq(bookingId), eq("+263770000001"), isNull()))
+                .thenThrow(new InvalidPaymentRequestException(
+                        "Insufficient balance in your InnBucks wallet", 422));
 
-        ResponseEntity<ApiResult<PaymentResponse>> resp = new PaymentController(client, mock(innbucks.paymentservice.client.LoyaltyServiceClient.class), newMetrics())
-                .processPayment(paymentFor(bookingId));
+        ResponseEntity<ApiResult<PaymentResponse>> resp =
+                f.controller().processPayment(paymentFor(bookingId));
 
-        assertEquals(0, new BigDecimal("75.5").compareTo(resp.getBody().getData().getAmountPaid()));
+        // Stub error vocabulary: non-200 + human message, data null.
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
+        assertEquals("Insufficient balance in your InnBucks wallet", resp.getBody().getMessage());
+        assertNull(resp.getBody().getData());
     }
 
     @Test
-    void processPayment_surfacesBookingServiceErrorMessageWhenConfirmRejected() {
-        BookingServiceClient client = mock(BookingServiceClient.class);
+    void processPayment_replayOnPaidBooking_returnsExistingReceipt_neverErrors() {
+        Fixture f = fixture();
         UUID bookingId = UUID.randomUUID();
-        when(client.confirmBooking(eq(bookingId)))
-                .thenThrow(new BookingConfirmationException("Seat hold expired", 400));
+        Payment paid = Payment.builder()
+                .id(UUID.randomUUID()).paymentReference("TKT-PMT-" + UUID.randomUUID())
+                .bookingId(bookingId).customerMsisdn("+263770000001")
+                .customerAccount("C1").merchantAccount("M1")
+                .amount(new BigDecimal("100.00")).currency("USD")
+                .status(Payment.PaymentStatus.SUCCEEDED)
+                .confirmationNumber("INN-REPLAY-1")
+                .build();
+        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
+                .thenReturn(Optional.of(paid));
 
-        ResponseEntity<ApiResult<PaymentResponse>> resp = new PaymentController(client, mock(innbucks.paymentservice.client.LoyaltyServiceClient.class), newMetrics())
-                .processPayment(paymentFor(bookingId));
+        ResponseEntity<ApiResult<PaymentResponse>> resp =
+                f.controller().processPayment(paymentFor(bookingId));
+
+        assertEquals(HttpStatus.OK, resp.getStatusCode());
+        assertEquals(PaymentResponse.Status.SUCCESS, resp.getBody().getData().getStatus());
+        assertEquals("INN-REPLAY-1", resp.getBody().getData().getConfirmationNumber());
+        // The real-money flow must NOT run again — double-tap is a replay.
+        verifyNoInteractions(f.innbucks());
+    }
+
+    @Test
+    void processPayment_bookingWithoutPhone_returns400() {
+        Fixture f = fixture();
+        UUID bookingId = UUID.randomUUID();
+        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
+                .thenReturn(Optional.empty());
+        when(f.bookings().getBooking(bookingId)).thenReturn(Map.of("totalAmount", 100.00));
+
+        ResponseEntity<ApiResult<PaymentResponse>> resp =
+                f.controller().processPayment(paymentFor(bookingId));
 
         assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
-        assertEquals("Seat hold expired", resp.getBody().getMessage());
+        assertNull(resp.getBody().getData());
+        verifyNoInteractions(f.innbucks());
+    }
+
+    @Test
+    void processPayment_surfacesBookingServiceErrorMessage() {
+        Fixture f = fixture();
+        UUID bookingId = UUID.randomUUID();
+        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
+                .thenReturn(Optional.empty());
+        when(f.bookings().getBooking(bookingId))
+                .thenThrow(new BookingConfirmationException("Booking not found", 404));
+
+        ResponseEntity<ApiResult<PaymentResponse>> resp =
+                f.controller().processPayment(paymentFor(bookingId));
+
+        assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
+        assertEquals("Booking not found", resp.getBody().getMessage());
         assertNull(resp.getBody().getData());
     }
 
@@ -156,7 +242,7 @@ class PaymentControllerTest {
         req.setCashAmount(new BigDecimal("10.00"));
 
         ResponseEntity<ApiResult<ShopCheckoutResponse>> resp = new PaymentController(
-                mock(BookingServiceClient.class), loyalty, newMetrics()).shopCheckout(req, AUTH_0712345678);
+                mock(BookingServiceClient.class), loyalty, newMetrics(), mock(InnbucksPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class)).shopCheckout(req, AUTH_0712345678);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         ShopCheckoutResponse data = resp.getBody().getData();
@@ -184,7 +270,7 @@ class PaymentControllerTest {
                         UUID.randomUUID(), UUID.randomUUID()));
 
         ResponseEntity<ApiResult<ShopCheckoutResponse>> resp = new PaymentController(
-                mock(BookingServiceClient.class), loyalty, newMetrics()).shopCheckout(cashAndPoints(shopId), AUTH_0712345678);
+                mock(BookingServiceClient.class), loyalty, newMetrics(), mock(InnbucksPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class)).shopCheckout(cashAndPoints(shopId), AUTH_0712345678);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         ShopCheckoutResponse data = resp.getBody().getData();
@@ -207,7 +293,7 @@ class PaymentControllerTest {
         req.setPointsAmount(new BigDecimal("200")); // illegal mix
 
         ResponseEntity<ApiResult<ShopCheckoutResponse>> resp = new PaymentController(
-                mock(BookingServiceClient.class), mock(LoyaltyServiceClient.class), newMetrics()).shopCheckout(req, AUTH_0712345678);
+                mock(BookingServiceClient.class), mock(LoyaltyServiceClient.class), newMetrics(), mock(InnbucksPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class)).shopCheckout(req, AUTH_0712345678);
 
         assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
         assertTrue(resp.getBody().getMessage().contains("CASH"));
@@ -222,7 +308,7 @@ class PaymentControllerTest {
         // no pointsAmount → invalid
 
         ResponseEntity<ApiResult<ShopCheckoutResponse>> resp = new PaymentController(
-                mock(BookingServiceClient.class), mock(LoyaltyServiceClient.class), newMetrics()).shopCheckout(req, AUTH_0712345678);
+                mock(BookingServiceClient.class), mock(LoyaltyServiceClient.class), newMetrics(), mock(InnbucksPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class)).shopCheckout(req, AUTH_0712345678);
 
         assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
     }
@@ -234,7 +320,7 @@ class PaymentControllerTest {
                 .thenThrow(new LoyaltyCheckoutException("merchant is not active; no loyalty operations will run", 400));
 
         ResponseEntity<ApiResult<ShopCheckoutResponse>> resp = new PaymentController(
-                mock(BookingServiceClient.class), loyalty, newMetrics()).shopCheckout(cashAndPoints(UUID.randomUUID()), AUTH_0712345678);
+                mock(BookingServiceClient.class), loyalty, newMetrics(), mock(InnbucksPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class)).shopCheckout(cashAndPoints(UUID.randomUUID()), AUTH_0712345678);
 
         assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
         assertTrue(resp.getBody().getMessage().contains("merchant is not active"));
@@ -251,7 +337,7 @@ class PaymentControllerTest {
                         new BigDecimal("12.5"), new BigDecimal("1612.5"),
                         UUID.randomUUID(), UUID.randomUUID()));
         PaymentMetrics m = newMetrics();
-        new PaymentController(mock(BookingServiceClient.class), loyalty, m)
+        new PaymentController(mock(BookingServiceClient.class), loyalty, m, mock(InnbucksPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class))
                 .shopCheckout(cashAndPoints(shopId), AUTH_0712345678);
 
         double success = m.shopCheckoutDuration().count() > 0
@@ -266,7 +352,7 @@ class PaymentControllerTest {
         when(loyalty.shopCheckout(any(), any(), any(), any(), any()))
                 .thenThrow(new LoyaltyCheckoutException("Unable to reach loyalty-service for checkout", 503));
         PaymentMetrics m = newMetrics();
-        new PaymentController(mock(BookingServiceClient.class), loyalty, m)
+        new PaymentController(mock(BookingServiceClient.class), loyalty, m, mock(InnbucksPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class))
                 .shopCheckout(cashAndPoints(UUID.randomUUID()), AUTH_0712345678);
 
         assertEquals(1.0, counter(m, "outcome", "loyalty_unavailable", "mode", "mixed"));
@@ -281,7 +367,7 @@ class PaymentControllerTest {
         req.setCashAmount(new BigDecimal("10"));
         req.setPointsAmount(new BigDecimal("200"));
         PaymentMetrics m = newMetrics();
-        new PaymentController(mock(BookingServiceClient.class), mock(LoyaltyServiceClient.class), m)
+        new PaymentController(mock(BookingServiceClient.class), mock(LoyaltyServiceClient.class), m, mock(InnbucksPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class))
                 .shopCheckout(req, AUTH_0712345678);
 
         assertEquals(1.0, counter(m, "outcome", "validation_failed", "mode", "cash"));
@@ -297,14 +383,16 @@ class PaymentControllerTest {
 
     @Test
     void processPayment_returns503EquivalentWhenBookingServiceIsUnreachable() {
-        BookingServiceClient client = mock(BookingServiceClient.class);
         UUID bookingId = UUID.randomUUID();
-        when(client.confirmBooking(eq(bookingId)))
+        Fixture f = fixture();
+        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
+                .thenReturn(Optional.empty());
+        when(f.bookings().getBooking(bookingId))
                 .thenThrow(new BookingConfirmationException(
                         "Unable to reach booking-service to confirm the booking", 503));
 
-        ResponseEntity<ApiResult<PaymentResponse>> resp = new PaymentController(client, mock(innbucks.paymentservice.client.LoyaltyServiceClient.class), newMetrics())
-                .processPayment(paymentFor(bookingId));
+        ResponseEntity<ApiResult<PaymentResponse>> resp =
+                f.controller().processPayment(paymentFor(bookingId));
 
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, resp.getStatusCode());
         assertTrue(resp.getBody().getMessage().toLowerCase().contains("booking-service"));

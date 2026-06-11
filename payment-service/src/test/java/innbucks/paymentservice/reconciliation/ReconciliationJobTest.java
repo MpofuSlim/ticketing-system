@@ -1,5 +1,7 @@
 package innbucks.paymentservice.reconciliation;
 
+import innbucks.paymentservice.client.BankApiClient;
+import innbucks.paymentservice.client.BankInquiryResult;
 import innbucks.paymentservice.client.BookingServiceClient;
 import innbucks.paymentservice.config.PaymentMetrics;
 import innbucks.paymentservice.entity.Payment;
@@ -46,19 +48,29 @@ class ReconciliationJobTest {
 
     private static ReconciliationJob newJob(TransactionRepository repo, PaymentMetrics metrics, int batchSize) {
         // Payment-side collaborators are inert mocks here: Mockito's default
-        // answers return empty lists, so the payment sweeps are no-ops in the
-        // transactions-ledger tests.
+        // answers return empty lists / false, so the payment sweeps are
+        // no-ops in the transactions-ledger tests.
         return new ReconciliationJob(repo, mock(PaymentRepository.class),
                 mock(PaymentRecordService.class), mock(BookingServiceClient.class),
-                metrics, FIVE_MINUTES, batchSize);
+                mock(BankApiClient.class), metrics, FIVE_MINUTES, batchSize);
     }
 
     private static ReconciliationJob newPaymentJob(PaymentRepository payments,
                                                    PaymentRecordService records,
                                                    BookingServiceClient bookings,
                                                    PaymentMetrics metrics) {
+        // Bank API unconfigured (isConfigured() -> false by Mockito default):
+        // the staleness sweep stays observe-only in these tests.
         return new ReconciliationJob(mock(TransactionRepository.class), payments,
-                records, bookings, metrics, FIVE_MINUTES, 100);
+                records, bookings, mock(BankApiClient.class), metrics, FIVE_MINUTES, 100);
+    }
+
+    private static ReconciliationJob newInquiryJob(PaymentRepository payments,
+                                                   PaymentRecordService records,
+                                                   BankApiClient bankApi,
+                                                   PaymentMetrics metrics) {
+        return new ReconciliationJob(mock(TransactionRepository.class), payments,
+                records, mock(BookingServiceClient.class), bankApi, metrics, FIVE_MINUTES, 100);
     }
 
     private static Payment paymentRow(Payment.PaymentStatus status, Instant createdAt) {
@@ -231,6 +243,76 @@ class ReconciliationJobTest {
         verify(records, never()).resolveUnconfirmed(eq(broken.getId()), any());
         assertEquals(1.0, unconfirmedRetryCount(metrics, "resolved"));
         assertEquals(1.0, unconfirmedRetryCount(metrics, "still_failing"));
+    }
+
+    // ---- inquiry-based resolution of stale rows (bank configured) ----------
+
+    @Test
+    void inquiryCompleted_parksRowAsCompletedUnconfirmed() {
+        PaymentRepository payments = mock(PaymentRepository.class);
+        PaymentRecordService records = mock(PaymentRecordService.class);
+        BankApiClient bankApi = mock(BankApiClient.class);
+        PaymentMetrics metrics = new PaymentMetrics(new SimpleMeterRegistry());
+        Payment inDoubt = paymentRow(Payment.PaymentStatus.IN_DOUBT, Instant.now().minus(Duration.ofMinutes(9)));
+        when(payments.findByStatusInAndCreatedAtBefore(any(), any(Instant.class), any(Pageable.class)))
+                .thenReturn(List.of(inDoubt));
+        when(bankApi.isConfigured()).thenReturn(true);
+        when(bankApi.inquireTransaction(eq("CUST-1"), eq(inDoubt.getPaymentReference())))
+                .thenReturn(new BankInquiryResult(BankInquiryResult.Outcome.COMPLETED, "BANK-REF-7", "SUCCESS", null));
+
+        newInquiryJob(payments, records, bankApi, metrics).scanPayments();
+
+        // Money moved upstream: park as COMPLETED_UNCONFIRMED (the
+        // confirm-retry loop promotes to SUCCEEDED on the next pass).
+        verify(records).markCompletedUnconfirmed(eq(inDoubt.getId()), eq("BANK-REF-7"), any());
+        verify(records, never()).markFailed(any(), any(), any());
+    }
+
+    @Test
+    void inquiryFailedOrNotFound_closesRowFailed() {
+        PaymentRepository payments = mock(PaymentRepository.class);
+        PaymentRecordService records = mock(PaymentRecordService.class);
+        BankApiClient bankApi = mock(BankApiClient.class);
+        PaymentMetrics metrics = new PaymentMetrics(new SimpleMeterRegistry());
+        Payment failedUpstream = paymentRow(Payment.PaymentStatus.IN_DOUBT, Instant.now().minus(Duration.ofMinutes(9)));
+        Payment neverLanded = paymentRow(Payment.PaymentStatus.PENDING, Instant.now().minus(Duration.ofMinutes(7)));
+        when(payments.findByStatusInAndCreatedAtBefore(any(), any(Instant.class), any(Pageable.class)))
+                .thenReturn(List.of(failedUpstream, neverLanded));
+        when(bankApi.isConfigured()).thenReturn(true);
+        when(bankApi.inquireTransaction(eq("CUST-1"), eq(failedUpstream.getPaymentReference())))
+                .thenReturn(new BankInquiryResult(BankInquiryResult.Outcome.FAILED, null, "DECLINED", "card declined"));
+        when(bankApi.inquireTransaction(eq("CUST-1"), eq(neverLanded.getPaymentReference())))
+                .thenReturn(new BankInquiryResult(BankInquiryResult.Outcome.NOT_FOUND, null, "404", null));
+
+        newInquiryJob(payments, records, bankApi, metrics).scanPayments();
+
+        verify(records).markFailed(eq(failedUpstream.getId()), eq("DECLINED"), eq("card declined"));
+        verify(records).markFailed(eq(neverLanded.getId()), eq("not_found_upstream"), any());
+        verify(records, never()).markCompletedUnconfirmed(any(), any(), any());
+    }
+
+    @Test
+    void inquiryUnknownOrError_leavesRowUntouched() {
+        // NEVER guess: an unclassifiable inquiry (or an inquiry failure)
+        // leaves the row for the next sweep.
+        PaymentRepository payments = mock(PaymentRepository.class);
+        PaymentRecordService records = mock(PaymentRecordService.class);
+        BankApiClient bankApi = mock(BankApiClient.class);
+        PaymentMetrics metrics = new PaymentMetrics(new SimpleMeterRegistry());
+        Payment unknown = paymentRow(Payment.PaymentStatus.IN_DOUBT, Instant.now().minus(Duration.ofMinutes(9)));
+        Payment erroring = paymentRow(Payment.PaymentStatus.IN_DOUBT, Instant.now().minus(Duration.ofMinutes(8)));
+        when(payments.findByStatusInAndCreatedAtBefore(any(), any(Instant.class), any(Pageable.class)))
+                .thenReturn(List.of(unknown, erroring));
+        when(bankApi.isConfigured()).thenReturn(true);
+        when(bankApi.inquireTransaction(eq("CUST-1"), eq(unknown.getPaymentReference())))
+                .thenReturn(new BankInquiryResult(BankInquiryResult.Outcome.UNKNOWN, null, null, null));
+        when(bankApi.inquireTransaction(eq("CUST-1"), eq(erroring.getPaymentReference())))
+                .thenThrow(new RuntimeException("inquiry timeout"));
+
+        newInquiryJob(payments, records, bankApi, metrics).scanPayments();
+
+        verify(records, never()).markFailed(any(), any(), any());
+        verify(records, never()).markCompletedUnconfirmed(any(), any(), any());
     }
 
     private static double paymentStaleCount(PaymentMetrics metrics, String status) {

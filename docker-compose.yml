@@ -395,21 +395,18 @@ services:
       retries: 10
       start_period: 45s
 
-  # payment-service: real money movement for wallet operations + a
-  # placeholder ticket-purchase confirm path.
+  # payment-service: real money movement.
   #
-  # PRODUCTION-GRADE TODAY:
+  #   - POST /payments (ticket purchase): REAL InnBucks wallet debit via the
+  #     public Bank API (BANK_API_* below), with the hardened payment ledger
+  #     (IN_DOUBT + inquiry-based reconciliation). Same FE contract as the
+  #     old stub — the FE never changed.
   #   - Wallet transfers / withdrawals via Oradian middleware
   #     (TransfersController + OradianMiddlewareClient with Retry +
   #     CircuitBreaker, PENDING/SUCCEEDED/FAILED ledger in transactions
   #     table, Redis idempotency-key replay cache, Kafka event publication,
   #     ReconciliationJob safety net).
   #   - Shop loyalty checkout — real points debit/credit via loyalty-service.
-  #
-  # STILL A STUB:
-  #   - POST /payments (the ticket-purchase confirm): no real charge — calls
-  #     booking-service /confirm and stamps a fake receipt. Waits on the
-  #     veengu integration to become a real merchant collection.
   #
   # NOT optional: this service is part of the default stack. (Used to live
   # behind a "payments" docker compose profile when it was a pure dummy;
@@ -481,6 +478,19 @@ services:
       # tunnel that rotates); the api key is a required secret.
       WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-https://maximum-implicitly-treefrog.ngrok-free.app}
       WHATSAPP_API_KEY: ${WHATSAPP_API_KEY:?set WHATSAPP_API_KEY in .env}
+      # Public InnBucks Bank API — ticket payments (POST /payments) debit the
+      # customer's wallet directly through it; the old innbucks-core-gateway
+      # s2s hop is gone. All three credentials are secrets from .env. The
+      # merchant account is the ticketing business's InnBucks account that
+      # RECEIVES ticket money — payments are refused if it's unset.
+      BANK_API_URL: ${BANK_API_URL:-https://staging.innbucks.co.zw}
+      BANK_API_KEY: ${BANK_API_KEY:?set BANK_API_KEY in .env}
+      BANK_API_USERNAME: ${BANK_API_USERNAME:?set BANK_API_USERNAME in .env}
+      BANK_API_PASSWORD: ${BANK_API_PASSWORD:?set BANK_API_PASSWORD in .env}
+      PAYMENTS_INNBUCKS_MERCHANT_ACCOUNT: ${PAYMENTS_INNBUCKS_MERCHANT_ACCOUNT:?set PAYMENTS_INNBUCKS_MERCHANT_ACCOUNT in .env}
+      # Real payments on by default; set false on a cell whose Bank API
+      # credentials aren't provisioned yet.
+      PAYMENTS_INNBUCKS_ENABLED: ${PAYMENTS_INNBUCKS_ENABLED:-true}
     ports:
       - "127.0.0.1:8085:8085"
     healthcheck:
