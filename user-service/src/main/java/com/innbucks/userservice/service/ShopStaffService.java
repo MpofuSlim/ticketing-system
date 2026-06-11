@@ -8,6 +8,7 @@ import com.innbucks.userservice.dto.UserResponseDTO;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.integration.LoyaltyServiceClient;
 import com.innbucks.userservice.repository.UserRepository;
+import com.innbucks.userservice.util.TemporaryPasswordGenerator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -46,15 +47,6 @@ import java.util.UUID;
 @Slf4j
 public class ShopStaffService {
 
-    /**
-     * Temporary password stamped on every new shop staff member and emailed to
-     * them on creation (best-effort, with an SMS fallback) so they can sign in.
-     * They must rotate it via POST /auth/change-password on first login. A
-     * proper one-time set-password link is the eventual upgrade; until then this
-     * shared default + forced rotation is the onboarding mechanism.
-     */
-    static final String DEFAULT_STAFF_PASSWORD = "#Pass123";
-
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final LoyaltyServiceClient loyaltyServiceClient;
@@ -80,13 +72,14 @@ public class ShopStaffService {
         }
         UUID merchantId = UUID.fromString(shop.merchantId());
 
+        String tempPassword = TemporaryPasswordGenerator.generate();
         User staff = buildStaff(req.getFirstName(), req.getMiddleName(), req.getLastName(),
                 req.getEmail(), req.getPhoneNumber(),
-                User.Role.SHOP_ADMIN, merchantId, req.getShopId());
+                User.Role.SHOP_ADMIN, merchantId, req.getShopId(), tempPassword);
         userRepository.save(staff);
         log.info("Created SHOP_ADMIN userId={} email={} shopId={} merchantId={} by={}",
                 staff.getId(), staff.getEmail(), req.getShopId(), merchantId, caller.getEmail());
-        notifyOnboarding(staff);
+        notifyOnboarding(staff, tempPassword);
         return UserResponseDTO.from(staff);
     }
 
@@ -102,13 +95,14 @@ public class ShopStaffService {
             throw badRequest("Your SHOP_ADMIN account is missing shop scope; contact a merchant admin");
         }
 
+        String tempPassword = TemporaryPasswordGenerator.generate();
         User staff = buildStaff(req.getFirstName(), req.getMiddleName(), req.getLastName(),
                 req.getEmail(), req.getPhoneNumber(),
-                User.Role.SHOP_USER, callerMerchantId, callerShopId);
+                User.Role.SHOP_USER, callerMerchantId, callerShopId, tempPassword);
         userRepository.save(staff);
         log.info("Created SHOP_USER userId={} email={} shopId={} by={}",
                 staff.getId(), staff.getEmail(), callerShopId, caller.getEmail());
-        notifyOnboarding(staff);
+        notifyOnboarding(staff, tempPassword);
         return UserResponseDTO.from(staff);
     }
 
@@ -153,7 +147,7 @@ public class ShopStaffService {
 
     private User buildStaff(String firstName, String middleName, String lastName,
                             String email, String phone,
-                            User.Role role, UUID merchantId, UUID shopId) {
+                            User.Role role, UUID merchantId, UUID shopId, String tempPassword) {
         if (userRepository.existsByEmail(email)) {
             throw badRequest("Email already registered");
         }
@@ -169,7 +163,7 @@ public class ShopStaffService {
                 .email(email)
                 .phoneNumber(phone)
                 .homeCountry(deploymentCountry)
-                .password(passwordEncoder.encode(DEFAULT_STAFF_PASSWORD))
+                .password(passwordEncoder.encode(tempPassword))
                 .roles(EnumSet.of(role))
                 // Grants the loyalty bundle's microservices (loyalty + payments) on the JWT.
                 .defaultServices(new LinkedHashSet<>(List.of(Services.LOYALTY)))
@@ -188,7 +182,7 @@ public class ShopStaffService {
      * address is on file. Mirrors {@code UserAdminService#notifyApproval}. Never
      * logs the temporary password.
      */
-    private void notifyOnboarding(User staff) {
+    private void notifyOnboarding(User staff, String tempPassword) {
         String roleLabel = staff.hasRole(User.Role.SHOP_ADMIN) ? "Shop Administrator" : "Shop User";
         String email = staff.getEmail();
         if (email != null && !email.isBlank()) {
@@ -196,7 +190,7 @@ public class ShopStaffService {
                 emailNotificationClient.sendEmail(
                         email,
                         "Welcome to InnBucks — your account is ready",
-                        buildOnboardingHtml(staff.getFirstName(), email, roleLabel),
+                        buildOnboardingHtml(staff.getFirstName(), email, roleLabel, tempPassword),
                         "STAFF-ONBOARD-" + staff.getId());
                 log.info("Onboarding email sent userId={} role={}", staff.getId(), roleLabel);
                 return;
@@ -216,7 +210,7 @@ public class ShopStaffService {
         }
         String account = (email != null && !email.isBlank()) ? " (" + email + ")" : "";
         String sms = "Welcome to InnBucks. Your account" + account + " is ready. Temporary password: "
-                + DEFAULT_STAFF_PASSWORD + ". Log in and change it immediately.";
+                + tempPassword + ". Log in and change it immediately.";
         try {
             smsNotificationClient.sendSms(phone, sms, "STAFF-ONBOARD-" + staff.getId());
             log.info("Onboarding SMS sent userId={}", staff.getId());
@@ -229,10 +223,10 @@ public class ShopStaffService {
     /**
      * Renders the onboarding email body. Dynamic values are HTML-escaped so a
      * name or address containing markup can't break (or inject into) the
-     * message. The temporary password is a fixed internal constant, not
-     * caller-supplied.
+     * message. The temporary password is a freshly-generated random value
+     * (server-side, not caller-supplied) — escaped regardless as defence in depth.
      */
-    private String buildOnboardingHtml(String firstName, String email, String roleLabel) {
+    private String buildOnboardingHtml(String firstName, String email, String roleLabel, String tempPassword) {
         String name = (firstName != null && !firstName.isBlank())
                 ? HtmlUtils.htmlEscape(firstName) : "there";
         return "<p>Hi " + name + ",</p>"
@@ -241,7 +235,7 @@ public class ShopStaffService {
                 + "<p>Use these credentials to sign in:</p>"
                 + "<ul>"
                 + "<li><strong>Username:</strong> " + HtmlUtils.htmlEscape(email) + "</li>"
-                + "<li><strong>Temporary password:</strong> " + DEFAULT_STAFF_PASSWORD + "</li>"
+                + "<li><strong>Temporary password:</strong> " + HtmlUtils.htmlEscape(tempPassword) + "</li>"
                 + "</ul>"
                 + "<p>For your security, please log in and change your password immediately.</p>"
                 + "<p>— The InnBucks Team</p>";

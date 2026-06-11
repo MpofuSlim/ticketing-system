@@ -6,11 +6,14 @@ import com.innbucks.userservice.client.WhatsAppNotificationClient;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.exception.NotFoundException;
 import com.innbucks.userservice.repository.UserRepository;
+import com.innbucks.userservice.util.TemporaryPasswordGenerator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.util.HtmlUtils;
 
 import java.util.Map;
@@ -31,10 +34,6 @@ import java.util.Map;
 @Service
 @RequiredArgsConstructor
 public class UserAdminService {
-
-    // Shared default assigned to a system user when their account is approved.
-    // The user is forced to change it on first login (must_change_password).
-    private static final String DEFAULT_PASSWORD = "#Pass123";
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
@@ -72,11 +71,16 @@ public class UserAdminService {
             return user;
         }
 
+        // The generated temp password (firstApproval only) has to survive past
+        // the save so it can be delivered to the user — it's never persisted in
+        // plaintext, only the bcrypt hash is.
+        String tempPassword = null;
         if (firstApproval) {
-            user.setPassword(passwordEncoder.encode(DEFAULT_PASSWORD));
+            tempPassword = TemporaryPasswordGenerator.generate();
+            user.setPassword(passwordEncoder.encode(tempPassword));
             user.setMustChangePassword(true);
             user.setApproved(true);
-            log.info("User approved, default password assigned userId={}", id);
+            log.info("User approved, temporary password assigned userId={}", id);
         }
 
         user.setActive(active);
@@ -86,8 +90,54 @@ public class UserAdminService {
         recordAudit(saved, firstApproval, active, adminEmail, auditContext);
 
         if (firstApproval) {
-            notifyApproval(saved);
+            notifyApproval(saved, tempPassword);
         }
+        return saved;
+    }
+
+    /**
+     * Mint a fresh temporary password for an already-onboarded system user and
+     * re-deliver it. This is the recovery path for when the original onboarding
+     * notification never reached the user — with per-user random passwords (vs.
+     * the old shared {@code #Pass123}) the notification is the ONLY channel that
+     * carries the credential, so a SUPER_ADMIN needs a way to re-issue it.
+     *
+     * <p>The old password is irretrievably bcrypt-hashed, so "resend" can only
+     * mean "generate a new one" — that's why this rotates rather than re-sends.
+     * The user is re-flagged {@code mustChangePassword} so the fresh value is
+     * still single-use.
+     *
+     * <p>Refuses to act on a SUPER_ADMIN target: that account's credential is
+     * owned by the {@code BOOTSTRAP_ADMIN_PASSWORD} env seed, not this
+     * notification-delivered flow. Resetting it would lock the platform owner
+     * out behind an SMS/email that may never arrive.
+     */
+    @Transactional
+    public User resetTemporaryPassword(Long id, String adminEmail, AuditContext auditContext) {
+        User user = userRepository.findById(id)
+                .orElseThrow(() -> new NotFoundException("User not found: " + id));
+
+        if (user.hasRole(User.Role.SUPER_ADMIN)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Cannot reset the temporary password of a SUPER_ADMIN; that credential is "
+                            + "managed via BOOTSTRAP_ADMIN_PASSWORD");
+        }
+
+        String tempPassword = TemporaryPasswordGenerator.generate();
+        user.setPassword(passwordEncoder.encode(tempPassword));
+        user.setMustChangePassword(true);
+        User saved = userRepository.save(user);
+        log.info("Temporary password reset userId={} by={}", id, adminEmail == null ? "system" : adminEmail);
+
+        auditService.recordSuccess(
+                AuditEventType.USER_TEMP_PASSWORD_RESET,
+                adminEmail == null ? "system" : adminEmail,
+                adminEmail == null ? AuditService.ACTOR_TYPE_SYSTEM : AuditService.ACTOR_TYPE_USER,
+                String.valueOf(saved.getId()), AuditService.TARGET_TYPE_USER,
+                Map.of("targetEmail", saved.getEmail() == null ? "" : saved.getEmail()),
+                auditContext == null ? AuditContext.none() : auditContext);
+
+        notifyPasswordReset(saved, tempPassword);
         return saved;
     }
 
@@ -128,63 +178,93 @@ public class UserAdminService {
      * SMS then WhatsApp are the phone-based fallbacks for when no address is on
      * file or the email gateway is unreachable. Never logs the password.
      */
-    private void notifyApproval(User user) {
-        String message = "Your InnBucks account has been approved. Your temporary password is "
-                + DEFAULT_PASSWORD
-                + ". Please log in and change it immediately.";
+    private void notifyApproval(User user, String tempPassword) {
+        deliverCredential(user, tempPassword,
+                "Your InnBucks account has been approved",
+                "Good news — your InnBucks account has been approved and is now active.",
+                "Your InnBucks account has been approved. Your temporary password is "
+                        + tempPassword + ". Please log in and change it immediately.",
+                "APPROVAL-" + user.getId());
+    }
 
-        // Email primary — the credential belongs in an inbox.
+    private void notifyPasswordReset(User user, String tempPassword) {
+        deliverCredential(user, tempPassword,
+                "Your InnBucks temporary password has been reset",
+                "Your InnBucks temporary password has been reset by an administrator.",
+                "Your InnBucks temporary password has been reset to "
+                        + tempPassword + ". Please log in and change it immediately.",
+                "PWRESET-" + user.getId());
+    }
+
+    /**
+     * Deliver a freshly-generated temporary password to the user. Best-effort:
+     * a delivery failure must NOT roll back the (already-committed) approval /
+     * reset — the password is set either way. Email is the primary channel (a
+     * credential belongs in an inbox); SMS then WhatsApp are the phone-based
+     * fallbacks for when no address is on file or the email gateway is
+     * unreachable. Never logs the password.
+     *
+     * <p>With per-user random passwords this is the ONLY channel that carries
+     * the credential, so a total delivery failure leaves the user unable to log
+     * in — the SUPER_ADMIN recovers them via {@code resetTemporaryPassword}.
+     */
+    private void deliverCredential(User user, String tempPassword,
+                                   String emailSubject, String emailIntro,
+                                   String smsText, String ref) {
         String email = user.getEmail();
         if (email != null && !email.isBlank()) {
             try {
                 emailNotificationClient.sendEmail(
-                        email,
-                        "Your InnBucks account has been approved",
-                        buildApprovalHtml(user.getFirstName(), email),
-                        "APPROVAL-" + user.getId());
-                log.info("Approval email sent userId={}", user.getId());
+                        email, emailSubject,
+                        buildCredentialHtml(user.getFirstName(), email, tempPassword, emailIntro),
+                        ref);
+                log.info("Credential email sent userId={} ref={}", user.getId(), ref);
                 return;
             } catch (RuntimeException emailEx) {
-                log.warn("Approval email failed userId={}, trying SMS: {}", user.getId(), emailEx.getMessage());
+                log.warn("Credential email failed userId={} ref={}, trying SMS: {}",
+                        user.getId(), ref, emailEx.getMessage());
             }
         }
 
-        // Phone-based fallback: SMS first, then WhatsApp.
         String phone = user.getPhoneNumber();
         if (phone == null || phone.isBlank()) {
-            log.warn("Approved user has no reachable email or phone; skipping first-password notification userId={}",
-                    user.getId());
+            log.warn("User has no reachable email or phone; skipping credential delivery userId={} ref={}",
+                    user.getId(), ref);
             return;
         }
         try {
-            smsNotificationClient.sendSms(phone, message, "APPROVAL-" + user.getId());
-            log.info("Approval SMS sent userId={}", user.getId());
+            smsNotificationClient.sendSms(phone, smsText, ref);
+            log.info("Credential SMS sent userId={} ref={}", user.getId(), ref);
             return;
         } catch (RuntimeException smsEx) {
-            log.warn("Approval SMS failed userId={}, trying WhatsApp: {}", user.getId(), smsEx.getMessage());
+            log.warn("Credential SMS failed userId={} ref={}, trying WhatsApp: {}",
+                    user.getId(), ref, smsEx.getMessage());
         }
         try {
-            whatsAppNotificationClient.sendCustomNotification(phone, message);
-            log.info("Approval WhatsApp notification sent userId={}", user.getId());
+            whatsAppNotificationClient.sendCustomNotification(phone, smsText);
+            log.info("Credential WhatsApp notification sent userId={} ref={}", user.getId(), ref);
         } catch (RuntimeException ex) {
-            log.warn("Approval notification failed userId={} (account still approved): {}",
-                    user.getId(), ex.getMessage());
+            log.warn("Credential delivery failed userId={} ref={} (account state unchanged): {}",
+                    user.getId(), ref, ex.getMessage());
         }
     }
 
     /**
-     * Renders the approval email body. Dynamic values are HTML-escaped; the
-     * temporary password is a fixed internal constant, not caller-supplied.
+     * Renders the credential email body. Dynamic values (name, email) are
+     * HTML-escaped; the temporary password is a freshly-generated random value
+     * from {@link TemporaryPasswordGenerator} (server-side, not caller-supplied),
+     * so it carries no injection risk, but we keep it outside any attribute
+     * context regardless.
      */
-    private String buildApprovalHtml(String firstName, String email) {
+    private String buildCredentialHtml(String firstName, String email, String tempPassword, String intro) {
         String name = (firstName != null && !firstName.isBlank())
                 ? HtmlUtils.htmlEscape(firstName) : "there";
         return "<p>Hi " + name + ",</p>"
-                + "<p>Good news — your InnBucks account has been approved and is now active.</p>"
+                + "<p>" + intro + "</p>"
                 + "<p>Use these credentials to sign in:</p>"
                 + "<ul>"
                 + "<li><strong>Username:</strong> " + HtmlUtils.htmlEscape(email) + "</li>"
-                + "<li><strong>Temporary password:</strong> " + DEFAULT_PASSWORD + "</li>"
+                + "<li><strong>Temporary password:</strong> " + HtmlUtils.htmlEscape(tempPassword) + "</li>"
                 + "</ul>"
                 + "<p>For your security, please log in and change your password immediately.</p>"
                 + "<p>— The InnBucks Team</p>";

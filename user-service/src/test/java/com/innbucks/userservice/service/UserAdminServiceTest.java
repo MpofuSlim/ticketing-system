@@ -8,7 +8,9 @@ import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.exception.NotFoundException;
 import com.innbucks.userservice.repository.UserRepository;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Optional;
 
@@ -18,8 +20,18 @@ import static org.mockito.Mockito.*;
 
 class UserAdminServiceTest {
 
+    /** Shape of a generated temp password: three hyphen-separated 4-char groups. */
+    private static final String TEMP_PW_SHAPE = "[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}";
+
+    /** Capture the plaintext handed to encode() — it's the generated temp password. */
+    private static String capturePassword(PasswordEncoder encoder) {
+        ArgumentCaptor<String> pw = ArgumentCaptor.forClass(String.class);
+        verify(encoder).encode(pw.capture());
+        return pw.getValue();
+    }
+
     @Test
-    void firstActivation_approvesAssignsDefaultPasswordAndEmailsCredentials() {
+    void firstActivation_approvesAssignsRandomPasswordAndEmailsCredentials() {
         UserRepository userRepo = mock(UserRepository.class);
         PasswordEncoder encoder = mock(PasswordEncoder.class);
         WhatsAppNotificationClient whatsApp = mock(WhatsAppNotificationClient.class);
@@ -30,7 +42,7 @@ class UserAdminServiceTest {
                 .password("placeholder").active(false).approved(false).build();
         when(userRepo.findById(1L)).thenReturn(Optional.of(user));
         when(userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(encoder.encode("#Pass123")).thenReturn("encoded-default");
+        when(encoder.encode(anyString())).thenReturn("encoded-temp");
 
         User result = new UserAdminService(userRepo, encoder, whatsApp, sms, email,
                 mock(AuditService.class)).setActive(1L, true);
@@ -38,11 +50,16 @@ class UserAdminServiceTest {
         assertTrue(result.isActive());
         assertTrue(result.isApproved());
         assertTrue(result.isMustChangePassword());
-        assertEquals("encoded-default", result.getPassword());
-        verify(encoder).encode("#Pass123");
-        // Email is the primary channel: the first-time password is emailed to the
-        // approved user (in the HTML body), and the phone fallbacks are NOT touched.
-        verify(email).sendEmail(eq("a@b.com"), anyString(), contains("#Pass123"), anyString());
+        assertEquals("encoded-temp", result.getPassword());
+
+        // The generated password is per-user random, NOT the old public default.
+        String generated = capturePassword(encoder);
+        assertNotEquals("#Pass123", generated);
+        assertTrue(generated.matches(TEMP_PW_SHAPE), "unexpected temp password shape: " + generated);
+
+        // Email is the primary channel: the SAME generated password lands in the
+        // email body, and the phone fallbacks are NOT touched.
+        verify(email).sendEmail(eq("a@b.com"), anyString(), contains(generated), anyString());
         verifyNoInteractions(whatsApp, sms);
     }
 
@@ -59,14 +76,15 @@ class UserAdminServiceTest {
                 .password("placeholder").active(false).approved(false).build();
         when(userRepo.findById(1L)).thenReturn(Optional.of(user));
         when(userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(encoder.encode("#Pass123")).thenReturn("encoded-default");
+        when(encoder.encode(anyString())).thenReturn("encoded-temp");
 
         User result = new UserAdminService(userRepo, encoder, whatsApp, sms, email,
                 mock(AuditService.class)).setActive(1L, true);
 
-        // Approval still succeeds; the password falls back to SMS, WhatsApp untouched.
         assertTrue(result.isApproved());
-        verify(sms).sendSms(eq("+263771234567"), contains("#Pass123"), anyString());
+        String generated = capturePassword(encoder);
+        // Approval still succeeds; the SAME password falls back to SMS, WhatsApp untouched.
+        verify(sms).sendSms(eq("+263771234567"), contains(generated), anyString());
         verifyNoInteractions(whatsApp);
     }
 
@@ -85,14 +103,15 @@ class UserAdminServiceTest {
                 .password("placeholder").active(false).approved(false).build();
         when(userRepo.findById(1L)).thenReturn(Optional.of(user));
         when(userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(encoder.encode("#Pass123")).thenReturn("encoded-default");
+        when(encoder.encode(anyString())).thenReturn("encoded-temp");
 
         User result = new UserAdminService(userRepo, encoder, whatsApp, sms, email,
                 mock(AuditService.class)).setActive(1L, true);
 
-        // Approval still succeeds; both prior channels failed, WhatsApp is the last resort.
         assertTrue(result.isApproved());
-        verify(whatsApp).sendCustomNotification(eq("+263771234567"), contains("#Pass123"));
+        String generated = capturePassword(encoder);
+        // Both prior channels failed, WhatsApp is the last resort — same password.
+        verify(whatsApp).sendCustomNotification(eq("+263771234567"), contains(generated));
     }
 
     @Test
@@ -107,12 +126,13 @@ class UserAdminServiceTest {
                 .password("placeholder").active(false).approved(false).build();
         when(userRepo.findById(5L)).thenReturn(Optional.of(user));
         when(userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(encoder.encode("#Pass123")).thenReturn("encoded-default");
+        when(encoder.encode(anyString())).thenReturn("encoded-temp");
 
         new UserAdminService(userRepo, encoder, whatsApp, sms, email,
                 mock(AuditService.class)).setActive(5L, true);
 
-        verify(sms).sendSms(eq("+263771234567"), contains("#Pass123"), anyString());
+        String generated = capturePassword(encoder);
+        verify(sms).sendSms(eq("+263771234567"), contains(generated), anyString());
         verifyNoInteractions(email, whatsApp);
     }
 
@@ -190,6 +210,73 @@ class UserAdminServiceTest {
                         .setActive(99L, true));
     }
 
+    // ---- resetTemporaryPassword ----
+
+    @Test
+    void resetTemporaryPassword_rotatesFlagsChangeAndNotifies() {
+        UserRepository userRepo = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        EmailNotificationClient email = mock(EmailNotificationClient.class);
+        AuditService audit = mock(AuditService.class);
+        // Approved user who never got their onboarding notification.
+        User user = User.builder().id(42L).email("alice@innbucks.co.zw").phoneNumber("+263771234567")
+                .password("old-hash").active(true).approved(true).mustChangePassword(false)
+                .roles(java.util.EnumSet.of(User.Role.EVENT_ORGANIZER)).build();
+        when(userRepo.findById(42L)).thenReturn(Optional.of(user));
+        when(userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(encoder.encode(anyString())).thenReturn("new-hash");
+
+        User result = new UserAdminService(userRepo, encoder,
+                mock(WhatsAppNotificationClient.class), mock(SmsNotificationClient.class), email, audit)
+                .resetTemporaryPassword(42L, "admin@innbucks.co.zw", AuditContext.none());
+
+        assertEquals("new-hash", result.getPassword());
+        assertTrue(result.isMustChangePassword());            // single-use again
+        String generated = capturePassword(encoder);
+        assertNotEquals("#Pass123", generated);
+        assertTrue(generated.matches(TEMP_PW_SHAPE));
+        // The fresh password is delivered (email primary).
+        verify(email).sendEmail(eq("alice@innbucks.co.zw"), anyString(), contains(generated), anyString());
+        verify(audit).recordSuccess(
+                eq(AuditEventType.USER_TEMP_PASSWORD_RESET),
+                eq("admin@innbucks.co.zw"), eq(AuditService.ACTOR_TYPE_USER),
+                eq("42"), eq(AuditService.TARGET_TYPE_USER),
+                anyMap(), eq(AuditContext.none()));
+    }
+
+    @Test
+    void resetTemporaryPassword_refusesSuperAdminTarget() {
+        UserRepository userRepo = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        User superAdmin = User.builder().id(1L).email("admin@innbucks.co.zw")
+                .password("pw").active(true).approved(true)
+                .roles(java.util.EnumSet.of(User.Role.SUPER_ADMIN)).build();
+        when(userRepo.findById(1L)).thenReturn(Optional.of(superAdmin));
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> new UserAdminService(userRepo, encoder,
+                        mock(WhatsAppNotificationClient.class), mock(SmsNotificationClient.class),
+                        mock(EmailNotificationClient.class), mock(AuditService.class))
+                        .resetTemporaryPassword(1L, "admin@innbucks.co.zw", AuditContext.none()));
+
+        assertTrue(ex.getReason() != null && ex.getReason().contains("SUPER_ADMIN"));
+        // Nothing rotated, nothing saved.
+        verify(encoder, never()).encode(any());
+        verify(userRepo, never()).save(any());
+    }
+
+    @Test
+    void resetTemporaryPassword_throwsNotFoundWhenMissing() {
+        UserRepository userRepo = mock(UserRepository.class);
+        when(userRepo.findById(99L)).thenReturn(Optional.empty());
+
+        assertThrows(NotFoundException.class,
+                () -> new UserAdminService(userRepo, mock(PasswordEncoder.class),
+                        mock(WhatsAppNotificationClient.class), mock(SmsNotificationClient.class),
+                        mock(EmailNotificationClient.class), mock(AuditService.class))
+                        .resetTemporaryPassword(99L, "admin@innbucks.co.zw", AuditContext.none()));
+    }
+
     // ---- audit_events recording for SUPER_ADMIN user activation/deactivation ----
 
     @Test
@@ -201,7 +288,7 @@ class UserAdminServiceTest {
                 .password("placeholder").active(false).approved(false).build();
         when(userRepo.findById(7L)).thenReturn(Optional.of(user));
         when(userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(encoder.encode("#Pass123")).thenReturn("encoded-default");
+        when(encoder.encode(anyString())).thenReturn("encoded-temp");
 
         AuditContext ctx = new AuditContext("203.0.113.5", "curl/8.4.0");
         new UserAdminService(userRepo, encoder,
@@ -268,11 +355,6 @@ class UserAdminServiceTest {
 
     @Test
     void noOpIdempotentRetry_recordsNoAudit() {
-        // setActive(true) on an already-active+approved user is a no-op — the
-        // observable state didn't change, so no audit row should land. Without
-        // this guard, retries of the same admin button would flood audit_events
-        // with duplicate USER_ACTIVATED rows for every retry of an already-active
-        // user — making the audit table noisy and harder to investigate.
         UserRepository userRepo = mock(UserRepository.class);
         AuditService audit = mock(AuditService.class);
         User user = User.builder().id(10L).active(true).approved(true).password("pw").build();
@@ -288,10 +370,6 @@ class UserAdminServiceTest {
 
     @Test
     void noArgOverload_recordsSystemActor_forBackwardCompat() {
-        // The setActive(id, active) overload used to be the only form. Tests /
-        // background jobs that still call it get actor_type=SYSTEM so the
-        // audit row still lands (vs. a null actor that would fail any
-        // downstream "who did this" investigation).
         UserRepository userRepo = mock(UserRepository.class);
         AuditService audit = mock(AuditService.class);
         User user = User.builder().id(11L).active(false).approved(true).password("pw").build();

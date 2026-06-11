@@ -212,8 +212,10 @@ public class AdminUserController {
             summary = "Activate or deactivate a user",
             description = "Sets the `active` flag on the specified user account. Only an active user can log in. " +
                     "**The first activation of a newly-registered system user is its approval**: the account is " +
-                    "assigned the default password `#Pass123` and flagged to change it on first login. Subsequent " +
-                    "deactivate/reactivate toggles never reset the password. Requires **SUPER_ADMIN** role."
+                    "assigned a randomly-generated one-time temporary password, flagged to change it on first " +
+                    "login, and the password is delivered to the user over email/SMS/WhatsApp. Subsequent " +
+                    "deactivate/reactivate toggles never reset the password. If the delivery fails, re-issue " +
+                    "the password via `POST /admin/users/{id}/reset-temp-password`. Requires **SUPER_ADMIN** role."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -255,6 +257,68 @@ public class AdminUserController {
 
         String action = request.getActive() ? "activated" : "deactivated";
         return ResponseEntity.ok(ApiResult.ok("User " + action, UserResponseDTO.from(user)));
+    }
+
+    @PostMapping("/{id}/reset-temp-password")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @Operation(
+            summary = "Reset a system user's temporary password",
+            description = "Mints a **fresh random temporary password** for the user, flags it must-change, " +
+                    "and re-delivers it over their notification channel (email → SMS → WhatsApp). This is the " +
+                    "recovery path for when the original onboarding notification never reached the user — " +
+                    "because temporary passwords are per-user random values (not a shared default), the " +
+                    "notification is the only channel that carries the credential, so a SUPER_ADMIN needs a " +
+                    "way to re-issue it.\n\n" +
+                    "The old password is irretrievably hashed, so this **rotates** to a new value rather than " +
+                    "re-sending the original. Refuses to act on a SUPER_ADMIN target (that credential is " +
+                    "managed via the `BOOTSTRAP_ADMIN_PASSWORD` env seed). Requires **SUPER_ADMIN** role."
+    )
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "Temporary password reset and re-delivered",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Temporary password reset; the user has been notified",
+                                      "data": {
+                                        "id": 42,
+                                        "firstName": "Alice",
+                                        "lastName": "Moyo",
+                                        "email": "alice@innbucks.co.zw",
+                                        "roles": ["EVENT_ORGANIZER"],
+                                        "active": true,
+                                        "createdAt": "2026-01-15T10:30:00"
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "Target is a SUPER_ADMIN (credential managed via BOOTSTRAP_ADMIN_PASSWORD)",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "Cannot reset the temporary password of a SUPER_ADMIN; that credential is managed via BOOTSTRAP_ADMIN_PASSWORD",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "User not found"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Caller is not a SUPER_ADMIN")
+    })
+    public ResponseEntity<ApiResult<UserResponseDTO>> resetTemporaryPassword(
+            @PathVariable Long id,
+            Authentication authentication,
+            HttpServletRequest httpRequest) {
+
+        // @PreAuthorize already enforced SUPER_ADMIN, so authentication is non-null.
+        String adminEmail = authentication.getName();
+        AuditContext auditContext = new AuditContext(clientIp(httpRequest),
+                httpRequest.getHeader("User-Agent"));
+
+        User user = userAdminService.resetTemporaryPassword(id, adminEmail, auditContext);
+        log.info("POST /admin/users/{}/reset-temp-password by={}", id, adminEmail);
+        return ResponseEntity.ok(ApiResult.ok(
+                "Temporary password reset; the user has been notified", UserResponseDTO.from(user)));
     }
 
     /**
