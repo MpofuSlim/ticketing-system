@@ -212,7 +212,8 @@ public class PaymentController {
                                         "pointsRedeemed": 200.0000,
                                         "pointsEarned": 12.5000,
                                         "walletBalanceAfter": 1812.5000,
-                                        "processedAt": "2026-05-14T10:30:00"
+                                        "processedAt": "2026-05-14T10:30:00",
+                                        "reference": "SHOP-7c9e6679-7425-40de-944b-e07fc1f90ae7"
                                       }
                                     }
                                     """))),
@@ -313,12 +314,17 @@ public class PaymentController {
                             .build());
         }
 
+        // Server-owned reference (per-merchant idempotency on the loyalty PURCHASE
+        // row). The FE/POS no longer supplies one — this mirrors the
+        // TKT-SMS-<uuid> auto-fill convention used by SmsNotificationClient.
+        String reference = "SHOP-" + UUID.randomUUID();
+
         LoyaltyServiceClient.CheckoutResult result;
         try {
             result = loyaltyServiceClient.shopCheckout(
                     request.getShopId(), msisdn,
                     request.getCashAmount(), request.getPointsAmount(),
-                    request.getReference());
+                    reference);
         } catch (LoyaltyCheckoutException e) {
             HttpStatus status = HttpStatus.resolve(e.getStatusCode());
             if (status == null) status = HttpStatus.BAD_GATEWAY;
@@ -348,12 +354,13 @@ public class PaymentController {
                 .pointsEarned(result.pointsEarned())
                 .walletBalanceAfter(result.walletBalanceAfter())
                 .processedAt(LocalDateTime.now(ZoneOffset.UTC))
+                .reference(reference)
                 .build();
 
         metrics.incShopCheckout("success", mode);
         metrics.shopCheckoutDuration().record(System.nanoTime() - startNanos, java.util.concurrent.TimeUnit.NANOSECONDS);
-        log.info("Shop checkout processed transactionId={} shopId={} pointsEarned={} pointsRedeemed={} balance={}",
-                response.getTransactionId(), response.getShopId(),
+        log.info("Shop checkout processed transactionId={} shopId={} reference={} pointsEarned={} pointsRedeemed={} balance={}",
+                response.getTransactionId(), response.getShopId(), reference,
                 response.getPointsEarned(), response.getPointsRedeemed(),
                 response.getWalletBalanceAfter());
         return ResponseEntity.ok(ApiResult.ok("Shop checkout processed successfully", response));
