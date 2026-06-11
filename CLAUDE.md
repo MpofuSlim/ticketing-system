@@ -169,6 +169,35 @@ loyalty platform landed via `claude/add-loyalty-service` (merged in #91) and
 the old H2 sibling branch was deleted — the legacy `claude/*` branch names
 are history; use `feature/*` from now on.
 
+## InnBucks Merchant API — the ticket-payment rail (2D code)
+
+**Ticket payments (`POST /payments` in payment-service) run EXCLUSIVELY on
+the InnBucks 2D-code rail.** The canonical spec is
+`docs/api/InnBucks_Merchant_Api_Doc_v1.0.9.pdf`, distilled (greppable) at
+`docs/api/innbucks-merchant-api.md`. The earlier server-side wallet debit
+(`/bank/api/payment`) was removed at the InnBucks team's direction — do not
+reintroduce it.
+
+Non-negotiables when touching this integration:
+
+- **Amounts are in CENTS** on the Merchant API (booking totals are decimal
+  dollars). `InnbucksPaymentService.toCents` is the single conversion point
+  and the client cross-checks the generation response's amount echo — keep
+  both, they are the 100x-charge guard.
+- **Code generation is NEVER retried** (a retry can mint a second live code);
+  the status query is the only retried call. A row whose upstream status is
+  UNKNOWN is never auto-expired — blocked slot beats double charge.
+- The FE contract is the historical stub shape: `bookingId` in,
+  SUCCESS/PROCESSING/FAILED out. `paymentCode`/`paymentCodeExpiresAt` are
+  additive. The code reaches the customer via WhatsApp→SMS
+  (`PaymentCodeNotifier`), so the current FE needs no changes.
+- Env vars deliberately keep their `BANK_API_*` names (same platform creds);
+  the credentials must belong to a MERCHANT-type client allowed to generate
+  PAYMENT codes.
+- Refunds: real-time reversals are NOT available for code-based transactions
+  (doc §10) — paid-but-unconfirmable bookings are an operator queue, watch
+  `payment.payments.unconfirmed_retry{outcome=still_failing}`.
+
 ## Veengu API reference — source of truth for payment integrations
 
 **The canonical spec for every veengu-backed payment integration in this

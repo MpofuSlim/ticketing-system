@@ -1,8 +1,8 @@
 package innbucks.paymentservice.reconciliation;
 
-import innbucks.paymentservice.client.BankApiClient;
-import innbucks.paymentservice.client.BankInquiryResult;
 import innbucks.paymentservice.client.BookingServiceClient;
+import innbucks.paymentservice.client.CodeStatusResult;
+import innbucks.paymentservice.client.InnbucksApiClient;
 import innbucks.paymentservice.config.PaymentMetrics;
 import innbucks.paymentservice.entity.Payment;
 import innbucks.paymentservice.entity.Transaction;
@@ -25,6 +25,8 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -52,25 +54,24 @@ class ReconciliationJobTest {
         // no-ops in the transactions-ledger tests.
         return new ReconciliationJob(repo, mock(PaymentRepository.class),
                 mock(PaymentRecordService.class), mock(BookingServiceClient.class),
-                mock(BankApiClient.class), metrics, FIVE_MINUTES, batchSize);
+                mock(InnbucksApiClient.class), metrics, FIVE_MINUTES, batchSize);
     }
 
     private static ReconciliationJob newPaymentJob(PaymentRepository payments,
                                                    PaymentRecordService records,
                                                    BookingServiceClient bookings,
                                                    PaymentMetrics metrics) {
-        // Bank API unconfigured (isConfigured() -> false by Mockito default):
-        // the staleness sweep stays observe-only in these tests.
         return new ReconciliationJob(mock(TransactionRepository.class), payments,
-                records, bookings, mock(BankApiClient.class), metrics, FIVE_MINUTES, 100);
+                records, bookings, mock(InnbucksApiClient.class), metrics, FIVE_MINUTES, 100);
     }
 
-    private static ReconciliationJob newInquiryJob(PaymentRepository payments,
-                                                   PaymentRecordService records,
-                                                   BankApiClient bankApi,
-                                                   PaymentMetrics metrics) {
+    private static ReconciliationJob newPollJob(PaymentRepository payments,
+                                                PaymentRecordService records,
+                                                BookingServiceClient bookings,
+                                                InnbucksApiClient innbucksApi,
+                                                PaymentMetrics metrics) {
         return new ReconciliationJob(mock(TransactionRepository.class), payments,
-                records, mock(BookingServiceClient.class), bankApi, metrics, FIVE_MINUTES, 100);
+                records, bookings, innbucksApi, metrics, FIVE_MINUTES, 100);
     }
 
     private static Payment paymentRow(Payment.PaymentStatus status, Instant createdAt) {
@@ -79,13 +80,20 @@ class ReconciliationJobTest {
                 .paymentReference("TKT-PMT-" + UUID.randomUUID())
                 .bookingId(UUID.randomUUID())
                 .customerMsisdn("+263770000001")
-                .customerAccount("CUST-1")
-                .merchantAccount("MERCH-1")
                 .amount(new BigDecimal("50.00"))
                 .currency("USD")
                 .status(status)
                 .createdAt(createdAt)
                 .build();
+    }
+
+    /** TOKEN_ISSUED row with code handles, expiring at the given instant. */
+    private static Payment tokenIssuedRow(Instant expiresAt) {
+        Payment p = paymentRow(Payment.PaymentStatus.TOKEN_ISSUED, Instant.now().minus(Duration.ofMinutes(1)));
+        p.setInnbucksCode("701285660");
+        p.setCodeAuthNumber("1616800");
+        p.setCodeExpiresAt(expiresAt);
+        return p;
     }
 
     @Test
@@ -181,7 +189,7 @@ class ReconciliationJobTest {
     // ---- ticket-payment ledger sweeps --------------------------------------
 
     @Test
-    void scanPayments_flagsStalePendingAndInDoubt_observeOnly() {
+    void scanPayments_stalePending_isClosedFailed_inDoubtObserveOnly() {
         PaymentRepository payments = mock(PaymentRepository.class);
         PaymentRecordService records = mock(PaymentRecordService.class);
         PaymentMetrics metrics = new PaymentMetrics(new SimpleMeterRegistry());
@@ -194,9 +202,14 @@ class ReconciliationJobTest {
 
         assertEquals(1.0, paymentStaleCount(metrics, "PENDING"));
         assertEquals(1.0, paymentStaleCount(metrics, "IN_DOUBT"));
-        // Observe-only: the sweep must never resolve or fail a row by itself —
-        // an IN_DOUBT flip without querying the processor would be a guess.
-        verifyNoInteractions(records);
+        // Stale PENDING in the code flow = we died before recording the
+        // generate outcome; the code (if any) was never DELIVERED, so closing
+        // FAILED is safe and frees the booking slot.
+        verify(records).markFailed(eq(pending.getId()), eq("stale_pending"), anyString());
+        // IN_DOUBT has no writer in the code flow — legacy rows are operator
+        // territory, never auto-resolved.
+        verify(records, never()).markFailed(eq(inDoubt.getId()), anyString(), anyString());
+        verify(records, never()).markExpired(any(), anyString());
     }
 
     @Test
@@ -245,74 +258,181 @@ class ReconciliationJobTest {
         assertEquals(1.0, unconfirmedRetryCount(metrics, "still_failing"));
     }
 
-    // ---- inquiry-based resolution of stale rows (bank configured) ----------
+    // ---- 2D-code status poll ------------------------------------------------
 
-    @Test
-    void inquiryCompleted_parksRowAsCompletedUnconfirmed() {
-        PaymentRepository payments = mock(PaymentRepository.class);
-        PaymentRecordService records = mock(PaymentRecordService.class);
-        BankApiClient bankApi = mock(BankApiClient.class);
-        PaymentMetrics metrics = new PaymentMetrics(new SimpleMeterRegistry());
-        Payment inDoubt = paymentRow(Payment.PaymentStatus.IN_DOUBT, Instant.now().minus(Duration.ofMinutes(9)));
-        when(payments.findByStatusInAndCreatedAtBefore(any(), any(Instant.class), any(Pageable.class)))
-                .thenReturn(List.of(inDoubt));
-        when(bankApi.isConfigured()).thenReturn(true);
-        when(bankApi.inquireTransaction(eq("CUST-1"), eq(inDoubt.getPaymentReference())))
-                .thenReturn(new BankInquiryResult(BankInquiryResult.Outcome.COMPLETED, "BANK-REF-7", "SUCCESS", null));
-
-        newInquiryJob(payments, records, bankApi, metrics).scanPayments();
-
-        // Money moved upstream: park as COMPLETED_UNCONFIRMED (the
-        // confirm-retry loop promotes to SUCCEEDED on the next pass).
-        verify(records).markCompletedUnconfirmed(eq(inDoubt.getId()), eq("BANK-REF-7"), any());
-        verify(records, never()).markFailed(any(), any(), any());
+    private static CodeStatusResult status(CodeStatusResult.Status s) {
+        return new CodeStatusResult(s, s.name(), null);
     }
 
     @Test
-    void inquiryFailedOrNotFound_closesRowFailed() {
+    void poll_paidCode_confirmsBooking_andMarksSucceeded() {
         PaymentRepository payments = mock(PaymentRepository.class);
         PaymentRecordService records = mock(PaymentRecordService.class);
-        BankApiClient bankApi = mock(BankApiClient.class);
+        BookingServiceClient bookings = mock(BookingServiceClient.class);
+        InnbucksApiClient innbucksApi = mock(InnbucksApiClient.class);
         PaymentMetrics metrics = new PaymentMetrics(new SimpleMeterRegistry());
-        Payment failedUpstream = paymentRow(Payment.PaymentStatus.IN_DOUBT, Instant.now().minus(Duration.ofMinutes(9)));
-        Payment neverLanded = paymentRow(Payment.PaymentStatus.PENDING, Instant.now().minus(Duration.ofMinutes(7)));
-        when(payments.findByStatusInAndCreatedAtBefore(any(), any(Instant.class), any(Pageable.class)))
-                .thenReturn(List.of(failedUpstream, neverLanded));
-        when(bankApi.isConfigured()).thenReturn(true);
-        when(bankApi.inquireTransaction(eq("CUST-1"), eq(failedUpstream.getPaymentReference())))
-                .thenReturn(new BankInquiryResult(BankInquiryResult.Outcome.FAILED, null, "DECLINED", "card declined"));
-        when(bankApi.inquireTransaction(eq("CUST-1"), eq(neverLanded.getPaymentReference())))
-                .thenReturn(new BankInquiryResult(BankInquiryResult.Outcome.NOT_FOUND, null, "404", null));
+        Payment open = tokenIssuedRow(Instant.now().plus(Duration.ofMinutes(8)));
+        when(payments.findByStatus(eq(Payment.PaymentStatus.TOKEN_ISSUED), any(Pageable.class)))
+                .thenReturn(List.of(open));
+        when(innbucksApi.isConfigured()).thenReturn(true);
+        when(innbucksApi.queryCodeStatus("1616800")).thenReturn(status(CodeStatusResult.Status.PAID));
+        when(bookings.confirmBooking(open.getBookingId()))
+                .thenReturn(java.util.Map.of("confirmationNumber", "INN-CONF-9"));
 
-        newInquiryJob(payments, records, bankApi, metrics).scanPayments();
+        newPollJob(payments, records, bookings, innbucksApi, metrics).pollCodePayments();
 
-        verify(records).markFailed(eq(failedUpstream.getId()), eq("DECLINED"), eq("card declined"));
-        verify(records).markFailed(eq(neverLanded.getId()), eq("not_found_upstream"), any());
-        verify(records, never()).markCompletedUnconfirmed(any(), any(), any());
+        verify(records).markSucceeded(open.getId(), "1616800", "INN-CONF-9");
+        assertEquals(1.0, codeResolutionCount(metrics, "paid"));
     }
 
     @Test
-    void inquiryUnknownOrError_leavesRowUntouched() {
-        // NEVER guess: an unclassifiable inquiry (or an inquiry failure)
-        // leaves the row for the next sweep.
+    void poll_claimedCode_isTreatedAsPaid_perTheDoc() {
         PaymentRepository payments = mock(PaymentRepository.class);
         PaymentRecordService records = mock(PaymentRecordService.class);
-        BankApiClient bankApi = mock(BankApiClient.class);
+        BookingServiceClient bookings = mock(BookingServiceClient.class);
+        InnbucksApiClient innbucksApi = mock(InnbucksApiClient.class);
+        Payment open = tokenIssuedRow(Instant.now().plus(Duration.ofMinutes(8)));
+        when(payments.findByStatus(eq(Payment.PaymentStatus.TOKEN_ISSUED), any(Pageable.class)))
+                .thenReturn(List.of(open));
+        when(innbucksApi.isConfigured()).thenReturn(true);
+        when(innbucksApi.queryCodeStatus("1616800")).thenReturn(status(CodeStatusResult.Status.CLAIMED));
+        when(bookings.confirmBooking(open.getBookingId()))
+                .thenReturn(java.util.Map.of("confirmationNumber", "INN-CONF-10"));
+
+        newPollJob(payments, records, bookings, innbucksApi, new PaymentMetrics(new SimpleMeterRegistry()))
+                .pollCodePayments();
+
+        verify(records).markSucceeded(open.getId(), "1616800", "INN-CONF-10");
+    }
+
+    @Test
+    void poll_paidCode_confirmFails_parksCompletedUnconfirmed_neverFailed() {
+        // Money HAS moved (customer approved the code). A booking-confirm
+        // failure must park the row for the confirm-retry loop — recording
+        // FAILED here would be the one lie the ledger must never contain.
+        PaymentRepository payments = mock(PaymentRepository.class);
+        PaymentRecordService records = mock(PaymentRecordService.class);
+        BookingServiceClient bookings = mock(BookingServiceClient.class);
+        InnbucksApiClient innbucksApi = mock(InnbucksApiClient.class);
         PaymentMetrics metrics = new PaymentMetrics(new SimpleMeterRegistry());
-        Payment unknown = paymentRow(Payment.PaymentStatus.IN_DOUBT, Instant.now().minus(Duration.ofMinutes(9)));
-        Payment erroring = paymentRow(Payment.PaymentStatus.IN_DOUBT, Instant.now().minus(Duration.ofMinutes(8)));
-        when(payments.findByStatusInAndCreatedAtBefore(any(), any(Instant.class), any(Pageable.class)))
+        Payment open = tokenIssuedRow(Instant.now().plus(Duration.ofMinutes(8)));
+        when(payments.findByStatus(eq(Payment.PaymentStatus.TOKEN_ISSUED), any(Pageable.class)))
+                .thenReturn(List.of(open));
+        when(innbucksApi.isConfigured()).thenReturn(true);
+        when(innbucksApi.queryCodeStatus("1616800")).thenReturn(status(CodeStatusResult.Status.PAID));
+        when(bookings.confirmBooking(open.getBookingId()))
+                .thenThrow(new BookingServiceClient.BookingConfirmationException("hold expired", 409));
+
+        newPollJob(payments, records, bookings, innbucksApi, metrics).pollCodePayments();
+
+        verify(records).markCompletedUnconfirmed(eq(open.getId()), eq("1616800"), contains("hold expired"));
+        verify(records, never()).markFailed(any(), anyString(), anyString());
+        verify(records, never()).markExpired(any(), anyString());
+        assertEquals(1.0, codeResolutionCount(metrics, "paid_unconfirmed"));
+    }
+
+    @Test
+    void poll_expiredOrTimedOut_marksExpired_freeingTheSlot() {
+        PaymentRepository payments = mock(PaymentRepository.class);
+        PaymentRecordService records = mock(PaymentRecordService.class);
+        InnbucksApiClient innbucksApi = mock(InnbucksApiClient.class);
+        PaymentMetrics metrics = new PaymentMetrics(new SimpleMeterRegistry());
+        Payment expired = tokenIssuedRow(Instant.now().minus(Duration.ofMinutes(1)));
+        Payment timedOut = tokenIssuedRow(Instant.now().minus(Duration.ofMinutes(2)));
+        when(payments.findByStatus(eq(Payment.PaymentStatus.TOKEN_ISSUED), any(Pageable.class)))
+                .thenReturn(List.of(expired, timedOut));
+        when(innbucksApi.isConfigured()).thenReturn(true);
+        when(innbucksApi.queryCodeStatus(expired.getCodeAuthNumber()))
+                .thenReturn(status(CodeStatusResult.Status.EXPIRED))
+                .thenReturn(status(CodeStatusResult.Status.TIMED_OUT));
+
+        newPollJob(payments, records, mock(BookingServiceClient.class), innbucksApi, metrics)
+                .pollCodePayments();
+
+        verify(records, times(2)).markExpired(any(UUID.class), anyString());
+        assertEquals(2.0, codeResolutionCount(metrics, "expired"));
+    }
+
+    @Test
+    void poll_stillNew_beforeDeadline_leavesRowAlone() {
+        PaymentRepository payments = mock(PaymentRepository.class);
+        PaymentRecordService records = mock(PaymentRecordService.class);
+        InnbucksApiClient innbucksApi = mock(InnbucksApiClient.class);
+        PaymentMetrics metrics = new PaymentMetrics(new SimpleMeterRegistry());
+        Payment open = tokenIssuedRow(Instant.now().plus(Duration.ofMinutes(8)));
+        when(payments.findByStatus(eq(Payment.PaymentStatus.TOKEN_ISSUED), any(Pageable.class)))
+                .thenReturn(List.of(open));
+        when(innbucksApi.isConfigured()).thenReturn(true);
+        when(innbucksApi.queryCodeStatus("1616800")).thenReturn(status(CodeStatusResult.Status.NEW));
+
+        newPollJob(payments, records, mock(BookingServiceClient.class), innbucksApi, metrics)
+                .pollCodePayments();
+
+        verify(records, never()).markExpired(any(), anyString());
+        assertEquals(1.0, codeResolutionCount(metrics, "still_pending"));
+    }
+
+    @Test
+    void poll_stillNew_pastDeadlinePlusGrace_expiresLocally() {
+        PaymentRepository payments = mock(PaymentRepository.class);
+        PaymentRecordService records = mock(PaymentRecordService.class);
+        InnbucksApiClient innbucksApi = mock(InnbucksApiClient.class);
+        // Deadline 10 minutes ago — far past the 2-minute grace.
+        Payment open = tokenIssuedRow(Instant.now().minus(Duration.ofMinutes(10)));
+        when(payments.findByStatus(eq(Payment.PaymentStatus.TOKEN_ISSUED), any(Pageable.class)))
+                .thenReturn(List.of(open));
+        when(innbucksApi.isConfigured()).thenReturn(true);
+        when(innbucksApi.queryCodeStatus("1616800")).thenReturn(status(CodeStatusResult.Status.NEW));
+
+        newPollJob(payments, records, mock(BookingServiceClient.class), innbucksApi,
+                new PaymentMetrics(new SimpleMeterRegistry())).pollCodePayments();
+
+        // Safe to expire: upstream POSITIVELY says still-New (unpaid).
+        verify(records).markExpired(eq(open.getId()), contains("New"));
+    }
+
+    @Test
+    void poll_unknownOrError_neverExpiresTheRow() {
+        // NEVER guess: the customer may have paid. Expiring would free the
+        // slot and invite a double charge — the safe failure is a blocked
+        // slot + a dripping metric for the operator.
+        PaymentRepository payments = mock(PaymentRepository.class);
+        PaymentRecordService records = mock(PaymentRecordService.class);
+        InnbucksApiClient innbucksApi = mock(InnbucksApiClient.class);
+        PaymentMetrics metrics = new PaymentMetrics(new SimpleMeterRegistry());
+        Payment unknown = tokenIssuedRow(Instant.now().minus(Duration.ofHours(2)));
+        Payment erroring = tokenIssuedRow(Instant.now().minus(Duration.ofHours(3)));
+        when(payments.findByStatus(eq(Payment.PaymentStatus.TOKEN_ISSUED), any(Pageable.class)))
                 .thenReturn(List.of(unknown, erroring));
-        when(bankApi.isConfigured()).thenReturn(true);
-        when(bankApi.inquireTransaction(eq("CUST-1"), eq(unknown.getPaymentReference())))
-                .thenReturn(new BankInquiryResult(BankInquiryResult.Outcome.UNKNOWN, null, null, null));
-        when(bankApi.inquireTransaction(eq("CUST-1"), eq(erroring.getPaymentReference())))
-                .thenThrow(new RuntimeException("inquiry timeout"));
+        when(innbucksApi.isConfigured()).thenReturn(true);
+        when(innbucksApi.queryCodeStatus(unknown.getCodeAuthNumber()))
+                .thenReturn(status(CodeStatusResult.Status.UNKNOWN))
+                .thenThrow(new RuntimeException("query timeout"));
 
-        newInquiryJob(payments, records, bankApi, metrics).scanPayments();
+        newPollJob(payments, records, mock(BookingServiceClient.class), innbucksApi, metrics)
+                .pollCodePayments();
 
-        verify(records, never()).markFailed(any(), any(), any());
-        verify(records, never()).markCompletedUnconfirmed(any(), any(), any());
+        verify(records, never()).markExpired(any(), anyString());
+        verify(records, never()).markFailed(any(), anyString(), anyString());
+        assertEquals(1.0, codeResolutionCount(metrics, "unknown"));
+        assertEquals(1.0, codeResolutionCount(metrics, "error"));
+    }
+
+    @Test
+    void poll_unconfiguredClient_neverQueries_andLeavesRows() {
+        PaymentRepository payments = mock(PaymentRepository.class);
+        PaymentRecordService records = mock(PaymentRecordService.class);
+        InnbucksApiClient innbucksApi = mock(InnbucksApiClient.class);
+        Payment open = tokenIssuedRow(Instant.now().plus(Duration.ofMinutes(8)));
+        when(payments.findByStatus(eq(Payment.PaymentStatus.TOKEN_ISSUED), any(Pageable.class)))
+                .thenReturn(List.of(open));
+        when(innbucksApi.isConfigured()).thenReturn(false);
+
+        newPollJob(payments, records, mock(BookingServiceClient.class), innbucksApi,
+                new PaymentMetrics(new SimpleMeterRegistry())).pollCodePayments();
+
+        verify(innbucksApi, never()).queryCodeStatus(anyString());
+        verifyNoInteractions(records);
     }
 
     private static double paymentStaleCount(PaymentMetrics metrics, String status) {
@@ -325,6 +445,13 @@ class ReconciliationJobTest {
     private static double unconfirmedRetryCount(PaymentMetrics metrics, String outcome) {
         SimpleMeterRegistry reg = (SimpleMeterRegistry) extractRegistry(metrics);
         return reg.find("payment.payments.unconfirmed_retry").tag("outcome", outcome)
+                .counters().stream()
+                .mapToDouble(io.micrometer.core.instrument.Counter::count).sum();
+    }
+
+    private static double codeResolutionCount(PaymentMetrics metrics, String outcome) {
+        SimpleMeterRegistry reg = (SimpleMeterRegistry) extractRegistry(metrics);
+        return reg.find("payment.payments.code_resolution").tag("outcome", outcome)
                 .counters().stream()
                 .mapToDouble(io.micrometer.core.instrument.Counter::count).sum();
     }

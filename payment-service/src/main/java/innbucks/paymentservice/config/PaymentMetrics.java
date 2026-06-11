@@ -102,17 +102,31 @@ public class PaymentMetrics {
     }
 
     /**
-     * Outcome of the reconciler's Bank-API transaction inquiry for stale
-     * PENDING / IN_DOUBT rows. outcome={completed, failed, not_found,
-     * unknown, error}. `completed` flips the row to COMPLETED_UNCONFIRMED
-     * (the confirm-retry loop finishes the job); `failed`/`not_found` close
-     * it FAILED; `unknown`/`error` leave it for the next sweep — a sustained
-     * drip of those means the inquiry contract needs attention.
+     * Outcome of each code-status poll pass over a TOKEN_ISSUED row.
+     * outcome={paid, paid_unconfirmed, expired, still_pending, unknown,
+     * unqueryable, error}. `paid` is the conversion signal; `expired` is the
+     * abandon rate; a sustained drip of `unknown`/`error` means the InnBucks
+     * status contract needs attention WHILE customer money may be waiting —
+     * page on it. Rows behind `unknown` are deliberately never auto-expired.
      */
-    public void incInDoubtResolution(String outcome) {
-        Counter.builder("payment.payments.indoubt_resolution")
-                .description("Reconciler Bank-API inquiry resolutions of stale PENDING/IN_DOUBT payments, by outcome")
+    public void incCodeResolution(String outcome) {
+        Counter.builder("payment.payments.code_resolution")
+                .description("Code-status poller resolutions of TOKEN_ISSUED payments, by outcome")
                 .tag("outcome", outcome)
+                .register(registry)
+                .increment();
+    }
+
+    /**
+     * Delivery channel of the InnBucks payment code to the customer.
+     * channel={whatsapp, sms, failed}. `failed` means BOTH channels failed —
+     * those customers only see the code if the FE surfaces the additive
+     * paymentCode field, so a sustained drip is a notification-stack page.
+     */
+    public void incCodeDelivery(String channel) {
+        Counter.builder("payment.payments.code_delivery")
+                .description("Payment-code delivery outcomes, by channel (whatsapp/sms/failed)")
+                .tag("channel", channel)
                 .register(registry)
                 .increment();
     }

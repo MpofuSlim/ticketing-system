@@ -1,8 +1,8 @@
 package innbucks.paymentservice.reconciliation;
 
-import innbucks.paymentservice.client.BankApiClient;
-import innbucks.paymentservice.client.BankInquiryResult;
 import innbucks.paymentservice.client.BookingServiceClient;
+import innbucks.paymentservice.client.CodeStatusResult;
+import innbucks.paymentservice.client.InnbucksApiClient;
 import innbucks.paymentservice.config.PaymentMetrics;
 import innbucks.paymentservice.entity.Payment;
 import innbucks.paymentservice.entity.Payment.PaymentStatus;
@@ -30,39 +30,53 @@ import java.util.Map;
  * Oradian-success-but-local-write-failed class of bug. Observe-only: log +
  * counter; resolution is operator-driven (see the original class notes).
  *
- * <p><b>2. {@code payment} (ticket-checkout debits):</b> two sweeps.
+ * <p><b>2. {@code payment} (ticket 2D-code payments):</b> three sweeps.
  * <ul>
- *   <li><b>Stale PENDING / IN_DOUBT:</b> rows past the staleness threshold.
- *       IN_DOUBT means an upstream call timed out — money MAY have moved.
- *       Resolved by QUERYING the bank ({@code GET /bank/api/transaction/
- *       inquiry} keyed by our paymentReference) — see
- *       {@link #resolveByInquiry}. Never guessed: an unclassifiable inquiry
- *       leaves the row for the next sweep, because flipping an IN_DOUBT row
- *       to FAILED on a hunch would tell the customer a payment failed when
- *       their money may already have moved.</li>
- *   <li><b>COMPLETED_UNCONFIRMED (self-heal):</b> money definitely moved but
- *       the booking confirm failed at payment time. Booking-side confirm is
- *       an idempotent replay, so this sweep RETRIES it; on success the row
- *       is promoted to SUCCEEDED. Rows that keep failing stay put, get
- *       logged at WARN with the booking-side reason, and bump the
- *       {@code payment.payments.unconfirmed_retry{outcome=still_failing}}
- *       counter — sustained drips there are customers debited without
- *       tickets, the loudest page this service owns.</li>
+ *   <li><b>Code-status poll (every ~20s):</b> THE resolver of the 2D-code
+ *       flow. Each TOKEN_ISSUED row is queried upstream by its
+ *       {@code authNumber}: Paid/Claimed → confirm the booking → SUCCEEDED
+ *       (confirm failure → COMPLETED_UNCONFIRMED, money HAS moved);
+ *       Expired/Timed Out → EXPIRED (slot freed for a fresh code); still
+ *       New → expired locally only once our TTL + grace has passed.
+ *       <b>UNKNOWN/error never expires a row</b> — a code the customer may
+ *       have paid must keep blocking the slot until an answer or an
+ *       operator; auto-expiring it would invite a second charge.</li>
+ *   <li><b>Stale PENDING / IN_DOUBT (every minute):</b> PENDING rows past
+ *       the threshold mean the service died between opening the row and
+ *       recording the generate outcome — no code was ever DELIVERED (the
+ *       send happens after TOKEN_ISSUED), so closing FAILED is safe and
+ *       frees the slot. IN_DOUBT has no writer in the code flow; legacy
+ *       rows are logged + counted for the operator, never auto-resolved.</li>
+ *   <li><b>COMPLETED_UNCONFIRMED (self-heal):</b> the customer PAID the code
+ *       but the booking confirm failed. Booking-side confirm is an
+ *       idempotent replay, so this sweep RETRIES it; on success the row is
+ *       promoted to SUCCEEDED. Rows that keep failing stay put and bump
+ *       {@code payment.payments.unconfirmed_retry{outcome=still_failing}} —
+ *       a sustained drip there is customers who paid without tickets, the
+ *       loudest page this service owns (refund via the Merchant API is
+ *       manual: real-time reversals are NOT available for code-based
+ *       transactions, per the doc).</li>
  * </ul>
  */
 @Component
 @Slf4j
 public class ReconciliationJob {
 
-    /** Ticket-payment states the staleness sweep watches (non-terminal). */
+    /** Ticket-payment states the staleness sweep watches (non-terminal, non-code). */
     private static final EnumSet<PaymentStatus> STALE_WATCH =
             EnumSet.of(PaymentStatus.PENDING, PaymentStatus.IN_DOUBT);
+
+    /**
+     * Slack past the local code TTL before a still-New code is expired —
+     * absorbs clock skew with InnBucks and a poll cycle's worth of lag.
+     */
+    private static final Duration CODE_EXPIRY_GRACE = Duration.ofMinutes(2);
 
     private final TransactionRepository repository;
     private final PaymentRepository paymentRepository;
     private final PaymentRecordService paymentRecordService;
     private final BookingServiceClient bookingServiceClient;
-    private final BankApiClient bankApiClient;
+    private final InnbucksApiClient innbucksApiClient;
     private final PaymentMetrics metrics;
     private final Duration stalePendingThreshold;
     private final int batchSize;
@@ -72,7 +86,7 @@ public class ReconciliationJob {
             PaymentRepository paymentRepository,
             PaymentRecordService paymentRecordService,
             BookingServiceClient bookingServiceClient,
-            BankApiClient bankApiClient,
+            InnbucksApiClient innbucksApiClient,
             PaymentMetrics metrics,
             @Value("${payment-service.reconciliation.stale-pending-threshold:PT5M}") Duration stalePendingThreshold,
             @Value("${payment-service.reconciliation.batch-size:100}") int batchSize) {
@@ -80,7 +94,7 @@ public class ReconciliationJob {
         this.paymentRepository = paymentRepository;
         this.paymentRecordService = paymentRecordService;
         this.bookingServiceClient = bookingServiceClient;
-        this.bankApiClient = bankApiClient;
+        this.innbucksApiClient = innbucksApiClient;
         this.metrics = metrics;
         this.stalePendingThreshold = stalePendingThreshold;
         this.batchSize = batchSize;
@@ -127,6 +141,111 @@ public class ReconciliationJob {
         }
     }
 
+    /**
+     * The 2D-code resolver. Tight cadence (default 20s) because this IS the
+     * payment confirmation path — the customer approves the code in their
+     * app and this poll is what turns that into a confirmed booking.
+     */
+    @Scheduled(fixedDelayString = "${payment-service.code-poll.interval:PT20S}")
+    public void pollCodePayments() {
+        List<Payment> open = paymentRepository.findByStatus(
+                PaymentStatus.TOKEN_ISSUED, PageRequest.of(0, batchSize));
+        if (open.isEmpty()) {
+            return;
+        }
+        if (!innbucksApiClient.isConfigured()) {
+            log.warn("Code poll: {} TOKEN_ISSUED rows but the InnBucks API is not configured — cannot resolve",
+                    open.size());
+            return;
+        }
+        for (Payment p : open) {
+            // Per-row isolation: one code's query failure must not stall the rest.
+            try {
+                resolveCodePayment(p);
+            } catch (RuntimeException e) {
+                metrics.incCodeResolution("error");
+                log.warn("Code poll failed for paymentReference={} — leaving row for next pass: {}",
+                        p.getPaymentReference(), e.getMessage());
+            }
+        }
+    }
+
+    private void resolveCodePayment(Payment p) {
+        if (p.getCodeAuthNumber() == null || p.getCodeAuthNumber().isBlank()) {
+            // Should be impossible (markTokenIssued always records it) — but a
+            // row we cannot query must never be guessed into a terminal state.
+            metrics.incCodeResolution("unqueryable");
+            log.error("TOKEN_ISSUED row has no codeAuthNumber — cannot poll paymentId={} paymentReference={}",
+                    p.getId(), p.getPaymentReference());
+            return;
+        }
+        CodeStatusResult result = innbucksApiClient.queryCodeStatus(p.getCodeAuthNumber());
+        switch (result.status()) {
+            case PAID, CLAIMED -> completePaidCode(p, result);
+            case EXPIRED -> {
+                paymentRecordService.markExpired(p.getId(),
+                        "InnBucks reports the code " + result.rawStatus() + " — never paid");
+                metrics.incCodeResolution("expired");
+                log.info("Code expired upstream paymentReference={} bookingId={} — slot freed",
+                        p.getPaymentReference(), p.getBookingId());
+            }
+            case TIMED_OUT -> {
+                paymentRecordService.markExpired(p.getId(),
+                        "InnBucks reports the code Timed Out — never paid");
+                metrics.incCodeResolution("expired");
+            }
+            case NEW -> {
+                // Still waiting on the customer. Expire only once OUR deadline
+                // + grace passed — and only because upstream POSITIVELY says
+                // it is still unpaid (New), so no money can be in flight.
+                Instant deadline = p.getCodeExpiresAt() == null
+                        ? p.getCreatedAt().plus(CODE_EXPIRY_GRACE)
+                        : p.getCodeExpiresAt().plus(CODE_EXPIRY_GRACE);
+                if (Instant.now().isAfter(deadline)) {
+                    paymentRecordService.markExpired(p.getId(),
+                            "Local TTL elapsed and InnBucks still reports New — closing unpaid");
+                    metrics.incCodeResolution("expired");
+                } else {
+                    metrics.incCodeResolution("still_pending");
+                }
+            }
+            case ERROR, UNKNOWN -> {
+                // NEVER guess. The customer may have paid; expiring would free
+                // the slot and invite a double charge. The row stays put and
+                // the metric drips — sustained unknowns are an operator page.
+                metrics.incCodeResolution("unknown");
+                log.warn("Code status unresolvable paymentReference={} status={} raw='{}' msg='{}' — leaving row",
+                        p.getPaymentReference(), result.status(), result.rawStatus(), result.responseMsg());
+            }
+        }
+    }
+
+    /**
+     * InnBucks says the customer paid (Paid, or Claimed — the doc defines
+     * both as "finalised by the customer"). Confirm the booking, then promote;
+     * a confirm failure parks the row COMPLETED_UNCONFIRMED with the
+     * authNumber as the recovery handle — money HAS moved, and the
+     * confirm-retry sweep below keeps trying.
+     */
+    private void completePaidCode(Payment p, CodeStatusResult result) {
+        try {
+            Map<String, Object> confirmed = bookingServiceClient.confirmBooking(p.getBookingId());
+            Object confirmation = confirmed == null ? null : confirmed.get("confirmationNumber");
+            paymentRecordService.markSucceeded(p.getId(), p.getCodeAuthNumber(),
+                    confirmation == null ? null : confirmation.toString());
+            metrics.incCodeResolution("paid");
+            log.info("Code paid + booking confirmed paymentReference={} bookingId={} confirmation={} upstreamStatus={}",
+                    p.getPaymentReference(), p.getBookingId(), confirmation, result.rawStatus());
+        } catch (RuntimeException e) {
+            paymentRecordService.markCompletedUnconfirmed(p.getId(), p.getCodeAuthNumber(),
+                    "Customer paid the InnBucks code but booking confirm failed: " + e.getMessage());
+            metrics.incCodeResolution("paid_unconfirmed");
+            log.error("CODE PAID BUT BOOKING CONFIRM FAILED — confirm-retry will keep trying "
+                            + "paymentReference={} bookingId={} reason={}",
+                    p.getPaymentReference(), p.getBookingId(), e.getMessage());
+        }
+    }
+
     /** Ticket-payment ledger sweeps (stale watch + unconfirmed self-heal). */
     @Scheduled(fixedDelayString = "${payment-service.reconciliation.scan-interval:PT1M}")
     public void scanPayments() {
@@ -138,7 +257,6 @@ public class ReconciliationJob {
         Instant cutoff = Instant.now().minus(stalePendingThreshold);
         List<Payment> stale = paymentRepository.findByStatusInAndCreatedAtBefore(
                 STALE_WATCH, cutoff, PageRequest.of(0, batchSize));
-        boolean canInquire = bankApiClient.isConfigured();
         Instant now = Instant.now();
         for (Payment p : stale) {
             long ageSeconds = Duration.between(p.getCreatedAt(), now).toSeconds();
@@ -146,60 +264,20 @@ public class ReconciliationJob {
                     p.getStatus(), p.getId(), p.getPaymentReference(),
                     p.getBookingId(), p.getAmount(), ageSeconds);
             metrics.incStalePayment(p.getStatus().name());
-            if (canInquire) {
-                resolveByInquiry(p);
+            if (p.getStatus() == PaymentStatus.PENDING) {
+                // Code flow truth: a PENDING row this old means we died between
+                // opening it and recording the generate outcome. Even if a code
+                // was minted upstream, it was never DELIVERED (delivery happens
+                // after TOKEN_ISSUED) so nobody can pay it — closing FAILED is
+                // safe and frees the booking slot for a clean retry.
+                paymentRecordService.markFailed(p.getId(), "stale_pending",
+                        "No code was recorded before the staleness threshold — closing; slot freed for retry");
             }
+            // IN_DOUBT: no writer in the code flow; legacy rows are operator
+            // territory — observed + counted, never auto-resolved.
         }
         if (stale.size() == batchSize) {
             log.warn("Payment staleness sweep hit batch cap ({}); more rows likely behind it.", batchSize);
-        }
-    }
-
-    /**
-     * Resolve a stale PENDING / IN_DOUBT row by asking the bank what actually
-     * happened ({@code GET /bank/api/transaction/inquiry} keyed by our
-     * paymentReference). NEVER guesses:
-     * <ul>
-     *   <li>COMPLETED — money moved: park as COMPLETED_UNCONFIRMED with the
-     *       bank's reference; the confirm-retry loop promotes to SUCCEEDED
-     *       (next pass) once the booking is confirmed.</li>
-     *   <li>FAILED / NOT_FOUND — no money moved (declined, or the submission
-     *       never landed): close FAILED, freeing the booking slot for a
-     *       retry payment.</li>
-     *   <li>UNKNOWN or inquiry error — leave the row alone; next sweep
-     *       tries again. Sustained UNKNOWNs surface via
-     *       {@code payment.payments.indoubt_resolution{outcome=unknown}}.</li>
-     * </ul>
-     */
-    private void resolveByInquiry(Payment p) {
-        try {
-            BankInquiryResult result = bankApiClient.inquireTransaction(
-                    p.getCustomerAccount(), p.getPaymentReference());
-            switch (result.outcome()) {
-                case COMPLETED -> {
-                    paymentRecordService.markCompletedUnconfirmed(p.getId(), result.reference(),
-                            "Resolved by bank inquiry: transaction COMPLETED upstream");
-                    metrics.incInDoubtResolution("completed");
-                    log.info("Inquiry resolved paymentReference={} as COMPLETED upstream (bankRef={}) — confirm-retry will finish",
-                            p.getPaymentReference(), result.reference());
-                }
-                case FAILED -> {
-                    paymentRecordService.markFailed(p.getId(),
-                            result.code() != null ? result.code() : "upstream_failed",
-                            result.message() != null ? result.message() : "Bank inquiry reported the transaction failed");
-                    metrics.incInDoubtResolution("failed");
-                }
-                case NOT_FOUND -> {
-                    paymentRecordService.markFailed(p.getId(), "not_found_upstream",
-                            "Bank inquiry has no record of this reference — submission never landed");
-                    metrics.incInDoubtResolution("not_found");
-                }
-                case UNKNOWN -> metrics.incInDoubtResolution("unknown");
-            }
-        } catch (RuntimeException e) {
-            metrics.incInDoubtResolution("error");
-            log.warn("Bank inquiry failed for paymentReference={} — leaving row for next sweep: {}",
-                    p.getPaymentReference(), e.getMessage());
         }
     }
 
@@ -219,7 +297,7 @@ public class ReconciliationJob {
                         p.getId(), p.getPaymentReference(), confirmation);
             } catch (RuntimeException e) {
                 metrics.incUnconfirmedRetry("still_failing");
-                log.warn("Reconciler confirm retry still failing paymentId={} paymentReference={} veenguRef={} bookingId={} reason={}",
+                log.warn("Reconciler confirm retry still failing paymentId={} paymentReference={} upstreamRef={} bookingId={} reason={}",
                         p.getId(), p.getPaymentReference(), p.getVeenguTransactionId(),
                         p.getBookingId(), e.getMessage());
             }

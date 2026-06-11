@@ -101,6 +101,53 @@ class PaymentLedgerIntegrityPostgresIT extends PostgresIntegrationTestBase {
     }
 
     @Test
+    void tokenIssuedCode_holdsTheBookingSlot() {
+        // An open InnBucks code IS an active payment: a second code for the
+        // same booking would let the customer pay twice.
+        UUID bookingId = UUID.randomUUID();
+        payments.saveAndFlush(row(bookingId, PaymentStatus.TOKEN_ISSUED));
+
+        assertThrows(DataIntegrityViolationException.class,
+                () -> payments.saveAndFlush(row(bookingId, PaymentStatus.PENDING)));
+    }
+
+    @Test
+    void expiredCode_freesTheSlot_forAFreshCode() {
+        UUID bookingId = UUID.randomUUID();
+        payments.saveAndFlush(row(bookingId, PaymentStatus.EXPIRED));
+
+        assertDoesNotThrow(() -> payments.saveAndFlush(row(bookingId, PaymentStatus.PENDING)),
+                "a lapsed code must not lock the customer out of paying again");
+    }
+
+    @Test
+    void codeColumns_roundTripThroughV6() {
+        // V6 columns + the relaxed account nullability (the code flow stores
+        // neither customer_account nor merchant_account).
+        java.time.Instant expiresAt = java.time.Instant.now().plusSeconds(600)
+                .truncatedTo(java.time.temporal.ChronoUnit.MICROS);
+        Payment p = Payment.builder()
+                .id(UUID.randomUUID())
+                .paymentReference("TKT-PMT-" + UUID.randomUUID())
+                .bookingId(UUID.randomUUID())
+                .customerMsisdn("+263770000001")
+                .amount(new BigDecimal("50.00"))
+                .currency("USD")
+                .status(PaymentStatus.TOKEN_ISSUED)
+                .innbucksCode("701285660")
+                .codeAuthNumber("1616800")
+                .codeExpiresAt(expiresAt)
+                .build();
+
+        Payment reloaded = payments.findById(payments.saveAndFlush(p).getId()).orElseThrow();
+        assertEquals("701285660", reloaded.getInnbucksCode());
+        assertEquals("1616800", reloaded.getCodeAuthNumber());
+        assertEquals(expiresAt, reloaded.getCodeExpiresAt());
+        assertNull(reloaded.getCustomerAccount());
+        assertNull(reloaded.getMerchantAccount());
+    }
+
+    @Test
     void paymentEventJournal_acceptsTransitionRows() {
         Payment p = payments.saveAndFlush(row(UUID.randomUUID(), PaymentStatus.PENDING));
 

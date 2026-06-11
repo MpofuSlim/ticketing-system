@@ -197,4 +197,94 @@ class PaymentRecordServiceTest {
                 new PaymentRecordService(repo, events).markSucceeded(UUID.randomUUID(), "V", "C"));
         verifyNoInteractions(events);
     }
+
+    // ---- 2D-code flow transitions ------------------------------------------
+
+    @Test
+    void markTokenIssued_fromPending_recordsCodeHandlesAndDeadline() {
+        PaymentRepository repo = mock(PaymentRepository.class);
+        PaymentEventRepository events = mock(PaymentEventRepository.class);
+        Payment p = payment(PaymentStatus.PENDING);
+        when(repo.findById(p.getId())).thenReturn(Optional.of(p));
+        java.time.Instant deadline = java.time.Instant.now().plusSeconds(600);
+
+        new PaymentRecordService(repo, events).markTokenIssued(p.getId(), "701285660", "1616800", deadline);
+
+        assertEquals(PaymentStatus.TOKEN_ISSUED, p.getStatus());
+        assertEquals("701285660", p.getInnbucksCode());
+        assertEquals("1616800", p.getCodeAuthNumber());
+        assertEquals(deadline, p.getCodeExpiresAt());
+        ArgumentCaptor<PaymentEvent> ev = ArgumentCaptor.forClass(PaymentEvent.class);
+        verify(events).save(ev.capture());
+        assertEquals("PENDING", ev.getValue().getFromStatus());
+        assertEquals("TOKEN_ISSUED", ev.getValue().getToStatus());
+        assertEquals("1616800", ev.getValue().getUpstreamRef(),
+                "the authNumber is the recovery handle and must be journaled");
+    }
+
+    @Test
+    void markExpired_fromTokenIssued_isTerminal_andImmutable() {
+        PaymentRepository repo = mock(PaymentRepository.class);
+        PaymentEventRepository events = mock(PaymentEventRepository.class);
+        Payment p = payment(PaymentStatus.TOKEN_ISSUED);
+        when(repo.findById(p.getId())).thenReturn(Optional.of(p));
+
+        PaymentRecordService service = new PaymentRecordService(repo, events);
+        service.markExpired(p.getId(), "code lapsed unpaid");
+        assertEquals(PaymentStatus.EXPIRED, p.getStatus());
+
+        // EXPIRED is terminal: a late "paid after all" signal must be refused
+        // and shouted about, never applied silently.
+        service.markSucceeded(p.getId(), "1616800", "INN-LATE");
+        assertEquals(PaymentStatus.EXPIRED, p.getStatus(), "terminal EXPIRED must not be resurrected");
+    }
+
+    @Test
+    void markSucceeded_fromTokenIssued_isTheCodePaidPath() {
+        PaymentRepository repo = mock(PaymentRepository.class);
+        PaymentEventRepository events = mock(PaymentEventRepository.class);
+        Payment p = payment(PaymentStatus.TOKEN_ISSUED);
+        when(repo.findById(p.getId())).thenReturn(Optional.of(p));
+
+        new PaymentRecordService(repo, events).markSucceeded(p.getId(), "1616800", "INN-CONF-1");
+
+        assertEquals(PaymentStatus.SUCCEEDED, p.getStatus());
+        assertEquals("1616800", p.getVeenguTransactionId());
+        assertEquals("INN-CONF-1", p.getConfirmationNumber());
+    }
+
+    @Test
+    void tokenIssued_cannotRegressToPending() {
+        PaymentRepository repo = mock(PaymentRepository.class);
+        PaymentEventRepository events = mock(PaymentEventRepository.class);
+        Payment p = payment(PaymentStatus.SUCCEEDED);
+        when(repo.findById(p.getId())).thenReturn(Optional.of(p));
+
+        // No public API even attempts SUCCEEDED -> TOKEN_ISSUED; pin the
+        // nearest expressible guard: a terminal row refuses markTokenIssued.
+        new PaymentRecordService(repo, events).markTokenIssued(
+                p.getId(), "code", "auth", java.time.Instant.now());
+
+        assertEquals(PaymentStatus.SUCCEEDED, p.getStatus());
+        verify(repo, never()).save(any());
+        verifyNoInteractions(events);
+    }
+
+    @Test
+    void noteEvent_appendsAnnotationRow_withoutStatusChange() {
+        PaymentRepository repo = mock(PaymentRepository.class);
+        PaymentEventRepository events = mock(PaymentEventRepository.class);
+        Payment p = payment(PaymentStatus.TOKEN_ISSUED);
+        when(repo.findById(p.getId())).thenReturn(Optional.of(p));
+
+        new PaymentRecordService(repo, events).noteEvent(p.getId(), "Payment code delivered via SMS");
+
+        assertEquals(PaymentStatus.TOKEN_ISSUED, p.getStatus(), "annotation must not move the state");
+        verify(repo, never()).save(any());
+        ArgumentCaptor<PaymentEvent> ev = ArgumentCaptor.forClass(PaymentEvent.class);
+        verify(events).save(ev.capture());
+        assertEquals("TOKEN_ISSUED", ev.getValue().getFromStatus());
+        assertEquals("TOKEN_ISSUED", ev.getValue().getToStatus());
+        assertEquals("Payment code delivered via SMS", ev.getValue().getDetail());
+    }
 }

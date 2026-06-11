@@ -46,15 +46,18 @@ import java.util.UUID;
  *
  * <ul>
  *   <li>{@code POST /payments} — ticket-purchase payment, the FE's public
- *       entry. <b>Moves real money</b> via the public InnBucks Bank API:
- *       the payer's wallet is resolved from the BOOKING's phoneNumber
- *       (captured at booking time — the FE sends only {@code bookingId},
- *       exactly the historical stub contract), debited for the booking's
- *       totalAmount, and the booking confirmed. Request/response shapes are
- *       byte-identical to the old stub; {@code Status.PROCESSING} is the
- *       one additive value (async outcome, reconciler finishes the job).
- *       Idempotent replay: a double-tap on an already-paid/in-flight
- *       booking returns that payment's receipt, never an error.</li>
+ *       entry. <b>Collects real money</b> via the InnBucks 2D-code rail
+ *       (Merchant API): an InnBucks PAYMENT code is issued for the booking's
+ *       totalAmount and delivered to the BOOKING's phoneNumber (captured at
+ *       booking time — the FE sends only {@code bookingId}, exactly the
+ *       historical stub contract); the customer approves it in their own
+ *       InnBucks app/USSD and the reconciler's poller confirms the booking.
+ *       Request/response shapes stay stub-compatible; {@code PROCESSING} is
+ *       the one additive status value and {@code paymentCode} /
+ *       {@code paymentCodeExpiresAt} are additive fields. Idempotent replay:
+ *       a double-tap on an already-paid/in-flight booking returns that
+ *       payment's receipt (with the live code if still awaiting approval),
+ *       never an error.</li>
  *   <li>{@code POST /payments/shop-checkout} — pay at a shop with cash,
  *       loyalty points, or a mix. <b>Moves real loyalty points</b> via
  *       loyalty-service (earn on the cash leg, burn on the points leg —
@@ -80,38 +83,63 @@ public class PaymentController {
 
     @PostMapping
     @Operation(
-            summary = "Pay for a ticket booking (InnBucks wallet debit)",
+            summary = "Pay for a ticket booking (InnBucks 2D-code)",
             description = "Public endpoint — same contract as the historical stub: body carries only `bookingId` " +
-                    "(plus cosmetic `currency`/`cardLast4`). The payer's wallet is resolved from the booking's " +
-                    "phoneNumber (captured at booking time), debited for the booking's `totalAmount` via the " +
-                    "InnBucks Bank API, and the booking is confirmed. Clients never quote amounts. " +
-                    "Replay-safe: paying an already-paid or in-flight booking returns that payment's receipt. " +
-                    "`status=PROCESSING` means the debit was accepted but the outcome isn't authoritative yet — " +
-                    "the reconciler completes the booking within ~a minute; poll the booking status."
+                    "(plus cosmetic `currency`/`cardLast4`). An InnBucks PAYMENT code is issued for the booking's " +
+                    "`totalAmount` and delivered (WhatsApp → SMS fallback) to the booking's phoneNumber captured " +
+                    "at booking time; the customer approves it in their own InnBucks app or USSD. Clients never " +
+                    "quote amounts. The normal response is `status=PROCESSING` with the additive `paymentCode` / " +
+                    "`paymentCodeExpiresAt` fields — once the customer approves, the poller confirms the booking " +
+                    "(poll the booking status for the confirmation number). " +
+                    "Replay-safe: paying an already-paid or in-flight booking returns that payment's receipt, " +
+                    "including the live code while it's still awaiting approval. If the code expires unpaid, the " +
+                    "payment closes and POSTing again issues a fresh code."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
-                    description = "Payment processed and booking confirmed",
+                    description = "Code issued and delivered (PROCESSING), or replay of a completed payment (SUCCESS)",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = PaymentResponse.class),
-                            examples = @ExampleObject(name = "Payment success", value = """
-                                    {
-                                      "code": "200 OK",
-                                      "message": "Payment processed successfully",
-                                      "data": {
-                                        "transactionId": "f0e1d2c3-4567-890a-bcde-f01234567890",
-                                        "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
-                                        "status": "SUCCESS",
-                                        "amountPaid": 100.00,
-                                        "currency": "USD",
-                                        "cardLast4": "4242",
-                                        "confirmationNumber": "INN-20260502-AB12CD",
-                                        "processedAt": "2026-05-02T15:48:00"
-                                      }
-                                    }
-                                    """)
+                            examples = {
+                                    @ExampleObject(name = "Code issued — awaiting customer approval", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Approve the payment in your InnBucks app — your payment code was sent to your phone",
+                                              "data": {
+                                                "transactionId": "f0e1d2c3-4567-890a-bcde-f01234567890",
+                                                "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "status": "PROCESSING",
+                                                "amountPaid": 100.00,
+                                                "currency": "USD",
+                                                "cardLast4": "4242",
+                                                "confirmationNumber": null,
+                                                "processedAt": "2026-06-11T15:48:00",
+                                                "paymentCode": "701285660",
+                                                "paymentCodeExpiresAt": "2026-06-11T15:58:00"
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Replay after the customer approved", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Payment processed successfully",
+                                              "data": {
+                                                "transactionId": "f0e1d2c3-4567-890a-bcde-f01234567890",
+                                                "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "status": "SUCCESS",
+                                                "amountPaid": 100.00,
+                                                "currency": "USD",
+                                                "cardLast4": "4242",
+                                                "confirmationNumber": "INN-20260611-AB12CD",
+                                                "processedAt": "2026-06-11T15:52:00",
+                                                "paymentCode": null,
+                                                "paymentCodeExpiresAt": null
+                                              }
+                                            }
+                                            """)
+                            }
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
@@ -239,10 +267,13 @@ public class PaymentController {
                 .cardLast4(request.getCardLast4())
                 .confirmationNumber(outcome.getConfirmationNumber())
                 .processedAt(LocalDateTime.now(ZoneOffset.UTC))
+                .paymentCode(outcome.getPaymentCode())
+                .paymentCodeExpiresAt(outcome.getPaymentCodeExpiresAt())
                 .build();
         String message = status == PaymentResponse.Status.SUCCESS
                 ? "Payment processed successfully"
-                : "Payment received; booking confirmation will follow shortly";
+                : (outcome.getUpstreamMessage() != null ? outcome.getUpstreamMessage()
+                        : "Payment received; booking confirmation will follow shortly");
         log.info("Payment processed transactionId={} bookingId={} status={} confirmation={} amountPaid={}",
                 response.getTransactionId(), response.getBookingId(), status,
                 response.getConfirmationNumber(), response.getAmountPaid());
@@ -254,6 +285,8 @@ public class PaymentController {
             case SUCCEEDED -> PaymentResponse.Status.SUCCESS;
             default -> PaymentResponse.Status.PROCESSING;
         };
+        boolean awaitingApproval = status == PaymentResponse.Status.PROCESSING
+                && p.getInnbucksCode() != null;
         PaymentResponse response = PaymentResponse.builder()
                 .transactionId(p.getId())
                 .bookingId(p.getBookingId())
@@ -263,10 +296,20 @@ public class PaymentController {
                 .cardLast4(request.getCardLast4())
                 .confirmationNumber(p.getConfirmationNumber())
                 .processedAt(LocalDateTime.now(ZoneOffset.UTC))
+                // A replay while the code is still open re-surfaces it — the
+                // customer's recovery path if the WhatsApp/SMS went missing.
+                .paymentCode(awaitingApproval ? p.getInnbucksCode() : null)
+                .paymentCodeExpiresAt(awaitingApproval && p.getCodeExpiresAt() != null
+                        ? LocalDateTime.ofInstant(p.getCodeExpiresAt(), ZoneOffset.UTC) : null)
                 .build();
-        String message = status == PaymentResponse.Status.SUCCESS
-                ? "Payment processed successfully"
-                : "Payment received; booking confirmation will follow shortly";
+        String message;
+        if (status == PaymentResponse.Status.SUCCESS) {
+            message = "Payment processed successfully";
+        } else if (awaitingApproval) {
+            message = "Approve the payment in your InnBucks app — your payment code was sent to your phone";
+        } else {
+            message = "Payment received; booking confirmation will follow shortly";
+        }
         return ResponseEntity.ok(ApiResult.ok(message, response));
     }
 
