@@ -473,23 +473,25 @@ services:
       ORADIAN_INTERNAL_TOKEN: ${ORADIAN_INTERNAL_TOKEN:?set ORADIAN_INTERNAL_TOKEN in .env (must match middleware INTERNAL_API_TOKEN)}
       # Shared secret between ticketing's own services (loyalty webhooks).
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
-      # External WhatsApp notification gateway (payment confirmations). Override
-      # the URL per environment (the application.yaml default is a dev ngrok
-      # tunnel that rotates); the api key is a required secret.
+      # External WhatsApp notification gateway (payment-code delivery +
+      # payment confirmations). Override the URL per environment (the
+      # application.yaml default is a dev ngrok tunnel that rotates); the api
+      # key is a required secret.
       WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-https://maximum-implicitly-treefrog.ngrok-free.app}
       WHATSAPP_API_KEY: ${WHATSAPP_API_KEY:?set WHATSAPP_API_KEY in .env}
-      # Public InnBucks Bank API — ticket payments (POST /payments) debit the
-      # customer's wallet directly through it; the old innbucks-core-gateway
-      # s2s hop is gone. All three credentials are secrets from .env. The
-      # merchant account is the ticketing business's InnBucks account that
-      # RECEIVES ticket money — payments are refused if it's unset.
+      # innbucks-core-gateway adapter — SMS fallback for payment-code
+      # delivery. Runs on the EC2 host (outside this compose network), so
+      # containers reach it via the EC2 private IP, same as booking/user.
+      INNBUCKS_GATEWAY_URL: ${INNBUCKS_GATEWAY_URL:-http://10.0.155.69:8088}
+      # Public InnBucks Merchant API — ticket payments (POST /payments) issue
+      # a 2D PAYMENT code the customer approves in their own InnBucks app;
+      # no server-side debit. All three credentials are secrets from .env and
+      # must belong to a MERCHANT-type API client allowed to generate PAYMENT
+      # codes. (Env names kept from the bank-api round — same platform creds.)
       BANK_API_URL: ${BANK_API_URL:-https://staging.innbucks.co.zw}
       BANK_API_KEY: ${BANK_API_KEY:?set BANK_API_KEY in .env}
       BANK_API_USERNAME: ${BANK_API_USERNAME:?set BANK_API_USERNAME in .env}
       BANK_API_PASSWORD: ${BANK_API_PASSWORD:?set BANK_API_PASSWORD in .env}
-      PAYMENTS_INNBUCKS_MERCHANT_ACCOUNT: ${PAYMENTS_INNBUCKS_MERCHANT_ACCOUNT:?set PAYMENTS_INNBUCKS_MERCHANT_ACCOUNT in .env}
-      # Real payments on by default; set false on a cell whose Bank API
-      # credentials aren't provisioned yet.
       PAYMENTS_INNBUCKS_ENABLED: ${PAYMENTS_INNBUCKS_ENABLED:-true}
     ports:
       - "127.0.0.1:8085:8085"

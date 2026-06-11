@@ -60,14 +60,23 @@ public class PaymentRecordService {
 
     /**
      * The complete legal state machine. Anything not listed is refused.
-     * The veengu-flow states (TOKEN_ISSUED, CONSENTED, ...) gain their
-     * entries when the direct-API adapter lands — no writer exists today,
-     * so no transitions are legal into or out of them yet.
+     *
+     * <p>The 2D-code flow's happy path is PENDING → TOKEN_ISSUED (code
+     * minted + delivered) → SUCCEEDED (customer paid, booking confirmed).
+     * TOKEN_ISSUED → EXPIRED closes a code that lapsed unpaid (frees the
+     * booking slot); TOKEN_ISSUED → COMPLETED_UNCONFIRMED records
+     * customer-paid-but-confirm-failed, which the reconciler's confirm-retry
+     * loop promotes. The remaining reserved states (CONSENTED, EXECUTING,
+     * REQUIRES_AUTH, REJECTED) still have no writer and no legal transitions.
      */
     private static final Map<PaymentStatus, Set<PaymentStatus>> LEGAL_TRANSITIONS = Map.of(
             PaymentStatus.PENDING, EnumSet.of(
+                    PaymentStatus.TOKEN_ISSUED,
                     PaymentStatus.SUCCEEDED, PaymentStatus.FAILED,
                     PaymentStatus.IN_DOUBT, PaymentStatus.COMPLETED_UNCONFIRMED),
+            PaymentStatus.TOKEN_ISSUED, EnumSet.of(
+                    PaymentStatus.SUCCEEDED, PaymentStatus.COMPLETED_UNCONFIRMED,
+                    PaymentStatus.FAILED, PaymentStatus.EXPIRED),
             PaymentStatus.IN_DOUBT, EnumSet.of(
                     PaymentStatus.SUCCEEDED, PaymentStatus.FAILED,
                     PaymentStatus.COMPLETED_UNCONFIRMED),
@@ -102,6 +111,11 @@ public class PaymentRecordService {
         return saved;
     }
 
+    /**
+     * Terminal success: money received AND booking confirmed. The upstream
+     * reference lands in the legacy-named {@code veengu_transaction_id}
+     * column — for 2D-code payments that's the InnBucks {@code authNumber}.
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void markSucceeded(UUID id, String veenguTransactionId, String confirmationNumber) {
         transition(id, PaymentStatus.SUCCEEDED, "Debit completed and booking confirmed",
@@ -110,6 +124,52 @@ public class PaymentRecordService {
                     payment.setConfirmationNumber(confirmationNumber);
                     payment.setCompletedAt(Instant.now());
                 });
+    }
+
+    /**
+     * 2D-code flow: the InnBucks PAYMENT code was minted. Records both
+     * handles (the customer-facing code and the {@code authNumber} the
+     * status poller queries with) plus our local expiry deadline, in the
+     * same transaction as the PENDING → TOKEN_ISSUED transition.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markTokenIssued(UUID id, String code, String authNumber, Instant expiresAt) {
+        transition(id, PaymentStatus.TOKEN_ISSUED,
+                "InnBucks payment code issued; awaiting customer approval", authNumber,
+                payment -> {
+                    payment.setInnbucksCode(code);
+                    payment.setCodeAuthNumber(authNumber);
+                    payment.setCodeExpiresAt(expiresAt);
+                });
+    }
+
+    /**
+     * 2D-code flow: the code lapsed unpaid (upstream says Expired/Timed Out,
+     * or our local TTL passed with the code still New). Terminal — frees the
+     * booking's payment slot so the customer can simply tap pay again for a
+     * fresh code. NEVER call this on a row whose upstream status is unknown:
+     * expiring a code the customer may have paid is the double-charge path.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markExpired(UUID id, String detail) {
+        transition(id, PaymentStatus.EXPIRED, detail, null,
+                payment -> payment.setCompletedAt(Instant.now()));
+    }
+
+    /**
+     * Append an annotation row to the journal WITHOUT a status change
+     * (from == to). Used for events that matter to an auditor but aren't
+     * transitions — e.g. which channel the payment code was delivered on,
+     * or that delivery failed on all channels.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void noteEvent(UUID id, String detail) {
+        Payment payment = repository.findById(id).orElse(null);
+        if (payment == null) {
+            log.error("payment journal note requested for missing payment id={} detail={}", id, detail);
+            return;
+        }
+        recordEvent(payment, payment.getStatus(), payment.getStatus(), detail, null);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)

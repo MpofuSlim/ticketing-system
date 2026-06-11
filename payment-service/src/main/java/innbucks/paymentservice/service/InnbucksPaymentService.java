@@ -1,13 +1,11 @@
 package innbucks.paymentservice.service;
 
-import innbucks.paymentservice.client.BankApiClient;
-import innbucks.paymentservice.client.BankApiException;
-import innbucks.paymentservice.client.BankApiTransientException;
-import innbucks.paymentservice.client.BankPaymentCommand;
-import innbucks.paymentservice.client.BankPaymentResult;
 import innbucks.paymentservice.client.BookingServiceClient;
-import innbucks.paymentservice.client.BookingServiceClient.BookingConfirmationException;
-import innbucks.paymentservice.client.PaymentOutcome;
+import innbucks.paymentservice.client.CodeGenerationResult;
+import innbucks.paymentservice.client.InnbucksApiClient;
+import innbucks.paymentservice.client.InnbucksApiException;
+import innbucks.paymentservice.client.InnbucksApiTransientException;
+import innbucks.paymentservice.config.PaymentMetrics;
 import innbucks.paymentservice.dto.InnbucksPaymentResponse;
 import innbucks.paymentservice.dto.InnbucksPaymentResponse.Status;
 import innbucks.paymentservice.entity.Payment;
@@ -18,6 +16,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.Map;
@@ -25,41 +25,37 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Orchestrates a real InnBucks-backed ticketing payment over the PUBLIC
- * Bank API (the s2s innbucks-core-gateway hop is gone):
+ * Orchestrates an InnBucks <b>2D-code</b> ticket payment — the rail the
+ * InnBucks team designated as the primary (and only) collection method:
  *
  * <pre>
- *   1. Resolve the customer's wallet (Bank API linked-account by MSISDN)
- *   2. Fetch the booking's totalAmount + currency (booking-service GET)
- *   3. Open a PENDING payment ledger row (REQUIRES_NEW commit)
- *   4. POST /bank/api/payment (participantReference = our paymentReference)
- *   5. Classify the bank's response
- *      - COMPLETED  -> confirm the booking, then markSucceeded, return SUCCESS
- *      - COMPLETED but confirm fails -> markCompletedUnconfirmed (money moved;
- *        reconciler retries the confirm), return PROCESSING
- *      - PROCESSING / DUPLICATE_DETECTED -> leave PENDING, return PROCESSING
- *      - UPSTREAM_UNAVAILABLE / null outcome -> markInDoubt, return PROCESSING
- *      - REJECTED_* -> markFailed with veengu's code, return FAILED
- *   6. On a transient exception (gateway/veengu unreachable) -> markInDoubt,
- *      return PROCESSING; reconciler resolves later
+ *   1. Fetch the booking's totalAmount + currency (booking-service GET)
+ *   2. Open a PENDING payment ledger row (REQUIRES_NEW commit)
+ *   3. POST /api/code/generate (type=PAYMENT, amount in CENTS,
+ *      reference = our paymentReference)
+ *      - approved        -> TOKEN_ISSUED (code + authNumber + local expiry)
+ *      - refused         -> FAILED (no money moves on generate), FE sees the reason
+ *      - amount echo != sent -> FAILED amount_mismatch (the 100x guard) — the
+ *        code is NOT delivered to the customer
+ *      - transient/5xx   -> FAILED + 503 (safe: an orphaned upstream code is
+ *        undeliverable and simply expires; the slot frees for a clean retry)
+ *   4. Deliver the code to the BOOKING's phone (WhatsApp -> SMS fallback,
+ *      best-effort, journaled) — the customer approves it in their own
+ *      InnBucks app or USSD. Zero FE involvement.
+ *   5. Return PROCESSING with the code echoed; the reconciler's status
+ *      poller flips the row when InnBucks reports Paid (confirm booking ->
+ *      SUCCEEDED) or Expired/Timed Out (-> EXPIRED, slot freed).
  * </pre>
  *
- * <p>Ledger discipline: a timeout or unclassifiable outcome is NEVER recorded
- * as FAILED (money may have moved — IN_DOUBT until the processor is queried),
- * and a confirmed debit is NEVER recorded as FAILED just because the booking
- * confirm failed (COMPLETED_UNCONFIRMED carries the veengu reference as the
- * recovery handle). One active-or-successful payment per booking is enforced
- * by the {@code uq_payment_active_booking} partial index, with a friendly
- * 409 pre-check here.
- *
- * <p>Critical ordering at step 5/COMPLETED: confirmBooking happens BEFORE
- * markSucceeded. If markSucceeded fails (DB blip) we end up with a CONFIRMED
- * booking + a still-PENDING payment row — recoverable by the reconciler.
- *
- * <p>Automated refund (for bookings that stay unconfirmable, e.g. hold
- * expired for good) is still a later PR — the veengu Payout flow. Until
- * then, rows stuck in COMPLETED_UNCONFIRMED past the alert threshold are
- * the operator's queue.
+ * <p>Ledger discipline carried over from the hardening pass: the PENDING row
+ * commits before any upstream call; every transition is journaled; one
+ * active-or-successful payment per booking is enforced by the
+ * {@code uq_payment_active_booking} partial index (friendly 409 pre-check
+ * here, index as the arbiter under races). Unlike the old server-side debit,
+ * code <i>generation</i> moves no money — so generation failures may close
+ * the row FAILED outright, and IN_DOUBT never arises in this flow. The
+ * "money moved but unconfirmed" state still exists downstream: the POLLER
+ * records COMPLETED_UNCONFIRMED when a paid code's booking confirm fails.
  */
 @Slf4j
 @Service
@@ -70,22 +66,25 @@ public class InnbucksPaymentService {
     private static final String DEFAULT_CURRENCY = "USD";
 
     private final PaymentRecordService paymentRecordService;
-    private final BankApiClient bankApiClient;
+    private final InnbucksApiClient innbucksApiClient;
     private final BookingServiceClient bookingServiceClient;
+    private final PaymentCodeNotifier codeNotifier;
+    private final PaymentMetrics metrics;
 
-    /** Ticketing merchant's InnBucks account number (payment destination) — per-deployment env var. */
-    @Value("${payments.innbucks.merchant-account:}")
-    private String merchantAccount;
+    /**
+     * How long the customer has to approve the code. Must stay comfortably
+     * UNDER the booking hold window so a paid code can still confirm its
+     * booking; the InnBucks-side validity (~10 min per the doc's samples)
+     * is the upper bound.
+     */
+    @Value("${payments.innbucks.code.ttl:PT10M}")
+    private Duration codeTtl;
 
     public InnbucksPaymentResponse processPayment(UUID bookingId,
                                                   String customerMsisdn,
                                                   String idempotencyKey) {
         Objects.requireNonNull(bookingId, "bookingId");
         Objects.requireNonNull(customerMsisdn, "customerMsisdn");
-        if (merchantAccount == null || merchantAccount.isBlank()) {
-            throw new IllegalStateException(
-                    "payments.innbucks.merchant-account is not configured — refusing to debit without a payee account");
-        }
 
         // ---- Step 0: one active payment per booking ---------------------------
         // Friendly pre-check; the uq_payment_active_booking partial index is
@@ -96,27 +95,23 @@ public class InnbucksPaymentService {
                     "A payment for this booking is already in progress or completed", 409);
         }
 
-        // ---- Step 1: resolve customer wallet ----------------------------------
-        String customerAccount = resolveMainWallet(customerMsisdn);
-
-        // ---- Step 2: fetch booking (amount + currency) ------------------------
+        // ---- Step 1: fetch booking (amount + currency) ------------------------
         Map<String, Object> booking = bookingServiceClient.getBooking(bookingId);
         BigDecimal amount = asBigDecimal(booking.get("totalAmount"));
         if (amount == null || amount.signum() <= 0) {
             throw new InvalidPaymentRequestException(
-                    "Booking has no positive totalAmount; cannot debit", 422);
+                    "Booking has no positive totalAmount; cannot request payment", 422);
         }
         String currency = asString(booking.get("currency"));
         if (currency == null || currency.isBlank()) currency = DEFAULT_CURRENCY;
+        long amountCents = toCents(amount);
 
-        // ---- Step 3: open PENDING ledger row ----------------------------------
+        // ---- Step 2: open PENDING ledger row ----------------------------------
         String paymentReference = PAYMENT_REFERENCE_PREFIX + UUID.randomUUID();
         Payment draft = Payment.builder()
                 .paymentReference(paymentReference)
                 .bookingId(bookingId)
                 .customerMsisdn(customerMsisdn)
-                .customerAccount(customerAccount)
-                .merchantAccount(merchantAccount)
                 .amount(amount)
                 .currency(currency)
                 .idempotencyKey(idempotencyKey)
@@ -133,150 +128,92 @@ public class InnbucksPaymentService {
                     "A payment for this booking is already in progress or completed", 409);
         }
 
-        // ---- Step 4: debit via the public Bank API ----------------------------
-        BankPaymentCommand command = new BankPaymentCommand(
-                amount, currency,
-                "Ticketing payment " + paymentReference,
-                customerAccount, merchantAccount, paymentReference);
-
-        BankPaymentResult bankResult;
+        // ---- Step 3: mint the InnBucks PAYMENT code ----------------------------
+        CodeGenerationResult generated;
         try {
-            bankResult = bankApiClient.pay(command);
-        } catch (BankApiTransientException e) {
-            // Timeout / 5xx / circuit open AFTER the request may have left us —
-            // money MAY have moved. IN_DOUBT, never FAILED; the reconciler
-            // resolves via transaction inquiry. FE sees PROCESSING.
-            log.warn("[innbucks-payment] bank-api transient for paymentReference={} msisdn={} status={}",
+            generated = innbucksApiClient.generatePaymentCode(
+                    paymentReference, "InnBucks ticket booking " + shortId(bookingId), amountCents);
+        } catch (InnbucksApiTransientException e) {
+            // Generation moves NO money. Worst case a code was minted upstream
+            // that nobody will ever see — it expires on its own. Closing the
+            // row FAILED is therefore safe AND frees the slot for a clean
+            // retry; deliberately never retried here (a retry could mint a
+            // second live code and split our tracking from the one paid).
+            log.warn("[innbucks-payment] code generation transient paymentReference={} msisdn={} status={}",
                     paymentReference, MsisdnMasking.mask(customerMsisdn), e.getStatusCode());
-            paymentRecordService.markInDoubt(opened.getId(),
-                    "Bank API transient failure: HTTP " + e.getStatusCode());
-            return buildResponse(opened, Status.PROCESSING, null, null,
-                    "InnBucks temporarily unavailable; your payment is still being processed");
-        } catch (BankApiException e) {
-            // Non-decline 4xx / credential failure — the bank actively refused
-            // the REQUEST (no money moved). Close the row; ops bug, not customer.
-            log.error("[innbucks-payment] bank-api rejected request paymentReference={} status={}",
+            paymentRecordService.markFailed(opened.getId(), "innbucks_unreachable",
+                    "Code generation transient failure: " + e.getMessage());
+            throw new InvalidPaymentRequestException(
+                    "InnBucks is temporarily unavailable; please try again shortly", 503);
+        } catch (InnbucksApiException e) {
+            // Credentials / request-shape refusal — ops bug, not customer.
+            log.error("[innbucks-payment] code generation rejected paymentReference={} status={}",
                     paymentReference, e.getStatusCode(), e);
-            paymentRecordService.markFailed(opened.getId(), "bank_rejected", e.getMessage());
+            paymentRecordService.markFailed(opened.getId(), "innbucks_rejected", e.getMessage());
             throw new InvalidPaymentRequestException(
                     "Payment request was rejected by InnBucks", 500);
         }
 
-        // ---- Step 5: classify outcome -----------------------------------------
-        return handleOutcome(opened, bankResult, bookingId);
-    }
-
-    private InnbucksPaymentResponse handleOutcome(Payment opened,
-                                                  BankPaymentResult bankResult,
-                                                  UUID bookingId) {
-        PaymentOutcome outcome = bankResult.outcome();
-        if (outcome == null) {
-            // Unclassifiable envelope: money MAY have moved. Park IN_DOUBT
-            // with whatever reference we got — that's the recovery handle.
-            log.error("[innbucks-payment] bank-api returned null outcome paymentReference={}",
-                    opened.getPaymentReference());
-            paymentRecordService.markInDoubt(opened.getId(),
-                    "Bank API returned null outcome; bankRef=" + bankResult.reference());
-            return buildResponse(opened, Status.PROCESSING,
-                    bankResult.reference(), null,
-                    "Outcome unknown; reconciler will resolve");
+        if (!generated.approved()) {
+            paymentRecordService.markFailed(opened.getId(),
+                    generated.responseCode() != null ? generated.responseCode() : "code_refused",
+                    generated.responseMsg());
+            return buildResponse(opened, Status.FAILED, null,
+                    generated.responseCode(),
+                    generated.responseMsg() != null ? generated.responseMsg()
+                            : "InnBucks could not start this payment; please try again",
+                    null, null);
         }
 
-        switch (outcome) {
-            case COMPLETED -> {
-                // Confirm the booking BEFORE markSucceeded — see class javadoc
-                // for the ordering rationale. The catch returns early, so the
-                // markSucceeded call below only runs when confirmationNumber
-                // is definitely assigned.
-                String confirmationNumber;
-                try {
-                    Map<String, Object> confirmed = bookingServiceClient.confirmBooking(bookingId);
-                    confirmationNumber = asString(confirmed.get("confirmationNumber"));
-                } catch (BookingConfirmationException e) {
-                    // Customer was debited but booking confirm failed. Money
-                    // MOVED — recording this as FAILED (the old behaviour)
-                    // told the ledger no money moved, the one lie a payment
-                    // ledger must never contain. COMPLETED_UNCONFIRMED parks
-                    // it with the veengu reference as the recovery handle;
-                    // the reconciler retries the confirm (booking-side
-                    // confirm is an idempotent replay) and promotes to
-                    // SUCCEEDED. Sustained presence in this state is a page.
-                    log.error("[innbucks-payment] BOOKING CONFIRM FAILED AFTER DEBIT — reconciler will retry " +
-                                    "paymentReference={} bankRef={} bookingStatus={} reason={}",
-                            opened.getPaymentReference(), bankResult.reference(),
-                            e.getStatusCode(), e.getMessage());
-                    paymentRecordService.markCompletedUnconfirmed(opened.getId(),
-                            bankResult.reference(),
-                            "Debit COMPLETED but booking confirm rejected (HTTP "
-                                    + e.getStatusCode() + "): " + e.getMessage());
-                    // FE-visible status is PROCESSING (an existing value on
-                    // this endpoint): truthful — the payment landed and the
-                    // booking is being finalised, very likely automatically
-                    // on the next reconciler pass.
-                    return buildResponse(opened, Status.PROCESSING,
-                            bankResult.reference(), "booking_confirm_pending",
-                            "Payment received; we're finalising your booking. " +
-                                    "Reference " + opened.getPaymentReference() +
-                                    " — your confirmation will follow shortly.");
-                }
-                paymentRecordService.markSucceeded(opened.getId(),
-                        bankResult.reference(), confirmationNumber);
-                opened.setConfirmationNumber(confirmationNumber);
-                return buildResponse(opened, Status.SUCCESS,
-                        bankResult.reference(), null, null);
-            }
-            case PROCESSING, DUPLICATE_DETECTED -> {
-                // Leave PENDING: the bank answered 2xx but the body didn't
-                // classify (or flagged a duplicate). The reconciler resolves
-                // by transaction inquiry on its next pass.
-                log.info("[innbucks-payment] {} paymentReference={} bankRef={}",
-                        outcome, opened.getPaymentReference(), bankResult.reference());
-                return buildResponse(opened, Status.PROCESSING,
-                        bankResult.reference(), null,
-                        "Payment accepted by InnBucks; awaiting confirmation");
-            }
-            case UPSTREAM_UNAVAILABLE -> {
-                // Defensive: the classifier doesn't emit this today (transport
-                // failures throw BankApiTransientException instead), but the
-                // discipline is identical — outcome unknown, IN_DOUBT.
-                log.warn("[innbucks-payment] upstream unavailable paymentReference={}",
-                        opened.getPaymentReference());
-                paymentRecordService.markInDoubt(opened.getId(),
-                        "Bank reported upstream unavailable");
-                return buildResponse(opened, Status.PROCESSING, null, null,
-                        "InnBucks temporarily unavailable; your payment is still being processed");
-            }
-            default -> {
-                // All REJECTED_* outcomes -> mark FAILED with the bank's code.
-                paymentRecordService.markFailed(opened.getId(),
-                        bankResult.code(), bankResult.message());
-                return buildResponse(opened, Status.FAILED,
-                        null, bankResult.code(),
-                        humanMessage(outcome, bankResult.message()));
-            }
+        // The cents/dollars 100x guard: if the platform echoes a different
+        // amount than we asked for, the live code is for the WRONG amount.
+        // Fail the row and — critically — never deliver the code; it expires
+        // unclaimable upstream within minutes.
+        if (generated.amountEchoCents() != null && generated.amountEchoCents() != amountCents) {
+            log.error("[innbucks-payment] AMOUNT MISMATCH on code generation — sent {} cents, "
+                            + "InnBucks echoed {} — check the amount-unit contract! paymentReference={}",
+                    amountCents, generated.amountEchoCents(), paymentReference);
+            paymentRecordService.markFailed(opened.getId(), "amount_mismatch",
+                    "Sent " + amountCents + " cents but InnBucks echoed " + generated.amountEchoCents());
+            return buildResponse(opened, Status.FAILED, null, "amount_mismatch",
+                    "Could not start the payment — please try again or contact support",
+                    null, null);
         }
-    }
 
-    private String resolveMainWallet(String customerMsisdn) {
-        // Linked-account inquiry on the public Bank API: MSISDN -> wallet
-        // account number. Replaces the old Oradian-middleware deposits hop.
-        try {
-            return bankApiClient.findWalletAccount(customerMsisdn)
-                    .orElseThrow(() -> new InvalidPaymentRequestException(
-                            "No InnBucks wallet found for this customer", 422));
-        } catch (BankApiTransientException e) {
-            // Pre-debit lookup failure: nothing has moved; safe to surface a
-            // retryable 503 to the FE without touching the ledger.
-            throw new InvalidPaymentRequestException(
-                    "InnBucks temporarily unavailable; please retry shortly", 503);
+        // ---- Step 4: record TOKEN_ISSUED, then deliver the code ---------------
+        Instant expiresAt = Instant.now().plus(codeTtl);
+        paymentRecordService.markTokenIssued(opened.getId(),
+                generated.code(), generated.authNumber(), expiresAt);
+
+        PaymentCodeNotifier.Delivery delivery = codeNotifier.sendPaymentCode(
+                customerMsisdn, generated.code(), amount, currency, codeTtl, paymentReference);
+        metrics.incCodeDelivery(delivery.name().toLowerCase(java.util.Locale.ROOT));
+        if (delivery == PaymentCodeNotifier.Delivery.FAILED) {
+            // Best-effort by design: the code is still valid and echoed on the
+            // response. Journal the miss so support can explain "I never got
+            // a code" tickets; the row expires + frees the slot if unpaid.
+            paymentRecordService.noteEvent(opened.getId(),
+                    "Payment-code delivery FAILED on all channels (WhatsApp + SMS)");
+        } else {
+            paymentRecordService.noteEvent(opened.getId(),
+                    "Payment code delivered via " + delivery);
         }
+
+        log.info("[innbucks-payment] code issued paymentReference={} authNumber={} expiresAt={} delivery={}",
+                paymentReference, generated.authNumber(), expiresAt, delivery);
+        return buildResponse(opened, Status.PROCESSING,
+                generated.authNumber(), null,
+                "Approve the payment in your InnBucks app — your payment code was sent to your phone",
+                generated.code(), expiresAt);
     }
 
     private InnbucksPaymentResponse buildResponse(Payment payment,
                                                   Status status,
                                                   String upstreamReference,
                                                   String upstreamCode,
-                                                  String upstreamMessage) {
+                                                  String upstreamMessage,
+                                                  String paymentCode,
+                                                  Instant codeExpiresAt) {
         return InnbucksPaymentResponse.builder()
                 .paymentReference(payment.getPaymentReference())
                 .bookingId(payment.getBookingId())
@@ -287,21 +224,30 @@ public class InnbucksPaymentService {
                 .upstreamReference(upstreamReference)
                 .upstreamCode(upstreamCode)
                 .upstreamMessage(upstreamMessage)
+                .paymentCode(paymentCode)
+                .paymentCodeExpiresAt(codeExpiresAt == null ? null
+                        : LocalDateTime.ofInstant(codeExpiresAt, ZoneOffset.UTC))
                 .processedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .build();
     }
 
-    private static String humanMessage(PaymentOutcome outcome, String upstreamMessage) {
-        return switch (outcome) {
-            case REJECTED_INSUFFICIENT_FUNDS -> "Insufficient balance in your InnBucks wallet";
-            case REJECTED_ACCOUNT_UNAVAILABLE -> "Your InnBucks wallet is currently unavailable; please contact InnBucks support";
-            case REJECTED_LIMIT_REACHED -> "Daily transaction limit reached on your InnBucks wallet";
-            case REJECTED_CURRENCY -> "Currency not supported on your InnBucks wallet for this payment";
-            case REJECTED_NOT_AUTHORIZED -> "Payment was not authorised";
-            case REJECTED_VALIDATION -> "Payment request was rejected by InnBucks";
-            case REJECTED_OTHER -> upstreamMessage != null ? upstreamMessage : "Payment was rejected by InnBucks";
-            default -> upstreamMessage != null ? upstreamMessage : "Payment was rejected";
-        };
+    /**
+     * Booking totals are decimal major units (e.g. 50.00 USD); the Merchant
+     * API takes CENTS. Anything with sub-cent precision is refused rather
+     * than silently rounded — a ledger must never charge an amount that
+     * differs from the booking by even a fraction.
+     */
+    static long toCents(BigDecimal amount) {
+        try {
+            return amount.movePointRight(2).longValueExact();
+        } catch (ArithmeticException e) {
+            throw new InvalidPaymentRequestException(
+                    "Booking totalAmount has sub-cent precision; cannot request payment", 422);
+        }
+    }
+
+    private static String shortId(UUID id) {
+        return id.toString().substring(0, 8);
     }
 
     private static BigDecimal asBigDecimal(Object value) {

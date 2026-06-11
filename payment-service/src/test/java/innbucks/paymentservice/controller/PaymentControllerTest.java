@@ -113,23 +113,38 @@ class PaymentControllerTest {
     }
 
     @Test
-    void processPayment_processingOutcome_returns200WithProcessingStatus() {
+    void processPayment_codeIssued_returns200Processing_withTheCodeEchoed() {
         Fixture f = fixture();
         UUID bookingId = UUID.randomUUID();
+        java.time.LocalDateTime expiresAt = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).plusMinutes(10);
         when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
                 .thenReturn(Optional.empty());
         when(f.bookings().getBooking(bookingId)).thenReturn(Map.of(
                 "phoneNumber", "+263770000001", "totalAmount", 100.00));
         when(f.innbucks().processPayment(eq(bookingId), eq("+263770000001"), isNull()))
-                .thenReturn(outcome(bookingId, InnbucksPaymentResponse.Status.PROCESSING,
-                        "TKT-PMT-" + UUID.randomUUID(), null));
+                .thenReturn(InnbucksPaymentResponse.builder()
+                        .paymentReference("TKT-PMT-" + UUID.randomUUID())
+                        .bookingId(bookingId)
+                        .status(InnbucksPaymentResponse.Status.PROCESSING)
+                        .amountPaid(new BigDecimal("100.00"))
+                        .currency("USD")
+                        .upstreamMessage("Approve the payment in your InnBucks app — your payment code was sent to your phone")
+                        .paymentCode("701285660")
+                        .paymentCodeExpiresAt(expiresAt)
+                        .build());
 
         ResponseEntity<ApiResult<PaymentResponse>> resp =
                 f.controller().processPayment(paymentFor(bookingId));
 
         // 200 (not 202): the FE's stub contract treats non-200 as error.
         assertEquals(HttpStatus.OK, resp.getStatusCode());
-        assertEquals(PaymentResponse.Status.PROCESSING, resp.getBody().getData().getStatus());
+        PaymentResponse data = resp.getBody().getData();
+        assertEquals(PaymentResponse.Status.PROCESSING, data.getStatus());
+        // Additive fields: the code rides along for a future FE / debugging,
+        // while delivery to the customer happens via WhatsApp/SMS.
+        assertEquals("701285660", data.getPaymentCode());
+        assertEquals(expiresAt, data.getPaymentCodeExpiresAt());
+        assertTrue(resp.getBody().getMessage().contains("InnBucks app"));
     }
 
     @Test
@@ -160,7 +175,6 @@ class PaymentControllerTest {
         Payment paid = Payment.builder()
                 .id(UUID.randomUUID()).paymentReference("TKT-PMT-" + UUID.randomUUID())
                 .bookingId(bookingId).customerMsisdn("+263770000001")
-                .customerAccount("C1").merchantAccount("M1")
                 .amount(new BigDecimal("100.00")).currency("USD")
                 .status(Payment.PaymentStatus.SUCCEEDED)
                 .confirmationNumber("INN-REPLAY-1")
@@ -174,7 +188,40 @@ class PaymentControllerTest {
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertEquals(PaymentResponse.Status.SUCCESS, resp.getBody().getData().getStatus());
         assertEquals("INN-REPLAY-1", resp.getBody().getData().getConfirmationNumber());
+        // A resolved payment exposes no code — there is nothing left to approve.
+        assertNull(resp.getBody().getData().getPaymentCode());
         // The real-money flow must NOT run again — double-tap is a replay.
+        verifyNoInteractions(f.innbucks());
+    }
+
+    @Test
+    void processPayment_replayWhileCodeOpen_reSurfacesTheLiveCode() {
+        // The lost-SMS recovery path: re-POSTing while the code is still
+        // awaiting approval returns the SAME code (never a second one).
+        Fixture f = fixture();
+        UUID bookingId = UUID.randomUUID();
+        java.time.Instant expiresAt = java.time.Instant.now().plusSeconds(540);
+        Payment open = Payment.builder()
+                .id(UUID.randomUUID()).paymentReference("TKT-PMT-" + UUID.randomUUID())
+                .bookingId(bookingId).customerMsisdn("+263770000001")
+                .amount(new BigDecimal("100.00")).currency("USD")
+                .status(Payment.PaymentStatus.TOKEN_ISSUED)
+                .innbucksCode("701285660")
+                .codeAuthNumber("1616800")
+                .codeExpiresAt(expiresAt)
+                .build();
+        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
+                .thenReturn(Optional.of(open));
+
+        ResponseEntity<ApiResult<PaymentResponse>> resp =
+                f.controller().processPayment(paymentFor(bookingId));
+
+        assertEquals(HttpStatus.OK, resp.getStatusCode());
+        PaymentResponse data = resp.getBody().getData();
+        assertEquals(PaymentResponse.Status.PROCESSING, data.getStatus());
+        assertEquals("701285660", data.getPaymentCode());
+        assertEquals(java.time.LocalDateTime.ofInstant(expiresAt, java.time.ZoneOffset.UTC),
+                data.getPaymentCodeExpiresAt());
         verifyNoInteractions(f.innbucks());
     }
 

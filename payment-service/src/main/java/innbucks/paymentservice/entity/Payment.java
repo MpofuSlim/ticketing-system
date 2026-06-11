@@ -68,10 +68,16 @@ public class Payment {
     @Column(name = "customer_msisdn", nullable = false, length = 32)
     private String customerMsisdn;
 
-    @Column(name = "customer_account", nullable = false, length = 64)
+    /**
+     * Direct-debit-era columns (nullable since V6): the 2D-code flow has no
+     * wallet lookup and no destination account — the merchant identity is
+     * implicit in the API credentials, and the customer approves the code
+     * from their own app. Kept for historical rows.
+     */
+    @Column(name = "customer_account", length = 64)
     private String customerAccount;
 
-    @Column(name = "merchant_account", nullable = false, length = 64)
+    @Column(name = "merchant_account", length = 64)
     private String merchantAccount;
 
     @Column(name = "amount", nullable = false, precision = 19, scale = 4)
@@ -105,6 +111,30 @@ public class Payment {
     /** Booking-service's confirmation number, populated after the post-debit confirm. */
     @Column(name = "confirmation_number", length = 64)
     private String confirmationNumber;
+
+    /**
+     * The InnBucks 2D code the customer approves in their own app/USSD
+     * ({@code code} from {@code POST /api/code/generate}). Also echoed on the
+     * {@code POST /payments} response and delivered via WhatsApp/SMS.
+     */
+    @Column(name = "innbucks_code", length = 32)
+    private String innbucksCode;
+
+    /**
+     * InnBucks-side handle for the code ({@code authNumber} from generation) —
+     * the {@code originalReference} the status poller queries with.
+     */
+    @Column(name = "code_auth_number", length = 64)
+    private String codeAuthNumber;
+
+    /**
+     * Our local deadline for the code (issue time + configured TTL). The
+     * poller expires a still-New code shortly after this passes; rows whose
+     * upstream status can't be read are NEVER auto-expired (see
+     * ReconciliationJob — an UNKNOWN row might already be paid).
+     */
+    @Column(name = "code_expires_at")
+    private Instant codeExpiresAt;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -140,16 +170,22 @@ public class Payment {
      *       unclassifiable outcome: money MAY have moved. Never auto-failed —
      *       only the reconciler (by querying the processor) or an operator
      *       may resolve it. Customer-facing status stays PROCESSING.</li>
-     *   <li>{@link #COMPLETED_UNCONFIRMED} — money DEFINITELY moved but the
-     *       booking confirm failed. The reconciler retries the confirm and
-     *       promotes to SUCCEEDED; sustained presence here is a page.</li>
+     *   <li>{@link #COMPLETED_UNCONFIRMED} — money DEFINITELY moved (the
+     *       customer paid the code) but the booking confirm failed. The
+     *       reconciler retries the confirm and promotes to SUCCEEDED;
+     *       sustained presence here is a page.</li>
+     *   <li>{@link #TOKEN_ISSUED} — the 2D-code flow's waiting state: an
+     *       InnBucks PAYMENT code was issued and delivered; the customer
+     *       hasn't approved it yet. The poller resolves it (Paid →
+     *       SUCCEEDED, Expired/Timed Out → EXPIRED). Occupies the booking's
+     *       single payment slot.</li>
+     *   <li>{@link #EXPIRED} — the code lapsed unpaid. Terminal; frees the
+     *       booking slot for a fresh payment attempt (new code).</li>
      * </ul>
      *
-     * <p>The remaining values are RESERVED for the direct veengu Purchase
-     * flow (paymentDetails → consent → purchase) and have no writer yet:
-     * {@link #TOKEN_ISSUED}, {@link #CONSENTED}, {@link #EXECUTING},
-     * {@link #REQUIRES_AUTH} (step-up OTP pending), {@link #REJECTED},
-     * {@link #EXPIRED}. Declared now so the DB CHECK constraint and the
+     * <p>The remaining values ({@link #CONSENTED}, {@link #EXECUTING},
+     * {@link #REQUIRES_AUTH}, {@link #REJECTED}) stay RESERVED with no
+     * writer — declared so the DB CHECK constraint and the
      * one-active-payment-per-booking index already cover them.
      */
     public enum PaymentStatus {

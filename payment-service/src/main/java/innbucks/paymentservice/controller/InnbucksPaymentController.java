@@ -30,11 +30,11 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 /**
- * Real InnBucks/veengu-backed payment endpoint. Sits ALONGSIDE the dummy
- * {@code POST /payments} (which keeps serving traffic untouched) — this
- * controller is wired up only when {@code payments.innbucks.enabled=true},
- * default off, so we can enable per-environment without redeploying the
- * dummy on/off.
+ * Authenticated InnBucks 2D-code payment endpoint. Sits ALONGSIDE the FE's
+ * public {@code POST /payments} (same flow, same service underneath) and adds
+ * JWT + Idempotency-Key discipline for callers that can supply them — wired
+ * up only when {@code payments.innbucks.enabled=true} so it can be toggled
+ * per environment.
  *
  * <p>Contract:
  * <ul>
@@ -73,10 +73,11 @@ public class InnbucksPaymentController {
 
     @PostMapping("/innbucks")
     @Operation(
-            summary = "Process payment via InnBucks wallet (veengu)",
-            description = "Debits the authenticated customer's InnBucks wallet for a booking's totalAmount " +
-                    "via innbucks-core-gateway -> veengu, then confirms the booking. The customer's MSISDN is " +
-                    "derived from the JWT (never from the body). " +
+            summary = "Process payment via InnBucks 2D-code (authenticated)",
+            description = "Issues an InnBucks PAYMENT code for the booking's totalAmount and delivers it to the " +
+                    "authenticated customer's phone (MSISDN derived from the JWT, never from the body); the " +
+                    "customer approves it in their own InnBucks app/USSD and the status poller confirms the " +
+                    "booking. Normal response is 202 PROCESSING with the `paymentCode` echoed. " +
                     "Requires the `Idempotency-Key` header; duplicate keys with the same body return the cached " +
                     "response, duplicate keys with a different body return 422 idempotency_conflict."
     )
@@ -154,12 +155,13 @@ public class InnbucksPaymentController {
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "503",
-                    description = "InnBucks core temporarily unavailable; payment row left PENDING for the reconciler",
+                    description = "InnBucks temporarily unavailable — no code was issued (no money moves on "
+                            + "generation), the attempt is closed and the booking can be retried immediately",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(name = "Upstream down", value = """
                                     {
                                       "code": "503 SERVICE_UNAVAILABLE",
-                                      "message": "InnBucks core temporarily unavailable; your payment is still being processed",
+                                      "message": "InnBucks is temporarily unavailable; please try again shortly",
                                       "data": null
                                     }
                                     """)))

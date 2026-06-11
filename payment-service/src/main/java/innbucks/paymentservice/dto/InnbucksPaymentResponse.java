@@ -11,19 +11,17 @@ import java.time.LocalDateTime;
 import java.util.UUID;
 
 /**
- * Response body for {@code POST /payments/innbucks}. Mirrors the dummy
- * {@code PaymentResponse} shape (so a future cutover keeps the FE contract
- * stable) but adds two veengu-side fields useful for support / receipt UX:
- * {@code paymentReference} (stable identifier carried into veengu) and
- * {@code upstreamReference} (veengu's internal transaction id, populated on
- * SUCCESS).
+ * Internal outcome of an InnBucks 2D-code payment attempt (consumed by both
+ * payment controllers; {@code PaymentController} reshapes it onto the FE's
+ * historical stub contract).
  *
- * <p>On a terminal rejection ({@code status=FAILED}), {@code upstreamCode} +
- * {@code upstreamMessage} carry the veengu reason code (e.g.
- * {@code NOT_SUFFICIENT_FUNDS}) so the FE can render a specific message
- * instead of "payment failed". On PROCESSING (delivered as 202 Accepted)
- * the FE should poll the booking's status — the reconciler will resolve
- * the payment shortly.
+ * <p>The normal outcome is {@code PROCESSING} + {@code paymentCode}: an
+ * InnBucks PAYMENT code was issued, delivered to the customer's phone, and
+ * awaits their approval in the InnBucks app/USSD — the reconciler's poller
+ * confirms the booking once InnBucks reports the code Paid. {@code SUCCESS}
+ * with a confirmation number appears on replays of already-resolved
+ * payments. On a terminal rejection ({@code status=FAILED}),
+ * {@code upstreamCode} + {@code upstreamMessage} carry the InnBucks reason.
  */
 @Data
 @Builder
@@ -65,6 +63,16 @@ public class InnbucksPaymentResponse {
     @Schema(description = "Veengu's human-readable error message on a terminal rejection.",
             example = "Customer balance insufficient for transaction")
     private String upstreamMessage;
+
+    @Schema(description = "The InnBucks payment code the customer approves in their own app/USSD "
+            + "(also delivered to their phone via WhatsApp/SMS). Present while status=PROCESSING.",
+            example = "701285660")
+    private String paymentCode;
+
+    @Schema(description = "UTC deadline for approving the payment code; after this the payment "
+            + "expires and the booking can be paid again with a fresh code.",
+            example = "2026-06-11T15:58:00")
+    private LocalDateTime paymentCodeExpiresAt;
 
     @Schema(description = "UTC timestamp when the payment reached its terminal state (or was accepted for PROCESSING).",
             example = "2026-06-08T15:48:00")

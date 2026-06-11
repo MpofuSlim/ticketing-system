@@ -120,11 +120,18 @@ innbucks:
 # it accumulates silently. Defaults: scan every minute, flag anything
 # PENDING for > 5 minutes, max 100 rows per scan (next scan picks up
 # the rest if the page was full).
+#
+# code-poll is the 2D-code resolver: every TOKEN_ISSUED payment is queried
+# upstream on this cadence, and the booking confirms within ~one interval of
+# the customer approving the code — keep it tight (it IS the payment
+# confirmation latency the customer experiences).
 payment-service:
   reconciliation:
     scan-interval: ${RECONCILIATION_SCAN_INTERVAL:PT1M}
     stale-pending-threshold: ${RECONCILIATION_STALE_THRESHOLD:PT5M}
     batch-size: ${RECONCILIATION_BATCH_SIZE:100}
+  code-poll:
+    interval: ${CODE_POLL_INTERVAL:PT20S}
   # Topic provisioning. Spring auto-creates from the NewTopic @Bean if
   # the broker allows it; replication-factor of 1 is dev-only — bump to
   # 3 in any environment with multiple brokers.
@@ -175,18 +182,18 @@ resilience4j:
         exponential-backoff-multiplier: 2
         retry-exceptions:
           - innbucks.paymentservice.client.OradianMiddlewareTransientException
-      # Public InnBucks Bank API. IMPORTANT: this retry instance is applied
-      # ONLY to the idempotent operations (login, linked-account lookup,
-      # transaction inquiry). The payment submission itself is NEVER retried —
-      # it isn't provably idempotent upstream, so a transient failure parks
-      # the ledger row IN_DOUBT and the reconciler resolves it by inquiry.
-      bank-api:
+      # Public InnBucks Merchant API. IMPORTANT: this retry instance is
+      # applied ONLY to the read-only code-status query (and login). Code
+      # GENERATION is NEVER retried — a retry after an ambiguous failure
+      # could mint a second live code while the first is still claimable;
+      # the caller closes the row FAILED instead (generation moves no money).
+      innbucks-api:
         max-attempts: 3
         wait-duration: 500ms
         enable-exponential-backoff: true
         exponential-backoff-multiplier: 2
         retry-exceptions:
-          - innbucks.paymentservice.client.BankApiTransientException
+          - innbucks.paymentservice.client.InnbucksApiTransientException
   circuitbreaker:
     instances:
       oradian-middleware:
@@ -206,7 +213,7 @@ resilience4j:
         # is a customer-side problem, not an upstream-down signal.
         record-exceptions:
           - innbucks.paymentservice.client.OradianMiddlewareTransientException
-      bank-api:
+      innbucks-api:
         register-health-indicator: true
         sliding-window-type: COUNT_BASED
         sliding-window-size: 20
@@ -216,37 +223,48 @@ resilience4j:
         permitted-number-of-calls-in-half-open-state: 3
         automatic-transition-from-open-to-half-open-enabled: true
         record-exceptions:
-          - innbucks.paymentservice.client.BankApiTransientException
+          - innbucks.paymentservice.client.InnbucksApiTransientException
 
-# Public InnBucks Bank API — the direct integration that replaced the
-# innbucks-core-gateway s2s hop for ticket payments. Auth: X-Api-Key on every
+# Public InnBucks Merchant API — the 2D-code payment rail behind
+# POST /payments (the only collection method; the server-side wallet debit
+# was removed at the InnBucks team's direction). Auth: X-Api-Key on every
 # call + Bearer token from POST /auth/third-party (cached, refreshed on
-# expiry/401). All three credentials are secrets: env-only, never committed.
-# Spec pinned at docs/api/innbucks-bank-api.postman_collection.json (scrubbed).
-bank-api:
+# expiry/401). All three credentials are secrets: env-only, never committed,
+# and must belong to a MERCHANT-type API client allowed to generate PAYMENT
+# codes. The env vars keep their BANK_API_* names from the first integration
+# round (same platform, same credentials, already in deployment runbooks).
+# Spec pinned at docs/api/innbucks-merchant-api.md (+ the original PDF).
+innbucks-api:
   base-url: ${BANK_API_URL:https://staging.innbucks.co.zw}
   api-key: ${BANK_API_KEY:}
   username: ${BANK_API_USERNAME:}
   password: ${BANK_API_PASSWORD:}
-  # Transaction `type` on POST /bank/api/payment. CARD_ON_US per the Postman
-  # example — confirm the correct value for wallet→merchant ticket payments
-  # with the InnBucks team and override if it differs.
-  payment-type: ${BANK_API_PAYMENT_TYPE:CARD_ON_US}
   connect-timeout-ms: ${BANK_API_CONNECT_TIMEOUT_MS:3000}
   read-timeout-ms: ${BANK_API_READ_TIMEOUT_MS:20000}
   token-ttl: ${BANK_API_TOKEN_TTL:PT8M}
 
-# The real InnBucks payment path — the FE's public payment entry
-# (POST /payments/innbucks via the api-gateway). Enabled by default now that
-# it talks to the public Bank API directly; disable per-cell with
-# PAYMENTS_INNBUCKS_ENABLED=false (e.g. a cell whose Bank credentials aren't
-# provisioned yet). The merchant-account is the ticketing merchant's InnBucks
-# account number (payment destination) — REQUIRED; the service refuses to
-# debit without it.
+# innbucks-core-gateway adapter (SMS via InnBucks messenger-interface) —
+# the SMS fallback channel for delivering the payment code. External to the
+# fleet (not in Eureka), so a plain URL. Same INNBUCKS_GATEWAY_URL convention
+# as user-service and booking-service.
+innbucks-gateway:
+  base-url: ${INNBUCKS_GATEWAY_URL:http://localhost:8088}
+  connect-timeout-ms: ${INNBUCKS_GATEWAY_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${INNBUCKS_GATEWAY_READ_TIMEOUT_MS:10000}
+
+# InnBucks 2D-code payment knobs.
+#   enabled — gates the authenticated /payments/innbucks endpoint (the public
+#             POST /payments is always on; it refuses cleanly when the
+#             Merchant API credentials are missing).
+#   code.ttl — how long the customer has to approve the code. MUST stay
+#             comfortably under the booking hold window so a paid code can
+#             still confirm its booking; InnBucks-side validity (~10 min per
+#             the doc's samples) is the upper bound.
 payments:
   innbucks:
     enabled: ${PAYMENTS_INNBUCKS_ENABLED:true}
-    merchant-account: ${PAYMENTS_INNBUCKS_MERCHANT_ACCOUNT:}
+    code:
+      ttl: ${PAYMENTS_CODE_TTL:PT10M}
 
 springdoc:
   swagger-ui:

@@ -14,10 +14,11 @@ public class PaymentResponse {
 
     /**
      * {@code PROCESSING} is additive (the historical stub only ever emitted
-     * SUCCESS): returned when the bank accepted the debit but the outcome
-     * isn't authoritative yet — the reconciler resolves it and the booking
-     * confirms within ~a minute. FE treatment: same as SUCCESS visually
-     * ("payment received"); the confirmation number lands on the booking.
+     * SUCCESS): the normal first response of the 2D-code flow — an InnBucks
+     * payment code was issued and sent to the customer's phone; the booking
+     * confirms automatically once they approve it. FE treatment: same as
+     * SUCCESS visually ("payment received — approve in your InnBucks app");
+     * the confirmation number lands on the booking.
      */
     public enum Status { SUCCESS, PROCESSING, FAILED }
 
@@ -29,4 +30,14 @@ public class PaymentResponse {
     private String cardLast4;
     private String confirmationNumber;
     private LocalDateTime processedAt;
+
+    /**
+     * Additive (old FE ignores them): the InnBucks code the customer
+     * approves — also delivered via WhatsApp/SMS so the CURRENT FE needs no
+     * change — and its approval deadline. A future FE can render these
+     * directly (e.g. show the code or deep-link
+     * {@code com.innbucks.customer://purchase?paymentToken=<code>}).
+     */
+    private String paymentCode;
+    private LocalDateTime paymentCodeExpiresAt;
 }
