@@ -111,6 +111,34 @@ class RulesEngineTest {
     }
 
     @Test
+    void cardPaymentEarnsPointsLikePurchase() {
+        // CARD_PAYMENT is a new TransactionType (V19); it must route through
+        // the rules engine the same way PURCHASE does. RulesEngine excludes
+        // REFUND / ADJUSTMENT from earning — pin that CARD_PAYMENT isn't
+        // accidentally added to the exclusion side of the same `if`.
+        LoyaltyRuleRepository rules = Mockito.mock(LoyaltyRuleRepository.class);
+        CampaignRepository campaigns = Mockito.mock(CampaignRepository.class);
+        UUID tenantId = UUID.randomUUID();
+        UUID merchantId = UUID.randomUUID();
+
+        LoyaltyRule rule = new LoyaltyRule();
+        rule.setTenantId(tenantId);
+        rule.setTransactionType(TransactionType.CARD_PAYMENT);
+        rule.setPointsPerUnit(BigDecimal.ONE);
+        rule.setMultiplier(BigDecimal.ONE);
+
+        Mockito.when(rules.findApplicable(tenantId, merchantId, TransactionType.CARD_PAYMENT))
+                .thenReturn(List.of(rule));
+        Mockito.when(campaigns.findActive(Mockito.eq(tenantId), Mockito.eq(merchantId),
+                Mockito.eq(TransactionType.CARD_PAYMENT), Mockito.any()))
+                .thenReturn(List.of());
+
+        RulesEngine engine = new RulesEngine(rules, campaigns);
+        var eval = engine.evaluate(tenantId, merchantId, TransactionType.CARD_PAYMENT, new BigDecimal("50"));
+        assertThat(eval.points()).isEqualByComparingTo("50");
+    }
+
+    @Test
     void capRespectsMaxPerTransaction() {
         LoyaltyRuleRepository rules = Mockito.mock(LoyaltyRuleRepository.class);
         CampaignRepository campaigns = Mockito.mock(CampaignRepository.class);
