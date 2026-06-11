@@ -51,8 +51,4 @@ public class ShopCheckoutRequest {
             description = "Points to spend from the wallet. Required (> 0) when paymentMethod is POINTS or CASH_AND_POINTS; must be omitted or 0 for CASH.")
     @PositiveOrZero(message = "pointsAmount must be >= 0")
     private BigDecimal pointsAmount;
-
-    @Schema(example = "POS-20260514-0007", nullable = true,
-            description = "Optional external reference. Used on the loyalty PURCHASE row for idempotency (per-merchant unique).")
-    private String reference;
 }

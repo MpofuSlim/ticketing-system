@@ -24,6 +24,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
@@ -140,7 +141,8 @@ class PaymentControllerTest {
         UUID shopId = UUID.randomUUID();
         UUID merchantId = UUID.randomUUID();
         when(loyalty.shopCheckout(eq(shopId), eq("0712345678"),
-                eq(new BigDecimal("10.00")), eq(null), eq(null)))
+                eq(new BigDecimal("10.00")), eq(null),
+                argThat((String r) -> r != null && r.startsWith("SHOP-"))))
                 .thenReturn(new LoyaltyServiceClient.CheckoutResult(
                         shopId, merchantId, UUID.randomUUID(), UUID.randomUUID(),
                         new BigDecimal("10.00"), BigDecimal.ZERO,
@@ -162,6 +164,10 @@ class PaymentControllerTest {
         assertEquals(0, new BigDecimal("12.5000").compareTo(data.getPointsEarned()));
         assertEquals(0, BigDecimal.ZERO.compareTo(data.getPointsRedeemed()));
         assertEquals(merchantId, data.getMerchantId());
+        // Auto-generated reference is surfaced on the response so the FE
+        // / POS receipt can display it.
+        assertNotNull(data.getReference());
+        assertTrue(data.getReference().startsWith("SHOP-"));
     }
 
     @Test
@@ -169,7 +175,8 @@ class PaymentControllerTest {
         LoyaltyServiceClient loyalty = mock(LoyaltyServiceClient.class);
         UUID shopId = UUID.randomUUID();
         when(loyalty.shopCheckout(eq(shopId), eq("0712345678"),
-                eq(new BigDecimal("10.00")), eq(new BigDecimal("200.0000")), eq(null)))
+                eq(new BigDecimal("10.00")), eq(new BigDecimal("200.0000")),
+                argThat((String r) -> r != null && r.startsWith("SHOP-"))))
                 .thenReturn(new LoyaltyServiceClient.CheckoutResult(
                         shopId, UUID.randomUUID(), UUID.randomUUID(), UUID.randomUUID(),
                         new BigDecimal("10.00"), new BigDecimal("200.0000"),
@@ -184,6 +191,8 @@ class PaymentControllerTest {
         assertEquals(0, new BigDecimal("200.0000").compareTo(data.getPointsRedeemed()));
         assertEquals(0, new BigDecimal("12.5000").compareTo(data.getPointsEarned()));
         assertEquals(0, new BigDecimal("1612.5000").compareTo(data.getWalletBalanceAfter()));
+        assertNotNull(data.getReference());
+        assertTrue(data.getReference().startsWith("SHOP-"));
     }
 
     @Test
