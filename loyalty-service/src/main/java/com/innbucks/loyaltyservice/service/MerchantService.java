@@ -12,6 +12,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -35,11 +36,72 @@ public class MerchantService {
         m.setCategory(req.category());
         if (req.currency() != null) m.setCurrency(req.currency());
         if (req.billingCycle() != null) m.setBillingCycle(req.billingCycle());
-        if (req.feePerVoucherIssued() != null) m.setFeePerVoucherIssued(req.feePerVoucherIssued());
-        if (req.feePerVoucherRedeemed() != null) m.setFeePerVoucherRedeemed(req.feePerVoucherRedeemed());
+        applyFeeIssued(m, req.feeIssued());
+        applyFeeRedeemed(m, req.feeRedeemed());
         m.setAdminEmail(callerEmail());
         merchants.save(m);
         return toResponse(m);
+    }
+
+    /**
+     * Validate the caller's {@link Dtos.FeeModel} against the constraints of
+     * its {@code type} and stamp it onto the entity. Null input leaves the
+     * entity defaults (FIXED 0) — the merchant simply isn't billed.
+     *
+     * <p>Type vs. value invariants enforced here so the error message can name
+     * the offending field; the DB check constraints are non-negative only.
+     */
+    private static void applyFeeIssued(Merchant m, Dtos.FeeModel f) {
+        if (f == null || f.type() == null) return;
+        validate(f, "feeIssued");
+        m.setFeeIssuedType(f.type());
+        m.setFeeIssuedFixed(nz(f.fixed()));
+        m.setFeeIssuedPercentage(nz(f.percentage()));
+    }
+
+    private static void applyFeeRedeemed(Merchant m, Dtos.FeeModel f) {
+        if (f == null || f.type() == null) return;
+        validate(f, "feeRedeemed");
+        m.setFeeRedeemedType(f.type());
+        m.setFeeRedeemedFixed(nz(f.fixed()));
+        m.setFeeRedeemedPercentage(nz(f.percentage()));
+    }
+
+    private static void validate(Dtos.FeeModel f, String fieldName) {
+        BigDecimal fixed = nz(f.fixed());
+        BigDecimal pct   = nz(f.percentage());
+        if (fixed.signum() < 0 || pct.signum() < 0) {
+            throw LoyaltyException.badRequest("FEE_NEGATIVE",
+                    fieldName + ": fixed and percentage must be >= 0");
+        }
+        switch (f.type()) {
+            case FIXED -> {
+                if (pct.signum() != 0) {
+                    throw LoyaltyException.badRequest("FEE_FIXED_HAS_PERCENT",
+                            fieldName + ": type=FIXED requires percentage to be null or 0");
+                }
+            }
+            case PERCENTAGE -> {
+                if (fixed.signum() != 0) {
+                    throw LoyaltyException.badRequest("FEE_PERCENT_HAS_FIXED",
+                            fieldName + ": type=PERCENTAGE requires fixed to be null or 0");
+                }
+                if (pct.signum() == 0) {
+                    throw LoyaltyException.badRequest("FEE_PERCENT_ZERO",
+                            fieldName + ": type=PERCENTAGE requires percentage > 0");
+                }
+            }
+            case FIXED_PLUS_PERCENTAGE -> {
+                if (fixed.signum() == 0 || pct.signum() == 0) {
+                    throw LoyaltyException.badRequest("FEE_BOTH_REQUIRED",
+                            fieldName + ": type=FIXED_PLUS_PERCENTAGE requires both fixed > 0 and percentage > 0");
+                }
+            }
+        }
+    }
+
+    private static BigDecimal nz(BigDecimal b) {
+        return b == null ? BigDecimal.ZERO : b;
     }
 
     private static String callerEmail() {
@@ -102,6 +164,8 @@ public class MerchantService {
 
     public static Dtos.MerchantResponse toResponse(Merchant m) {
         return new Dtos.MerchantResponse(m.getId(), m.getTenantId(), m.getName(),
-                m.getCategory(), m.getCurrency(), m.getBillingCycle(), m.getStatus());
+                m.getCategory(), m.getCurrency(), m.getBillingCycle(), m.getStatus(),
+                new Dtos.FeeModel(m.getFeeIssuedType(),   m.getFeeIssuedFixed(),   m.getFeeIssuedPercentage()),
+                new Dtos.FeeModel(m.getFeeRedeemedType(), m.getFeeRedeemedFixed(), m.getFeeRedeemedPercentage()));
     }
 }

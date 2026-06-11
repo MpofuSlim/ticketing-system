@@ -112,4 +112,98 @@ class MerchantServiceTest {
                 .isInstanceOf(IllegalStateException.class);
         verifyNoInteractions(repo);
     }
+
+    // --- Fee-model validation on create -----------------------------------
+
+    private static MerchantService newService(MerchantRepository repo) {
+        return new MerchantService(repo, mock(UserServiceClient.class));
+    }
+
+    private static Dtos.MerchantRequest req(Dtos.FeeModel issued, Dtos.FeeModel redeemed) {
+        return new Dtos.MerchantRequest("Cafe A", "F&B", "USD",
+                Merchant.BillingCycle.MONTHLY, issued, redeemed);
+    }
+
+    @Test
+    void create_acceptsFixedPlusPercentage() {
+        MerchantRepository repo = mock(MerchantRepository.class);
+        when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
+        MerchantService svc = newService(repo);
+
+        Dtos.FeeModel mix = new Dtos.FeeModel(Merchant.FeeType.FIXED_PLUS_PERCENTAGE,
+                new java.math.BigDecimal("0.30"), new java.math.BigDecimal("2.5"));
+
+        Dtos.MerchantResponse resp = svc.create(UUID.randomUUID(), req(mix, mix));
+
+        assertThat(resp.feeIssued().type()).isEqualTo(Merchant.FeeType.FIXED_PLUS_PERCENTAGE);
+        assertThat(resp.feeIssued().fixed()).isEqualByComparingTo("0.30");
+        assertThat(resp.feeIssued().percentage()).isEqualByComparingTo("2.5");
+        assertThat(resp.feeRedeemed().type()).isEqualTo(Merchant.FeeType.FIXED_PLUS_PERCENTAGE);
+    }
+
+    @Test
+    void create_rejectsFixedWithNonZeroPercentage() {
+        MerchantService svc = newService(mock(MerchantRepository.class));
+        Dtos.FeeModel bad = new Dtos.FeeModel(Merchant.FeeType.FIXED,
+                new java.math.BigDecimal("0.30"), new java.math.BigDecimal("2.5"));
+
+        assertThatThrownBy(() -> svc.create(UUID.randomUUID(), req(bad, null)))
+                .hasMessageContaining("FIXED")
+                .hasMessageContaining("percentage");
+    }
+
+    @Test
+    void create_rejectsPercentageWithNonZeroFixed() {
+        MerchantService svc = newService(mock(MerchantRepository.class));
+        Dtos.FeeModel bad = new Dtos.FeeModel(Merchant.FeeType.PERCENTAGE,
+                new java.math.BigDecimal("0.30"), new java.math.BigDecimal("2.5"));
+
+        assertThatThrownBy(() -> svc.create(UUID.randomUUID(), req(bad, null)))
+                .hasMessageContaining("PERCENTAGE")
+                .hasMessageContaining("fixed");
+    }
+
+    @Test
+    void create_rejectsPercentageWithZeroPercentage() {
+        MerchantService svc = newService(mock(MerchantRepository.class));
+        Dtos.FeeModel bad = new Dtos.FeeModel(Merchant.FeeType.PERCENTAGE,
+                java.math.BigDecimal.ZERO, java.math.BigDecimal.ZERO);
+
+        assertThatThrownBy(() -> svc.create(UUID.randomUUID(), req(bad, null)))
+                .hasMessageContaining("percentage > 0");
+    }
+
+    @Test
+    void create_rejectsFixedPlusPercentageMissingALeg() {
+        MerchantService svc = newService(mock(MerchantRepository.class));
+        Dtos.FeeModel bad = new Dtos.FeeModel(Merchant.FeeType.FIXED_PLUS_PERCENTAGE,
+                new java.math.BigDecimal("0.30"), java.math.BigDecimal.ZERO);
+
+        assertThatThrownBy(() -> svc.create(UUID.randomUUID(), req(bad, null)))
+                .hasMessageContaining("FIXED_PLUS_PERCENTAGE");
+    }
+
+    @Test
+    void create_rejectsNegativeValues() {
+        MerchantService svc = newService(mock(MerchantRepository.class));
+        Dtos.FeeModel bad = new Dtos.FeeModel(Merchant.FeeType.FIXED,
+                new java.math.BigDecimal("-0.10"), java.math.BigDecimal.ZERO);
+
+        assertThatThrownBy(() -> svc.create(UUID.randomUUID(), req(bad, null)))
+                .hasMessageContaining(">= 0");
+    }
+
+    @Test
+    void create_nullFeeModels_defaultEntityToFixedZero() {
+        MerchantRepository repo = mock(MerchantRepository.class);
+        when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
+        MerchantService svc = newService(repo);
+
+        Dtos.MerchantResponse resp = svc.create(UUID.randomUUID(), req(null, null));
+
+        // Entity defaults: type=FIXED, fixed=0, percentage=0 (no billing impact).
+        assertThat(resp.feeIssued().type()).isEqualTo(Merchant.FeeType.FIXED);
+        assertThat(resp.feeIssued().fixed()).isEqualByComparingTo("0");
+        assertThat(resp.feeIssued().percentage()).isEqualByComparingTo("0");
+    }
 }

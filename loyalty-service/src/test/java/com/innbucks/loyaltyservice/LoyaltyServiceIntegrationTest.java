@@ -75,8 +75,8 @@ class LoyaltyServiceIntegrationTest {
         Dtos.MerchantResponse mr = merchantService.create(t.getId(),
                 new Dtos.MerchantRequest("Cafe Westgate", "F&B", "USD",
                         Merchant.BillingCycle.MONTHLY,
-                        new BigDecimal("0.05"),
-                        new BigDecimal("0.10")));
+                        new Dtos.FeeModel(Merchant.FeeType.FIXED, new BigDecimal("0.05"), null),
+                        new Dtos.FeeModel(Merchant.FeeType.FIXED, new BigDecimal("0.10"), null)));
         ruleAdminService.createRule(t.getId(), mr.id(),
                 new Dtos.RuleRequest(null, TransactionType.PURCHASE,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
@@ -120,7 +120,7 @@ class LoyaltyServiceIntegrationTest {
         Dtos.MerchantResponse mr = merchantService.create(t.getId(),
                 new Dtos.MerchantRequest("Mall Bulawayo", "Retail", "USD",
                         Merchant.BillingCycle.MONTHLY,
-                        BigDecimal.ZERO, BigDecimal.ZERO));
+                        new Dtos.FeeModel(Merchant.FeeType.FIXED, BigDecimal.ZERO, null), new Dtos.FeeModel(Merchant.FeeType.FIXED, BigDecimal.ZERO, null)));
         ruleAdminService.createRule(t.getId(), mr.id(),
                 new Dtos.RuleRequest(null, TransactionType.PURCHASE,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
@@ -152,7 +152,7 @@ class LoyaltyServiceIntegrationTest {
         Dtos.MerchantResponse mr = merchantService.create(t.getId(),
                 new Dtos.MerchantRequest("Pump Mutare", "Fuel", "USD",
                         Merchant.BillingCycle.MONTHLY,
-                        BigDecimal.ZERO, BigDecimal.ZERO));
+                        new Dtos.FeeModel(Merchant.FeeType.FIXED, BigDecimal.ZERO, null), new Dtos.FeeModel(Merchant.FeeType.FIXED, BigDecimal.ZERO, null)));
         ruleAdminService.createRule(t.getId(), mr.id(),
                 new Dtos.RuleRequest(null, TransactionType.QR_PAY,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
@@ -185,8 +185,8 @@ class LoyaltyServiceIntegrationTest {
         Dtos.MerchantResponse mr = merchantService.create(t.getId(),
                 new Dtos.MerchantRequest("Pharmacy Gweru", "Health", "USD",
                         Merchant.BillingCycle.MONTHLY,
-                        new BigDecimal("1.00"),
-                        new BigDecimal("0.50")));
+                        new Dtos.FeeModel(Merchant.FeeType.FIXED, new BigDecimal("1.00"), null),
+                        new Dtos.FeeModel(Merchant.FeeType.FIXED, new BigDecimal("0.50"), null)));
         ruleAdminService.createRule(t.getId(), mr.id(),
                 new Dtos.RuleRequest(null, TransactionType.PURCHASE,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));

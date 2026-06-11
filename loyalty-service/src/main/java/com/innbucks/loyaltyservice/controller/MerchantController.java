@@ -43,10 +43,24 @@ public class MerchantController {
     @Operation(summary = "Onboard a merchant",
             description = "Creates a new merchant outlet under the current tenant. The caller supplies the " +
                           "outlet's display name (e.g. \"Chicken Inn Westgate\") plus its category, currency, " +
-                          "billing cycle, and fee schedule. One tenant can have many merchants — each outlet " +
-                          "of a multi-location operator gets its own row. The merchant ID returned here is " +
-                          "what callers reference in transaction/voucher/invoice requests. Fee fields drive " +
-                          "periodic invoicing — set them to ZERO for free-tier merchants.")
+                          "billing cycle, and the per-voucher fee schedules. One tenant can have many " +
+                          "merchants — each outlet of a multi-location operator gets its own row. The " +
+                          "merchant ID returned here is what callers reference in transaction / voucher / " +
+                          "invoice requests.\n\n" +
+                          "**Fee schedules.** `feeIssued` and `feeRedeemed` each independently configure " +
+                          "how the merchant is billed when a voucher is issued or redeemed. Three modes are " +
+                          "supported on each side:\n\n" +
+                          "- `FIXED` — flat amount per voucher, independent of face value " +
+                          "(`fee = fixed`).\n" +
+                          "- `PERCENTAGE` — percentage of the voucher's face value " +
+                          "(`fee = faceValue × percentage / 100`).\n" +
+                          "- `FIXED_PLUS_PERCENTAGE` — both legs added together " +
+                          "(`fee = fixed + faceValue × percentage / 100`).\n\n" +
+                          "`percentage` is a **whole-number percent** — `2.5` means 2.5%. " +
+                          "Omit `feeIssued` / `feeRedeemed` (or supply `null`) to default that side to " +
+                          "FIXED 0 (no fee). The fee model is applied per voucher at invoice generation " +
+                          "time, so a billing period accumulates as the sum of per-voucher fees, not a " +
+                          "single count × flat.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -65,7 +79,9 @@ public class MerchantController {
                                         "category": "Coffee",
                                         "currency": "USD",
                                         "billingCycle": "MONTHLY",
-                                        "status": "ACTIVE"
+                                        "status": "ACTIVE",
+                                        "feeIssued":   { "type": "FIXED_PLUS_PERCENTAGE", "fixed": 0.30, "percentage": 2.5 },
+                                        "feeRedeemed": { "type": "FIXED",                 "fixed": 0.10, "percentage": 0   }
                                       }
                                     }
                                     """)
@@ -122,7 +138,9 @@ public class MerchantController {
                                             "category": "Coffee",
                                             "currency": "USD",
                                             "billingCycle": "MONTHLY",
-                                            "status": "ACTIVE"
+                                            "status": "ACTIVE",
+                                            "feeIssued":   { "type": "FIXED_PLUS_PERCENTAGE", "fixed": 0.30, "percentage": 2.5 },
+                                            "feeRedeemed": { "type": "FIXED",                 "fixed": 0.10, "percentage": 0   }
                                           },
                                           {
                                             "id": "c5d1e3f4-3456-7890-abcd-ef0123456789",
@@ -131,7 +149,9 @@ public class MerchantController {
                                             "category": "Coffee",
                                             "currency": "USD",
                                             "billingCycle": "WEEKLY",
-                                            "status": "INACTIVE"
+                                            "status": "INACTIVE",
+                                            "feeIssued":   { "type": "PERCENTAGE", "fixed": 0,    "percentage": 1.5 },
+                                            "feeRedeemed": { "type": "PERCENTAGE", "fixed": 0,    "percentage": 1.0 }
                                           }
                                         ],
                                         "page": 0,
@@ -192,7 +212,9 @@ public class MerchantController {
                                         "category": "Coffee",
                                         "currency": "USD",
                                         "billingCycle": "MONTHLY",
-                                        "status": "ACTIVE"
+                                        "status": "ACTIVE",
+                                        "feeIssued":   { "type": "FIXED_PLUS_PERCENTAGE", "fixed": 0.30, "percentage": 2.5 },
+                                        "feeRedeemed": { "type": "FIXED",                 "fixed": 0.10, "percentage": 0   }
                                       }
                                     }
                                     """)
@@ -242,7 +264,9 @@ public class MerchantController {
                                         "category": "Coffee",
                                         "currency": "USD",
                                         "billingCycle": "MONTHLY",
-                                        "status": "INACTIVE"
+                                        "status": "INACTIVE",
+                                        "feeIssued":   { "type": "FIXED_PLUS_PERCENTAGE", "fixed": 0.30, "percentage": 2.5 },
+                                        "feeRedeemed": { "type": "FIXED",                 "fixed": 0.10, "percentage": 0   }
                                       }
                                     }
                                     """)
