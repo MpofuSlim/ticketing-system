@@ -28,8 +28,13 @@ RUN ./mvnw -B -pl discovery-server -am -DskipTests package spring-boot:repackage
     && cp discovery-server/target/discovery-server-*.jar /workspace/app.jar
 
 FROM eclipse-temurin:21-jre-alpine AS runtime
-# Pull in any apk security patches published since the base image was tagged.
-RUN apk --no-cache upgrade \
+# Refresh the apk index + force-upgrade OpenSSL by name. Without naming the
+# packages, Docker reuses a stale layer hash and the cached upgrade doesn't
+# re-run when a new Alpine point release ships the fix.
+# CVE-2026-45447 (HIGH) — libssl3 / libcrypto3 / openssl PKCS#7 / S/MIME
+# signed-message handling. Fixed in alpine 3.5.7-r0.
+RUN apk update \
+ && apk --no-cache upgrade libssl3 libcrypto3 openssl \
  && addgroup -S app && adduser -S -G app app
 WORKDIR /app
 USER app

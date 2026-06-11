@@ -26,10 +26,13 @@ RUN ./mvnw -B -pl loyalty-service -am -DskipTests package spring-boot:repackage 
     && cp loyalty-service/target/loyalty-service-*.jar /workspace/app.jar
 
 FROM eclipse-temurin:21-jre-alpine AS runtime
-# Pull in the latest patched alpine packages on every rebuild so CVEs
-# fixed upstream (e.g. CVE-2026-33845 in gnutls) close as soon as the
-# alpine repo publishes them, without waiting for a base-image retag.
-RUN apk --no-cache upgrade
+# Refresh the apk index + force-upgrade OpenSSL by name. Without naming the
+# packages, Docker reuses a stale layer hash and the cached upgrade doesn't
+# re-run when a new Alpine point release ships the fix.
+# CVE-2026-45447 (HIGH) — libssl3 / libcrypto3 / openssl PKCS#7 / S/MIME
+# signed-message handling. Fixed in alpine 3.5.7-r0.
+RUN apk update \
+ && apk --no-cache upgrade libssl3 libcrypto3 openssl
 RUN addgroup -S app && adduser -S -G app app \
     && mkdir -p /app/data \
     && chown -R app:app /app
