@@ -40,8 +40,14 @@ public class ShopCheckoutResponse {
     @Schema(example = "12.5000", description = "Points credited to the customer for the cash portion (rules + active campaign).")
     private BigDecimal pointsEarned;
 
-    @Schema(example = "1812.5000", description = "Customer's wallet balance after both legs settled.")
-    private BigDecimal walletBalanceAfter;
+    // Wallet balance after the transaction is intentionally NOT exposed on
+    // this response. It used to be returned so the POS could flash it on the
+    // cashier screen, but a side effect was that some POS implementations
+    // also printed it on the customer's receipt — exposing a balance figure
+    // on a piece of paper that ends up in pockets, bins, and other people's
+    // hands. Keeping the field off the API closes that channel by
+    // construction; customers check their balance through the InnBucks app
+    // (GET /loyalty/users/me/wallet).
 
     @Schema(example = "2026-05-14T10:30:00")
     private LocalDateTime processedAt;
