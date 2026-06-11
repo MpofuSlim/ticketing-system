@@ -284,8 +284,19 @@ add_run(ov3, "issue, list, and redeem. Each voucher carries an HMAC-signed code 
 doc.add_paragraph()
 
 # Endpoint summary
-heading(doc, "1.1 Endpoint reference at a glance", 2)
-body(doc, "All paths in this guide are relative to the gateway base URL. Send every authenticated "
+heading(doc, "1.1 Base URL", 2)
+body(doc, "Every endpoint in this guide lives under a single base URL. Prepend it to "
+          "every path the document shows.")
+code_block(doc, [
+    "https://dtx.innbucks.co.zw",
+])
+body(doc, "Example: the login endpoint below is shown as POST /auth/login — the full URL "
+          "is https://dtx.innbucks.co.zw/auth/login. The gateway terminates TLS, validates "
+          "your JWT, and forwards the call to the matching service. No port, no path "
+          "prefix per service — everything sits under that single hostname.")
+
+heading(doc, "1.2 Endpoint reference at a glance", 2)
+body(doc, "All paths are relative to the base URL above. Send every authenticated "
           "request with the Authorization header you receive from /auth/login.")
 endpoint_summary_table(doc, [
     ("POST", "/auth/login", "Obtain a JWT for the merchant operator", "Anonymous"),
@@ -322,7 +333,7 @@ body(doc, "CUSTOMER — issued to the buyer themselves when they log in to the I
 heading(doc, "2.1 Obtaining a token", 2)
 body(doc, "Submit the operator's email + password to /auth/login:")
 code_block(doc, [
-    "POST /auth/login",
+    "POST https://dtx.innbucks.co.zw/auth/login",
     "Content-Type: application/json",
     "",
     "{",
@@ -370,7 +381,7 @@ body(doc, "Done once when you onboard. After this, your POS only needs the per-s
 
 heading(doc, "4.1 Create a merchant", 2)
 code_block(doc, [
-    "POST /loyalty/merchants",
+    "POST https://dtx.innbucks.co.zw/loyalty/merchants",
     "Authorization: Bearer <MERCHANT_ADMIN token>",
     "",
     "{",
@@ -441,7 +452,7 @@ heading(doc, "5. Customer enrolment at the till", 1)
 body(doc, "The customer's phone number is their identity across InnBucks. If they're new "
           "to the platform, register them once at tier 1 — this takes <5 seconds at the till.")
 code_block(doc, [
-    "POST /auth/customer/register",
+    "POST https://dtx.innbucks.co.zw/auth/customer/register",
     "Content-Type: application/json",
     "",
     "{",
@@ -481,7 +492,7 @@ body(doc, "This is the single most important endpoint in the integration. It han
 
 heading(doc, "6.1 Request", 2)
 code_block(doc, [
-    "POST /payments/shop-checkout",
+    "POST https://dtx.innbucks.co.zw/payments/shop-checkout",
     "Authorization: Bearer <SHOP_ADMIN token>",
     "Content-Type: application/json",
     "X-Customer-Phone: +263771234567        // header: identifies the buyer",
@@ -587,7 +598,7 @@ heading(doc, "7.1 List a customer's active vouchers", 2)
 body(doc, "Before the customer's order is finalised, you can show them the discounts they "
           "already hold so they don't forget:")
 code_block(doc, [
-    "GET /loyalty/vouchers/users/by-phone/+263771234567/active",
+    "GET  https://dtx.innbucks.co.zw/loyalty/vouchers/users/by-phone/+263771234567/active",
     "Authorization: Bearer <SHOP_ADMIN token>",
 ])
 code_block(doc, [
@@ -624,7 +635,7 @@ body(doc, "When the customer chooses a voucher to apply (either by stating its c
           "scanning their app's QR code), submit a redeem call before posting the cash sale "
           "via shop-checkout:")
 code_block(doc, [
-    "POST /loyalty/vouchers/redeem",
+    "POST https://dtx.innbucks.co.zw/loyalty/vouchers/redeem",
     "Authorization: Bearer <SHOP_ADMIN token>",
     "",
     "{",
@@ -670,7 +681,7 @@ heading(doc, "7.3 QR-code redemption (alternative)", 2)
 body(doc, "If the customer presents a QR code rather than a written code, use the QR endpoint "
           "instead — it accepts the scanner output directly:")
 code_block(doc, [
-    "POST /loyalty/qr/consume",
+    "POST https://dtx.innbucks.co.zw/loyalty/qr/consume",
     "Authorization: Bearer <SHOP_ADMIN token>",
     "",
     "{",
@@ -686,7 +697,7 @@ heading(doc, "7.4 Direct voucher issuance (CRM)", 2)
 body(doc, "If you want to gift a specific customer a one-off voucher (apology, retention, VIP), "
           "issue one from an existing template at MERCHANT_ADMIN level:")
 code_block(doc, [
-    "POST /loyalty/vouchers/issue",
+    "POST https://dtx.innbucks.co.zw/loyalty/vouchers/issue",
     "Authorization: Bearer <MERCHANT_ADMIN token>",
     "",
     "{",
@@ -703,7 +714,7 @@ doc.add_page_break()
 heading(doc, "8. Customer wallet lookup", 1)
 body(doc, "If your POS surfaces \"current balance\" before applying points, query the wallet directly:")
 code_block(doc, [
-    "GET /loyalty/users/me/wallet",
+    "GET  https://dtx.innbucks.co.zw/loyalty/users/me/wallet",
     "Authorization: Bearer <CUSTOMER token>",
 ])
 body(doc, "Response:")
@@ -747,14 +758,14 @@ body(doc, "Tanaka (phone +263771234567) walks into the Avondale branch of Chicke
 
 heading(doc, "Step 1 — Operator logs in (once per shift)", 3)
 code_block(doc, [
-    "POST /auth/login",
+    "POST https://dtx.innbucks.co.zw/auth/login",
     '{ "identifier": "till-1@chickeninn.co.zw", "password": "…" }',
     "→ 200 OK, captures token = eyJ…",
 ])
 
 heading(doc, "Step 2 — Tanaka is new; enrol her", 3)
 code_block(doc, [
-    "POST /auth/customer/register",
+    "POST https://dtx.innbucks.co.zw/auth/customer/register",
     '{ "firstName": "Tanaka", "lastName": "Moyo",',
     '  "phoneNumber": "+263771234567", "country": "Zimbabwe" }',
     "→ 201 Created",
@@ -762,21 +773,21 @@ code_block(doc, [
 
 heading(doc, "Step 3 — List her active vouchers", 3)
 code_block(doc, [
-    "GET /loyalty/vouchers/users/by-phone/+263771234567/active",
+    "GET  https://dtx.innbucks.co.zw/loyalty/vouchers/users/by-phone/+263771234567/active",
     "Authorization: Bearer eyJ…",
     "→ 200 OK, returns [{ code: \"VCH-AB12-CD34-EF56\", value: $5 FIXED }, …]",
 ])
 
 heading(doc, "Step 4 — Redeem the $5 voucher she chose", 3)
 code_block(doc, [
-    "POST /loyalty/vouchers/redeem",
+    "POST https://dtx.innbucks.co.zw/loyalty/vouchers/redeem",
     '{ "code": "VCH-AB12-CD34-EF56", "shopId": "…", "phoneNumber": "+263771234567" }',
     "→ 200 OK, status \"REDEEMED\", discountValue 5.00",
 ])
 
 heading(doc, "Step 5 — Post the sale ($15 − $5 = $10)", 3)
 code_block(doc, [
-    "POST /payments/shop-checkout",
+    "POST https://dtx.innbucks.co.zw/payments/shop-checkout",
     "X-Customer-Phone: +263771234567",
     '{ "shopId": "…", "paymentMethod": "CASH", "cashAmount": 10.00 }',
     "→ 200 OK, pointsEarned 12.5000, walletBalanceAfter 12.5000,",
@@ -788,15 +799,15 @@ body(doc, "Print: subtotal $15.00 · voucher discount −$5.00 · paid $10.00 ·
           "balance 12.50 · ref SHOP-7c9e6679-… Reuse the same reference if you ever need to "
           "void / reverse the sale (a future API).")
 
-# ----------------------- 11. Sandbox + production
-heading(doc, "11. Base URLs and rollout", 1)
-body(doc, "Two environments. Use sandbox for integration; switch the base URL to production at go-live.")
-endpoint_summary_table(doc, [
-    ("Sandbox",    "https://sandbox.dtx.innbucks.co.zw", "Test merchants and shops; data wiped weekly.", "Open to any partner"),
-    ("Production", "https://dtx.innbucks.co.zw",          "Live customer wallets; signed go-live form required.", "Approved partners only"),
+# ----------------------- 11. Base URL + rate limits
+heading(doc, "11. Base URL and rate limits", 1)
+body(doc, "The InnBucks gateway is the single entry point for everything in this guide:")
+code_block(doc, [
+    "https://dtx.innbucks.co.zw",
 ])
-body(doc, "Rate limits in production: 50 requests/second sustained, 100 burst, per access "
-          "token. Sandbox is more permissive (1000/2000) so you can stress-test integration.")
+body(doc, "Rate limits: 50 requests / second sustained per access token, with a 100-request "
+          "burst allowance. Honour the Retry-After header on any 429 response — the gateway "
+          "tells you exactly when to retry.")
 
 # ----------------------- 12. Support
 heading(doc, "12. Support", 1)
