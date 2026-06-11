@@ -30,9 +30,10 @@ import java.util.UUID;
 @RequestMapping("/loyalty/rules")
 @Tag(name = "Rules & Campaigns",
      description = "Earn-rate configuration. **Rules** define how many points are awarded per currency unit " +
-                   "for each transaction type (PURCHASE, QR_PAY, etc.) and may include caps and per-pocket " +
-                   "targeting. **Campaigns** layer time-bound multipliers on top of rules (e.g. 2x weekend). " +
-                   "Both are evaluated by RulesEngine on every transaction. Requires X-Tenant-Id.")
+                   "for each transaction type (PURCHASE, CARD_PAYMENT, QR_PAY, etc.) and may include caps " +
+                   "and per-pocket targeting. **Campaigns** layer time-bound multipliers on top of rules " +
+                   "(e.g. 2x weekend). Both are evaluated by RulesEngine on every transaction. Requires " +
+                   "X-Tenant-Id.")
 public class RuleController {
 
     private final RuleAdminService rules;

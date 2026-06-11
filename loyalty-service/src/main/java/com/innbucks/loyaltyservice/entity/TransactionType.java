@@ -10,5 +10,7 @@ public enum TransactionType {
     REFUND,
     TRANSFER,
     REDEMPTION,
-    ADJUSTMENT
+    ADJUSTMENT,
+    /** Card-based purchase at a POS / online checkout. Earns points like PURCHASE. */
+    CARD_PAYMENT
 }

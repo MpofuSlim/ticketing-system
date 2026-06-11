@@ -186,7 +186,7 @@ public class Dtos {
             @Schema(example = "+263771234567", nullable = true,
                     description = "Phone number of the recipient. If no LoyaltyUser exists yet, one is auto-created in PENDING status so points accrue against the phone until the customer registers.")
             String assigneePhone,
-            @Schema(example = "PURCHASE", allowableValues = {"PURCHASE", "QR_PAY", "REDEMPTION", "REFUND", "ADJUSTMENT", "TRANSFER_IN", "TRANSFER_OUT"})
+            @Schema(example = "PURCHASE", allowableValues = {"PURCHASE", "CARD_PAYMENT", "QR_PAY", "REDEMPTION", "REFUND", "ADJUSTMENT", "TRANSFER_IN", "TRANSFER_OUT"})
             @NotNull TransactionType type,
             @Schema(example = "100.00", nullable = true, description = "Transaction amount in the merchant's currency.")
             BigDecimal amount,
