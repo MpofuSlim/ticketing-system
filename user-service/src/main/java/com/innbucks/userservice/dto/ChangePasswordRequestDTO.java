@@ -9,11 +9,12 @@ import lombok.Data;
 @Schema(name = "ChangePasswordRequest",
         description = "Payload for a logged-in user to rotate their password. The caller must " +
                       "supply both the current password (for re-authentication) and the new password. " +
-                      "Used by shop staff to replace the default password #Pass123 stamped at onboarding.")
+                      "Used by system users to replace the one-time temporary password they were " +
+                      "issued at onboarding (delivered to them over email/SMS).")
 public class ChangePasswordRequestDTO {
 
     @NotBlank(message = "currentPassword is required")
-    @Schema(example = "#Pass123", description = "The user's existing password.")
+    @Schema(example = "Kp7r-Qn4m-Tx9j", description = "The user's existing password (e.g. the temporary password from their onboarding notification).")
     private String currentPassword;
 
     @NotBlank(message = "newPassword is required")

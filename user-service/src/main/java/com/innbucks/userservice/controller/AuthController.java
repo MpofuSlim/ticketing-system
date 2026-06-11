@@ -49,8 +49,9 @@ public class AuthController {
     @Operation(summary = "Register system user",
             description = "Submits a system-user account for approval. **No password is supplied here** — the " +
                     "account is created inactive and pending SUPER_ADMIN approval. On approval (the first " +
-                    "activation via `PUT /admin/users/{id}/active`) the account is assigned the default password " +
-                    "`#Pass123` and flagged to change it on first login. " +
+                    "activation via `PUT /admin/users/{id}/active`) the account is assigned a randomly-generated " +
+                    "one-time temporary password (delivered to the user over email/SMS) and flagged to change " +
+                    "it on first login. " +
                     "The caller picks one or more `defaultServices` (`ticketing`, `loyalty`); the server derives " +
                     "the role and the underlying microservice access. `ticketing` -> EVENT_ORGANIZER " +
                     "(events/seats/bookings/payments). `loyalty` -> MERCHANT_ADMIN (loyalty/payments). Picking " +
@@ -399,9 +400,9 @@ public class AuthController {
                     are required — the current password is checked against the stored hash to prevent a
                     stolen-token attacker from locking the legitimate user out.
 
-                    Used by shop staff to replace the default password (`#Pass123`) stamped at onboarding
-                    by their merchant/shop admin. The existing JWT continues to work until it expires;
-                    no re-login is required.
+                    Used by system users to replace the one-time temporary password they were issued at
+                    onboarding (delivered over email/SMS). The existing JWT continues to work until it
+                    expires; no re-login is required.
                     """)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(

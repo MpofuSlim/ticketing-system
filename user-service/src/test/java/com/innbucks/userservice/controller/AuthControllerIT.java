@@ -8,6 +8,7 @@ import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.repository.OtpRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.service.UserAdminService;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -39,6 +40,7 @@ class AuthControllerIT {
     @Autowired UserRepository userRepository;
     @Autowired UserAdminService userAdminService;
     @Autowired OtpRepository otpRepository;
+    @Autowired PasswordEncoder passwordEncoder;
 
     // Tier-2 registration mirrors the customer into Oradian via this client;
     // hitting a real Oradian instance from a test is neither possible nor
@@ -63,14 +65,22 @@ class AuthControllerIT {
         when(oradianClient.createCustomer(any(), any())).thenReturn(fake);
     }
 
-    // Approval == first activation: assigns the default password (#Pass123) and
+    // Approval == first activation: assigns a RANDOM one-time temp password and
     // flags must-change, exactly as PUT /admin/users/{id}/active does. A
     // registered account has no usable password until this runs.
-    private static final String DEFAULT_PASSWORD = "#Pass123";
+    //
+    // Because the assigned password is now random + delivered via notification
+    // (not the old shared #Pass123), the test can't know it — so approve()
+    // deterministically overwrites it with this known value afterwards, giving
+    // the login assertions a credential to use.
+    private static final String KNOWN_LOGIN_PASSWORD = "Test-Login-9xyz";
 
     private void approve(String email) {
         User u = userRepository.findByEmail(email).orElseThrow();
-        userAdminService.setActive(u.getId(), true);
+        userAdminService.setActive(u.getId(), true);          // real flow: random password assigned
+        User approved = userRepository.findByEmail(email).orElseThrow();
+        approved.setPassword(passwordEncoder.encode(KNOWN_LOGIN_PASSWORD));  // override for deterministic login
+        userRepository.save(approved);
     }
 
     private RegisterPayload baseSystemPayload(String email, String phone, String bundle) {
@@ -112,7 +122,7 @@ class AuthControllerIT {
 
         LoginPayload login = new LoginPayload();
         login.identifier = "user1@example.com";
-        login.password = DEFAULT_PASSWORD;
+        login.password = KNOWN_LOGIN_PASSWORD;
 
         mockMvc.perform(post("/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -158,7 +168,7 @@ class AuthControllerIT {
 
         LoginPayload login = new LoginPayload();
         login.identifier = "user3@example.com";
-        login.password = DEFAULT_PASSWORD;
+        login.password = KNOWN_LOGIN_PASSWORD;
         String loginBody = mockMvc.perform(post("/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(login)))

@@ -57,11 +57,11 @@ public enum AuditEventType {
 
     /**
      * SUPER_ADMIN approved a system user's first activation — combines the
-     * activation itself with the assignment of the default password
-     * ({@code #Pass123}, force-changed on first login). Fires at most once per
-     * user (the {@code approved} flag makes the path one-shot). Distinct from
-     * {@link #USER_ACTIVATED} so dashboards can break out "new account approvals"
-     * (compliance-relevant) from routine reactivation traffic.
+     * activation itself with the assignment of a one-time temporary password
+     * (randomly generated per user, force-changed on first login). Fires at
+     * most once per user (the {@code approved} flag makes the path one-shot).
+     * Distinct from {@link #USER_ACTIVATED} so dashboards can break out "new
+     * account approvals" (compliance-relevant) from routine reactivation traffic.
      */
     USER_APPROVED,
     /**
@@ -70,5 +70,13 @@ public enum AuditEventType {
      */
     USER_ACTIVATED,
     /** SUPER_ADMIN deactivated a user — account can no longer log in. */
-    USER_DEACTIVATED
+    USER_DEACTIVATED,
+    /**
+     * SUPER_ADMIN reset a system user's temporary password — mints a fresh
+     * random password, re-flags must-change, and re-delivers it. The recovery
+     * path for when the original onboarding notification never reached the
+     * user (every delivery channel failed). Never fired for a SUPER_ADMIN
+     * target (that credential is owned by the bootstrap env seed).
+     */
+    USER_TEMP_PASSWORD_RESET
 }

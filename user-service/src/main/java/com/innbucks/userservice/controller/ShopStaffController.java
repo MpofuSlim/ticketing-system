@@ -48,8 +48,9 @@ public class ShopStaffController {
             description = "Creates a new SHOP_ADMIN user attached to the supplied shopId. The shop " +
                           "is resolved via loyalty-service and must belong to the caller's merchant " +
                           "(taken from the caller's TenantProfile, not the request body). The new " +
-                          "user is created with the default password `#Pass123` — they must rotate " +
-                          "it via POST /auth/change-password on first login. " +
+                          "user is created with a randomly-generated one-time temporary password, " +
+                          "delivered to them over email/SMS — they must rotate it via " +
+                          "POST /auth/change-password on first login. " +
                           "Requires **MERCHANT_ADMIN** role."
     )
     @ApiResponses({
@@ -110,8 +111,9 @@ public class ShopStaffController {
             description = "Creates a new SHOP_USER (cashier / operator) attached to the caller's " +
                           "shop. The new user's loyaltyShopId and loyaltyMerchantId are copied from " +
                           "the caller's User row — a SHOP_ADMIN can only create staff for their own " +
-                          "shop. The new user is created with the default password `#Pass123` — they " +
-                          "must rotate it via POST /auth/change-password on first login. " +
+                          "shop. The new user is created with a randomly-generated one-time temporary " +
+                          "password, delivered to them over email/SMS — they must rotate it via " +
+                          "POST /auth/change-password on first login. " +
                           "Requires **SHOP_ADMIN** role."
     )
     @ApiResponses({

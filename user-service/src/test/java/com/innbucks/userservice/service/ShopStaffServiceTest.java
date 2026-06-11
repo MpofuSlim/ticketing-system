@@ -108,12 +108,21 @@ class ShopStaffServiceTest {
         ArgumentCaptor<String> ref = ArgumentCaptor.forClass(String.class);
         verify(emailNotificationClient).sendEmail(to.capture(), subject.capture(), body.capture(), ref.capture());
 
+        // The temp password is now a per-user random value (not the old shared
+        // #Pass123). Capture what was hashed and assert the SAME value reaches
+        // the email body.
+        ArgumentCaptor<String> pw = ArgumentCaptor.forClass(String.class);
+        verify(passwordEncoder).encode(pw.capture());
+        String generated = pw.getValue();
+        assertThat(generated).isNotEqualTo("#Pass123")
+                .matches("[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}");
+
         assertThat(to.getValue()).isEqualTo("tendai@shop.co.zw");
         assertThat(subject.getValue()).contains("Welcome to InnBucks");
         assertThat(body.getValue())
                 .contains("Shop Administrator")
                 .contains("Tendai")
-                .contains(ShopStaffService.DEFAULT_STAFF_PASSWORD);
+                .contains(generated);
         assertThat(ref.getValue()).startsWith("STAFF-ONBOARD-");
 
         // Email succeeded → SMS fallback must not fire.
@@ -157,10 +166,14 @@ class ShopStaffServiceTest {
         UserResponseDTO result = service.createShopAdmin(shopAdminDto(shopId));
 
         assertThat(result).isNotNull();
+        ArgumentCaptor<String> pw = ArgumentCaptor.forClass(String.class);
+        verify(passwordEncoder).encode(pw.capture());
+        String generated = pw.getValue();
+
         ArgumentCaptor<String> msg = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> ref = ArgumentCaptor.forClass(String.class);
         verify(smsNotificationClient).sendSms(eq("+263771234567"), msg.capture(), ref.capture());
-        assertThat(msg.getValue()).contains(ShopStaffService.DEFAULT_STAFF_PASSWORD);
+        assertThat(msg.getValue()).contains(generated);
         assertThat(ref.getValue()).startsWith("STAFF-ONBOARD-");
     }
 
