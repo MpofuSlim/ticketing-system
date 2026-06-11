@@ -13,18 +13,24 @@ server:
   # Own port; override per host (avoid clashing with whatever else runs there).
   port: ${SERVER_PORT:8088}
 
-# InnBucks core Eureka cluster (5-node HA), as supplied by the platform team.
-# This spike only FETCHES the registry — register-with-eureka is false so it
-# does NOT add itself to the InnBucks registry while we're just validating
-# reachability + discovery of veengu-integration. Flip EUREKA_REGISTER=true
+# InnBucks core platform Eureka. The adapter FETCHES the registry to discover
+# messenger-interface + veengu-integration; register-with-eureka is false so it
+# does NOT add itself to the InnBucks registry. Flip EUREKA_REGISTER=true
 # later if/when InnBucks services need to call back into the adapter.
 #
-# If their Eureka turns out to require HTTP Basic auth, set creds in the URLs:
-#   http://USER:PASS@13.245.148.112:8761/eureka/,...  (via INNBUCKS_EUREKA_ZONES)
+# Default is the host-local registry: in the actual deployment topology the
+# core platform's discovery-server runs ON THE SAME EC2 HOST as this adapter
+# (/srv/apps/discovery-server, listening on *:8761). The previous default — a
+# 5-node public-IP list from the original connectivity spike — went entirely
+# dark and cost us an outage: a gateway restart hung in startup cycling dead
+# IPs while the registry was on localhost all along (2026-06-11). Override
+# INNBUCKS_EUREKA_ZONES only for a deployment where the registry is genuinely
+# remote, e.g.:
+#   INNBUCKS_EUREKA_ZONES=http://USER:PASS@10.0.1.5:8761/eureka/,http://10.0.1.6:8761/eureka/
 eureka:
   client:
     service-url:
-      defaultZone: ${INNBUCKS_EUREKA_ZONES:http://13.245.148.112:8761/eureka/,http://13.246.83.218:8761/eureka/,http://13.245.140.176:8761/eureka/,http://3.9.50.61:8761/eureka/,http://34.253.166.104:8761/eureka/}
+      defaultZone: ${INNBUCKS_EUREKA_ZONES:http://127.0.0.1:8761/eureka/}
     register-with-eureka: ${EUREKA_REGISTER:false}
     fetch-registry: true
     # Fail fast-ish if the cluster is unreachable, so logs show the problem
