@@ -261,16 +261,18 @@ body(doc,
      "and customers can redeem points or vouchers back at the till in the same call.")
 
 body(doc,
-     "This document walks through the integration end to end from a merchant POS / shop-system "
-     "perspective: the one-time setup, the per-transaction call you'll make on every sale, "
-     "and the voucher / wallet lookups you'll need to surface to the customer at checkout.",
+     "This document picks up at the point your POS goes live — i.e. after InnBucks ops "
+     "has provisioned your merchant, your shops, your earn rules and your voucher "
+     "templates, and after each customer has already been enrolled on the platform. "
+     "It covers the per-sale and per-redemption calls your POS will actually make every day.",
      bold_first_n=0)
 
 body(doc, "There are three things to integrate against:", bold_first_n=0)
 ov = doc.add_paragraph(style="List Bullet")
 add_run(ov, "Customer identity — ", bold=True, color=TEXT_DARK, size=10.5)
-add_run(ov, "the customer's phone number is the universal key. You enrol them once "
-            "at tier 1, then every subsequent call references that phone.", color=TEXT_DARK, size=10.5)
+add_run(ov, "the customer's phone number is the universal key. You receive it from "
+            "the customer at the till (verbal, scan, or app); every subsequent call "
+            "references that phone.", color=TEXT_DARK, size=10.5)
 ov2 = doc.add_paragraph(style="List Bullet")
 add_run(ov2, "Transactions (earn + redeem) — ", bold=True, color=TEXT_DARK, size=10.5)
 add_run(ov2, "a single POST per sale handles cash, points, or a mix. Points earned "
@@ -299,15 +301,12 @@ heading(doc, "1.2 Endpoint reference at a glance", 2)
 body(doc, "All paths are relative to the base URL above. Send every authenticated "
           "request with the Authorization header you receive from /auth/login.")
 endpoint_summary_table(doc, [
-    ("POST", "/auth/login", "Obtain a JWT for the merchant operator", "Anonymous"),
-    ("POST", "/auth/customer/register", "Enrol a new customer (tier 1)", "Anonymous"),
+    ("POST", "/auth/login", "Obtain a JWT for the till operator", "Anonymous"),
     ("POST", "/payments/shop-checkout", "Per-sale call — earn / redeem points", "SHOP_ADMIN"),
     ("GET",  "/loyalty/vouchers/users/by-phone/{phone}/active", "List a customer's active vouchers", "SHOP_ADMIN"),
-    ("POST", "/loyalty/vouchers/issue", "Manually issue a voucher to a customer", "MERCHANT_ADMIN"),
     ("POST", "/loyalty/vouchers/redeem", "Redeem a voucher at the till", "SHOP_ADMIN"),
-    ("GET",  "/loyalty/users/me/wallet", "Customer-facing wallet balance", "CUSTOMER"),
-    ("POST", "/loyalty/qr/issue", "Mint a QR code for a voucher (mobile)", "MERCHANT_ADMIN"),
     ("POST", "/loyalty/qr/consume", "Consume a scanned voucher QR code", "SHOP_ADMIN"),
+    ("GET",  "/loyalty/users/me/wallet", "Customer-facing wallet balance", "CUSTOMER"),
 ])
 
 # ----------------------- 2. Authentication
@@ -361,136 +360,14 @@ body(doc, "Use the access token as Authorization: Bearer <token> on every subseq
           "Tokens expire after 24 hours by default; call /auth/refresh with the refreshToken "
           "to mint a new pair without prompting the user to log in again.")
 
-# ----------------------- 3. Hierarchy
-heading(doc, "3. The platform hierarchy", 1)
-body(doc, "Everything you create at setup time hangs off a tenant. The hierarchy is fixed:")
-code_block(doc, [
-    "Tenant            ← your brand (e.g. \"Chicken Inn\")",
-    "  └─ Merchant     ← a business unit (e.g. \"Chicken Inn Restaurants\")",
-    "       └─ Shop    ← a physical outlet (e.g. \"Avondale Branch\")",
-    "             └─ Transactions belong here; customers earn/burn against this shopId",
-])
-body(doc, "Voucher templates and earn rules are set at the merchant level — they apply across "
-          "every shop owned by that merchant. Campaign multipliers can be scoped narrower (e.g. "
-          "\"double points on Friday at Avondale only\").")
-
-# ----------------------- 4. One-time setup
+# ----------------------- 3. The transaction call
 doc.add_page_break()
-heading(doc, "4. One-time setup (head office, MERCHANT_ADMIN)", 1)
-body(doc, "Done once when you onboard. After this, your POS only needs the per-sale call in §6.")
-
-heading(doc, "4.1 Create a merchant", 2)
-code_block(doc, [
-    "POST https://dtx.innbucks.co.zw/loyalty/merchants",
-    "Authorization: Bearer <MERCHANT_ADMIN token>",
-    "",
-    "{",
-    '  "name":           "Chicken Inn Restaurants",',
-    '  "registrationNo": "RC-2017-04123",',
-    '  "contactEmail":   "ops@chickeninn.co.zw",',
-    '  "contactPhone":   "+263242123456",',
-    '  "address":        "12 Speke Avenue, Harare"',
-    "}",
-])
-body(doc, "Response carries the merchantId — store it; you'll need it for shops, rules, and templates.")
-
-heading(doc, "4.2 Create each shop", 2)
-code_block(doc, [
-    "POST /loyalty/shops",
-    "",
-    "{",
-    '  "merchantId":   "b4c0d2e3-2345-6789-abcd-ef0123456789",',
-    '  "name":         "Avondale Branch",',
-    '  "address":      "King George Rd, Avondale, Harare",',
-    '  "phoneNumber":  "+263242456789"',
-    "}",
-])
-body(doc, "Each shop's response carries a shopId — that's what your POS will send on every "
-          "shop-checkout call. If you have many outlets, /loyalty/shops/bulk-upload accepts a "
-          "CSV; ask InnBucks for the template.")
-
-heading(doc, "4.3 Define an earn rule", 2)
-body(doc, "Rules say \"for every $X of cash spent, the customer earns Y points.\" The default "
-          "rule below earns 1.25 points per US dollar at any of the merchant's shops:")
-code_block(doc, [
-    "POST /loyalty/rules",
-    "",
-    "{",
-    '  "merchantId":     "b4c0d2e3-2345-6789-abcd-ef0123456789",',
-    '  "name":           "Standard earn",',
-    '  "pointsPerUnit":  1.25,',
-    '  "minSpend":       0.00,',
-    '  "active":         true',
-    "}",
-])
-body(doc, "You can stack a campaign on top of the base rule (e.g. \"2× points on Mondays\") "
-          "via POST /loyalty/rules/campaigns. The platform automatically applies the active "
-          "campaign multiplier at shop-checkout time.")
-
-heading(doc, "4.4 Create voucher templates (optional but recommended)", 2)
-body(doc, "A voucher template defines the kind of voucher customers can earn or that you can "
-          "issue. Each template names the discount amount, validity period, and shop scope.")
-code_block(doc, [
-    "POST /loyalty/vouchers/templates",
-    "",
-    "{",
-    '  "merchantId":     "b4c0d2e3-2345-6789-abcd-ef0123456789",',
-    '  "name":           "$5 OFF main meal",',
-    '  "type":           "SINGLE_USE",',
-    '  "discountType":   "FIXED",',
-    '  "discountValue":  5.00,',
-    '  "validityDays":   30,',
-    '  "appliesToShops": []          // empty = every shop owned by the merchant',
-    "}",
-])
-body(doc, "Type can be SINGLE_USE (one redemption), MULTI_USE (up to N uses), CAMPAIGN "
-          "(time-windowed promo), or REFERRAL (issued when a customer refers another).")
-
-# ----------------------- 5. Customer enrolment
-doc.add_page_break()
-heading(doc, "5. Customer enrolment at the till", 1)
-body(doc, "The customer's phone number is their identity across InnBucks. If they're new "
-          "to the platform, register them once at tier 1 — this takes <5 seconds at the till.")
-code_block(doc, [
-    "POST https://dtx.innbucks.co.zw/auth/customer/register",
-    "Content-Type: application/json",
-    "",
-    "{",
-    '  "firstName":   "Tanaka",',
-    '  "lastName":    "Moyo",',
-    '  "phoneNumber": "+263771234567",',
-    '  "country":     "Zimbabwe"',
-    "}",
-])
-body(doc, "Successful response (201 Created):")
-code_block(doc, [
-    "{",
-    '  "code": "201 CREATED",',
-    '  "message": "Registration successful.",',
-    '  "data": {',
-    '    "token":     "eyJhbGciOiJIUzI1NiJ9…",   // customer token, not the POS token',
-    '    "roles":     ["CUSTOMER"],',
-    '    "tier":      1,',
-    '    "verified":  false,',
-    '    "nextStep":  "Verify phone at /auth/otp/verify, then submit personal details at',
-    '                 /auth/customer/register/tier2"',
-    "  }",
-    "}",
-])
-body(doc, "The till does not have to do anything with the returned token — the customer's "
-          "wallet is created the moment they're enrolled, and your subsequent shop-checkout "
-          "calls reference them by phone number. The token is for when the customer downloads "
-          "the InnBucks customer app.")
-body(doc, "If the phone is already registered, you'll receive HTTP 400 with "
-          "\"Phone already registered\". That's fine — skip straight to step 6.")
-
-# ----------------------- 6. The transaction call
-heading(doc, "6. Per-sale: POST /payments/shop-checkout", 1)
+heading(doc, "3. Per-sale: POST /payments/shop-checkout", 1)
 body(doc, "This is the single most important endpoint in the integration. It handles both "
           "earn (cash leg) and burn (points leg) atomically. Call it once per sale, regardless "
           "of how the customer paid.")
 
-heading(doc, "6.1 Request", 2)
+heading(doc, "3.1 Request", 2)
 code_block(doc, [
     "POST https://dtx.innbucks.co.zw/payments/shop-checkout",
     "Authorization: Bearer <SHOP_ADMIN token>",
@@ -527,7 +404,7 @@ add_run(n3, "The platform generates the idempotency reference automatically (ret
             "response as SHOP-<uuid>). Print it on the customer's receipt.",
         color=TEXT_DARK, size=10.5)
 
-heading(doc, "6.2 Response (200 OK)", 2)
+heading(doc, "3.2 Response (200 OK)", 2)
 code_block(doc, [
     "{",
     '  "code": "200 OK",',
@@ -552,7 +429,7 @@ body(doc, "Print pointsEarned and walletBalanceAfter on the receipt — that's t
           "same physical sale, send a different X-Idempotency-Key (it's the platform that "
           "generates the reference on its end, but your POS must dedupe its own retries).")
 
-heading(doc, "6.3 Failure responses", 2)
+heading(doc, "3.3 Failure responses", 2)
 body(doc, "Three categories of failure your POS must handle:")
 code_block(doc, [
     "# Validation failure (400 BAD_REQUEST)",
@@ -586,15 +463,14 @@ code_block(doc, [
 body(doc, "On 503, retry once after ~500ms. On any 4xx, surface the message to the cashier; "
           "do NOT retry — the call already returned its terminal answer.")
 
-# ----------------------- 7. Vouchers
+# ----------------------- 4. Vouchers
 doc.add_page_break()
-heading(doc, "7. Voucher lifecycle", 1)
-body(doc, "Vouchers are how customers get one-off discounts (e.g. \"$5 OFF main meal\"). They "
-          "can be issued by the merchant directly (CRM-style), earned automatically when a "
-          "customer hits a points threshold, or distributed via a campaign code. At the till, "
-          "your POS does two things with vouchers: list them and redeem them.")
+heading(doc, "4. Voucher lifecycle at the till", 1)
+body(doc, "Vouchers are how customers get one-off discounts (e.g. \"$5 OFF main meal\"). At "
+          "the till, your POS does two things with vouchers: list the ones a customer holds, "
+          "and redeem the one they choose to apply.")
 
-heading(doc, "7.1 List a customer's active vouchers", 2)
+heading(doc, "4.1 List a customer's active vouchers", 2)
 body(doc, "Before the customer's order is finalised, you can show them the discounts they "
           "already hold so they don't forget:")
 code_block(doc, [
@@ -630,7 +506,7 @@ code_block(doc, [
     "}",
 ])
 
-heading(doc, "7.2 Redeem a voucher at the till", 2)
+heading(doc, "4.2 Redeem a voucher at the till", 2)
 body(doc, "When the customer chooses a voucher to apply (either by stating its code or by "
           "scanning their app's QR code), submit a redeem call before posting the cash sale "
           "via shop-checkout:")
@@ -677,7 +553,7 @@ code_block(doc, [
     "{ \"code\": \"429 TOO_MANY_REQUESTS\", \"message\": \"Redemption blocked due to fraud velocity\", \"data\": null }",
 ])
 
-heading(doc, "7.3 QR-code redemption (alternative)", 2)
+heading(doc, "4.3 QR-code redemption (alternative)", 2)
 body(doc, "If the customer presents a QR code rather than a written code, use the QR endpoint "
           "instead — it accepts the scanner output directly:")
 code_block(doc, [
@@ -693,25 +569,9 @@ body(doc, "QR codes carry an embedded nonce and have a short TTL (5 minutes by d
           "consumed, the same QR cannot be reused, even within its TTL window. The response "
           "shape matches /loyalty/vouchers/redeem.")
 
-heading(doc, "7.4 Direct voucher issuance (CRM)", 2)
-body(doc, "If you want to gift a specific customer a one-off voucher (apology, retention, VIP), "
-          "issue one from an existing template at MERCHANT_ADMIN level:")
-code_block(doc, [
-    "POST https://dtx.innbucks.co.zw/loyalty/vouchers/issue",
-    "Authorization: Bearer <MERCHANT_ADMIN token>",
-    "",
-    "{",
-    '  "templateId":  "11111111-2222-3333-4444-555555555555",',
-    '  "phoneNumber": "+263771234567",       // optional — leave null for unassigned',
-    '  "note":        "Goodwill replacement for order #4892"',
-    "}",
-])
-body(doc, "Response carries the voucher code and an expiresAt — share the code with the "
-          "customer over SMS/WhatsApp; they can then redeem it via §7.2 like any other voucher.")
-
-# ----------------------- 8. Wallet
+# ----------------------- 5. Wallet
 doc.add_page_break()
-heading(doc, "8. Customer wallet lookup", 1)
+heading(doc, "5. Customer wallet lookup", 1)
 body(doc, "If your POS surfaces \"current balance\" before applying points, query the wallet directly:")
 code_block(doc, [
     "GET  https://dtx.innbucks.co.zw/loyalty/users/me/wallet",
@@ -731,12 +591,12 @@ code_block(doc, [
 ])
 body(doc, "This endpoint requires a CUSTOMER token (so the customer's own app must be the "
           "caller; SHOP_ADMIN cannot read other people's wallets via /me). For a till-side "
-          "balance check, use the voucher-list endpoint in §7.1 instead — it returns the "
+          "balance check, use the voucher-list endpoint in §4.1 instead — it returns the "
           "customer's active vouchers and is enough information for the cashier to compute "
           "the maximum points the customer could redeem.")
 
-# ----------------------- 9. Error handling
-heading(doc, "9. Error handling — what to do per status code", 1)
+# ----------------------- 6. Error handling
+heading(doc, "6. Error handling — what to do per status code", 1)
 body(doc, "All errors return the same envelope: { \"code\": \"…\", \"message\": \"…\", \"data\": null }.")
 endpoint_summary_table(doc, [
     ("400", "BAD_REQUEST", "Validation, business-rule violation, expired voucher, insufficient balance.", "Surface message to cashier; do not retry."),
@@ -749,12 +609,12 @@ endpoint_summary_table(doc, [
     ("503", "SERVICE_UNAVAILABLE", "Loyalty service unreachable.", "Retry once after ~500 ms; queue if it persists."),
 ])
 
-# ----------------------- 10. End-to-end example
+# ----------------------- 7. End-to-end example
 doc.add_page_break()
-heading(doc, "10. End-to-end example", 1)
-body(doc, "Tanaka (phone +263771234567) walks into the Avondale branch of Chicken Inn for the "
-          "first time, orders a $15 main meal, and uses a $5 voucher she got via SMS. This is "
-          "every call the POS makes, in order.")
+heading(doc, "7. End-to-end example", 1)
+body(doc, "Tanaka (phone +263771234567) — already enrolled on the platform — comes through "
+          "your till, orders a $15 main meal, and uses a $5 voucher she'd earned previously. "
+          "This is every call the POS makes, in order.")
 
 heading(doc, "Step 1 — Operator logs in (once per shift)", 3)
 code_block(doc, [
@@ -763,44 +623,36 @@ code_block(doc, [
     "→ 200 OK, captures token = eyJ…",
 ])
 
-heading(doc, "Step 2 — Tanaka is new; enrol her", 3)
-code_block(doc, [
-    "POST https://dtx.innbucks.co.zw/auth/customer/register",
-    '{ "firstName": "Tanaka", "lastName": "Moyo",',
-    '  "phoneNumber": "+263771234567", "country": "Zimbabwe" }',
-    "→ 201 Created",
-])
-
-heading(doc, "Step 3 — List her active vouchers", 3)
+heading(doc, "Step 2 — Cashier asks for the phone, lists her active vouchers", 3)
 code_block(doc, [
     "GET  https://dtx.innbucks.co.zw/loyalty/vouchers/users/by-phone/+263771234567/active",
     "Authorization: Bearer eyJ…",
     "→ 200 OK, returns [{ code: \"VCH-AB12-CD34-EF56\", value: $5 FIXED }, …]",
 ])
 
-heading(doc, "Step 4 — Redeem the $5 voucher she chose", 3)
+heading(doc, "Step 3 — Redeem the $5 voucher she chose", 3)
 code_block(doc, [
     "POST https://dtx.innbucks.co.zw/loyalty/vouchers/redeem",
     '{ "code": "VCH-AB12-CD34-EF56", "shopId": "…", "phoneNumber": "+263771234567" }',
     "→ 200 OK, status \"REDEEMED\", discountValue 5.00",
 ])
 
-heading(doc, "Step 5 — Post the sale ($15 − $5 = $10)", 3)
+heading(doc, "Step 4 — Post the sale ($15 − $5 = $10)", 3)
 code_block(doc, [
     "POST https://dtx.innbucks.co.zw/payments/shop-checkout",
     "X-Customer-Phone: +263771234567",
     '{ "shopId": "…", "paymentMethod": "CASH", "cashAmount": 10.00 }',
-    "→ 200 OK, pointsEarned 12.5000, walletBalanceAfter 12.5000,",
+    "→ 200 OK, pointsEarned 12.5000, walletBalanceAfter (existing + 12.5000),",
     "          reference \"SHOP-7c9e6679-…\"",
 ])
 
-heading(doc, "Step 6 — Print the receipt", 3)
+heading(doc, "Step 5 — Print the receipt", 3)
 body(doc, "Print: subtotal $15.00 · voucher discount −$5.00 · paid $10.00 · points earned 12.50 · "
-          "balance 12.50 · ref SHOP-7c9e6679-… Reuse the same reference if you ever need to "
-          "void / reverse the sale (a future API).")
+          "balance (her new total) · ref SHOP-7c9e6679-… Reuse the same reference if you ever "
+          "need to void / reverse the sale (a future API).")
 
-# ----------------------- 11. Base URL + rate limits
-heading(doc, "11. Base URL and rate limits", 1)
+# ----------------------- 8. Base URL + rate limits
+heading(doc, "8. Base URL and rate limits", 1)
 body(doc, "The InnBucks gateway is the single entry point for everything in this guide:")
 code_block(doc, [
     "https://dtx.innbucks.co.zw",
@@ -809,8 +661,8 @@ body(doc, "Rate limits: 50 requests / second sustained per access token, with a 
           "burst allowance. Honour the Retry-After header on any 429 response — the gateway "
           "tells you exactly when to retry.")
 
-# ----------------------- 12. Support
-heading(doc, "12. Support", 1)
+# ----------------------- 9. Support
+heading(doc, "9. Support", 1)
 body(doc, "Integration questions, sandbox provisioning, and go-live sign-off:")
 sup = doc.add_paragraph()
 add_run(sup, "Tawanda Mpofu — ", bold=True, color=BRAND_BLUE, size=10.5)
