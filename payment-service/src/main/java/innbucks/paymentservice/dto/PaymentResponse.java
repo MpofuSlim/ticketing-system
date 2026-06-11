@@ -12,7 +12,14 @@ import java.util.UUID;
 @AllArgsConstructor
 public class PaymentResponse {
 
-    public enum Status { SUCCESS, FAILED }
+    /**
+     * {@code PROCESSING} is additive (the historical stub only ever emitted
+     * SUCCESS): returned when the bank accepted the debit but the outcome
+     * isn't authoritative yet — the reconciler resolves it and the booking
+     * confirms within ~a minute. FE treatment: same as SUCCESS visually
+     * ("payment received"); the confirmation number lands on the booking.
+     */
+    public enum Status { SUCCESS, PROCESSING, FAILED }
 
     private UUID transactionId;
     private UUID bookingId;

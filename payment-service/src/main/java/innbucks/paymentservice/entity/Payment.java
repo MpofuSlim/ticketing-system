@@ -80,7 +80,7 @@ public class Payment {
     @Column(name = "currency", nullable = false, length = 8)
     private String currency;
 
-    @Column(name = "status", nullable = false, length = 16)
+    @Column(name = "status", nullable = false, length = 32)
     @Enumerated(EnumType.STRING)
     private PaymentStatus status;
 
@@ -125,7 +125,37 @@ public class Payment {
         }
     }
 
+    /**
+     * Ledger state machine. Transition legality is enforced by
+     * {@code PaymentRecordService} (terminal states are immutable; every
+     * transition is journalled to {@code payment_event}).
+     *
+     * <ul>
+     *   <li>{@link #PENDING} — row opened before the upstream call.</li>
+     *   <li>{@link #SUCCEEDED} — money moved AND booking confirmed. Terminal.</li>
+     *   <li>{@link #FAILED} — definitively no money moved (upstream rejected,
+     *       or request never reached the processor). Terminal; frees the
+     *       booking for a retry payment.</li>
+     *   <li>{@link #IN_DOUBT} — the upstream call timed out or returned an
+     *       unclassifiable outcome: money MAY have moved. Never auto-failed —
+     *       only the reconciler (by querying the processor) or an operator
+     *       may resolve it. Customer-facing status stays PROCESSING.</li>
+     *   <li>{@link #COMPLETED_UNCONFIRMED} — money DEFINITELY moved but the
+     *       booking confirm failed. The reconciler retries the confirm and
+     *       promotes to SUCCEEDED; sustained presence here is a page.</li>
+     * </ul>
+     *
+     * <p>The remaining values are RESERVED for the direct veengu Purchase
+     * flow (paymentDetails → consent → purchase) and have no writer yet:
+     * {@link #TOKEN_ISSUED}, {@link #CONSENTED}, {@link #EXECUTING},
+     * {@link #REQUIRES_AUTH} (step-up OTP pending), {@link #REJECTED},
+     * {@link #EXPIRED}. Declared now so the DB CHECK constraint and the
+     * one-active-payment-per-booking index already cover them.
+     */
     public enum PaymentStatus {
-        PENDING, SUCCEEDED, FAILED
+        PENDING, SUCCEEDED, FAILED,
+        IN_DOUBT, COMPLETED_UNCONFIRMED,
+        TOKEN_ISSUED, CONSENTED, EXECUTING, REQUIRES_AUTH,
+        REJECTED, EXPIRED
     }
 }

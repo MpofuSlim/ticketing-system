@@ -70,4 +70,50 @@ public class PaymentMetrics {
                 .register(registry)
                 .increment();
     }
+
+    /**
+     * Counter incremented once per stale ticket-payment ledger row
+     * (PENDING or IN_DOUBT past the reconciliation threshold) per scan.
+     * IN_DOUBT is the louder of the two: it means an upstream debit call
+     * timed out or returned an unclassifiable outcome and money MAY have
+     * moved — any sustained non-zero value is a page.
+     */
+    public void incStalePayment(String status) {
+        Counter.builder("payment.payments.stale")
+                .description("Ticket-payment ledger rows stuck in a non-terminal state past the reconciliation threshold, by status")
+                .tag("status", status == null ? "UNKNOWN" : status)
+                .register(registry)
+                .increment();
+    }
+
+    /**
+     * Outcome of the reconciler's booking-confirm retry for
+     * COMPLETED_UNCONFIRMED rows (money moved, booking not confirmed).
+     * outcome={resolved, still_failing}. A steady drip of still_failing
+     * means customers are debited without tickets — page and read the
+     * booking-side rejection reason out of the WARN logs.
+     */
+    public void incUnconfirmedRetry(String outcome) {
+        Counter.builder("payment.payments.unconfirmed_retry")
+                .description("Reconciler retries of the booking confirm for money-moved-but-unconfirmed payments, by outcome")
+                .tag("outcome", outcome)
+                .register(registry)
+                .increment();
+    }
+
+    /**
+     * Outcome of the reconciler's Bank-API transaction inquiry for stale
+     * PENDING / IN_DOUBT rows. outcome={completed, failed, not_found,
+     * unknown, error}. `completed` flips the row to COMPLETED_UNCONFIRMED
+     * (the confirm-retry loop finishes the job); `failed`/`not_found` close
+     * it FAILED; `unknown`/`error` leave it for the next sweep — a sustained
+     * drip of those means the inquiry contract needs attention.
+     */
+    public void incInDoubtResolution(String outcome) {
+        Counter.builder("payment.payments.indoubt_resolution")
+                .description("Reconciler Bank-API inquiry resolutions of stale PENDING/IN_DOUBT payments, by outcome")
+                .tag("outcome", outcome)
+                .register(registry)
+                .increment();
+    }
 }

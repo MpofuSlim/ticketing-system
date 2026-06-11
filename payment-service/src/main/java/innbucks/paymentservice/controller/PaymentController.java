@@ -6,12 +6,18 @@ import innbucks.paymentservice.client.LoyaltyServiceClient;
 import innbucks.paymentservice.client.LoyaltyServiceClient.LoyaltyCheckoutException;
 import innbucks.paymentservice.config.PaymentMetrics;
 import innbucks.paymentservice.dto.ApiResult;
+import innbucks.paymentservice.dto.InnbucksPaymentResponse;
 import innbucks.paymentservice.dto.PaymentMethod;
 import innbucks.paymentservice.dto.PaymentRequest;
 import innbucks.paymentservice.dto.PaymentResponse;
 import innbucks.paymentservice.dto.ShopCheckoutRequest;
 import innbucks.paymentservice.dto.ShopCheckoutResponse;
+import innbucks.paymentservice.entity.Payment;
 import innbucks.paymentservice.exception.BadRequestException;
+import innbucks.paymentservice.repository.PaymentRepository;
+import innbucks.paymentservice.service.InnbucksPaymentService;
+import innbucks.paymentservice.service.InnbucksPaymentService.InvalidPaymentRequestException;
+import innbucks.paymentservice.service.PaymentRecordService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
@@ -39,11 +45,16 @@ import java.util.UUID;
  * Customer-facing payment endpoints.
  *
  * <ul>
- *   <li>{@code POST /payments} — ticket-purchase confirmation. <b>Stub</b>
- *       pending the veengu real-money integration: confirms the matching
- *       booking via booking-service without charging a card or moving
- *       funds. Returns a receipt populated from booking-service's
- *       {@code totalAmount}.</li>
+ *   <li>{@code POST /payments} — ticket-purchase payment, the FE's public
+ *       entry. <b>Moves real money</b> via the public InnBucks Bank API:
+ *       the payer's wallet is resolved from the BOOKING's phoneNumber
+ *       (captured at booking time — the FE sends only {@code bookingId},
+ *       exactly the historical stub contract), debited for the booking's
+ *       totalAmount, and the booking confirmed. Request/response shapes are
+ *       byte-identical to the old stub; {@code Status.PROCESSING} is the
+ *       one additive value (async outcome, reconciler finishes the job).
+ *       Idempotent replay: a double-tap on an already-paid/in-flight
+ *       booking returns that payment's receipt, never an error.</li>
  *   <li>{@code POST /payments/shop-checkout} — pay at a shop with cash,
  *       loyalty points, or a mix. <b>Moves real loyalty points</b> via
  *       loyalty-service (earn on the cash leg, burn on the points leg —
@@ -56,23 +67,27 @@ import java.util.UUID;
 @RequestMapping("/payments")
 @RequiredArgsConstructor
 @Slf4j
-@Tag(name = "Payments", description = "Customer payment endpoints. Shop checkout moves real loyalty points; "
-        + "ticket-purchase confirm is a stub pending the veengu real-money integration.")
+@Tag(name = "Payments", description = "Customer payment endpoints. POST /payments moves real money via the "
+        + "InnBucks Bank API; shop checkout moves real loyalty points.")
 public class PaymentController {
 
     private final BookingServiceClient bookingServiceClient;
     private final LoyaltyServiceClient loyaltyServiceClient;
     private final PaymentMetrics metrics;
+    private final InnbucksPaymentService innbucksPaymentService;
+    private final PaymentRecordService paymentRecordService;
+    private final PaymentRepository paymentRepository;
 
     @PostMapping
     @Operation(
-            summary = "Confirm a ticket purchase (stub — no real charge yet)",
-            description = "Public endpoint — no Authorization header required. Confirms the booking referenced " +
-                    "by `bookingId` by calling booking-service's PATCH /bookings/{id}/confirm. " +
-                    "Stub pending the veengu real-money integration: no card is charged and no funds are moved. " +
-                    "The receipt's `amountPaid` is read from booking-service's `totalAmount` (the source of truth) " +
-                    "— clients do not quote the amount. `currency` (defaults to USD) and `cardLast4` are optional " +
-                    "and echoed back on the receipt."
+            summary = "Pay for a ticket booking (InnBucks wallet debit)",
+            description = "Public endpoint — same contract as the historical stub: body carries only `bookingId` " +
+                    "(plus cosmetic `currency`/`cardLast4`). The payer's wallet is resolved from the booking's " +
+                    "phoneNumber (captured at booking time), debited for the booking's `totalAmount` via the " +
+                    "InnBucks Bank API, and the booking is confirmed. Clients never quote amounts. " +
+                    "Replay-safe: paying an already-paid or in-flight booking returns that payment's receipt. " +
+                    "`status=PROCESSING` means the debit was accepted but the outcome isn't authoritative yet — " +
+                    "the reconciler completes the booking within ~a minute; poll the booking status."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -144,40 +159,133 @@ public class PaymentController {
     ) {
         log.info("POST /payments bookingId={}", request.getBookingId());
 
-        Map<String, Object> confirmedBooking;
+        // Replay semantics: an already-paid or in-flight booking returns the
+        // existing payment's receipt — a double-tap must never error (the old
+        // stub re-confirmed idempotently; this is the real-money equivalent).
+        var existing = paymentRepository.findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(
+                request.getBookingId(), PaymentRecordService.ACTIVE_OR_SUCCEEDED);
+        if (existing.isPresent()) {
+            Payment p = existing.get();
+            log.info("POST /payments replay bookingId={} existing paymentReference={} status={}",
+                    request.getBookingId(), p.getPaymentReference(), p.getStatus());
+            return toReplayResponse(p, request);
+        }
+
+        // The payer is the booking's phone — captured at booking creation
+        // (JWT or guest flow). The FE never supplies payment credentials.
+        Map<String, Object> booking;
         try {
-            confirmedBooking = bookingServiceClient.confirmBooking(request.getBookingId());
+            booking = bookingServiceClient.getBooking(request.getBookingId());
         } catch (BookingConfirmationException e) {
             HttpStatus status = HttpStatus.resolve(e.getStatusCode());
             if (status == null) status = HttpStatus.BAD_GATEWAY;
-            log.warn("Payment failed bookingId={} status={} reason={}",
-                    request.getBookingId(), status.value(), e.getMessage());
-            // Surface booking-service's reason directly so the caller knows why.
-            return ResponseEntity.status(status).body(
-                    ApiResult.<PaymentResponse>builder()
-                            .code(status.value() + " " + status.name())
-                            .message(e.getMessage())
-                            .data(null)
-                            .build());
+            return error(status, e.getMessage());
+        }
+        String payerMsisdn = asString(booking.get("phoneNumber"));
+        if (payerMsisdn == null || payerMsisdn.isBlank()) {
+            return error(HttpStatus.BAD_REQUEST,
+                    "Booking has no payer phone number — create the booking with a phoneNumber to pay via InnBucks");
         }
 
-        // Amount paid is ALWAYS the booking's totalAmount (the source of truth
-        // computed from real seat prices). The client doesn't quote amounts.
+        InnbucksPaymentResponse outcome;
+        try {
+            outcome = innbucksPaymentService.processPayment(
+                    request.getBookingId(), payerMsisdn, null);
+        } catch (BookingConfirmationException e) {
+            HttpStatus status = HttpStatus.resolve(e.getStatusCode());
+            if (status == null) status = HttpStatus.BAD_GATEWAY;
+            return error(status, e.getMessage());
+        } catch (InvalidPaymentRequestException e) {
+            // 409 (already paying — race with another tap) degrades to replay.
+            if (e.getStatusCode() == 409) {
+                return paymentRepository.findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(
+                                request.getBookingId(), PaymentRecordService.ACTIVE_OR_SUCCEEDED)
+                        .map(p -> toReplayResponse(p, request))
+                        .orElseGet(() -> error(HttpStatus.CONFLICT, e.getMessage()));
+            }
+            HttpStatus status = HttpStatus.resolve(e.getStatusCode());
+            if (status == null) status = HttpStatus.UNPROCESSABLE_ENTITY;
+            // Keep the stub's error vocabulary: declines surface as 400 with
+            // the human-readable reason (e.g. insufficient balance). Compare
+            // by value — Framework 7 renamed 422's constant.
+            if (status.value() == 422) status = HttpStatus.BAD_REQUEST;
+            return error(status, e.getMessage());
+        }
+
+        return toStubShapedResponse(outcome, request);
+    }
+
+    /** Map the real-money outcome onto the stub's exact response contract. */
+    private ResponseEntity<ApiResult<PaymentResponse>> toStubShapedResponse(
+            InnbucksPaymentResponse outcome, PaymentRequest request) {
+        PaymentResponse.Status status = switch (outcome.getStatus()) {
+            case SUCCESS -> PaymentResponse.Status.SUCCESS;
+            case PROCESSING -> PaymentResponse.Status.PROCESSING;
+            case FAILED -> PaymentResponse.Status.FAILED;
+        };
+        if (status == PaymentResponse.Status.FAILED) {
+            // Stub error vocabulary: non-200 + message, data null.
+            String message = outcome.getUpstreamMessage() != null
+                    ? outcome.getUpstreamMessage() : "Payment was rejected";
+            return error(HttpStatus.BAD_REQUEST, message);
+        }
         PaymentResponse response = PaymentResponse.builder()
-                .transactionId(UUID.randomUUID())
-                .bookingId(request.getBookingId())
-                .status(PaymentResponse.Status.SUCCESS)
-                .amountPaid(asBigDecimal(confirmedBooking.get("totalAmount")))
-                .currency(request.getCurrency() != null ? request.getCurrency() : "USD")
+                .transactionId(transactionIdFrom(outcome.getPaymentReference()))
+                .bookingId(outcome.getBookingId())
+                .status(status)
+                .amountPaid(outcome.getAmountPaid())
+                .currency(outcome.getCurrency() != null ? outcome.getCurrency()
+                        : (request.getCurrency() != null ? request.getCurrency() : "USD"))
                 .cardLast4(request.getCardLast4())
-                .confirmationNumber(asString(confirmedBooking.get("confirmationNumber")))
+                .confirmationNumber(outcome.getConfirmationNumber())
                 .processedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .build();
-
-        log.info("Payment processed transactionId={} bookingId={} confirmation={} amountPaid={}",
-                response.getTransactionId(), response.getBookingId(),
+        String message = status == PaymentResponse.Status.SUCCESS
+                ? "Payment processed successfully"
+                : "Payment received; booking confirmation will follow shortly";
+        log.info("Payment processed transactionId={} bookingId={} status={} confirmation={} amountPaid={}",
+                response.getTransactionId(), response.getBookingId(), status,
                 response.getConfirmationNumber(), response.getAmountPaid());
-        return ResponseEntity.ok(ApiResult.ok("Payment processed successfully", response));
+        return ResponseEntity.ok(ApiResult.ok(message, response));
+    }
+
+    private ResponseEntity<ApiResult<PaymentResponse>> toReplayResponse(Payment p, PaymentRequest request) {
+        PaymentResponse.Status status = switch (p.getStatus()) {
+            case SUCCEEDED -> PaymentResponse.Status.SUCCESS;
+            default -> PaymentResponse.Status.PROCESSING;
+        };
+        PaymentResponse response = PaymentResponse.builder()
+                .transactionId(p.getId())
+                .bookingId(p.getBookingId())
+                .status(status)
+                .amountPaid(p.getAmount())
+                .currency(p.getCurrency())
+                .cardLast4(request.getCardLast4())
+                .confirmationNumber(p.getConfirmationNumber())
+                .processedAt(LocalDateTime.now(ZoneOffset.UTC))
+                .build();
+        String message = status == PaymentResponse.Status.SUCCESS
+                ? "Payment processed successfully"
+                : "Payment received; booking confirmation will follow shortly";
+        return ResponseEntity.ok(ApiResult.ok(message, response));
+    }
+
+    /** Stable receipt id: the UUID inside our TKT-PMT-<uuid> reference. */
+    private static UUID transactionIdFrom(String paymentReference) {
+        try {
+            return UUID.fromString(paymentReference.substring("TKT-PMT-".length()));
+        } catch (Exception e) {
+            return UUID.randomUUID();
+        }
+    }
+
+    private static ResponseEntity<ApiResult<PaymentResponse>> error(HttpStatus status, String message) {
+        return ResponseEntity.status(status).body(
+                ApiResult.<PaymentResponse>builder()
+                        .code(status.value() + " " + status.name())
+                        .message(message)
+                        .data(null)
+                        .build());
     }
 
     @PostMapping("/shop-checkout")
