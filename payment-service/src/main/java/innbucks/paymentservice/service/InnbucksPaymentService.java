@@ -37,25 +37,31 @@ import java.util.UUID;
  *   4. POST /payments/debit to innbucks-core-gateway -> veengu
  *   5. Classify the gateway envelope's outcome
  *      - COMPLETED  -> confirm the booking, then markSucceeded, return SUCCESS
+ *      - COMPLETED but confirm fails -> markCompletedUnconfirmed (money moved;
+ *        reconciler retries the confirm), return PROCESSING
  *      - PROCESSING / DUPLICATE_DETECTED -> leave PENDING, return PROCESSING
+ *      - UPSTREAM_UNAVAILABLE / null outcome -> markInDoubt, return PROCESSING
  *      - REJECTED_* -> markFailed with veengu's code, return FAILED
- *   6. On a transient exception (gateway/veengu unreachable) -> leave PENDING,
+ *   6. On a transient exception (gateway/veengu unreachable) -> markInDoubt,
  *      return PROCESSING; reconciler resolves later
  * </pre>
+ *
+ * <p>Ledger discipline: a timeout or unclassifiable outcome is NEVER recorded
+ * as FAILED (money may have moved — IN_DOUBT until the processor is queried),
+ * and a confirmed debit is NEVER recorded as FAILED just because the booking
+ * confirm failed (COMPLETED_UNCONFIRMED carries the veengu reference as the
+ * recovery handle). One active-or-successful payment per booking is enforced
+ * by the {@code uq_payment_active_booking} partial index, with a friendly
+ * 409 pre-check here.
  *
  * <p>Critical ordering at step 5/COMPLETED: confirmBooking happens BEFORE
  * markSucceeded. If markSucceeded fails (DB blip) we end up with a CONFIRMED
  * booking + a still-PENDING payment row — recoverable by the reconciler.
- * The alternative (markSucceeded before confirmBooking) risks a SUCCEEDED
- * payment row with an unconfirmed booking, which is worse: the customer is
- * debited but doesn't get the seat, and the reconciler can't infer that the
- * booking still needs confirming from the local row alone.
  *
- * <p>KNOWN GAP (PR 2): if veengu debits but confirmBooking fails for a real
- * reason (booking hold expired between fetch and confirm), we mark the
- * payment FAILED with a {@code booking_confirm_failed} code and ops must
- * refund manually in the veengu admin console. The automated refund flow
- * lands in a later PR. The runbook entry tracks this.
+ * <p>Automated refund (for bookings that stay unconfirmable, e.g. hold
+ * expired for good) is still a later PR — the veengu Payout flow. Until
+ * then, rows stuck in COMPLETED_UNCONFIRMED past the alert threshold are
+ * the operator's queue.
  */
 @Slf4j
 @Service
@@ -88,6 +94,15 @@ public class InnbucksPaymentService {
                     "payments.innbucks.merchant-account is not configured — refusing to debit without a payee account");
         }
 
+        // ---- Step 0: one active payment per booking ---------------------------
+        // Friendly pre-check; the uq_payment_active_booking partial index is
+        // the real arbiter under concurrency (the race-loser surfaces below
+        // as a DataIntegrityViolation on openPending, mapped to the same 409).
+        if (paymentRecordService.hasActiveOrSucceededPayment(bookingId)) {
+            throw new InvalidPaymentRequestException(
+                    "A payment for this booking is already in progress or completed", 409);
+        }
+
         // ---- Step 1: resolve customer wallet ----------------------------------
         String customerAccount = resolveMainWallet(customerMsisdn);
 
@@ -113,7 +128,17 @@ public class InnbucksPaymentService {
                 .currency(currency)
                 .idempotencyKey(idempotencyKey)
                 .build();
-        Payment opened = paymentRecordService.openPending(draft);
+        Payment opened;
+        try {
+            opened = paymentRecordService.openPending(draft);
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            // Race loser against uq_payment_active_booking (two concurrent
+            // submits for the same booking): the other request's row stands.
+            log.warn("[innbucks-payment] concurrent payment refused by active-booking index bookingId={}",
+                    bookingId);
+            throw new InvalidPaymentRequestException(
+                    "A payment for this booking is already in progress or completed", 409);
+        }
 
         // ---- Step 4: debit veengu via the gateway ----------------------------
         InnbucksCoreGatewayDebitRequest gatewayRequest = InnbucksCoreGatewayDebitRequest.builder()
@@ -131,9 +156,13 @@ public class InnbucksPaymentService {
         try {
             gatewayResponse = gatewayClient.debit(gatewayRequest, idempotencyKey);
         } catch (InnbucksCoreGatewayTransientException e) {
-            // Gateway/veengu unreachable. Leave PENDING; reconciler resolves later.
+            // Gateway/veengu unreachable AFTER the request may have left us —
+            // money MAY have moved. IN_DOUBT, never FAILED; the reconciler (or
+            // an operator checking the processor) resolves. FE sees PROCESSING.
             log.warn("[innbucks-payment] gateway transient for paymentReference={} msisdn={} status={}",
                     paymentReference, MsisdnMasking.mask(customerMsisdn), e.getStatusCode());
+            paymentRecordService.markInDoubt(opened.getId(),
+                    "Gateway transient failure: HTTP " + e.getStatusCode());
             return buildResponse(opened, Status.PROCESSING, null, null,
                     "InnBucks core temporarily unavailable; your payment is still being processed");
         } catch (InnbucksCoreGatewayException e) {
@@ -155,8 +184,13 @@ public class InnbucksPaymentService {
                                                   UUID bookingId) {
         PaymentOutcome outcome = gatewayResponse.outcome();
         if (outcome == null) {
+            // Unclassifiable envelope: money MAY have moved. Park IN_DOUBT
+            // with whatever reference we got — that's the recovery handle.
             log.error("[innbucks-payment] gateway returned null outcome paymentReference={}",
                     opened.getPaymentReference());
+            paymentRecordService.markInDoubt(opened.getId(),
+                    "Gateway returned null outcome; upstreamRef="
+                            + gatewayResponse.upstreamReference());
             return buildResponse(opened, Status.PROCESSING,
                     gatewayResponse.upstreamReference(), null,
                     "Outcome unknown; reconciler will resolve");
@@ -173,20 +207,31 @@ public class InnbucksPaymentService {
                     Map<String, Object> confirmed = bookingServiceClient.confirmBooking(bookingId);
                     confirmationNumber = asString(confirmed.get("confirmationNumber"));
                 } catch (BookingConfirmationException e) {
-                    // Customer was debited but booking confirm failed. PR 2 has
-                    // no automated refund — close the row FAILED and page ops.
-                    log.error("[innbucks-payment] BOOKING CONFIRM FAILED AFTER DEBIT — manual refund required " +
+                    // Customer was debited but booking confirm failed. Money
+                    // MOVED — recording this as FAILED (the old behaviour)
+                    // told the ledger no money moved, the one lie a payment
+                    // ledger must never contain. COMPLETED_UNCONFIRMED parks
+                    // it with the veengu reference as the recovery handle;
+                    // the reconciler retries the confirm (booking-side
+                    // confirm is an idempotent replay) and promotes to
+                    // SUCCEEDED. Sustained presence in this state is a page.
+                    log.error("[innbucks-payment] BOOKING CONFIRM FAILED AFTER DEBIT — reconciler will retry " +
                                     "paymentReference={} veenguRef={} bookingStatus={} reason={}",
                             opened.getPaymentReference(), gatewayResponse.upstreamReference(),
                             e.getStatusCode(), e.getMessage());
-                    paymentRecordService.markFailed(opened.getId(),
-                            "booking_confirm_failed",
-                            "Customer debited (veenguRef=" + gatewayResponse.upstreamReference()
-                                    + ") but booking confirm rejected: " + e.getMessage());
-                    return buildResponse(opened, Status.FAILED,
-                            gatewayResponse.upstreamReference(), "booking_confirm_failed",
-                            "Payment processed but booking could not be confirmed. " +
-                                    "Reference " + opened.getPaymentReference() + " — please contact support.");
+                    paymentRecordService.markCompletedUnconfirmed(opened.getId(),
+                            gatewayResponse.upstreamReference(),
+                            "Debit COMPLETED but booking confirm rejected (HTTP "
+                                    + e.getStatusCode() + "): " + e.getMessage());
+                    // FE-visible status is PROCESSING (an existing value on
+                    // this endpoint): truthful — the payment landed and the
+                    // booking is being finalised, very likely automatically
+                    // on the next reconciler pass.
+                    return buildResponse(opened, Status.PROCESSING,
+                            gatewayResponse.upstreamReference(), "booking_confirm_pending",
+                            "Payment received; we're finalising your booking. " +
+                                    "Reference " + opened.getPaymentReference() +
+                                    " — your confirmation will follow shortly.");
                 }
                 paymentRecordService.markSucceeded(opened.getId(),
                         gatewayResponse.upstreamReference(), confirmationNumber);
@@ -206,10 +251,13 @@ public class InnbucksPaymentService {
                         "Payment accepted by InnBucks; awaiting confirmation");
             }
             case UPSTREAM_UNAVAILABLE -> {
-                // Gateway returned 503 in the envelope (rare — usually the
-                // client throws InnbucksCoreGatewayTransientException first).
+                // Gateway reached veengu's doorstep and got turned away — but
+                // whether the debit was applied before the failure is unknown.
+                // Same discipline as the transient path: IN_DOUBT, never FAILED.
                 log.warn("[innbucks-payment] upstream unavailable paymentReference={}",
                         opened.getPaymentReference());
+                paymentRecordService.markInDoubt(opened.getId(),
+                        "Gateway reported upstream (veengu) unavailable");
                 return buildResponse(opened, Status.PROCESSING, null, null,
                         "InnBucks core temporarily unavailable; your payment is still being processed");
             }

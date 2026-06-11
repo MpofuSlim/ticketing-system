@@ -1,9 +1,13 @@
 package innbucks.paymentservice.repository;
 
 import innbucks.paymentservice.entity.Payment;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.time.Instant;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -19,4 +23,22 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
     Optional<Payment> findByPaymentReference(String paymentReference);
 
     Optional<Payment> findByIdempotencyKey(String idempotencyKey);
+
+    /**
+     * Pre-check companion to the {@code uq_payment_active_booking} partial
+     * unique index: lets the service refuse a second payment for a booking
+     * with a clean 409 instead of a constraint violation. The INDEX remains
+     * the source of truth under concurrency — this is UX, not enforcement.
+     */
+    boolean existsByBookingIdAndStatusIn(UUID bookingId, Collection<Payment.PaymentStatus> statuses);
+
+    /**
+     * Reconciler sweep: rows stuck in a non-terminal state (PENDING /
+     * IN_DOUBT) past the staleness threshold.
+     */
+    List<Payment> findByStatusInAndCreatedAtBefore(
+            Collection<Payment.PaymentStatus> statuses, Instant cutoff, Pageable pageable);
+
+    /** Reconciler sweep: money-moved-but-booking-unconfirmed rows to retry. */
+    List<Payment> findByStatus(Payment.PaymentStatus status, Pageable pageable);
 }
