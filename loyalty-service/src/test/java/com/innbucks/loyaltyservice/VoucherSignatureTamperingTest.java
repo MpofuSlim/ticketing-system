@@ -76,7 +76,7 @@ class VoucherSignatureTamperingTest {
         Dtos.MerchantResponse mr = merchantService.create(t.getId(),
                 new Dtos.MerchantRequest("Tamper Cafe", "F&B", "USD",
                         Merchant.BillingCycle.MONTHLY,
-                        new BigDecimal("0.05"), new BigDecimal("0.10")));
+                        new Dtos.FeeModel(Merchant.FeeType.FIXED, new BigDecimal("0.05"), null), new Dtos.FeeModel(Merchant.FeeType.FIXED, new BigDecimal("0.10"), null)));
 
         LoyaltyUser user = userService.findOrEnrol(t.getId(), "+263770099999", mr.id());
 

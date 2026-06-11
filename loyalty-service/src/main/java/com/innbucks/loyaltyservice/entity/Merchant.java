@@ -41,11 +41,32 @@ public class Merchant {
     @Column(name = "billing_cycle", nullable = false, length = 20)
     private BillingCycle billingCycle = BillingCycle.MONTHLY;
 
-    @Column(name = "fee_per_voucher_issued", precision = 19, scale = 6)
-    private BigDecimal feePerVoucherIssued = BigDecimal.ZERO;
+    // Per-voucher fee config. Three modes per side (see FeeType): FIXED is a
+    // flat amount, PERCENTAGE is computed off the voucher's face value, and
+    // FIXED_PLUS_PERCENTAGE is the sum. Issued and redeemed are configured
+    // independently so a merchant can charge differently for each leg.
 
-    @Column(name = "fee_per_voucher_redeemed", precision = 19, scale = 6)
-    private BigDecimal feePerVoucherRedeemed = BigDecimal.ZERO;
+    @Enumerated(EnumType.STRING)
+    @Column(name = "fee_issued_type", nullable = false, length = 30)
+    private FeeType feeIssuedType = FeeType.FIXED;
+
+    @Column(name = "fee_issued_fixed", precision = 19, scale = 6, nullable = false)
+    private BigDecimal feeIssuedFixed = BigDecimal.ZERO;
+
+    /** Whole-number percent, e.g. 2.5 means 2.5%. The /100 lives in {@link com.innbucks.loyaltyservice.service.MerchantFeeCalculator}. */
+    @Column(name = "fee_issued_percentage", precision = 7, scale = 4, nullable = false)
+    private BigDecimal feeIssuedPercentage = BigDecimal.ZERO;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "fee_redeemed_type", nullable = false, length = 30)
+    private FeeType feeRedeemedType = FeeType.FIXED;
+
+    @Column(name = "fee_redeemed_fixed", precision = 19, scale = 6, nullable = false)
+    private BigDecimal feeRedeemedFixed = BigDecimal.ZERO;
+
+    /** Whole-number percent, e.g. 2.5 means 2.5%. */
+    @Column(name = "fee_redeemed_percentage", precision = 7, scale = 4, nullable = false)
+    private BigDecimal feeRedeemedPercentage = BigDecimal.ZERO;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
@@ -62,4 +83,14 @@ public class Merchant {
 
     public enum BillingCycle { WEEKLY, MONTHLY }
     public enum Status { ACTIVE, INACTIVE }
+
+    /**
+     * How a per-voucher fee is computed:
+     * <ul>
+     *   <li>{@code FIXED} — fee = fee*Fixed, ignoring the voucher's face value.</li>
+     *   <li>{@code PERCENTAGE} — fee = voucherFaceValue × fee*Percentage / 100.</li>
+     *   <li>{@code FIXED_PLUS_PERCENTAGE} — sum of both legs above.</li>
+     * </ul>
+     */
+    public enum FeeType { FIXED, PERCENTAGE, FIXED_PLUS_PERCENTAGE }
 }

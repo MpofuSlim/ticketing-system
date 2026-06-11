@@ -121,23 +121,34 @@ public class ReportingService {
         Instant from = LocalDate.now().atStartOfDay().toInstant(ZoneOffset.UTC);
         Instant to = from.plusSeconds(86_400);
         Instant since24h = Instant.now().minusSeconds(86_400);
-        long today = vouchers.countByMerchantIdAndRedeemedAtBetween(merchantId, from, to);
-        long issued = vouchers.countByMerchantIdAndIssuedAtBetween(merchantId, from, to);
-        long redeemed = today;
+        Merchant m = merchants.findById(merchantId).orElse(null);
+
+        // Pull the individual rows so the dashboard's "estimated invoice"
+        // figure honours the merchant's PERCENTAGE / FIXED_PLUS_PERCENTAGE
+        // configuration. Without this we'd still be reporting count*flat —
+        // the same regression the invoicing path used to have.
+        List<Voucher> issuedVouchers   = vouchers.findByMerchantIdAndIssuedAtBetween(merchantId, from, to);
+        List<Voucher> redeemedVouchers = vouchers.findByMerchantIdAndRedeemedAtBetween(merchantId, from, to);
+        long issued   = issuedVouchers.size();
+        long redeemed = redeemedVouchers.size();
+        long today    = redeemed;
         BigDecimal pointsIssued = transactions.sumPointsIssued(merchantId, from, to);
         BigDecimal pointsRedeemed = transactions.sumPointsRedeemed(merchantId, from, to);
         long fraudAlerts = fraud.findTop100ByOrderByCreatedAtDesc().stream()
                 .filter(f -> merchantId.equals(f.getMerchantId()))
                 .filter(f -> f.getCreatedAt().isAfter(since24h))
                 .count();
-        Merchant m = merchants.findById(merchantId).orElse(null);
         LocalDate nextInvoice = m == null ? null
                 : (m.getBillingCycle() == Merchant.BillingCycle.WEEKLY
                     ? LocalDate.now().plusWeeks(1).with(java.time.DayOfWeek.MONDAY)
                     : LocalDate.now().withDayOfMonth(1).plusMonths(1));
         BigDecimal estimatedInvoice = m == null ? BigDecimal.ZERO
-                : m.getFeePerVoucherIssued().multiply(BigDecimal.valueOf(issued))
-                    .add(m.getFeePerVoucherRedeemed().multiply(BigDecimal.valueOf(redeemed)));
+                : issuedVouchers.stream()
+                        .map(v -> MerchantFeeCalculator.feeForIssued(m, v))
+                        .reduce(BigDecimal.ZERO, BigDecimal::add)
+                  .add(redeemedVouchers.stream()
+                        .map(v -> MerchantFeeCalculator.feeForRedeemed(m, v))
+                        .reduce(BigDecimal.ZERO, BigDecimal::add));
         return new Dtos.MerchantDashboard(merchantId, today, issued, redeemed,
                 pointsIssued, pointsRedeemed, fraudAlerts, nextInvoice, estimatedInvoice);
     }

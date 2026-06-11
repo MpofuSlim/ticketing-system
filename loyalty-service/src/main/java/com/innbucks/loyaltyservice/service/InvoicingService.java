@@ -4,6 +4,7 @@ import com.innbucks.loyaltyservice.config.LoyaltyProperties;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.Invoice;
 import com.innbucks.loyaltyservice.entity.Merchant;
+import com.innbucks.loyaltyservice.entity.Voucher;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.InvoiceRepository;
 import com.innbucks.loyaltyservice.repository.LoyaltyTransactionRepository;
@@ -65,11 +66,22 @@ public class InvoicingService {
 
         BigDecimal pointsIssued = transactions.sumPointsIssued(m.getId(), from, to);
         BigDecimal pointsRedeemed = transactions.sumPointsRedeemed(m.getId(), from, to);
-        long voucherIssued = vouchers.countByMerchantIdAndIssuedAtBetween(m.getId(), from, to);
-        long voucherRedeemed = vouchers.countByMerchantIdAndRedeemedAtBetween(m.getId(), from, to);
 
-        BigDecimal feeVoucherIssued = m.getFeePerVoucherIssued().multiply(BigDecimal.valueOf(voucherIssued));
-        BigDecimal feeVoucherRedeemed = m.getFeePerVoucherRedeemed().multiply(BigDecimal.valueOf(voucherRedeemed));
+        // Pull individual vouchers (not just COUNT) so PERCENTAGE / FIXED_PLUS_
+        // PERCENTAGE fees can multiply each row's face value by the merchant's
+        // configured percentage. For FIXED, this still sums to count*flat —
+        // MerchantFeeCalculator.compute returns the same value for every row.
+        List<Voucher> issuedVouchers   = vouchers.findByMerchantIdAndIssuedAtBetween(m.getId(), from, to);
+        List<Voucher> redeemedVouchers = vouchers.findByMerchantIdAndRedeemedAtBetween(m.getId(), from, to);
+        long voucherIssued   = issuedVouchers.size();
+        long voucherRedeemed = redeemedVouchers.size();
+
+        BigDecimal feeVoucherIssued = issuedVouchers.stream()
+                .map(v -> MerchantFeeCalculator.feeForIssued(m, v))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        BigDecimal feeVoucherRedeemed = redeemedVouchers.stream()
+                .map(v -> MerchantFeeCalculator.feeForRedeemed(m, v))
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal total = feeVoucherIssued.add(feeVoucherRedeemed);
 
         // No money owed -> no invoice. compareTo(ZERO) instead of equals so

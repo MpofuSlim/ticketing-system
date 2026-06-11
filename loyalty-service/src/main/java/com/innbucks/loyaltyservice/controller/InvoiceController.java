@@ -30,9 +30,10 @@ import java.util.UUID;
 @Tag(name = "Invoicing",
      description = "Per-merchant periodic billing. The daily InvoiceScheduler calls `/generate` for each " +
                    "active merchant; this controller exposes manual generation, listing, and mark-as-paid " +
-                   "for support flows. Total = (vouchersIssued × feePerVoucherIssued) + " +
-                   "(vouchersRedeemed × feePerVoucherRedeemed). Loyalty points carry no per-point fee. " +
-                   "Requires X-Tenant-Id.")
+                   "for support flows. The invoice total is the sum of per-voucher fees computed from " +
+                   "the merchant's `feeIssued` / `feeRedeemed` schedules (FIXED / PERCENTAGE / " +
+                   "FIXED_PLUS_PERCENTAGE — see `POST /loyalty/merchants` for details). Loyalty points " +
+                   "carry no per-point fee. Requires X-Tenant-Id.")
 public class InvoiceController {
 
     private final InvoicingService invoicing;

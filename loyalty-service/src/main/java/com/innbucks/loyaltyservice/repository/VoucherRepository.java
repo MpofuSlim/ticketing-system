@@ -47,6 +47,16 @@ public interface VoucherRepository extends JpaRepository<Voucher, UUID> {
 
     long countByMerchantIdAndRedeemedAtBetween(UUID merchantId, Instant from, Instant to);
 
+    // Per-merchant voucher pulls used by InvoicingService + ReportingService to
+    // compute per-voucher fees under the merchant's 3-mode fee model. The
+    // PERCENTAGE / FIXED_PLUS_PERCENTAGE legs need each voucher's face value,
+    // so a COUNT(*) is no longer enough. The result is bounded by per-merchant
+    // per-period activity (typically <10k rows / month per merchant); no
+    // pagination required at this scale.
+    List<Voucher> findByMerchantIdAndIssuedAtBetween(UUID merchantId, Instant from, Instant to);
+
+    List<Voucher> findByMerchantIdAndRedeemedAtBetween(UUID merchantId, Instant from, Instant to);
+
     long countByTenantIdAndStatus(UUID tenantId, Voucher.Status status);
 
     // One-query active-voucher count grouped by user. Powers /me/wallet so we

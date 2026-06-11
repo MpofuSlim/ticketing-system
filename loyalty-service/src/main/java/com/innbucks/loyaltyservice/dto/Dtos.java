@@ -31,6 +31,21 @@ public class Dtos {
 
     public record TenantMemberResponse(UUID id, UUID tenantId, String email, Instant joinedAt) {}
 
+    /**
+     * Per-voucher fee configuration on the merchant. {@code type} selects
+     * which of {@code fixed} / {@code percentage} applies (or both for
+     * {@code FIXED_PLUS_PERCENTAGE}). {@code percentage} is expressed as a
+     * whole-number percent — 2.5 means 2.5%.
+     */
+    public record FeeModel(
+            @Schema(example = "FIXED_PLUS_PERCENTAGE", description = "How the per-voucher fee is computed.")
+            Merchant.FeeType type,
+            @Schema(example = "0.30", description = "Flat amount in the merchant's currency. Used when type is FIXED or FIXED_PLUS_PERCENTAGE.", nullable = true)
+            BigDecimal fixed,
+            @Schema(example = "2.5", description = "Whole-number percent applied to the voucher's face value. 2.5 means 2.5%. Used when type is PERCENTAGE or FIXED_PLUS_PERCENTAGE.", nullable = true)
+            BigDecimal percentage
+    ) {}
+
     public record MerchantRequest(
             @Schema(example = "Innbucks Westgate", description = "Display name of the merchant outlet (e.g. \"Chicken Inn Westgate\").")
             @NotBlank String name,
@@ -40,15 +55,16 @@ public class Dtos {
             String currency,
             @Schema(example = "MONTHLY", allowableValues = {"WEEKLY", "MONTHLY"})
             Merchant.BillingCycle billingCycle,
-            @Schema(example = "0.050000", nullable = true, description = "Fee charged per voucher issued.")
-            BigDecimal feePerVoucherIssued,
-            @Schema(example = "0.100000", nullable = true, description = "Fee charged per voucher redeemed.")
-            BigDecimal feePerVoucherRedeemed
+            @Schema(description = "Fee charged to the merchant when a voucher is issued. Defaults to FIXED 0 (no fee) if omitted.", nullable = true)
+            FeeModel feeIssued,
+            @Schema(description = "Fee charged to the merchant when a voucher is redeemed. Defaults to FIXED 0 (no fee) if omitted.", nullable = true)
+            FeeModel feeRedeemed
     ) {}
 
     public record MerchantResponse(UUID id, UUID tenantId, String name, String category,
                                    String currency, Merchant.BillingCycle billingCycle,
-                                   Merchant.Status status) {}
+                                   Merchant.Status status,
+                                   FeeModel feeIssued, FeeModel feeRedeemed) {}
 
     // A Shop is a physical outlet under a Merchant. e.g. "Pizza Inn Avondale"
     // and "Pizza Inn Westgate" are two shops under the "Pizza Inn" merchant.
