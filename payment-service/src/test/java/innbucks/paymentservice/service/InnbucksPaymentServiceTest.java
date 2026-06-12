@@ -5,12 +5,10 @@ import innbucks.paymentservice.client.CodeGenerationResult;
 import innbucks.paymentservice.client.InnbucksApiClient;
 import innbucks.paymentservice.client.InnbucksApiException;
 import innbucks.paymentservice.client.InnbucksApiTransientException;
-import innbucks.paymentservice.config.PaymentMetrics;
 import innbucks.paymentservice.dto.InnbucksPaymentResponse;
 import innbucks.paymentservice.dto.InnbucksPaymentResponse.Status;
 import innbucks.paymentservice.entity.Payment;
 import innbucks.paymentservice.service.InnbucksPaymentService.InvalidPaymentRequestException;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -33,26 +31,26 @@ import static org.mockito.Mockito.*;
 /**
  * Pins the 2D-code flow's ledger + safety discipline:
  * <ul>
- *   <li>happy path: PENDING → TOKEN_ISSUED with the code handles, the code
- *       is DELIVERED (WhatsApp/SMS) and echoed on the PROCESSING response —
- *       zero FE involvement;</li>
+ *   <li>happy path: PENDING → TOKEN_ISSUED with the code handles + QR
+ *       echoed on the PROCESSING response — the FE renders both;</li>
  *   <li>amounts convert to CENTS exactly (sub-cent precision refused) and a
- *       mismatched amount echo kills the payment BEFORE the code reaches the
- *       customer — the 100x guard;</li>
+ *       mismatched amount echo kills the payment BEFORE the FE ever sees
+ *       the code — the 100x guard;</li>
  *   <li>generation failures (refusal/transient) close the row FAILED — no
  *       money moves on generate, the slot frees for a clean retry, and
  *       IN_DOUBT never arises in this flow;</li>
  *   <li>one active payment per booking: pre-check 409 + race-loser 409 on
- *       the unique-index violation;</li>
- *   <li>delivery failure is best-effort: journaled, never fails the payment.</li>
+ *       the unique-index violation.</li>
  * </ul>
+ *
+ * <p>No notifier dependency — the response IS the delivery (FE shows the
+ * code/QR on the checkout screen).
  */
 class InnbucksPaymentServiceTest {
 
     private PaymentRecordService records;
     private InnbucksApiClient innbucksApi;
     private BookingServiceClient bookings;
-    private PaymentCodeNotifier notifier;
     private InnbucksPaymentService service;
 
     private final UUID bookingId = UUID.randomUUID();
@@ -62,9 +60,7 @@ class InnbucksPaymentServiceTest {
         records = mock(PaymentRecordService.class);
         innbucksApi = mock(InnbucksApiClient.class);
         bookings = mock(BookingServiceClient.class);
-        notifier = mock(PaymentCodeNotifier.class);
-        service = new InnbucksPaymentService(records, innbucksApi, bookings, notifier,
-                new PaymentMetrics(new SimpleMeterRegistry()));
+        service = new InnbucksPaymentService(records, innbucksApi, bookings);
         ReflectionTestUtils.setField(service, "codeTtl", Duration.ofMinutes(10));
 
         lenient().when(records.hasActiveOrSucceededPayment(any())).thenReturn(false);
@@ -76,17 +72,15 @@ class InnbucksPaymentServiceTest {
             p.setStatus(Payment.PaymentStatus.PENDING);
             return p;
         });
-        lenient().when(notifier.sendPaymentCode(anyString(), anyString(), any(), anyString(), any(), anyString()))
-                .thenReturn(PaymentCodeNotifier.Delivery.WHATSAPP);
     }
 
     private static CodeGenerationResult approved(String code, String authNumber, Long echoCents) {
-        return new CodeGenerationResult(true, code, authNumber, "414107", echoCents,
+        return new CodeGenerationResult(true, code, authNumber, "qr-base64-bytes", "414107", echoCents,
                 "0", "Approved or completed successfully");
     }
 
     @Test
-    void happyPath_issuesCode_marksTokenIssued_deliversAndEchoesIt() {
+    void happyPath_issuesCode_marksTokenIssued_echoesCodeAndQrOnResponse() {
         when(innbucksApi.generatePaymentCode(anyString(), anyString(), eq(5000L)))
                 .thenReturn(approved("701285660", "1616800", 5000L));
 
@@ -94,13 +88,12 @@ class InnbucksPaymentServiceTest {
 
         assertEquals(Status.PROCESSING, resp.getStatus());
         assertEquals("701285660", resp.getPaymentCode());
+        assertEquals("qr-base64-bytes", resp.getPaymentQrCode(),
+                "the InnBucks QR must ride along for Scan-to-Pay");
         assertNotNull(resp.getPaymentCodeExpiresAt());
-        // Ledger: code handles + local deadline recorded on the transition.
-        verify(records).markTokenIssued(any(UUID.class), eq("701285660"), eq("1616800"), any(Instant.class));
-        // Delivery: the customer gets the code with the EXACT booking amount.
-        verify(notifier).sendPaymentCode(eq("+263770000001"), eq("701285660"),
-                eq(new BigDecimal("50.00")), eq("USD"), eq(Duration.ofMinutes(10)), anyString());
-        verify(records).noteEvent(any(UUID.class), contains("WHATSAPP"));
+        // Ledger: code handles + QR + local deadline recorded on the transition.
+        verify(records).markTokenIssued(any(UUID.class), eq("701285660"), eq("1616800"),
+                eq("qr-base64-bytes"), any(Instant.class));
         verify(records, never()).markFailed(any(), anyString(), anyString());
         verify(records, never()).markInDoubt(any(), anyString());
     }
@@ -129,10 +122,10 @@ class InnbucksPaymentServiceTest {
     }
 
     @Test
-    void amountEchoMismatch_failsRow_andNeverDeliversTheCode() {
+    void amountEchoMismatch_failsRow_andNeverSurfacesTheCode() {
         // We asked for 5000 cents; the platform echoed 50 — whatever the
         // cause (unit drift, truncation), the live code is for the WRONG
-        // amount. The customer must never receive it.
+        // amount. The FE must never see it.
         when(innbucksApi.generatePaymentCode(anyString(), anyString(), eq(5000L)))
                 .thenReturn(approved("701285660", "1616800", 50L));
 
@@ -140,15 +133,16 @@ class InnbucksPaymentServiceTest {
 
         assertEquals(Status.FAILED, resp.getStatus());
         assertEquals("amount_mismatch", resp.getUpstreamCode());
+        assertNull(resp.getPaymentCode());
+        assertNull(resp.getPaymentQrCode());
         verify(records).markFailed(any(UUID.class), eq("amount_mismatch"), contains("5000"));
-        verifyNoInteractions(notifier);
-        verify(records, never()).markTokenIssued(any(), anyString(), anyString(), any());
+        verify(records, never()).markTokenIssued(any(), anyString(), anyString(), anyString(), any());
     }
 
     @Test
     void upstreamRefusal_failsRow_withUpstreamReason() {
         when(innbucksApi.generatePaymentCode(anyString(), anyString(), anyLong()))
-                .thenReturn(new CodeGenerationResult(false, null, null, null, null,
+                .thenReturn(new CodeGenerationResult(false, null, null, null, null, null,
                         "96", "Request failed, please try again later"));
 
         InnbucksPaymentResponse resp = service.processPayment(bookingId, "+263770000001", null);
@@ -156,14 +150,13 @@ class InnbucksPaymentServiceTest {
         assertEquals(Status.FAILED, resp.getStatus());
         assertEquals("96", resp.getUpstreamCode());
         verify(records).markFailed(any(UUID.class), eq("96"), contains("Request failed"));
-        verifyNoInteractions(notifier);
     }
 
     @Test
     void generationTransient_failsRow_andSurfaces503_neverInDoubt() {
-        // Generation moves NO money: an orphaned upstream code is
-        // undeliverable and self-expires, so FAILED (slot freed) is correct —
-        // this flow never parks IN_DOUBT.
+        // Generation moves NO money: an orphaned upstream code reaches no
+        // one (no out-of-band delivery) and self-expires, so FAILED (slot
+        // freed) is correct — this flow never parks IN_DOUBT.
         when(innbucksApi.generatePaymentCode(anyString(), anyString(), anyLong()))
                 .thenThrow(new InnbucksApiTransientException("innbucks 503", 503));
 
@@ -173,7 +166,6 @@ class InnbucksPaymentServiceTest {
         assertEquals(503, ex.getStatusCode());
         verify(records).markFailed(any(UUID.class), eq("innbucks_unreachable"), anyString());
         verify(records, never()).markInDoubt(any(), anyString());
-        verifyNoInteractions(notifier);
     }
 
     @Test
@@ -186,24 +178,6 @@ class InnbucksPaymentServiceTest {
 
         assertEquals(500, ex.getStatusCode());
         verify(records).markFailed(any(UUID.class), eq("innbucks_rejected"), anyString());
-    }
-
-    @Test
-    void deliveryFailure_isBestEffort_paymentStaysTokenIssued() {
-        when(innbucksApi.generatePaymentCode(anyString(), anyString(), anyLong()))
-                .thenReturn(approved("701285660", "1616800", 5000L));
-        when(notifier.sendPaymentCode(anyString(), anyString(), any(), anyString(), any(), anyString()))
-                .thenReturn(PaymentCodeNotifier.Delivery.FAILED);
-
-        InnbucksPaymentResponse resp = service.processPayment(bookingId, "+263770000001", null);
-
-        // The code is still live + echoed on the response; the journal
-        // carries the miss for support. Never fail the payment over delivery.
-        assertEquals(Status.PROCESSING, resp.getStatus());
-        assertEquals("701285660", resp.getPaymentCode());
-        verify(records).markTokenIssued(any(UUID.class), eq("701285660"), eq("1616800"), any(Instant.class));
-        verify(records).noteEvent(any(UUID.class), contains("FAILED"));
-        verify(records, never()).markFailed(any(), anyString(), anyString());
     }
 
     @Test

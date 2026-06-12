@@ -27,17 +27,18 @@ public class PaymentResponse {
     private Status status;
     private BigDecimal amountPaid;
     private String currency;
-    private String cardLast4;
     private String confirmationNumber;
     private LocalDateTime processedAt;
 
     /**
-     * Additive (old FE ignores them): the InnBucks code the customer
-     * approves — also delivered via WhatsApp/SMS so the CURRENT FE needs no
-     * change — and its approval deadline. A future FE can render these
-     * directly (e.g. show the code or deep-link
-     * {@code com.innbucks.customer://purchase?paymentToken=<code>}).
+     * The InnBucks code the customer approves, its approval deadline, and
+     * the InnBucks-rendered QR image (base64). Present while
+     * {@code status=PROCESSING}; the FE renders both code and QR on the
+     * checkout screen (the response IS the delivery — no out-of-band
+     * messaging). QR render: {@code data:image/png;base64,<paymentQrCode>}.
+     * Deep link: {@code com.innbucks.customer://purchase?paymentToken=<code>}.
      */
     private String paymentCode;
     private LocalDateTime paymentCodeExpiresAt;
+    private String paymentQrCode;
 }

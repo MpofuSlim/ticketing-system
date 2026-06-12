@@ -6,10 +6,14 @@ package innbucks.paymentservice.client;
  * @param approved        platform said responseCode 0 AND returned both
  *                        handles ({@code code} + {@code authNumber})
  * @param code            the InnBucks code the CUSTOMER pays (shown in their
- *                        app under "Pay by Code"; delivered to them via
- *                        WhatsApp/SMS and echoed on the payment response)
+ *                        app under "Pay by Code"; surfaced to the FE on the
+ *                        payment response)
  * @param authNumber      InnBucks-side handle for this code — the
  *                        {@code originalReference} every status query keys on
+ * @param qrCodeBase64    InnBucks-rendered QR image (base64) encoding the same
+ *                        payment — surfaced to the FE so customers can
+ *                        Scan-to-Pay instead of typing the code; null when
+ *                        the platform omits it (the numeric code always works)
  * @param stan            InnBucks system trace audit number (logging only)
  * @param amountEchoCents the amount the platform echoed back, in CENTS —
  *                        callers MUST cross-check it against what they sent
@@ -21,6 +25,7 @@ public record CodeGenerationResult(
         boolean approved,
         String code,
         String authNumber,
+        String qrCodeBase64,
         String stan,
         Long amountEchoCents,
         String responseCode,

@@ -5,7 +5,6 @@ import innbucks.paymentservice.client.CodeGenerationResult;
 import innbucks.paymentservice.client.InnbucksApiClient;
 import innbucks.paymentservice.client.InnbucksApiException;
 import innbucks.paymentservice.client.InnbucksApiTransientException;
-import innbucks.paymentservice.config.PaymentMetrics;
 import innbucks.paymentservice.dto.InnbucksPaymentResponse;
 import innbucks.paymentservice.dto.InnbucksPaymentResponse.Status;
 import innbucks.paymentservice.entity.Payment;
@@ -38,13 +37,15 @@ import java.util.UUID;
  *      - amount echo != sent -> FAILED amount_mismatch (the 100x guard) — the
  *        code is NOT delivered to the customer
  *      - transient/5xx   -> FAILED + 503 (safe: an orphaned upstream code is
- *        undeliverable and simply expires; the slot frees for a clean retry)
- *   4. Deliver the code to the BOOKING's phone (WhatsApp -> SMS fallback,
- *      best-effort, journaled) — the customer approves it in their own
- *      InnBucks app or USSD. Zero FE involvement.
- *   5. Return PROCESSING with the code echoed; the reconciler's status
- *      poller flips the row when InnBucks reports Paid (confirm booking ->
- *      SUCCEEDED) or Expired/Timed Out (-> EXPIRED, slot freed).
+ *        unreachable and simply expires; the slot frees for a clean retry)
+ *   4. Return PROCESSING with the code + QR echoed on the response — the FE
+ *      renders both on the checkout screen so the customer approves them in
+ *      their own InnBucks app (Scan-to-Pay, Pay by Code, or the deep link).
+ *      No out-of-band delivery: the FE is the single source of truth for
+ *      what the customer sees.
+ *   5. The reconciler's status poller flips the row when InnBucks reports
+ *      Paid (confirm booking -> SUCCEEDED) or Expired/Timed Out (-> EXPIRED,
+ *      slot freed).
  * </pre>
  *
  * <p>Ledger discipline carried over from the hardening pass: the PENDING row
@@ -68,8 +69,6 @@ public class InnbucksPaymentService {
     private final PaymentRecordService paymentRecordService;
     private final InnbucksApiClient innbucksApiClient;
     private final BookingServiceClient bookingServiceClient;
-    private final PaymentCodeNotifier codeNotifier;
-    private final PaymentMetrics metrics;
 
     /**
      * How long the customer has to approve the code. Must stay comfortably
@@ -162,7 +161,7 @@ public class InnbucksPaymentService {
                     generated.responseCode(),
                     generated.responseMsg() != null ? generated.responseMsg()
                             : "InnBucks could not start this payment; please try again",
-                    null, null);
+                    null, null, null);
         }
 
         // The cents/dollars 100x guard: if the platform echoes a different
@@ -177,34 +176,23 @@ public class InnbucksPaymentService {
                     "Sent " + amountCents + " cents but InnBucks echoed " + generated.amountEchoCents());
             return buildResponse(opened, Status.FAILED, null, "amount_mismatch",
                     "Could not start the payment — please try again or contact support",
-                    null, null);
+                    null, null, null);
         }
 
-        // ---- Step 4: record TOKEN_ISSUED, then deliver the code ---------------
+        // ---- Step 4: record TOKEN_ISSUED; the code rides back on the response -
+        // No out-of-band delivery: the FE renders the code + QR + countdown
+        // from the response, so the customer sees them on the same screen
+        // they tapped Pay from. A missing notification can never lose a code.
         Instant expiresAt = Instant.now().plus(codeTtl);
         paymentRecordService.markTokenIssued(opened.getId(),
-                generated.code(), generated.authNumber(), expiresAt);
+                generated.code(), generated.authNumber(), generated.qrCodeBase64(), expiresAt);
 
-        PaymentCodeNotifier.Delivery delivery = codeNotifier.sendPaymentCode(
-                customerMsisdn, generated.code(), amount, currency, codeTtl, paymentReference);
-        metrics.incCodeDelivery(delivery.name().toLowerCase(java.util.Locale.ROOT));
-        if (delivery == PaymentCodeNotifier.Delivery.FAILED) {
-            // Best-effort by design: the code is still valid and echoed on the
-            // response. Journal the miss so support can explain "I never got
-            // a code" tickets; the row expires + frees the slot if unpaid.
-            paymentRecordService.noteEvent(opened.getId(),
-                    "Payment-code delivery FAILED on all channels (WhatsApp + SMS)");
-        } else {
-            paymentRecordService.noteEvent(opened.getId(),
-                    "Payment code delivered via " + delivery);
-        }
-
-        log.info("[innbucks-payment] code issued paymentReference={} authNumber={} expiresAt={} delivery={}",
-                paymentReference, generated.authNumber(), expiresAt, delivery);
+        log.info("[innbucks-payment] code issued paymentReference={} msisdn={} authNumber={} expiresAt={}",
+                paymentReference, MsisdnMasking.mask(customerMsisdn), generated.authNumber(), expiresAt);
         return buildResponse(opened, Status.PROCESSING,
                 generated.authNumber(), null,
-                "Approve the payment in your InnBucks app — your payment code was sent to your phone",
-                generated.code(), expiresAt);
+                "Approve the payment in your InnBucks app to complete your booking",
+                generated.code(), generated.qrCodeBase64(), expiresAt);
     }
 
     private InnbucksPaymentResponse buildResponse(Payment payment,
@@ -213,6 +201,7 @@ public class InnbucksPaymentService {
                                                   String upstreamCode,
                                                   String upstreamMessage,
                                                   String paymentCode,
+                                                  String paymentQrCode,
                                                   Instant codeExpiresAt) {
         return InnbucksPaymentResponse.builder()
                 .paymentReference(payment.getPaymentReference())
@@ -225,6 +214,7 @@ public class InnbucksPaymentService {
                 .upstreamCode(upstreamCode)
                 .upstreamMessage(upstreamMessage)
                 .paymentCode(paymentCode)
+                .paymentQrCode(paymentQrCode)
                 .paymentCodeExpiresAt(codeExpiresAt == null ? null
                         : LocalDateTime.ofInstant(codeExpiresAt, ZoneOffset.UTC))
                 .processedAt(LocalDateTime.now(ZoneOffset.UTC))

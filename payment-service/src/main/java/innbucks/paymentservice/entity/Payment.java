@@ -114,8 +114,9 @@ public class Payment {
 
     /**
      * The InnBucks 2D code the customer approves in their own app/USSD
-     * ({@code code} from {@code POST /api/code/generate}). Also echoed on the
-     * {@code POST /payments} response and delivered via WhatsApp/SMS.
+     * ({@code code} from {@code POST /api/code/generate}). Echoed on the
+     * {@code POST /payments} response — the FE renders it on the checkout
+     * screen; there is no out-of-band delivery.
      */
     @Column(name = "innbucks_code", length = 32)
     private String innbucksCode;
@@ -135,6 +136,15 @@ public class Payment {
      */
     @Column(name = "code_expires_at")
     private Instant codeExpiresAt;
+
+    /**
+     * InnBucks-rendered QR image (base64) for this code — the Scan-to-Pay
+     * twin of {@link #innbucksCode}. Persisted so a replay re-surfaces the
+     * exact artifact the customer was shown (and the ledger keeps it for
+     * disputes); a few KB per row, only while codes are in flight.
+     */
+    @Column(name = "code_qr_base64")
+    private String codeQrBase64;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

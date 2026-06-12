@@ -64,10 +64,17 @@ public class InnbucksPaymentResponse {
             example = "Customer balance insufficient for transaction")
     private String upstreamMessage;
 
-    @Schema(description = "The InnBucks payment code the customer approves in their own app/USSD "
-            + "(also delivered to their phone via WhatsApp/SMS). Present while status=PROCESSING.",
+    @Schema(description = "The InnBucks payment code the customer approves in their own app/USSD. "
+            + "Surfaced to the FE for the checkout screen — the FE renders the code (and QR below) "
+            + "directly; there is no out-of-band delivery. Present while status=PROCESSING.",
             example = "701285660")
     private String paymentCode;
+
+    @Schema(description = "InnBucks-rendered QR image (base64) encoding the same payment — render it "
+            + "so the customer can Scan-to-Pay in the InnBucks app instead of typing the code. "
+            + "May be null; the numeric code always works.",
+            example = "iVBORw0KGgoAAAANSUhEUg...")
+    private String paymentQrCode;
 
     @Schema(description = "UTC deadline for approving the payment code; after this the payment "
             + "expires and the booking can be paid again with a fresh code.",

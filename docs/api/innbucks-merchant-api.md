@@ -49,9 +49,11 @@ Response (success): `{"stan", "authNumber", "processedDateTime",
   **Pay by Code** (or USSD). We deliver it via WhatsApp→SMS and echo it on
   the `POST /payments` response (`paymentCode`, additive field).
 - `authNumber` — the handle for all status queries (`originalReference`).
-- `qrCode` — base64 QR image; not consumed today (text code + deep link
-  cover app + USSD). A future FE can render it or use the deep link
-  `com.innbucks.customer://purchase?paymentToken=<code>`.
+- `qrCode` — InnBucks-rendered base64 QR image of the same payment. Persisted
+  on the payment row and surfaced to the FE as the additive `paymentQrCode`
+  field on `POST /payments`, so the customer can **Scan-to-Pay** in the
+  InnBucks app instead of typing the code. The deep link
+  `com.innbucks.customer://purchase?paymentToken=<code>` is a third path.
 - **Never retried** by our client: a retry after an ambiguous failure could
   mint a second live code. Generation moves no money, so failures close the
   ledger row FAILED and the customer just taps pay again.
