@@ -83,9 +83,6 @@ class BookingConfirmedNotificationListenerTest {
         Mocks m = mocks();
         Booking b = bookingFixture("+263771234567", "rufaro@example.com", 2);
         when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
-        String qr1 = BASE + "/bookings/" + b.getId() + "/tickets/20260610-T1/qr";
-        String qr2 = BASE + "/bookings/" + b.getId() + "/tickets/20260610-T2/qr";
-
         m.listener().onBookingConfirmed(eventFor(b));
 
         // Email: to the booking address, subject carries the confirmation, body
@@ -104,8 +101,9 @@ class BookingConfirmedNotificationListenerTest {
         verify(m.wa()).sendCustomNotification(eq("+263771234567"), wa.capture());
         assertThat(wa.getValue())
                 .contains("INN-20260610-A1B2C3").contains("2 tickets")
-                // Direct QR-image links, one per ticket — the whole deliverable for now.
-                .contains(qr1).contains(qr2);
+                .contains("20260610-T1").contains("20260610-T2")
+                // No links of any kind — product direction; QR rides the email.
+                .doesNotContain("http");
         verifyNoInteractions(m.sms());
     }
 
@@ -129,13 +127,11 @@ class BookingConfirmedNotificationListenerTest {
         when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
         doThrow(new NotificationDeliveryException("gateway 503"))
                 .when(m.wa()).sendCustomNotification(anyString(), anyString());
-        String qr1 = BASE + "/bookings/" + b.getId() + "/tickets/20260610-T1/qr";
-
         m.listener().onBookingConfirmed(eventFor(b));
 
         ArgumentCaptor<String> smsMsg = ArgumentCaptor.forClass(String.class);
         verify(m.sms()).sendSms(eq("+263771234567"), smsMsg.capture(), startsWith("BOOKING-CONFIRM-"));
-        assertThat(smsMsg.getValue()).contains("INN-20260610-A1B2C3").contains(qr1);
+        assertThat(smsMsg.getValue()).contains("INN-20260610-A1B2C3").doesNotContain("http");
         // Email is an independent channel — still delivered despite WhatsApp failure.
         verify(m.email()).sendHtmlEmail(eq("rufaro@example.com"), anyString(), anyString(), anyString());
     }

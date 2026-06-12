@@ -32,10 +32,9 @@ import java.util.List;
  *       endpoint ({@code /bookings/{id}/tickets/{tn}/qr}) so it shows in Gmail/
  *       Outlook (data-URIs are stripped), plus a link to the ticket page.</li>
  *   <li><b>WhatsApp → SMS fallback</b> (to {@code phoneNumber}, if present) —
- *       the confirmation text + a DIRECT link to each ticket's QR image
- *       ({@code /bookings/{id}/tickets/{tn}/qr}). The WhatsApp gateway is
- *       text-only, so the QR rides the link, not an attachment; the ticket
- *       view page exists but isn't part of the message for now.</li>
+ *       a plain confirmation (booking ref, ticket count/numbers, total). NO
+ *       links by product direction; the scannable QR reaches the customer via
+ *       the email (and the hosted endpoints stay available for later).</li>
  * </ul>
  *
  * <p>Both links/images are absolute, built from
@@ -125,13 +124,6 @@ public class BookingConfirmedNotificationListener {
         }
     }
 
-    /** Direct link to one ticket's QR PNG — the only artifact we send for now
-     *  (the ticket view page exists but isn't part of the message yet). */
-    private String qrLink(Booking booking, BookingItem item) {
-        return publicBaseUrl + "/bookings/" + booking.getId()
-                + "/tickets/" + item.getTicketNumber() + "/qr";
-    }
-
     private String buildWhatsAppMessage(Booking booking) {
         List<BookingItem> items = booking.getItems() == null ? List.of() : booking.getItems();
         StringBuilder sb = new StringBuilder("InnBucks: your booking ")
@@ -144,32 +136,32 @@ public class BookingConfirmedNotificationListener {
         }
         appendTotal(sb, booking);
         sb.append('.');
-        // One line per ticket: the number (manual fallback at the gate) plus a
-        // DIRECT link to its QR image — that's the whole deliverable for now.
-        for (BookingItem item : items) {
-            sb.append("\nTicket ").append(item.getTicketNumber())
-                    .append(" QR: ").append(qrLink(booking, item));
+        // No links by product direction — just the ticket number(s) as the
+        // manual reference at the gate. The QR reaches the customer via email.
+        if (!items.isEmpty()) {
+            sb.append(" Ticket number").append(items.size() > 1 ? "s" : "").append(": ");
+            for (int i = 0; i < items.size(); i++) {
+                if (i > 0) sb.append(", ");
+                sb.append(items.get(i).getTicketNumber());
+            }
+            sb.append('.');
         }
         return sb.toString();
     }
 
     private String buildSmsMessage(Booking booking) {
-        // SMS fallback — direct QR link(s). A single link fits one segment;
-        // multi-seat bookings accept the extra segments (best-effort channel).
-        List<BookingItem> items = booking.getItems() == null ? List.of() : booking.getItems();
+        // SMS fallback — one short segment, no links (product direction).
         StringBuilder sb = new StringBuilder("InnBucks: booking ")
                 .append(booking.getConfirmationNumber())
                 .append(" confirmed");
-        if (items.size() == 1) {
+        int n = booking.getItems() == null ? 0 : booking.getItems().size();
+        if (n == 1) {
             sb.append(" (1 ticket)");
-        } else if (items.size() > 1) {
-            sb.append(" (").append(items.size()).append(" tickets)");
+        } else if (n > 1) {
+            sb.append(" (").append(n).append(" tickets)");
         }
-        sb.append(". QR: ");
-        for (int i = 0; i < items.size(); i++) {
-            if (i > 0) sb.append(' ');
-            sb.append(qrLink(booking, items.get(i)));
-        }
+        appendTotal(sb, booking);
+        sb.append('.');
         return sb.toString();
     }
 
