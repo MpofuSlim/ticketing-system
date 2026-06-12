@@ -2,6 +2,7 @@ package innbucks.paymentservice.service;
 
 import innbucks.paymentservice.client.BookingServiceClient;
 import innbucks.paymentservice.client.CodeGenerationResult;
+import innbucks.paymentservice.client.CodeStatusResult;
 import innbucks.paymentservice.client.InnbucksApiClient;
 import innbucks.paymentservice.client.InnbucksApiException;
 import innbucks.paymentservice.client.InnbucksApiTransientException;
@@ -69,6 +70,15 @@ public class InnbucksPaymentService {
     private final PaymentRecordService paymentRecordService;
     private final InnbucksApiClient innbucksApiClient;
     private final BookingServiceClient bookingServiceClient;
+    private final CodePaymentResolutionService codePaymentResolutionService;
+
+    /**
+     * Extra slack the seat hold must have past the code's own TTL: one poll
+     * interval + the poller's expiry grace + processing margin. Guarantees a
+     * code paid at second 599 of its 10-minute life still confirms against a
+     * LIVE hold.
+     */
+    private static final Duration HOLD_SAFETY_MARGIN = Duration.ofMinutes(3);
 
     /**
      * How long the customer has to approve the code. Must stay comfortably
@@ -104,6 +114,29 @@ public class InnbucksPaymentService {
         String currency = asString(booking.get("currency"));
         if (currency == null || currency.isBlank()) currency = DEFAULT_CURRENCY;
         long amountCents = toCents(amount);
+
+        // ---- Step 1.5: make the seat hold outlive the code --------------------
+        // The hold (5 min from booking) is shorter than the code (10 min from
+        // NOW) — without this, any payment approved after the hold lapsed was
+        // money taken + confirm refused (the paid-but-no-ticket gap). Extend
+        // BEFORE any ledger write or code mint; a refusal means the booking is
+        // already expired/cancelled, so the customer rebooks with ZERO money
+        // moved.
+        try {
+            bookingServiceClient.extendHold(bookingId,
+                    Instant.now().plus(codeTtl).plus(HOLD_SAFETY_MARGIN));
+        } catch (BookingServiceClient.BookingConfirmationException e) {
+            if (e.getStatusCode() == 404 || e.getStatusCode() == 409 || e.getStatusCode() == 400) {
+                log.warn("[innbucks-payment] hold extension refused bookingId={} status={} — payment refused pre-mint: {}",
+                        bookingId, e.getStatusCode(), e.getMessage());
+                throw new InvalidPaymentRequestException(
+                        "Your booking has expired — please create a new booking and try again", 409);
+            }
+            log.warn("[innbucks-payment] hold extension unreachable bookingId={} status={} — refusing payment: {}",
+                    bookingId, e.getStatusCode(), e.getMessage());
+            throw new InvalidPaymentRequestException(
+                    "We could not secure your booking right now; please try again shortly", 503);
+        }
 
         // ---- Step 2: open PENDING ledger row ----------------------------------
         String paymentReference = PAYMENT_REFERENCE_PREFIX + UUID.randomUUID();
@@ -252,6 +285,49 @@ public class InnbucksPaymentService {
     }
 
     /** Thrown by the service for validation failures the controller maps to 4xx. */
+    /** Outcome of a customer-triggered instant status check on an open code. */
+    public enum InstantCheckOutcome { PAID, EXPIRED, PENDING }
+
+    /**
+     * Customer-triggered "I've paid" check: ask InnBucks for the code's state
+     * RIGHT NOW instead of waiting for the 20s poller. Used by the
+     * POST /payments replay path. Resolution goes through the same
+     * {@link CodePaymentResolutionService} as the poller. Conservative on
+     * every failure: any error/unknown/transient answer leaves the row alone
+     * and reports PENDING — the poller remains the authority.
+     */
+    public InstantCheckOutcome tryResolveOpenCode(Payment payment) {
+        if (payment.getStatus() != Payment.PaymentStatus.TOKEN_ISSUED
+                || payment.getInnbucksCode() == null || payment.getInnbucksCode().isBlank()) {
+            return InstantCheckOutcome.PENDING;
+        }
+        CodeStatusResult result;
+        try {
+            result = innbucksApiClient.inquireCodeStatus(payment.getInnbucksCode());
+        } catch (RuntimeException e) {
+            log.debug("[innbucks-payment] instant check unavailable paymentReference={} cause={}",
+                    payment.getPaymentReference(), e.getMessage());
+            return InstantCheckOutcome.PENDING;
+        }
+        return switch (result.status()) {
+            case PAID, CLAIMED -> {
+                log.info("[innbucks-payment] instant check: code PAID paymentReference={} — completing now",
+                        payment.getPaymentReference());
+                codePaymentResolutionService.completePaid(payment, result.rawStatus());
+                yield InstantCheckOutcome.PAID;
+            }
+            case EXPIRED -> {
+                codePaymentResolutionService.markExpiredUpstream(payment, result.rawStatus());
+                yield InstantCheckOutcome.EXPIRED;
+            }
+            case TIMED_OUT -> {
+                codePaymentResolutionService.markExpiredUpstream(payment, "Timed Out");
+                yield InstantCheckOutcome.EXPIRED;
+            }
+            default -> InstantCheckOutcome.PENDING;
+        };
+    }
+
     public static class InvalidPaymentRequestException extends RuntimeException {
         private final int statusCode;
         public InvalidPaymentRequestException(String message, int statusCode) {

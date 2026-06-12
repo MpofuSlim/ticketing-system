@@ -54,7 +54,9 @@ class ReconciliationJobTest {
         // no-ops in the transactions-ledger tests.
         return new ReconciliationJob(repo, mock(PaymentRepository.class),
                 mock(PaymentRecordService.class), mock(BookingServiceClient.class),
-                mock(InnbucksApiClient.class), metrics, FIVE_MINUTES, batchSize);
+                mock(InnbucksApiClient.class), metrics,
+                mock(innbucks.paymentservice.service.CodePaymentResolutionService.class),
+                FIVE_MINUTES, batchSize);
     }
 
     private static ReconciliationJob newPaymentJob(PaymentRepository payments,
@@ -62,7 +64,9 @@ class ReconciliationJobTest {
                                                    BookingServiceClient bookings,
                                                    PaymentMetrics metrics) {
         return new ReconciliationJob(mock(TransactionRepository.class), payments,
-                records, bookings, mock(InnbucksApiClient.class), metrics, FIVE_MINUTES, 100);
+                records, bookings, mock(InnbucksApiClient.class), metrics,
+                new innbucks.paymentservice.service.CodePaymentResolutionService(records, bookings, metrics),
+                FIVE_MINUTES, 100);
     }
 
     private static ReconciliationJob newPollJob(PaymentRepository payments,
@@ -70,8 +74,12 @@ class ReconciliationJobTest {
                                                 BookingServiceClient bookings,
                                                 InnbucksApiClient innbucksApi,
                                                 PaymentMetrics metrics) {
+        // REAL resolution service over the same mocks: poll tests keep
+        // verifying confirm/markSucceeded/metrics exactly as before the extract.
         return new ReconciliationJob(mock(TransactionRepository.class), payments,
-                records, bookings, innbucksApi, metrics, FIVE_MINUTES, 100);
+                records, bookings, innbucksApi, metrics,
+                new innbucks.paymentservice.service.CodePaymentResolutionService(records, bookings, metrics),
+                FIVE_MINUTES, 100);
     }
 
     private static Payment paymentRow(Payment.PaymentStatus status, Instant createdAt) {

@@ -115,4 +115,52 @@ class BookingControllerInternalEndpointTest {
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
         verifyNoInteractions(bookingService);
     }
+
+    // --- PATCH /bookings/internal/{id}/extend-hold : pre-mint hold extension ---
+
+    @Test
+    void extendHold_validToken_delegatesWithTheRequestedDeadline() {
+        UUID id = UUID.randomUUID();
+        java.time.LocalDateTime until = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).plusMinutes(13);
+        BookingResponseDTO dto = new BookingResponseDTO();
+        dto.setId(id);
+        when(bookingService.extendHold(id, until)).thenReturn(dto);
+
+        ResponseEntity<ApiResult<BookingResponseDTO>> resp = controller.extendHoldInternal(
+                id, TOKEN, new com.innbucks.bookingservice.dto.ExtendHoldRequestDTO(until));
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        verify(bookingService).extendHold(id, until);
+    }
+
+    @Test
+    void extendHold_missingToken_401_neverTouchesTheBooking() {
+        ResponseEntity<ApiResult<BookingResponseDTO>> resp = controller.extendHoldInternal(
+                UUID.randomUUID(), null,
+                new com.innbucks.bookingservice.dto.ExtendHoldRequestDTO(
+                        java.time.LocalDateTime.now(java.time.ZoneOffset.UTC)));
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        verifyNoInteractions(bookingService);
+    }
+
+    @Test
+    void extendHold_wrongToken_401() {
+        ResponseEntity<ApiResult<BookingResponseDTO>> resp = controller.extendHoldInternal(
+                UUID.randomUUID(), "not-the-secret",
+                new com.innbucks.bookingservice.dto.ExtendHoldRequestDTO(
+                        java.time.LocalDateTime.now(java.time.ZoneOffset.UTC)));
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        verifyNoInteractions(bookingService);
+    }
+
+    @Test
+    void extendHold_missingHoldUntil_400() {
+        ResponseEntity<ApiResult<BookingResponseDTO>> resp = controller.extendHoldInternal(
+                UUID.randomUUID(), TOKEN, new com.innbucks.bookingservice.dto.ExtendHoldRequestDTO(null));
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        verifyNoInteractions(bookingService);
+    }
 }

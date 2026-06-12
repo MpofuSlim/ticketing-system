@@ -52,6 +52,7 @@ class InnbucksPaymentServiceTest {
     private InnbucksApiClient innbucksApi;
     private BookingServiceClient bookings;
     private InnbucksPaymentService service;
+    private CodePaymentResolutionService resolution;
 
     private final UUID bookingId = UUID.randomUUID();
 
@@ -60,7 +61,10 @@ class InnbucksPaymentServiceTest {
         records = mock(PaymentRecordService.class);
         innbucksApi = mock(InnbucksApiClient.class);
         bookings = mock(BookingServiceClient.class);
-        service = new InnbucksPaymentService(records, innbucksApi, bookings);
+        resolution = new CodePaymentResolutionService(records, bookings,
+                new innbucks.paymentservice.config.PaymentMetrics(
+                        new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        service = new InnbucksPaymentService(records, innbucksApi, bookings, resolution);
         ReflectionTestUtils.setField(service, "codeTtl", Duration.ofMinutes(10));
 
         lenient().when(records.hasActiveOrSucceededPayment(any())).thenReturn(false);
@@ -212,5 +216,115 @@ class InnbucksPaymentServiceTest {
         assertEquals(123456789L, InnbucksPaymentService.toCents(new BigDecimal("1234567.89")));
         assertThrows(InvalidPaymentRequestException.class,
                 () -> InnbucksPaymentService.toCents(new BigDecimal("50.005")));
+    }
+
+    // ---------------- hold extension (the paid-but-no-ticket gap) ----------------
+
+    @Test
+    void holdExtensionRefused_409_paymentRefusedBeforeAnyLedgerWriteOrMint() {
+        doThrow(new BookingServiceClient.BookingConfirmationException("Seat hold expired", 409))
+                .when(bookings).extendHold(eq(bookingId), any(Instant.class));
+
+        InvalidPaymentRequestException ex = assertThrows(InvalidPaymentRequestException.class,
+                () -> service.processPayment(bookingId, "+263770000001", null));
+
+        assertEquals(409, ex.getStatusCode());
+        // ZERO side effects: no ledger row, no code minted.
+        verify(records, never()).openPending(any());
+        verify(innbucksApi, never()).generatePaymentCode(anyString(), anyString(), anyLong());
+    }
+
+    @Test
+    void holdExtensionUnreachable_503_paymentRefusedSafely() {
+        doThrow(new BookingServiceClient.BookingConfirmationException("unreachable", 503))
+                .when(bookings).extendHold(eq(bookingId), any(Instant.class));
+
+        InvalidPaymentRequestException ex = assertThrows(InvalidPaymentRequestException.class,
+                () -> service.processPayment(bookingId, "+263770000001", null));
+
+        assertEquals(503, ex.getStatusCode());
+        verify(records, never()).openPending(any());
+    }
+
+    @Test
+    void holdExtension_requestsCodeTtlPlusSafetyMargin() {
+        when(innbucksApi.generatePaymentCode(anyString(), anyString(), anyLong()))
+                .thenReturn(approved("701285660", "1616800", 5000L));
+
+        Instant before = Instant.now();
+        service.processPayment(bookingId, "+263770000001", null);
+
+        org.mockito.ArgumentCaptor<Instant> until = org.mockito.ArgumentCaptor.forClass(Instant.class);
+        verify(bookings).extendHold(eq(bookingId), until.capture());
+        // ttl(10m) + margin(3m) = hold must reach >= now+13m (small clock slack).
+        assertFalse(until.getValue().isBefore(before.plus(Duration.ofMinutes(13)).minusSeconds(5)),
+                "hold must outlive the code by the safety margin");
+    }
+
+    // ---------------- instant check on replay ("I've paid") ----------------
+
+    private Payment openCodeRow() {
+        Payment p = Payment.builder()
+                .id(UUID.randomUUID())
+                .paymentReference("TKT-PMT-" + UUID.randomUUID())
+                .bookingId(bookingId)
+                .customerMsisdn("+263770000001")
+                .amount(new BigDecimal("50.00")).currency("USD")
+                .status(Payment.PaymentStatus.TOKEN_ISSUED)
+                .innbucksCode("701285660").codeAuthNumber("1616800")
+                .build();
+        return p;
+    }
+
+    @Test
+    void instantCheck_paid_confirmsBookingAndPromotes() {
+        Payment row = openCodeRow();
+        when(innbucksApi.inquireCodeStatus("701285660"))
+                .thenReturn(new innbucks.paymentservice.client.CodeStatusResult(
+                        innbucks.paymentservice.client.CodeStatusResult.Status.PAID, "Paid", null));
+        when(bookings.confirmBooking(bookingId)).thenReturn(Map.of("confirmationNumber", "INN-X"));
+
+        var outcome = service.tryResolveOpenCode(row);
+
+        assertEquals(InnbucksPaymentService.InstantCheckOutcome.PAID, outcome);
+        verify(records).markSucceeded(row.getId(), "1616800", "INN-X");
+    }
+
+    @Test
+    void instantCheck_expiredUpstream_freesTheSlot() {
+        Payment row = openCodeRow();
+        when(innbucksApi.inquireCodeStatus("701285660"))
+                .thenReturn(new innbucks.paymentservice.client.CodeStatusResult(
+                        innbucks.paymentservice.client.CodeStatusResult.Status.EXPIRED, "Expired", null));
+
+        var outcome = service.tryResolveOpenCode(row);
+
+        assertEquals(InnbucksPaymentService.InstantCheckOutcome.EXPIRED, outcome);
+        verify(records).markExpired(eq(row.getId()), contains("Expired"));
+    }
+
+    @Test
+    void instantCheck_inquiryFailure_isConservativePending_rowUntouched() {
+        Payment row = openCodeRow();
+        when(innbucksApi.inquireCodeStatus("701285660"))
+                .thenThrow(new InnbucksApiTransientException("circuit open", 503));
+
+        var outcome = service.tryResolveOpenCode(row);
+
+        assertEquals(InnbucksPaymentService.InstantCheckOutcome.PENDING, outcome);
+        verify(records, never()).markSucceeded(any(), anyString(), any());
+        verify(records, never()).markExpired(any(), anyString());
+    }
+
+    @Test
+    void instantCheck_stillNew_isPending_neverGuesses() {
+        Payment row = openCodeRow();
+        when(innbucksApi.inquireCodeStatus("701285660"))
+                .thenReturn(new innbucks.paymentservice.client.CodeStatusResult(
+                        innbucks.paymentservice.client.CodeStatusResult.Status.NEW, "New", null));
+
+        assertEquals(InnbucksPaymentService.InstantCheckOutcome.PENDING,
+                service.tryResolveOpenCode(row));
+        verifyNoInteractions(bookings);
     }
 }

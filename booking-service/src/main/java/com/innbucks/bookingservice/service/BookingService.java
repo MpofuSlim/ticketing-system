@@ -614,6 +614,43 @@ public class BookingService {
 
     // Backward-compatible overload: confirm with no points/cash split. Used
     // by callers (tests, payment-service) that don't yet know about loyalty.
+    /**
+     * Extend a PENDING booking's seat hold to AT LEAST {@code holdUntil} —
+     * called S2S by payment-service the moment it is about to mint an InnBucks
+     * payment code, so the hold provably outlives the code the customer is
+     * shown (hold 5 min vs code 10 min was the paid-but-no-ticket gap: pay
+     * after the hold lapsed -> confirm refused -> money stuck in the ops
+     * queue). Never SHORTENS a hold (max of existing and requested).
+     *
+     * <p>Refuses (409) when the booking is not PENDING or the hold has already
+     * lapsed — the caller then refuses the payment BEFORE any money moves,
+     * which beats resurrecting a hold the sweeper may be cancelling (the
+     * optimistic @Version on Booking arbitrates any direct race).
+     */
+    @Transactional
+    public BookingResponseDTO extendHold(UUID bookingId, LocalDateTime holdUntil) {
+        Objects.requireNonNull(holdUntil, "holdUntil");
+        Booking booking = bookingRepository.findById(bookingId)
+                .orElseThrow(() -> new NotFoundException("Booking not found"));
+        if (booking.getStatus() != Booking.BookingStatus.PENDING) {
+            throw new BookingConflictException(
+                    "Only a PENDING booking's hold can be extended (status: " + booking.getStatus() + ")");
+        }
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        if (booking.getExpiresAt() != null && booking.getExpiresAt().isBefore(now)) {
+            throw new BookingConflictException(
+                    "Seat hold expired — please create a new booking and pay within "
+                            + holdTtlMinutes + " minutes");
+        }
+        if (booking.getExpiresAt() == null || booking.getExpiresAt().isBefore(holdUntil)) {
+            log.info("Extending seat hold bookingId={} from={} to={}",
+                    bookingId, booking.getExpiresAt(), holdUntil);
+            booking.setExpiresAt(holdUntil);
+            booking = bookingRepository.save(booking);
+        }
+        return toDTO(booking);
+    }
+
     public BookingResponseDTO confirmBooking(UUID bookingId) {
         return confirmBooking(bookingId, null);
     }

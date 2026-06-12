@@ -68,6 +68,10 @@ class PaymentControllerTest {
         PaymentController controller = new PaymentController(
                 bookings, mock(LoyaltyServiceClient.class), newMetrics(),
                 innbucks, records, payments);
+        // Default: the instant check reports PENDING (poller stays authoritative)
+        // so replay tests exercise the plain replay path unless they say otherwise.
+        lenient().when(innbucks.tryResolveOpenCode(any()))
+                .thenReturn(InnbucksPaymentService.InstantCheckOutcome.PENDING);
         return new Fixture(controller, bookings, innbucks, payments, records);
     }
 
@@ -284,7 +288,9 @@ class PaymentControllerTest {
         assertNull(data.getPaymentCode(), "a dead code must never be advertised again");
         assertNull(data.getPaymentQrCode());
         assertTrue(resp.getBody().getMessage().contains("expired"));
-        verifyNoInteractions(f.innbucks());
+        // The instant check MAY consult InnBucks; what must never happen is a
+        // fresh generation from a replay of a locally-expired code.
+        verify(f.innbucks(), never()).processPayment(any(), anyString(), any());
     }
 
     @Test
@@ -343,7 +349,7 @@ class PaymentControllerTest {
                 "replay must re-surface the QR too");
         assertEquals(java.time.LocalDateTime.ofInstant(expiresAt, java.time.ZoneOffset.UTC),
                 data.getPaymentCodeExpiresAt());
-        verifyNoInteractions(f.innbucks());
+        verify(f.innbucks(), never()).processPayment(any(), anyString(), any());
     }
 
     @Test
@@ -564,5 +570,80 @@ class PaymentControllerTest {
 
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, resp.getStatusCode());
         assertTrue(resp.getBody().getMessage().toLowerCase().contains("booking-service"));
+    }
+
+    // ---------------- instant check on replay ("I've paid") ----------------
+
+    @Test
+    void replayOpenCode_instantCheckPaid_returnsSuccessReceiptImmediately() {
+        Fixture f = fixture();
+        UUID bookingId = UUID.randomUUID();
+        Payment open = Payment.builder()
+                .id(UUID.randomUUID()).paymentReference("TKT-PMT-" + UUID.randomUUID())
+                .bookingId(bookingId).customerMsisdn("+263770000001")
+                .amount(new BigDecimal("10.00")).currency("USD")
+                .status(Payment.PaymentStatus.TOKEN_ISSUED)
+                .innbucksCode("701285660").codeAuthNumber("1616800")
+                .codeExpiresAt(java.time.Instant.now().plusSeconds(300))
+                .createdAt(java.time.Instant.now().minusSeconds(60))
+                .build();
+        Payment promoted = Payment.builder()
+                .id(open.getId()).paymentReference(open.getPaymentReference())
+                .bookingId(bookingId).customerMsisdn("+263770000001")
+                .amount(new BigDecimal("10.00")).currency("USD")
+                .status(Payment.PaymentStatus.SUCCEEDED)
+                .innbucksCode("701285660").codeAuthNumber("1616800")
+                .confirmationNumber("INN-20260612-OK")
+                .createdAt(open.getCreatedAt())
+                .build();
+        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
+                .thenReturn(Optional.of(open));
+        when(f.innbucks().tryResolveOpenCode(open))
+                .thenReturn(InnbucksPaymentService.InstantCheckOutcome.PAID);
+        when(f.payments().findById(open.getId())).thenReturn(Optional.of(promoted));
+
+        ResponseEntity<ApiResult<PaymentResponse>> resp =
+                f.controller().processPayment(paymentFor(bookingId));
+
+        assertEquals(HttpStatus.OK, resp.getStatusCode());
+        assertEquals(PaymentResponse.Status.SUCCESS, resp.getBody().getData().getStatus());
+        assertEquals("INN-20260612-OK", resp.getBody().getData().getConfirmationNumber());
+        // No fresh payment was started — this resolved the existing one.
+        verify(f.innbucks(), never()).processPayment(any(), anyString(), any());
+    }
+
+    @Test
+    void replayOpenCode_instantCheckExpired_mintsAFreshCodeInTheSameRequest() {
+        Fixture f = fixture();
+        UUID bookingId = UUID.randomUUID();
+        Payment open = Payment.builder()
+                .id(UUID.randomUUID()).paymentReference("TKT-PMT-" + UUID.randomUUID())
+                .bookingId(bookingId).customerMsisdn("+263770000001")
+                .amount(new BigDecimal("10.00")).currency("USD")
+                .status(Payment.PaymentStatus.TOKEN_ISSUED)
+                .innbucksCode("701285660").codeAuthNumber("1616800")
+                .createdAt(java.time.Instant.now().minusSeconds(700))
+                .build();
+        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
+                .thenReturn(Optional.of(open));
+        when(f.innbucks().tryResolveOpenCode(open))
+                .thenReturn(InnbucksPaymentService.InstantCheckOutcome.EXPIRED);
+        when(f.bookings().getBooking(bookingId)).thenReturn(Map.of(
+                "phoneNumber", "+263770000001", "totalAmount", 10.00));
+        when(f.innbucks().processPayment(eq(bookingId), eq("+263770000001"), isNull()))
+                .thenReturn(InnbucksPaymentResponse.builder()
+                        .paymentReference("TKT-PMT-" + UUID.randomUUID())
+                        .bookingId(bookingId)
+                        .status(InnbucksPaymentResponse.Status.PROCESSING)
+                        .amountPaid(new BigDecimal("10.00")).currency("USD")
+                        .paymentCode("701999111")
+                        .build());
+
+        ResponseEntity<ApiResult<PaymentResponse>> resp =
+                f.controller().processPayment(paymentFor(bookingId));
+
+        assertEquals(HttpStatus.OK, resp.getStatusCode());
+        assertEquals("701999111", resp.getBody().getData().getPaymentCode(),
+                "an upstream-expired code must be replaced with a FRESH one in the same tap");
     }
 }

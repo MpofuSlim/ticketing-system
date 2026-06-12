@@ -72,6 +72,10 @@ public class SecurityConfig {
                         // 401s the call before the controller's token check runs (the
                         // cause of "booking-service get failed status=401").
                         .requestMatchers(HttpMethod.GET, "/bookings/internal/**").permitAll()
+                        // S2S hold extension before code mint (PATCH
+                        // /bookings/internal/{id}/extend-hold) — same trio:
+                        // controller token check + this permit + gateway deny.
+                        .requestMatchers(HttpMethod.PATCH, "/bookings/internal/**").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                         // Everything else requires authentication
                         .anyRequest().authenticated()

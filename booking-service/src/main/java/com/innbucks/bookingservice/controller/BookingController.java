@@ -4,6 +4,7 @@ import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.exception.BadRequestException;
 import com.innbucks.bookingservice.util.MsisdnMasking;
 import com.innbucks.bookingservice.dto.BookingResponseDTO;
+import com.innbucks.bookingservice.dto.ExtendHoldRequestDTO;
 import com.innbucks.bookingservice.dto.CategoryBookingDTO;
 import com.innbucks.bookingservice.dto.ConfirmBookingRequestDTO;
 import com.innbucks.bookingservice.dto.CreateBookingRequestDTO;
@@ -362,6 +363,56 @@ public class BookingController {
         log.info("GET /bookings/internal/{} (S2S)", id);
         return ResponseEntity.ok(ApiResult.ok("Booking retrieved successfully",
                 bookingService.getBookingById(id, null, true)));
+    }
+
+    /**
+     * S2S: payment-service extends the seat hold to outlive the InnBucks
+     * payment code it is about to mint (hold 5 min vs code 10 min was the
+     * paid-but-no-ticket gap). Same internal-token discipline as the GET
+     * above; 409 when the booking is no longer PENDING or the hold already
+     * lapsed — the caller refuses the payment before any money moves.
+     */
+    @org.springframework.web.bind.annotation.PatchMapping("/internal/{id}/extend-hold")
+    @SecurityRequirements()
+    @Operation(summary = "Extend seat hold (internal S2S)",
+            description = "payment-service calls this before minting a payment code so the hold provably "
+                    + "outlives the code. Never shortens a hold. Authenticated with the shared "
+                    + "X-Internal-Token; denied at the gateway edge.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "Hold extended (or already long enough)"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
+                    description = "Missing or invalid X-Internal-Token"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "Booking not found"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
+                    description = "Booking not PENDING or hold already expired")
+    })
+    public ResponseEntity<ApiResult<BookingResponseDTO>> extendHoldInternal(
+            @PathVariable UUID id,
+            @RequestHeader(value = "X-Internal-Token", required = false) String internalToken,
+            @RequestBody ExtendHoldRequestDTO request
+    ) {
+        if (!authorizedInternal(internalToken)) {
+            log.warn("Unauthorized PATCH /bookings/internal/{}/extend-hold — missing or wrong X-Internal-Token", id);
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.<BookingResponseDTO>builder()
+                            .code("401 UNAUTHORIZED")
+                            .message("Missing or invalid X-Internal-Token")
+                            .data(null)
+                            .build());
+        }
+        if (request == null || request.getHoldUntil() == null) {
+            return ResponseEntity.badRequest()
+                    .body(ApiResult.<BookingResponseDTO>builder()
+                            .code("400 BAD_REQUEST")
+                            .message("holdUntil is required")
+                            .data(null)
+                            .build());
+        }
+        log.info("PATCH /bookings/internal/{}/extend-hold holdUntil={} (S2S)", id, request.getHoldUntil());
+        return ResponseEntity.ok(ApiResult.ok("Seat hold extended",
+                bookingService.extendHold(id, request.getHoldUntil())));
     }
 
     private static boolean hasRole(Authentication authentication, String role) {
