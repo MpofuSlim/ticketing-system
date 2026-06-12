@@ -325,18 +325,20 @@ public class InnbucksApiClient {
         String responseMsg = firstString(parsed, "responseMsg", "responseDescription", "description");
         String code = asString(parsed.get("code"));
         String authNumber = asString(parsed.get("authNumber"));
+        String qrCodeBase64 = asString(parsed.get("qrCode"));
         String stan = asString(parsed.get("stan"));
         Long amountEcho = parseCents(parsed.get("amount"));
         // Approved only when the platform says 0/00 AND we actually got the
         // two handles the rest of the flow depends on (code to show the
-        // customer, authNumber to poll with).
+        // customer, authNumber to poll with). The QR is a nice-to-have —
+        // its absence never blocks the payment (the numeric code always works).
         boolean approved = responseCode != null && responseCode == 0
                 && notBlank(code) && notBlank(authNumber);
         if (responseCode != null && responseCode == 0 && !approved) {
             log.error("innbucks-api code generation said success but is missing code/authNumber — keys={}",
                     parsed.keySet());
         }
-        return new CodeGenerationResult(approved, code, authNumber, stan, amountEcho,
+        return new CodeGenerationResult(approved, code, authNumber, qrCodeBase64, stan, amountEcho,
                 responseCode == null ? null : String.valueOf(responseCode), responseMsg);
     }
 

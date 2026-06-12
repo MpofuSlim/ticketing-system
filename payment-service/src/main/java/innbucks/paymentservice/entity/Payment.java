@@ -136,6 +136,15 @@ public class Payment {
     @Column(name = "code_expires_at")
     private Instant codeExpiresAt;
 
+    /**
+     * InnBucks-rendered QR image (base64) for this code — the Scan-to-Pay
+     * twin of {@link #innbucksCode}. Persisted so a replay re-surfaces the
+     * exact artifact the customer was shown (and the ledger keeps it for
+     * disputes); a few KB per row, only while codes are in flight.
+     */
+    @Column(name = "code_qr_base64")
+    private String codeQrBase64;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 

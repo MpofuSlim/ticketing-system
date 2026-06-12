@@ -136,12 +136,14 @@ class PaymentLedgerIntegrityPostgresIT extends PostgresIntegrationTestBase {
                 .status(PaymentStatus.TOKEN_ISSUED)
                 .innbucksCode("701285660")
                 .codeAuthNumber("1616800")
+                .codeQrBase64("aGVsbG8=")
                 .codeExpiresAt(expiresAt)
                 .build();
 
         Payment reloaded = payments.findById(payments.saveAndFlush(p).getId()).orElseThrow();
         assertEquals("701285660", reloaded.getInnbucksCode());
         assertEquals("1616800", reloaded.getCodeAuthNumber());
+        assertEquals("aGVsbG8=", reloaded.getCodeQrBase64());
         assertEquals(expiresAt, reloaded.getCodeExpiresAt());
         assertNull(reloaded.getCustomerAccount());
         assertNull(reloaded.getMerchantAccount());

@@ -133,12 +133,14 @@ public class PaymentRecordService {
      * same transaction as the PENDING → TOKEN_ISSUED transition.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void markTokenIssued(UUID id, String code, String authNumber, Instant expiresAt) {
+    public void markTokenIssued(UUID id, String code, String authNumber,
+                                String qrCodeBase64, Instant expiresAt) {
         transition(id, PaymentStatus.TOKEN_ISSUED,
                 "InnBucks payment code issued; awaiting customer approval", authNumber,
                 payment -> {
                     payment.setInnbucksCode(code);
                     payment.setCodeAuthNumber(authNumber);
+                    payment.setCodeQrBase64(qrCodeBase64);
                     payment.setCodeExpiresAt(expiresAt);
                 });
     }

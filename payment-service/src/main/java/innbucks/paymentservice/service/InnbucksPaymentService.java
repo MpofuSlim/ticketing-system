@@ -162,7 +162,7 @@ public class InnbucksPaymentService {
                     generated.responseCode(),
                     generated.responseMsg() != null ? generated.responseMsg()
                             : "InnBucks could not start this payment; please try again",
-                    null, null);
+                    null, null, null);
         }
 
         // The cents/dollars 100x guard: if the platform echoes a different
@@ -177,13 +177,13 @@ public class InnbucksPaymentService {
                     "Sent " + amountCents + " cents but InnBucks echoed " + generated.amountEchoCents());
             return buildResponse(opened, Status.FAILED, null, "amount_mismatch",
                     "Could not start the payment — please try again or contact support",
-                    null, null);
+                    null, null, null);
         }
 
         // ---- Step 4: record TOKEN_ISSUED, then deliver the code ---------------
         Instant expiresAt = Instant.now().plus(codeTtl);
         paymentRecordService.markTokenIssued(opened.getId(),
-                generated.code(), generated.authNumber(), expiresAt);
+                generated.code(), generated.authNumber(), generated.qrCodeBase64(), expiresAt);
 
         PaymentCodeNotifier.Delivery delivery = codeNotifier.sendPaymentCode(
                 customerMsisdn, generated.code(), amount, currency, codeTtl, paymentReference);
@@ -204,7 +204,7 @@ public class InnbucksPaymentService {
         return buildResponse(opened, Status.PROCESSING,
                 generated.authNumber(), null,
                 "Approve the payment in your InnBucks app — your payment code was sent to your phone",
-                generated.code(), expiresAt);
+                generated.code(), generated.qrCodeBase64(), expiresAt);
     }
 
     private InnbucksPaymentResponse buildResponse(Payment payment,
@@ -213,6 +213,7 @@ public class InnbucksPaymentService {
                                                   String upstreamCode,
                                                   String upstreamMessage,
                                                   String paymentCode,
+                                                  String paymentQrCode,
                                                   Instant codeExpiresAt) {
         return InnbucksPaymentResponse.builder()
                 .paymentReference(payment.getPaymentReference())
@@ -225,6 +226,7 @@ public class InnbucksPaymentService {
                 .upstreamCode(upstreamCode)
                 .upstreamMessage(upstreamMessage)
                 .paymentCode(paymentCode)
+                .paymentQrCode(paymentQrCode)
                 .paymentCodeExpiresAt(codeExpiresAt == null ? null
                         : LocalDateTime.ofInstant(codeExpiresAt, ZoneOffset.UTC))
                 .processedAt(LocalDateTime.now(ZoneOffset.UTC))

@@ -123,6 +123,7 @@ class InnbucksApiClientContractTest {
         assertThat(result.approved()).isTrue();
         assertThat(result.code()).isEqualTo("701285660");
         assertThat(result.authNumber()).isEqualTo("1616800");
+        assertThat(result.qrCodeBase64()).isEqualTo("aGVsbG8=");
         assertThat(result.stan()).isEqualTo("414107");
         assertThat(result.amountEchoCents()).isEqualTo(5000L);
         wireMock.verify(postRequestedFor(urlEqualTo("/api/code/generate"))

@@ -208,11 +208,13 @@ class PaymentRecordServiceTest {
         when(repo.findById(p.getId())).thenReturn(Optional.of(p));
         java.time.Instant deadline = java.time.Instant.now().plusSeconds(600);
 
-        new PaymentRecordService(repo, events).markTokenIssued(p.getId(), "701285660", "1616800", deadline);
+        new PaymentRecordService(repo, events).markTokenIssued(
+                p.getId(), "701285660", "1616800", "qr-base64-bytes", deadline);
 
         assertEquals(PaymentStatus.TOKEN_ISSUED, p.getStatus());
         assertEquals("701285660", p.getInnbucksCode());
         assertEquals("1616800", p.getCodeAuthNumber());
+        assertEquals("qr-base64-bytes", p.getCodeQrBase64());
         assertEquals(deadline, p.getCodeExpiresAt());
         ArgumentCaptor<PaymentEvent> ev = ArgumentCaptor.forClass(PaymentEvent.class);
         verify(events).save(ev.capture());
@@ -263,7 +265,7 @@ class PaymentRecordServiceTest {
         // No public API even attempts SUCCEEDED -> TOKEN_ISSUED; pin the
         // nearest expressible guard: a terminal row refuses markTokenIssued.
         new PaymentRecordService(repo, events).markTokenIssued(
-                p.getId(), "code", "auth", java.time.Instant.now());
+                p.getId(), "code", "auth", "qr", java.time.Instant.now());
 
         assertEquals(PaymentStatus.SUCCEEDED, p.getStatus());
         verify(repo, never()).save(any());

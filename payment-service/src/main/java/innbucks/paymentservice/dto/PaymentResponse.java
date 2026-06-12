@@ -34,10 +34,13 @@ public class PaymentResponse {
     /**
      * Additive (old FE ignores them): the InnBucks code the customer
      * approves — also delivered via WhatsApp/SMS so the CURRENT FE needs no
-     * change — and its approval deadline. A future FE can render these
-     * directly (e.g. show the code or deep-link
-     * {@code com.innbucks.customer://purchase?paymentToken=<code>}).
+     * change — its approval deadline, and the InnBucks-rendered QR image
+     * (base64) so the FE can offer Scan-to-Pay
+     * (render as {@code data:image/png;base64,<paymentQrCode>}) alongside
+     * the typed-code and deep-link
+     * ({@code com.innbucks.customer://purchase?paymentToken=<code>}) paths.
      */
     private String paymentCode;
     private LocalDateTime paymentCodeExpiresAt;
+    private String paymentQrCode;
 }

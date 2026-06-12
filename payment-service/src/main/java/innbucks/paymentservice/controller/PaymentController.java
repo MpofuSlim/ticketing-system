@@ -89,7 +89,8 @@ public class PaymentController {
                     "`totalAmount` and delivered (WhatsApp → SMS fallback) to the booking's phoneNumber captured " +
                     "at booking time; the customer approves it in their own InnBucks app or USSD. Clients never " +
                     "quote amounts. The normal response is `status=PROCESSING` with the additive `paymentCode` / " +
-                    "`paymentCodeExpiresAt` fields — once the customer approves, the poller confirms the booking " +
+                    "`paymentCodeExpiresAt` / `paymentQrCode` fields (the QR is InnBucks-rendered base64 — show it " +
+                    "for Scan-to-Pay) — once the customer approves, the poller confirms the booking " +
                     "(poll the booking status for the confirmation number). " +
                     "Replay-safe: paying an already-paid or in-flight booking returns that payment's receipt, " +
                     "including the live code while it's still awaiting approval. If the code expires unpaid, the " +
@@ -117,7 +118,8 @@ public class PaymentController {
                                                 "confirmationNumber": null,
                                                 "processedAt": "2026-06-11T15:48:00",
                                                 "paymentCode": "701285660",
-                                                "paymentCodeExpiresAt": "2026-06-11T15:58:00"
+                                                "paymentCodeExpiresAt": "2026-06-11T15:58:00",
+                                                "paymentQrCode": "iVBORw0KGgoAAAANSUhEUg..."
                                               }
                                             }
                                             """),
@@ -135,7 +137,8 @@ public class PaymentController {
                                                 "confirmationNumber": "INN-20260611-AB12CD",
                                                 "processedAt": "2026-06-11T15:52:00",
                                                 "paymentCode": null,
-                                                "paymentCodeExpiresAt": null
+                                                "paymentCodeExpiresAt": null,
+                                                "paymentQrCode": null
                                               }
                                             }
                                             """)
@@ -269,6 +272,7 @@ public class PaymentController {
                 .processedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .paymentCode(outcome.getPaymentCode())
                 .paymentCodeExpiresAt(outcome.getPaymentCodeExpiresAt())
+                .paymentQrCode(outcome.getPaymentQrCode())
                 .build();
         String message = status == PaymentResponse.Status.SUCCESS
                 ? "Payment processed successfully"
@@ -296,11 +300,13 @@ public class PaymentController {
                 .cardLast4(request.getCardLast4())
                 .confirmationNumber(p.getConfirmationNumber())
                 .processedAt(LocalDateTime.now(ZoneOffset.UTC))
-                // A replay while the code is still open re-surfaces it — the
-                // customer's recovery path if the WhatsApp/SMS went missing.
+                // A replay while the code is still open re-surfaces it (and
+                // its QR) — the customer's recovery path if the WhatsApp/SMS
+                // went missing.
                 .paymentCode(awaitingApproval ? p.getInnbucksCode() : null)
                 .paymentCodeExpiresAt(awaitingApproval && p.getCodeExpiresAt() != null
                         ? LocalDateTime.ofInstant(p.getCodeExpiresAt(), ZoneOffset.UTC) : null)
+                .paymentQrCode(awaitingApproval ? p.getCodeQrBase64() : null)
                 .build();
         String message;
         if (status == PaymentResponse.Status.SUCCESS) {

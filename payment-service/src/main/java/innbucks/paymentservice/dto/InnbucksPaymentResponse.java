@@ -69,6 +69,12 @@ public class InnbucksPaymentResponse {
             example = "701285660")
     private String paymentCode;
 
+    @Schema(description = "InnBucks-rendered QR image (base64) encoding the same payment — render it "
+            + "so the customer can Scan-to-Pay in the InnBucks app instead of typing the code. "
+            + "May be null; the numeric code always works.",
+            example = "iVBORw0KGgoAAAANSUhEUg...")
+    private String paymentQrCode;
+
     @Schema(description = "UTC deadline for approving the payment code; after this the payment "
             + "expires and the booking can be paid again with a fresh code.",
             example = "2026-06-11T15:58:00")

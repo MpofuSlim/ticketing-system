@@ -81,7 +81,7 @@ class InnbucksPaymentServiceTest {
     }
 
     private static CodeGenerationResult approved(String code, String authNumber, Long echoCents) {
-        return new CodeGenerationResult(true, code, authNumber, "414107", echoCents,
+        return new CodeGenerationResult(true, code, authNumber, "qr-base64-bytes", "414107", echoCents,
                 "0", "Approved or completed successfully");
     }
 
@@ -94,9 +94,12 @@ class InnbucksPaymentServiceTest {
 
         assertEquals(Status.PROCESSING, resp.getStatus());
         assertEquals("701285660", resp.getPaymentCode());
+        assertEquals("qr-base64-bytes", resp.getPaymentQrCode(),
+                "the InnBucks QR must ride along for Scan-to-Pay");
         assertNotNull(resp.getPaymentCodeExpiresAt());
-        // Ledger: code handles + local deadline recorded on the transition.
-        verify(records).markTokenIssued(any(UUID.class), eq("701285660"), eq("1616800"), any(Instant.class));
+        // Ledger: code handles + QR + local deadline recorded on the transition.
+        verify(records).markTokenIssued(any(UUID.class), eq("701285660"), eq("1616800"),
+                eq("qr-base64-bytes"), any(Instant.class));
         // Delivery: the customer gets the code with the EXACT booking amount.
         verify(notifier).sendPaymentCode(eq("+263770000001"), eq("701285660"),
                 eq(new BigDecimal("50.00")), eq("USD"), eq(Duration.ofMinutes(10)), anyString());
@@ -142,13 +145,13 @@ class InnbucksPaymentServiceTest {
         assertEquals("amount_mismatch", resp.getUpstreamCode());
         verify(records).markFailed(any(UUID.class), eq("amount_mismatch"), contains("5000"));
         verifyNoInteractions(notifier);
-        verify(records, never()).markTokenIssued(any(), anyString(), anyString(), any());
+        verify(records, never()).markTokenIssued(any(), anyString(), anyString(), anyString(), any());
     }
 
     @Test
     void upstreamRefusal_failsRow_withUpstreamReason() {
         when(innbucksApi.generatePaymentCode(anyString(), anyString(), anyLong()))
-                .thenReturn(new CodeGenerationResult(false, null, null, null, null,
+                .thenReturn(new CodeGenerationResult(false, null, null, null, null, null,
                         "96", "Request failed, please try again later"));
 
         InnbucksPaymentResponse resp = service.processPayment(bookingId, "+263770000001", null);
@@ -201,7 +204,8 @@ class InnbucksPaymentServiceTest {
         // carries the miss for support. Never fail the payment over delivery.
         assertEquals(Status.PROCESSING, resp.getStatus());
         assertEquals("701285660", resp.getPaymentCode());
-        verify(records).markTokenIssued(any(UUID.class), eq("701285660"), eq("1616800"), any(Instant.class));
+        verify(records).markTokenIssued(any(UUID.class), eq("701285660"), eq("1616800"),
+                eq("qr-base64-bytes"), any(Instant.class));
         verify(records).noteEvent(any(UUID.class), contains("FAILED"));
         verify(records, never()).markFailed(any(), anyString(), anyString());
     }

@@ -131,6 +131,7 @@ class PaymentControllerTest {
                         .upstreamMessage("Approve the payment in your InnBucks app — your payment code was sent to your phone")
                         .paymentCode("701285660")
                         .paymentCodeExpiresAt(expiresAt)
+                        .paymentQrCode("qr-base64-bytes")
                         .build());
 
         ResponseEntity<ApiResult<PaymentResponse>> resp =
@@ -144,6 +145,7 @@ class PaymentControllerTest {
         // while delivery to the customer happens via WhatsApp/SMS.
         assertEquals("701285660", data.getPaymentCode());
         assertEquals(expiresAt, data.getPaymentCodeExpiresAt());
+        assertEquals("qr-base64-bytes", data.getPaymentQrCode());
         assertTrue(resp.getBody().getMessage().contains("InnBucks app"));
     }
 
@@ -208,6 +210,7 @@ class PaymentControllerTest {
                 .status(Payment.PaymentStatus.TOKEN_ISSUED)
                 .innbucksCode("701285660")
                 .codeAuthNumber("1616800")
+                .codeQrBase64("qr-base64-bytes")
                 .codeExpiresAt(expiresAt)
                 .build();
         when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
@@ -220,6 +223,8 @@ class PaymentControllerTest {
         PaymentResponse data = resp.getBody().getData();
         assertEquals(PaymentResponse.Status.PROCESSING, data.getStatus());
         assertEquals("701285660", data.getPaymentCode());
+        assertEquals("qr-base64-bytes", data.getPaymentQrCode(),
+                "replay must re-surface the QR too");
         assertEquals(java.time.LocalDateTime.ofInstant(expiresAt, java.time.ZoneOffset.UTC),
                 data.getPaymentCodeExpiresAt());
         verifyNoInteractions(f.innbucks());
