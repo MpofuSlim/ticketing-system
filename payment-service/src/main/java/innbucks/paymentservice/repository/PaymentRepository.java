@@ -43,6 +43,23 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
     List<Payment> findByStatus(Payment.PaymentStatus status, Pageable pageable);
 
     /**
+     * Settlement reconciliation: every code-bearing row created in the
+     * window, regardless of status — the our-side input of the nightly match
+     * against InnBucks' mini statement.
+     */
+    List<Payment> findByInnbucksCodeIsNotNullAndCreatedAtBetween(
+            Instant start, Instant end, Pageable pageable);
+
+    /**
+     * Exception workbasket: TOKEN_ISSUED rows whose code expiry passed long
+     * enough ago that the poller SHOULD have resolved them — still being
+     * open means the upstream status is unreadable (the never-guess rule
+     * keeps them blocking the slot until a human or InnBucks answers).
+     */
+    List<Payment> findByStatusAndCodeExpiresAtBefore(
+            Payment.PaymentStatus status, Instant cutoff, Pageable pageable);
+
+    /**
      * Replay lookup for the public {@code POST /payments} entry: when a
      * booking already has an active-or-successful payment, the endpoint
      * returns THAT row's receipt (idempotent-replay semantics — a double-tap

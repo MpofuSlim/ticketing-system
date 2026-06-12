@@ -491,6 +491,10 @@ services:
       BANK_API_USERNAME: ${BANK_API_USERNAME:?set BANK_API_USERNAME in .env}
       BANK_API_PASSWORD: ${BANK_API_PASSWORD:?set BANK_API_PASSWORD in .env}
       PAYMENTS_INNBUCKS_ENABLED: ${PAYMENTS_INNBUCKS_ENABLED:-true}
+      # OPTIONAL: the merchant's own InnBucks account id — enables the
+      # nightly settlement reconciliation (ledger vs InnBucks mini
+      # statement). Payments work without it; the recon job just skips.
+      PAYMENTS_INNBUCKS_MERCHANT_ACCOUNT: ${PAYMENTS_INNBUCKS_MERCHANT_ACCOUNT:-}
     ports:
       - "127.0.0.1:8085:8085"
     healthcheck:

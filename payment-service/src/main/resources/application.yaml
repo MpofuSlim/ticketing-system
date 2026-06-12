@@ -132,6 +132,9 @@ payment-service:
     batch-size: ${RECONCILIATION_BATCH_SIZE:100}
   code-poll:
     interval: ${CODE_POLL_INTERVAL:PT20S}
+  # Nightly settlement recon over YESTERDAY (UTC) — the morning report.
+  recon:
+    cron: ${RECON_CRON:0 30 2 * * *}
   # Topic provisioning. Spring auto-creates from the NewTopic @Bean if
   # the broker allows it; replication-factor of 1 is dev-only — bump to
   # 3 in any environment with multiple brokers.
@@ -256,6 +259,12 @@ payments:
     enabled: ${PAYMENTS_INNBUCKS_ENABLED:true}
     code:
       ttl: ${PAYMENTS_CODE_TTL:PT10M}
+    # Settlement reconciliation (SettlementReconciliationJob): the merchant's
+    # own InnBucks account id, used ONLY to pull the code mini-statement and
+    # match it against our ledger. Blank = reconciliation disabled (the
+    # payment flow itself never needs it).
+    recon:
+      account: ${PAYMENTS_INNBUCKS_MERCHANT_ACCOUNT:}
 
 springdoc:
   swagger-ui:

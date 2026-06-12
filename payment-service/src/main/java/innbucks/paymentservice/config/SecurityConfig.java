@@ -64,6 +64,14 @@ public class SecurityConfig {
                                 "/swagger-ui.html",
                                 "/error"
                         ).permitAll()
+                        // Internal ops endpoints (workbasket + settlement recon):
+                        // authenticated by the X-Internal-Token constant-time
+                        // compare in PaymentOpsController, and blocked at the
+                        // edge by the gateway's payment-internal-deny route.
+                        // Without this permitAll the JWT chain 401s the call
+                        // before the controller's token check ever runs (the
+                        // PR #145 class of bug).
+                        .requestMatchers("/payments/internal/**").permitAll()
                         // Everything else — /payments/**, /actuator/prometheus,
                         // any future endpoint — requires a valid customer JWT
                         // populated by JwtFilter.

@@ -70,6 +70,8 @@ public class InnbucksApiClient {
     private static final String LOGIN_PATH = "/auth/third-party";
     private static final String CODE_GENERATE_PATH = "/api/code/generate";
     private static final String CODE_QUERY_PATH = "/api/code/query/originalReference";
+    private static final java.time.format.DateTimeFormatter STATEMENT_DATE_FORMAT =
+            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private final InnbucksApiProperties properties;
     private final RestClient restClient;
@@ -225,6 +227,43 @@ public class InnbucksApiClient {
         }));
     }
 
+    // ------------------------------------------------------------ statement
+
+    /**
+     * The merchant's code mini-statement — InnBucks' OWN record of recent
+     * code transactions, used by settlement reconciliation as the
+     * counterparty truth. Read-only, retried on transients. A non-zero
+     * {@code responseCode} throws {@link InnbucksApiException}: a recon run
+     * must fail loudly rather than conclude "no entries, everything we have
+     * is unmatched".
+     */
+    public java.util.List<CodeStatementEntry> fetchCodeMiniStatement(String accountId) {
+        requireConfigured();
+        return executeIdempotent(() -> withAuthRetryOn401(token -> {
+            try {
+                String raw = restClient.get()
+                        .uri("/api/code/{accountId}/miniStatement", accountId)
+                        .header(API_KEY_HEADER, properties.getApiKey())
+                        .header("Authorization", "Bearer " + token)
+                        .retrieve()
+                        .body(String.class);
+                return classifyMiniStatement(raw);
+            } catch (RestClientResponseException e) {
+                int status = e.getStatusCode().value();
+                if (status == 401) throw new UnauthorizedException();
+                if (status >= 500) throw new InnbucksApiTransientException(
+                        "InnBucks API returned HTTP " + status + " on mini statement", status, e);
+                throw new InnbucksApiException(
+                        "InnBucks API rejected the mini-statement request: HTTP " + status, status, e);
+            } catch (InnbucksApiException | UnauthorizedException e) {
+                throw e;
+            } catch (Exception e) {
+                throw new InnbucksApiTransientException(
+                        "Unable to reach the InnBucks API: " + e.getMessage(), 502, e);
+            }
+        }));
+    }
+
     // ------------------------------------------------------------------ auth
 
     /** Run an authed call; on 401, force one token refresh and replay once. */
@@ -367,6 +406,43 @@ public class InnbucksApiClient {
             log.warn("innbucks-api code query returned unrecognised status='{}' — treating as UNKNOWN", rawStatus);
         }
         return new CodeStatusResult(status, rawStatus, responseMsg);
+    }
+
+    @SuppressWarnings("unchecked")
+    private java.util.List<CodeStatementEntry> classifyMiniStatement(String raw) {
+        Map<String, Object> parsed = parseJson(raw);
+        Integer responseCode = parseResponseCode(parsed.get("responseCode"));
+        if (responseCode == null || responseCode != 0) {
+            String msg = firstString(parsed, "responseMsg", "responseDescription", "description");
+            throw new InnbucksApiException("InnBucks mini statement refused: responseCode="
+                    + responseCode + (msg != null ? " (" + msg + ")" : ""), 502);
+        }
+        // Per the doc the entry array is (confusingly) named "code".
+        Object entries = parsed.get("code");
+        if (!(entries instanceof java.util.List<?> list)) {
+            // responseCode 0 with no array = an empty statement, not an error.
+            return java.util.List.of();
+        }
+        java.util.List<CodeStatementEntry> out = new java.util.ArrayList<>(list.size());
+        for (Object item : list) {
+            if (!(item instanceof Map<?, ?> m)) continue;
+            Map<String, Object> entry = (Map<String, Object>) m;
+            out.add(new CodeStatementEntry(
+                    asString(entry.get("code")),
+                    parseCents(entry.get("amount")),
+                    asString(entry.get("state")),
+                    parseStatementDate(asString(entry.get("createDate")))));
+        }
+        return out;
+    }
+
+    private static java.time.LocalDateTime parseStatementDate(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return java.time.LocalDateTime.parse(value.trim(), STATEMENT_DATE_FORMAT);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** responseCode arrives as number 0 or string "0"/"00"/"96" depending on the endpoint family. */
