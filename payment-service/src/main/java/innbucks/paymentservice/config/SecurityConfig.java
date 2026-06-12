@@ -64,9 +64,23 @@ public class SecurityConfig {
                                 "/swagger-ui.html",
                                 "/error"
                         ).permitAll()
-                        // Everything else — /payments/**, /actuator/prometheus,
-                        // any future endpoint — requires a valid customer JWT
-                        // populated by JwtFilter.
+                        // Guest ticket checkout: POST /payments is public so a
+                        // customer can pay without logging in (mirrors
+                        // booking-service's public POST /bookings). Safe to
+                        // open — the payer identity is the BOOKING's phoneNumber,
+                        // read from the booking record, NOT the JWT principal, so
+                        // this endpoint never used the token anyway. EXACT path
+                        // only ("/payments"): the money-moving siblings
+                        // (/payments/transfer, /payments/withdraw,
+                        // /payments/shop-checkout) derive the customer FROM the
+                        // JWT and MUST stay authenticated — they fall through to
+                        // anyRequest() below.
+                        .requestMatchers(HttpMethod.POST, "/payments").permitAll()
+                        // Everything else — /payments/transfer, /payments/withdraw,
+                        // /payments/shop-checkout, /actuator/prometheus, any future
+                        // endpoint — requires a valid customer JWT populated by
+                        // JwtFilter. (/payments/internal/** is gated separately by
+                        // X-Internal-Token in PaymentOpsController.)
                         .anyRequest().authenticated()
                 )
                 .exceptionHandling(ex -> ex
