@@ -83,7 +83,8 @@ class BookingConfirmedNotificationListenerTest {
         Mocks m = mocks();
         Booking b = bookingFixture("+263771234567", "rufaro@example.com", 2);
         when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
-        String expectedLink = BASE + "/bookings/" + b.getId() + "/tickets";
+        String qr1 = BASE + "/bookings/" + b.getId() + "/tickets/20260610-T1/qr";
+        String qr2 = BASE + "/bookings/" + b.getId() + "/tickets/20260610-T2/qr";
 
         m.listener().onBookingConfirmed(eventFor(b));
 
@@ -103,7 +104,8 @@ class BookingConfirmedNotificationListenerTest {
         verify(m.wa()).sendCustomNotification(eq("+263771234567"), wa.capture());
         assertThat(wa.getValue())
                 .contains("INN-20260610-A1B2C3").contains("2 tickets")
-                .contains(expectedLink).contains("20260610-T1").contains("20260610-T2");
+                // Direct QR-image links, one per ticket — the whole deliverable for now.
+                .contains(qr1).contains(qr2);
         verifyNoInteractions(m.sms());
     }
 
@@ -127,15 +129,13 @@ class BookingConfirmedNotificationListenerTest {
         when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
         doThrow(new NotificationDeliveryException("gateway 503"))
                 .when(m.wa()).sendCustomNotification(anyString(), anyString());
-        String expectedLink = BASE + "/bookings/" + b.getId() + "/tickets";
+        String qr1 = BASE + "/bookings/" + b.getId() + "/tickets/20260610-T1/qr";
 
         m.listener().onBookingConfirmed(eventFor(b));
 
         ArgumentCaptor<String> smsMsg = ArgumentCaptor.forClass(String.class);
         verify(m.sms()).sendSms(eq("+263771234567"), smsMsg.capture(), startsWith("BOOKING-CONFIRM-"));
-        assertThat(smsMsg.getValue()).contains("INN-20260610-A1B2C3").contains(expectedLink);
-        // SMS lane stays short — no ticket-number dump.
-        assertThat(smsMsg.getValue()).doesNotContain("20260610-T1");
+        assertThat(smsMsg.getValue()).contains("INN-20260610-A1B2C3").contains(qr1);
         // Email is an independent channel — still delivered despite WhatsApp failure.
         verify(m.email()).sendHtmlEmail(eq("rufaro@example.com"), anyString(), anyString(), anyString());
     }
