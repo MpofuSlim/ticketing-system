@@ -318,6 +318,52 @@ public class BookingController {
                 bookingService.getBookingById(id, userEmail, isAdmin)));
     }
 
+    /**
+     * Service-to-service read of a booking by id — used by payment-service to
+     * resolve {@code totalAmount} + {@code phoneNumber} before issuing an
+     * InnBucks payment code. Distinct from the customer {@code GET /{id}}
+     * above, which scopes by the JWT's owner: this path carries NO customer
+     * JWT (it must work for GUEST bookings too), so ownership is not checked —
+     * the trust boundary is the shared {@code X-Internal-Token}.
+     *
+     * <p>"Internal endpoints — three files agree": controller checks the token
+     * (here), {@code SecurityConfig} permits {@code GET /bookings/internal/**}
+     * (so Spring Security doesn't 401 before this runs), and the gateway's
+     * {@code booking-internal-deny} route blocks the path at the edge.
+     */
+    @GetMapping("/internal/{id}")
+    @SecurityRequirements()
+    @Operation(summary = "Get booking by id (internal S2S)",
+            description = "Service-to-service read for payment-service — resolves a booking's "
+                    + "totalAmount + phoneNumber before issuing an InnBucks payment code, and works for "
+                    + "guest bookings (no customer JWT). Authenticated with the shared X-Internal-Token; "
+                    + "ownership is not checked; denied at the gateway edge.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "Booking returned"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
+                    description = "Missing or invalid X-Internal-Token"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "Booking not found")
+    })
+    public ResponseEntity<ApiResult<BookingResponseDTO>> getBookingByIdInternal(
+            @PathVariable UUID id,
+            @RequestHeader(value = "X-Internal-Token", required = false) String internalToken
+    ) {
+        if (!authorizedInternal(internalToken)) {
+            log.warn("Unauthorized GET /bookings/internal/{} — missing or wrong X-Internal-Token", id);
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.<BookingResponseDTO>builder()
+                            .code("401 UNAUTHORIZED")
+                            .message("Missing or invalid X-Internal-Token")
+                            .data(null)
+                            .build());
+        }
+        log.info("GET /bookings/internal/{} (S2S)", id);
+        return ResponseEntity.ok(ApiResult.ok("Booking retrieved successfully",
+                bookingService.getBookingById(id, null, true)));
+    }
+
     private static boolean hasRole(Authentication authentication, String role) {
         if (authentication == null) return false;
         return authentication.getAuthorities().stream()
