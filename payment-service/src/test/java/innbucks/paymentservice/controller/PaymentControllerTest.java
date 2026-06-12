@@ -57,16 +57,18 @@ class PaymentControllerTest {
 
     /** Controller with mockable real-flow collaborators. */
     private record Fixture(PaymentController controller, BookingServiceClient bookings,
-                           InnbucksPaymentService innbucks, PaymentRepository payments) {}
+                           InnbucksPaymentService innbucks, PaymentRepository payments,
+                           PaymentRecordService records) {}
 
     private static Fixture fixture() {
         BookingServiceClient bookings = mock(BookingServiceClient.class);
         InnbucksPaymentService innbucks = mock(InnbucksPaymentService.class);
         PaymentRepository payments = mock(PaymentRepository.class);
+        PaymentRecordService records = mock(PaymentRecordService.class);
         PaymentController controller = new PaymentController(
                 bookings, mock(LoyaltyServiceClient.class), newMetrics(),
-                innbucks, mock(PaymentRecordService.class), payments);
-        return new Fixture(controller, bookings, innbucks, payments);
+                innbucks, records, payments);
+        return new Fixture(controller, bookings, innbucks, payments, records);
     }
 
     private static InnbucksPaymentResponse outcome(UUID bookingId, InnbucksPaymentResponse.Status status,
@@ -191,6 +193,123 @@ class PaymentControllerTest {
         assertNull(resp.getBody().getData().getPaymentCode());
         // The real-money flow must NOT run again — double-tap is a replay.
         verifyNoInteractions(f.innbucks());
+    }
+
+    @Test
+    void processPayment_orphanedPending_isClosedAndReplacedByAFreshAttempt() {
+        // The bug from live testing: a crash/outage leftover PENDING row (no
+        // code ever recorded) replayed as PROCESSING with null code/QR —
+        // nothing for the customer to pay, forever. It must be closed FAILED
+        // and a fresh attempt run in the same request.
+        Fixture f = fixture();
+        UUID bookingId = UUID.randomUUID();
+        Payment orphan = Payment.builder()
+                .id(UUID.randomUUID()).paymentReference("TKT-PMT-" + UUID.randomUUID())
+                .bookingId(bookingId).customerMsisdn("+263770000001")
+                .amount(new BigDecimal("10.00")).currency("USD")
+                .status(Payment.PaymentStatus.PENDING)
+                .createdAt(java.time.Instant.now().minusSeconds(120))
+                .build();
+        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
+                .thenReturn(Optional.of(orphan));
+        when(f.bookings().getBooking(bookingId)).thenReturn(Map.of(
+                "phoneNumber", "+263770000001", "totalAmount", 10.00));
+        when(f.innbucks().processPayment(eq(bookingId), eq("+263770000001"), isNull()))
+                .thenReturn(InnbucksPaymentResponse.builder()
+                        .paymentReference("TKT-PMT-" + UUID.randomUUID())
+                        .bookingId(bookingId)
+                        .status(InnbucksPaymentResponse.Status.PROCESSING)
+                        .amountPaid(new BigDecimal("10.00")).currency("USD")
+                        .paymentCode("701999000")
+                        .build());
+
+        ResponseEntity<ApiResult<PaymentResponse>> resp =
+                f.controller().processPayment(paymentFor(bookingId));
+
+        verify(f.records()).markFailed(eq(orphan.getId()), eq("stale_pending"), anyString());
+        verify(f.innbucks()).processPayment(eq(bookingId), eq("+263770000001"), isNull());
+        assertEquals(HttpStatus.OK, resp.getStatusCode());
+        assertEquals("701999000", resp.getBody().getData().getPaymentCode(),
+                "the customer must get the FRESH code, not the orphan's nothing");
+    }
+
+    @Test
+    void processPayment_youngPending_replaysHonestly_neverDoubleGenerates() {
+        // A PENDING row seconds old is a genuinely concurrent request —
+        // racing a second generation could mint two live codes.
+        Fixture f = fixture();
+        UUID bookingId = UUID.randomUUID();
+        Payment inFlight = Payment.builder()
+                .id(UUID.randomUUID()).paymentReference("TKT-PMT-" + UUID.randomUUID())
+                .bookingId(bookingId).customerMsisdn("+263770000001")
+                .amount(new BigDecimal("10.00")).currency("USD")
+                .status(Payment.PaymentStatus.PENDING)
+                .createdAt(java.time.Instant.now().minusSeconds(3))
+                .build();
+        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
+                .thenReturn(Optional.of(inFlight));
+
+        ResponseEntity<ApiResult<PaymentResponse>> resp =
+                f.controller().processPayment(paymentFor(bookingId));
+
+        assertEquals(HttpStatus.OK, resp.getStatusCode());
+        assertEquals(PaymentResponse.Status.PROCESSING, resp.getBody().getData().getStatus());
+        assertNull(resp.getBody().getData().getPaymentCode());
+        assertTrue(resp.getBody().getMessage().contains("already being processed"));
+        verifyNoInteractions(f.innbucks());
+        verify(f.records(), never()).markFailed(any(), anyString(), anyString());
+    }
+
+    @Test
+    void processPayment_replayWithExpiredCode_neverResurfacesTheDeadCode() {
+        Fixture f = fixture();
+        UUID bookingId = UUID.randomUUID();
+        Payment expired = Payment.builder()
+                .id(UUID.randomUUID()).paymentReference("TKT-PMT-" + UUID.randomUUID())
+                .bookingId(bookingId).customerMsisdn("+263770000001")
+                .amount(new BigDecimal("10.00")).currency("USD")
+                .status(Payment.PaymentStatus.TOKEN_ISSUED)
+                .innbucksCode("701285660").codeAuthNumber("1616800")
+                .codeExpiresAt(java.time.Instant.now().minusSeconds(60))
+                .createdAt(java.time.Instant.now().minusSeconds(700))
+                .build();
+        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
+                .thenReturn(Optional.of(expired));
+
+        ResponseEntity<ApiResult<PaymentResponse>> resp =
+                f.controller().processPayment(paymentFor(bookingId));
+
+        PaymentResponse data = resp.getBody().getData();
+        assertEquals(PaymentResponse.Status.PROCESSING, data.getStatus());
+        assertNull(data.getPaymentCode(), "a dead code must never be advertised again");
+        assertNull(data.getPaymentQrCode());
+        assertTrue(resp.getBody().getMessage().contains("expired"));
+        verifyNoInteractions(f.innbucks());
+    }
+
+    @Test
+    void processPayment_replayOnPaidUnconfirmed_hidesTheSpentCode() {
+        Fixture f = fixture();
+        UUID bookingId = UUID.randomUUID();
+        Payment cu = Payment.builder()
+                .id(UUID.randomUUID()).paymentReference("TKT-PMT-" + UUID.randomUUID())
+                .bookingId(bookingId).customerMsisdn("+263770000001")
+                .amount(new BigDecimal("10.00")).currency("USD")
+                .status(Payment.PaymentStatus.COMPLETED_UNCONFIRMED)
+                .innbucksCode("701285660").codeAuthNumber("1616800")
+                .codeExpiresAt(java.time.Instant.now().plusSeconds(300))
+                .createdAt(java.time.Instant.now().minusSeconds(60))
+                .build();
+        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
+                .thenReturn(Optional.of(cu));
+
+        ResponseEntity<ApiResult<PaymentResponse>> resp =
+                f.controller().processPayment(paymentFor(bookingId));
+
+        PaymentResponse data = resp.getBody().getData();
+        assertEquals(PaymentResponse.Status.PROCESSING, data.getStatus());
+        assertNull(data.getPaymentCode(), "a PAID code is spent — re-showing it invites confusion");
+        assertTrue(resp.getBody().getMessage().contains("being confirmed"));
     }
 
     @Test

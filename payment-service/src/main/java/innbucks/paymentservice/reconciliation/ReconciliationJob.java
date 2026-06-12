@@ -171,15 +171,16 @@ public class ReconciliationJob {
     }
 
     private void resolveCodePayment(Payment p) {
-        if (p.getCodeAuthNumber() == null || p.getCodeAuthNumber().isBlank()) {
+        if (p.getInnbucksCode() == null || p.getInnbucksCode().isBlank()) {
             // Should be impossible (markTokenIssued always records it) — but a
-            // row we cannot query must never be guessed into a terminal state.
+            // row we cannot inquire on must never be guessed into a terminal state.
             metrics.incCodeResolution("unqueryable");
-            log.error("TOKEN_ISSUED row has no codeAuthNumber — cannot poll paymentId={} paymentReference={}",
+            log.error("TOKEN_ISSUED row has no innbucksCode — cannot poll paymentId={} paymentReference={}",
                     p.getId(), p.getPaymentReference());
             return;
         }
-        CodeStatusResult result = innbucksApiClient.queryCodeStatus(p.getCodeAuthNumber());
+        // /api/code/inquiry is keyed by the CODE the customer pays, not the authNumber.
+        CodeStatusResult result = innbucksApiClient.inquireCodeStatus(p.getInnbucksCode());
         switch (result.status()) {
             case PAID, CLAIMED -> completePaidCode(p, result);
             case EXPIRED -> {

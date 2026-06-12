@@ -46,9 +46,11 @@ Response (success): `{"stan", "authNumber", "processedDateTime",
 "description"}`.
 
 - `code` — what the customer pays: shown in their InnBucks app under
-  **Pay by Code** (or USSD). We deliver it via WhatsApp→SMS and echo it on
-  the `POST /payments` response (`paymentCode`, additive field).
-- `authNumber` — the handle for all status queries (`originalReference`).
+  **Pay by Code** (or USSD). Surfaced to the FE on the `POST /payments`
+  response (`paymentCode`); the FE renders it (+ QR) on the checkout screen.
+  No out-of-band delivery. **This is also the key `/api/code/inquiry` uses.**
+- `authNumber` — InnBucks-side transaction handle; recorded on the payment
+  row for audit/recovery, but status inquiry is keyed by `code`, not this.
 - `qrCode` — InnBucks-rendered base64 QR image of the same payment. Persisted
   on the payment row and surfaced to the FE as the additive `paymentQrCode`
   field on `POST /payments`, so the customer can **Scan-to-Pay** in the
@@ -58,9 +60,14 @@ Response (success): `{"stan", "authNumber", "processedDateTime",
   mint a second live code. Generation moves no money, so failures close the
   ledger row FAILED and the customer just taps pay again.
 
-### 2. `POST /api/code/query/originalReference`
+### 2. `POST /api/code/inquiry`
 
-Request: `{"reference": "<unique per query>", "originalReference": "<authNumber>"}`.
+Request: `{"reference": "<unique per inquiry>", "code": "<the InnBucks code>"}`.
+**Keyed by the `code` the customer pays, NOT the authNumber** — the endpoint
+returns HTTP 400 `{"status":400,"errors":["Code is required"]}` if `code` is
+missing. (We previously used `/api/code/query/originalReference`; staging
+returned `096 "Error processing request"` for every call, so we moved to
+`/api/code/inquiry`, which is the documented inquiry endpoint.)
 
 Response: `{... "responseCode": 0, "code", "amount", "status", "timeToLive",
 "description"}` where `status` ∈:
@@ -76,8 +83,8 @@ Response: `{... "responseCode": 0, "code", "amount", "status", "timeToLive",
 Anything else → UNKNOWN: the poller leaves the row alone (auto-expiring a
 code the customer may have paid is the double-charge path).
 
-(`POST /api/code/query` — same thing keyed by the code itself — exists but is
-not used.)
+(`POST /api/code/query/originalReference` — keyed by the authNumber — exists
+but staging 096-errors on it; we use `/api/code/inquiry` instead.)
 
 ### 3. `GET /api/code/{accountId}/miniStatement` (settlement reconciliation)
 

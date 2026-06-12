@@ -2,6 +2,7 @@ package com.innbucks.bookingservice.controller;
 
 import com.innbucks.bookingservice.client.UserServiceClient;
 import com.innbucks.bookingservice.dto.ApiResult;
+import com.innbucks.bookingservice.dto.BookingResponseDTO;
 import com.innbucks.bookingservice.dto.EventChangeNotificationRequest;
 import com.innbucks.bookingservice.service.BookingService;
 import com.innbucks.bookingservice.service.EventChangeNotificationService;
@@ -11,9 +12,12 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.math.BigDecimal;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.*;
 
 /**
@@ -28,13 +32,15 @@ class BookingControllerInternalEndpointTest {
     private static final String TOKEN = "the-shared-secret";
 
     private EventChangeNotificationService notifications;
+    private BookingService bookingService;
     private BookingController controller;
 
     @BeforeEach
     void setUp() {
         notifications = mock(EventChangeNotificationService.class);
+        bookingService = mock(BookingService.class);
         controller = new BookingController(
-                mock(BookingService.class), mock(UserServiceClient.class), notifications);
+                bookingService, mock(UserServiceClient.class), notifications);
         ReflectionTestUtils.setField(controller, "expectedInternalToken", TOKEN);
     }
 
@@ -69,5 +75,44 @@ class BookingControllerInternalEndpointTest {
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
         verifyNoInteractions(notifications);
+    }
+
+    // --- GET /bookings/internal/{id} : the S2S read payment-service uses ---
+
+    @Test
+    void internalGet_validToken_returnsBooking_ownershipBypassed() {
+        UUID id = UUID.randomUUID();
+        BookingResponseDTO dto = new BookingResponseDTO();
+        dto.setId(id);
+        dto.setPhoneNumber("+263782606983");
+        dto.setTotalAmount(new BigDecimal("40.00"));
+        // isAdmin=true + null userEmail = no ownership check (trusted S2S caller).
+        when(bookingService.getBookingById(eq(id), isNull(), eq(true))).thenReturn(dto);
+
+        ResponseEntity<ApiResult<BookingResponseDTO>> resp =
+                controller.getBookingByIdInternal(id, TOKEN);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(resp.getBody().getData().getPhoneNumber()).isEqualTo("+263782606983");
+        assertThat(resp.getBody().getData().getTotalAmount()).isEqualByComparingTo("40.00");
+        verify(bookingService).getBookingById(id, null, true);
+    }
+
+    @Test
+    void internalGet_missingToken_returns401_andNeverReadsTheBooking() {
+        ResponseEntity<ApiResult<BookingResponseDTO>> resp =
+                controller.getBookingByIdInternal(UUID.randomUUID(), null);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        verifyNoInteractions(bookingService);
+    }
+
+    @Test
+    void internalGet_wrongToken_returns401_andNeverReadsTheBooking() {
+        ResponseEntity<ApiResult<BookingResponseDTO>> resp =
+                controller.getBookingByIdInternal(UUID.randomUUID(), "not-the-secret");
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        verifyNoInteractions(bookingService);
     }
 }
