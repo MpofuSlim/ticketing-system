@@ -235,8 +235,8 @@ public class PaymentController {
                     log.info("POST /payments instant-check EXPIRED bookingId={} — minting a fresh code",
                             request.getBookingId());
                 } else {
-                    log.info("POST /payments replay bookingId={} existing paymentReference={} status={}",
-                            request.getBookingId(), p.getPaymentReference(), p.getStatus());
+                    log.info("POST /payments replay after instant check (still pending upstream) bookingId={} paymentReference={}",
+                            request.getBookingId(), p.getPaymentReference());
                     return toReplayResponse(p, request);
                 }
             } else {
