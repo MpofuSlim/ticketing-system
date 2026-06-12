@@ -44,9 +44,10 @@ import java.util.function.Supplier;
  *       the customer might pay. A failed/timed-out generate moves no money,
  *       so the caller closes the ledger row FAILED and the customer simply
  *       taps pay again. Circuit breaker still applies.</li>
- *   <li>{@code POST /api/code/query/originalReference} — code status
+ *   <li>{@code POST /api/code/inquiry} — code status
  *       (New / Claimed / Paid / Expired / Timed Out), keyed by the
- *       {@code authNumber} from generation. Read-only, so retried on
+ *       {@code code} the customer pays (the inquiry endpoint requires
+ *       {@code code}, not the authNumber). Read-only, so retried on
  *       transients; the reconciler polls this until the code resolves.</li>
  * </ul>
  *
@@ -69,7 +70,7 @@ public class InnbucksApiClient {
     private static final String API_KEY_HEADER = "X-Api-Key";
     private static final String LOGIN_PATH = "/auth/third-party";
     private static final String CODE_GENERATE_PATH = "/api/code/generate";
-    private static final String CODE_QUERY_PATH = "/api/code/query/originalReference";
+    private static final String CODE_INQUIRY_PATH = "/api/code/inquiry";
 
     private final InnbucksApiProperties properties;
     private final RestClient restClient;
@@ -182,23 +183,24 @@ public class InnbucksApiClient {
     // ---------------------------------------------------------------- query
 
     /**
-     * Code status by {@code originalReference} = the {@code authNumber} from
-     * the generation response. Read-only — retried on transients. Anything
-     * the platform reports that doesn't map onto a documented status comes
-     * back {@code UNKNOWN}; the poller leaves such rows alone rather than
-     * guessing (a wrong guess here is the double-charge path).
+     * Code status via {@code POST /api/code/inquiry}, keyed by the
+     * {@code code} the customer pays (NOT the authNumber — the inquiry
+     * endpoint requires {@code code}). Read-only — retried on transients.
+     * Anything the platform reports that doesn't map onto a documented status
+     * comes back {@code UNKNOWN}; the poller leaves such rows alone rather
+     * than guessing (a wrong guess here is the double-charge path).
      */
-    public CodeStatusResult queryCodeStatus(String originalReference) {
+    public CodeStatusResult inquireCodeStatus(String code) {
         requireConfigured();
         return executeIdempotent(() -> withAuthRetryOn401(token -> {
             Map<String, Object> body = new LinkedHashMap<>();
             // Per the doc the request reference is "from the source system";
             // unique per inquiry so InnBucks-side logs distinguish polls.
             body.put("reference", "Q-" + UUID.randomUUID());
-            body.put("originalReference", originalReference);
+            body.put("code", code);
             try {
                 String raw = restClient.post()
-                        .uri(CODE_QUERY_PATH)
+                        .uri(CODE_INQUIRY_PATH)
                         .header(API_KEY_HEADER, properties.getApiKey())
                         .header("Authorization", "Bearer " + token)
                         .header("Content-Type", "application/json")
@@ -210,9 +212,9 @@ public class InnbucksApiClient {
                 int status = e.getStatusCode().value();
                 if (status == 401) throw new UnauthorizedException();
                 if (status >= 500) throw new InnbucksApiTransientException(
-                        "InnBucks API returned HTTP " + status + " on code query", status, e);
-                // 4xx — refused query (unknown reference, validation). Surface
-                // as ERROR so the poller counts it without mutating the row.
+                        "InnBucks API returned HTTP " + status + " on code inquiry", status, e);
+                // 4xx — refused inquiry (unknown code, validation). Surface as
+                // ERROR so the poller counts it without mutating the row.
                 CodeStatusResult refused = classifyStatus(e.getResponseBodyAsString());
                 return new CodeStatusResult(CodeStatusResult.Status.ERROR, refused.rawStatus(),
                         refused.responseMsg() != null ? refused.responseMsg() : "HTTP " + status);

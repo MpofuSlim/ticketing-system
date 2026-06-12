@@ -275,7 +275,7 @@ class ReconciliationJobTest {
         when(payments.findByStatus(eq(Payment.PaymentStatus.TOKEN_ISSUED), any(Pageable.class)))
                 .thenReturn(List.of(open));
         when(innbucksApi.isConfigured()).thenReturn(true);
-        when(innbucksApi.queryCodeStatus("1616800")).thenReturn(status(CodeStatusResult.Status.PAID));
+        when(innbucksApi.inquireCodeStatus("701285660")).thenReturn(status(CodeStatusResult.Status.PAID));
         when(bookings.confirmBooking(open.getBookingId()))
                 .thenReturn(java.util.Map.of("confirmationNumber", "INN-CONF-9"));
 
@@ -295,7 +295,7 @@ class ReconciliationJobTest {
         when(payments.findByStatus(eq(Payment.PaymentStatus.TOKEN_ISSUED), any(Pageable.class)))
                 .thenReturn(List.of(open));
         when(innbucksApi.isConfigured()).thenReturn(true);
-        when(innbucksApi.queryCodeStatus("1616800")).thenReturn(status(CodeStatusResult.Status.CLAIMED));
+        when(innbucksApi.inquireCodeStatus("701285660")).thenReturn(status(CodeStatusResult.Status.CLAIMED));
         when(bookings.confirmBooking(open.getBookingId()))
                 .thenReturn(java.util.Map.of("confirmationNumber", "INN-CONF-10"));
 
@@ -319,7 +319,7 @@ class ReconciliationJobTest {
         when(payments.findByStatus(eq(Payment.PaymentStatus.TOKEN_ISSUED), any(Pageable.class)))
                 .thenReturn(List.of(open));
         when(innbucksApi.isConfigured()).thenReturn(true);
-        when(innbucksApi.queryCodeStatus("1616800")).thenReturn(status(CodeStatusResult.Status.PAID));
+        when(innbucksApi.inquireCodeStatus("701285660")).thenReturn(status(CodeStatusResult.Status.PAID));
         when(bookings.confirmBooking(open.getBookingId()))
                 .thenThrow(new BookingServiceClient.BookingConfirmationException("hold expired", 409));
 
@@ -342,7 +342,7 @@ class ReconciliationJobTest {
         when(payments.findByStatus(eq(Payment.PaymentStatus.TOKEN_ISSUED), any(Pageable.class)))
                 .thenReturn(List.of(expired, timedOut));
         when(innbucksApi.isConfigured()).thenReturn(true);
-        when(innbucksApi.queryCodeStatus(expired.getCodeAuthNumber()))
+        when(innbucksApi.inquireCodeStatus(expired.getInnbucksCode()))
                 .thenReturn(status(CodeStatusResult.Status.EXPIRED))
                 .thenReturn(status(CodeStatusResult.Status.TIMED_OUT));
 
@@ -363,7 +363,7 @@ class ReconciliationJobTest {
         when(payments.findByStatus(eq(Payment.PaymentStatus.TOKEN_ISSUED), any(Pageable.class)))
                 .thenReturn(List.of(open));
         when(innbucksApi.isConfigured()).thenReturn(true);
-        when(innbucksApi.queryCodeStatus("1616800")).thenReturn(status(CodeStatusResult.Status.NEW));
+        when(innbucksApi.inquireCodeStatus("701285660")).thenReturn(status(CodeStatusResult.Status.NEW));
 
         newPollJob(payments, records, mock(BookingServiceClient.class), innbucksApi, metrics)
                 .pollCodePayments();
@@ -382,7 +382,7 @@ class ReconciliationJobTest {
         when(payments.findByStatus(eq(Payment.PaymentStatus.TOKEN_ISSUED), any(Pageable.class)))
                 .thenReturn(List.of(open));
         when(innbucksApi.isConfigured()).thenReturn(true);
-        when(innbucksApi.queryCodeStatus("1616800")).thenReturn(status(CodeStatusResult.Status.NEW));
+        when(innbucksApi.inquireCodeStatus("701285660")).thenReturn(status(CodeStatusResult.Status.NEW));
 
         newPollJob(payments, records, mock(BookingServiceClient.class), innbucksApi,
                 new PaymentMetrics(new SimpleMeterRegistry())).pollCodePayments();
@@ -405,7 +405,7 @@ class ReconciliationJobTest {
         when(payments.findByStatus(eq(Payment.PaymentStatus.TOKEN_ISSUED), any(Pageable.class)))
                 .thenReturn(List.of(unknown, erroring));
         when(innbucksApi.isConfigured()).thenReturn(true);
-        when(innbucksApi.queryCodeStatus(unknown.getCodeAuthNumber()))
+        when(innbucksApi.inquireCodeStatus(unknown.getInnbucksCode()))
                 .thenReturn(status(CodeStatusResult.Status.UNKNOWN))
                 .thenThrow(new RuntimeException("query timeout"));
 
@@ -431,7 +431,7 @@ class ReconciliationJobTest {
         newPollJob(payments, records, mock(BookingServiceClient.class), innbucksApi,
                 new PaymentMetrics(new SimpleMeterRegistry())).pollCodePayments();
 
-        verify(innbucksApi, never()).queryCodeStatus(anyString());
+        verify(innbucksApi, never()).inquireCodeStatus(anyString());
         verifyNoInteractions(records);
     }
 
