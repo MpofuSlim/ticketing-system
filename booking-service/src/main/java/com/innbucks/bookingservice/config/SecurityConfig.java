@@ -37,6 +37,13 @@ public class SecurityConfig {
                         .requestMatchers("/error").permitAll()
                         // Confirmation lookup is public — agents scan at the gate
                         .requestMatchers("/bookings/confirmation/**").permitAll()
+                        // Public ticket artifacts (QR PNG + HTML view page) linked
+                        // from the confirmation email/WhatsApp — opened with no app
+                        // session. Bearer-instrument model: the unguessable booking
+                        // UUID is the access control; TicketRenderingService only
+                        // renders CONFIRMED bookings. NOT under /bookings/internal/**,
+                        // so it routes through the public gateway normally.
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/bookings/*/tickets/**").permitAll()
                         // Guest web flow: customers can book without logging
                         // in. JWT is optional — when present, the customer's
                         // tier is enforced by TierAccessInterceptor. When

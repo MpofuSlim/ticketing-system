@@ -157,6 +157,12 @@ resilience4j:
 # circuit breakers (see below) so an outage degrades gracefully: cash bookings
 # still work, redeem fails fast.
 innbucks:
+  # Public origin (through the api-gateway) where the hosted ticket QR + view
+  # page are reachable. Used to build ABSOLUTE links in the confirmation email
+  # (<img src>) and WhatsApp/SMS. MUST be the public gateway URL in prod, e.g.
+  # https://api.yourdomain.com — a localhost default only works for local dev.
+  tickets:
+    public-base-url: ${TICKETS_PUBLIC_BASE_URL:http://localhost:8080}
   # Multi-cell country pin. Every running JVM is anchored to a single InnBucks
   # market — startup refuses to boot with an unknown value (see CountryMdcConfig).
   # Default ZW because the current deployment is the Zimbabwe home market;

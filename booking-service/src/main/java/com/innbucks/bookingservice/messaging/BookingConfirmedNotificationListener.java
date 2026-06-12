@@ -1,13 +1,15 @@
 package com.innbucks.bookingservice.messaging;
 
+import com.innbucks.bookingservice.client.EmailNotificationClient;
 import com.innbucks.bookingservice.client.SmsNotificationClient;
 import com.innbucks.bookingservice.client.WhatsAppNotificationClient;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
 import com.innbucks.bookingservice.event.BookingDomainEvent;
 import com.innbucks.bookingservice.repository.BookingRepository;
-import lombok.RequiredArgsConstructor;
+import com.innbucks.bookingservice.service.TicketRenderingService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,80 +20,115 @@ import java.math.BigDecimal;
 import java.util.List;
 
 /**
- * Notifies the customer that their booking is confirmed and their tickets are
- * ready. Fires on every {@link BookingDomainEvent.BookingConfirmed} event
- * AFTER the booking transaction commits — same hook the audit identified as
- * the right place for customer notifications (mirrors the
- * {@code PaymentNotificationListener} pattern in payment-service).
+ * Delivers the customer's tickets once a booking is confirmed. Fires on
+ * {@link BookingDomainEvent.BookingConfirmed} AFTER the booking transaction
+ * commits (idempotent confirm = exactly one event per real confirmation).
  *
- * <p>Channel order: <b>WhatsApp primary → SMS fallback</b>. WhatsApp is
- * preferred because it carries longer copy (1600 chars vs SMS's 160) and
- * supports read receipts; SMS catches every customer whose WhatsApp is off or
- * unreachable. The QR image isn't embedded — the {@code custom-notification}
- * endpoint is text-only — but the ticket number IS the QR payload, so quoting
- * it lets a customer present it manually at the gate if their app is offline.
+ * <p>Two INDEPENDENT, best-effort channels — a failure on either never affects
+ * the committed booking:
+ * <ul>
+ *   <li><b>Email</b> (to the booking's {@code userEmail}, if present) — an HTML
+ *       message with each seat's scannable QR, rendered from the hosted ticket
+ *       endpoint ({@code /bookings/{id}/tickets/{tn}/qr}) so it shows in Gmail/
+ *       Outlook (data-URIs are stripped), plus a link to the ticket page.</li>
+ *   <li><b>WhatsApp → SMS fallback</b> (to {@code phoneNumber}, if present) —
+ *       the confirmation text + a link to the hosted ticket page. The WhatsApp
+ *       gateway is text-only, so the QR rides the link, not an attachment.</li>
+ * </ul>
  *
- * <p><b>Best-effort.</b> A gateway failure on either channel logs a warning
- * and is swallowed — the booking is already CONFIRMED and the customer can
- * still see their tickets in the app. A separate {@link BookingEventPublisher}
- * listener also fires on this event (BEFORE_COMMIT, writing to the outbox for
- * Kafka) — the two are independent.
- *
- * <p>Idempotent replays of {@code confirmBooking} return early without
- * re-publishing the event, so this listener fires exactly once per actual
- * confirmation.
+ * <p>Both links/images are absolute, built from
+ * {@code innbucks.tickets.public-base-url} (the public gateway origin) so they
+ * resolve from an email client or phone with no app session.
  */
 @Component
-@RequiredArgsConstructor
 @Slf4j
 public class BookingConfirmedNotificationListener {
 
     private final BookingRepository bookingRepository;
     private final WhatsAppNotificationClient whatsApp;
     private final SmsNotificationClient sms;
+    private final EmailNotificationClient email;
+    private final TicketRenderingService ticketRendering;
+    private final String publicBaseUrl;
+
+    public BookingConfirmedNotificationListener(
+            BookingRepository bookingRepository,
+            WhatsAppNotificationClient whatsApp,
+            SmsNotificationClient sms,
+            EmailNotificationClient email,
+            TicketRenderingService ticketRendering,
+            @Value("${innbucks.tickets.public-base-url:}") String publicBaseUrl) {
+        this.bookingRepository = bookingRepository;
+        this.whatsApp = whatsApp;
+        this.sms = sms;
+        this.email = email;
+        this.ticketRendering = ticketRendering;
+        this.publicBaseUrl = publicBaseUrl == null ? "" : publicBaseUrl.trim();
+    }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     public void onBookingConfirmed(BookingDomainEvent.BookingConfirmed event) {
-        // The event is intentionally lean (it's also the outbox/Kafka payload),
-        // so reload the booking to pick up phone + items. AFTER_COMMIT, no
-        // race — the row is committed and visible.
         Booking booking = bookingRepository.findById(event.bookingId()).orElse(null);
         if (booking == null) {
-            log.warn("BookingConfirmed listener: booking not found bookingId={} — skipping notification",
+            log.warn("BookingConfirmed listener: booking not found bookingId={} — skipping notifications",
                     event.bookingId());
             return;
         }
+        String ticketLink = ticketLink(booking);
+        boolean anyChannel = false;
+
+        // ---- Email (independent best-effort) ----
+        String emailAddr = booking.getUserEmail();
+        if (emailAddr != null && !emailAddr.isBlank()) {
+            anyChannel = true;
+            try {
+                email.sendHtmlEmail(emailAddr,
+                        "Your InnBucks tickets — booking " + booking.getConfirmationNumber(),
+                        ticketRendering.confirmationEmailHtml(booking, publicBaseUrl),
+                        "BOOKING-CONFIRM-" + booking.getId());
+                log.info("Booking-confirm email sent bookingId={} ref={}",
+                        booking.getId(), booking.getConfirmationNumber());
+            } catch (RuntimeException ex) {
+                log.warn("Booking-confirm email failed bookingId={} (booking still CONFIRMED): {}",
+                        booking.getId(), ex.getMessage());
+            }
+        }
+
+        // ---- WhatsApp → SMS fallback (independent best-effort) ----
         String phone = booking.getPhoneNumber();
-        if (phone == null || phone.isBlank()) {
-            log.warn("BookingConfirmed listener: no phone on booking {} — skipping notification (no email path yet)",
-                    event.confirmationNumber());
-            return;
+        if (phone != null && !phone.isBlank()) {
+            anyChannel = true;
+            try {
+                whatsApp.sendCustomNotification(phone, buildWhatsAppMessage(booking, ticketLink));
+                log.info("Booking-confirm WhatsApp sent bookingId={} ref={}",
+                        booking.getId(), booking.getConfirmationNumber());
+            } catch (RuntimeException waEx) {
+                log.warn("Booking-confirm WhatsApp failed bookingId={}, trying SMS: {}",
+                        booking.getId(), waEx.getMessage());
+                try {
+                    sms.sendSms(phone, buildSmsMessage(booking, ticketLink),
+                            "BOOKING-CONFIRM-" + booking.getId());
+                    log.info("Booking-confirm SMS sent bookingId={} ref={}",
+                            booking.getId(), booking.getConfirmationNumber());
+                } catch (RuntimeException smsEx) {
+                    log.warn("Booking-confirm SMS also failed bookingId={} (booking still CONFIRMED): {}",
+                            booking.getId(), smsEx.getMessage());
+                }
+            }
         }
 
-        String whatsAppMessage = buildWhatsAppMessage(booking);
-        try {
-            whatsApp.sendCustomNotification(phone, whatsAppMessage);
-            log.info("Booking-confirm WhatsApp sent bookingId={} ref={}",
-                    booking.getId(), booking.getConfirmationNumber());
-            return;
-        } catch (RuntimeException waEx) {
-            log.warn("Booking-confirm WhatsApp failed bookingId={}, trying SMS: {}",
-                    booking.getId(), waEx.getMessage());
-        }
-
-        try {
-            sms.sendSms(phone, buildSmsMessage(booking),
-                    "BOOKING-CONFIRM-" + booking.getId());
-            log.info("Booking-confirm SMS sent bookingId={} ref={}",
-                    booking.getId(), booking.getConfirmationNumber());
-        } catch (RuntimeException smsEx) {
-            log.warn("Booking-confirm notification failed bookingId={} (booking still CONFIRMED): {}",
-                    booking.getId(), smsEx.getMessage());
+        if (!anyChannel) {
+            log.warn("BookingConfirmed listener: no email or phone on booking {} — no ticket delivery channel",
+                    booking.getConfirmationNumber());
         }
     }
 
-    private String buildWhatsAppMessage(Booking booking) {
+    private String ticketLink(Booking booking) {
+        return publicBaseUrl + "/bookings/" + booking.getId() + "/tickets";
+    }
+
+    private String buildWhatsAppMessage(Booking booking, String ticketLink) {
         List<BookingItem> items = booking.getItems() == null ? List.of() : booking.getItems();
         StringBuilder sb = new StringBuilder("InnBucks: your booking ")
                 .append(booking.getConfirmationNumber())
@@ -102,11 +139,12 @@ public class BookingConfirmedNotificationListener {
             sb.append(" — ").append(items.size()).append(" tickets");
         }
         appendTotal(sb, booking);
-        sb.append(". Show the QR code from the InnBucks app at the gate.");
+        sb.append(".\nView & scan your ticket").append(items.size() == 1 ? "" : "s").append(": ")
+                .append(ticketLink);
+        // Keep the ticket numbers too — a manual fallback at the gate if the
+        // customer can't open the link.
         if (!items.isEmpty()) {
-            sb.append(" Ticket number");
-            if (items.size() > 1) sb.append("s");
-            sb.append(": ");
+            sb.append("\nTicket number").append(items.size() > 1 ? "s" : "").append(": ");
             for (int i = 0; i < items.size(); i++) {
                 if (i > 0) sb.append(", ");
                 sb.append(items.get(i).getTicketNumber());
@@ -116,9 +154,8 @@ public class BookingConfirmedNotificationListener {
         return sb.toString();
     }
 
-    private String buildSmsMessage(Booking booking) {
-        // SMS lane is the fallback — keep it short. One line, no ticket-number
-        // dump (a 4-seat booking would blow past 160 chars and segment-bill).
+    private String buildSmsMessage(Booking booking, String ticketLink) {
+        // SMS fallback — keep it short (one segment). The link carries the QR.
         StringBuilder sb = new StringBuilder("InnBucks: booking ")
                 .append(booking.getConfirmationNumber())
                 .append(" confirmed");
@@ -128,8 +165,7 @@ public class BookingConfirmedNotificationListener {
         } else if (n > 1) {
             sb.append(" (").append(n).append(" tickets)");
         }
-        appendTotal(sb, booking);
-        sb.append(". Show QR in the InnBucks app at the gate.");
+        sb.append(". Tickets: ").append(ticketLink);
         return sb.toString();
     }
 
