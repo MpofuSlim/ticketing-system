@@ -87,14 +87,22 @@ public class PaymentController {
     @PostMapping
     @Operation(
             summary = "Pay for a ticket booking (InnBucks 2D-code)",
-            description = "Public endpoint. Body carries only `bookingId` — amount and currency are read " +
-                    "server-side from the booking. An InnBucks PAYMENT code is issued for the booking's " +
-                    "`totalAmount`; the customer approves it in their own InnBucks app (Scan-to-Pay or Pay by " +
-                    "Code). The normal response is `status=PROCESSING` with `paymentCode`, " +
-                    "`paymentCodeExpiresAt` and `paymentQrCode` — the FE renders both the typed code and the " +
-                    "InnBucks-rendered QR (base64) on the checkout screen. No out-of-band delivery: the " +
-                    "response IS the delivery. Once the customer approves, the poller confirms the booking — " +
-                    "poll the booking status for the confirmation number. " +
+            description = "Public endpoint (no login required — guest checkout). Body carries only " +
+                    "`bookingId`; amount and currency are read server-side from the booking. An InnBucks " +
+                    "PAYMENT code is issued for the booking's `totalAmount`; the customer approves it in their " +
+                    "own InnBucks app (Scan-to-Pay or Pay by Code). The normal response is `status=PROCESSING` " +
+                    "with `paymentCode`, `paymentCodeExpiresAt` and `paymentQrCode` — the FE renders both the " +
+                    "typed code and the InnBucks-rendered QR (base64) on the checkout screen. No out-of-band " +
+                    "delivery: the response IS the delivery.\n\n" +
+                    "**How the FE knows it's done (status lifecycle):** this endpoint returns `PROCESSING` " +
+                    "immediately; it does NOT block until payment. The customer then approves the code in " +
+                    "their InnBucks app, and a background poller confirms the booking within ~20s. The FE " +
+                    "should **poll the booking** — `GET /bookings/phone/{phoneNumber}` (guest) or " +
+                    "`GET /bookings/{id}` (logged-in) — until its status flips to `CONFIRMED` (carrying the " +
+                    "confirmation number). Behind the scenes the InnBucks code moves New → Claimed/Paid " +
+                    "(both mean the customer paid) → booking CONFIRMED; or New → Expired/Timed Out (unpaid) " +
+                    "→ the code lapses and the FE can offer Pay again. Stop polling once the booking is " +
+                    "CONFIRMED, or shortly after `paymentCodeExpiresAt` passes while still unconfirmed.\n\n" +
                     "Replay-safe: paying an already-paid or in-flight booking returns that payment's receipt, " +
                     "including the live code + QR while it's still awaiting approval. If the code expires " +
                     "unpaid, the payment closes and POSTing again issues a fresh code."

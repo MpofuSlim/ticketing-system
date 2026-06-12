@@ -322,6 +322,69 @@ class InnbucksApiClientContractTest {
     }
 
     @Test
+    @DisplayName("inquiry: status=Claimed WINS over a non-zero responseCode (the paid-but-stuck bug)")
+    void inquiry_claimedStatusWinsOverNonZeroResponseCode() {
+        // The exact production shape that left paid bookings stuck: InnBucks
+        // returns the finalised state in `status` even with a non-zero
+        // responseCode + an error-ish responseMsg. The status is authoritative.
+        stubLogin();
+        wireMock.stubFor(post(urlEqualTo("/api/code/inquiry"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("""
+                                {
+                                  "responseCode": 1,
+                                  "responseMsg": "2D Code Expired/Claimed",
+                                  "code": "701285660",
+                                  "status": "Claimed"
+                                }
+                                """)));
+
+        CodeStatusResult result = newClient("http://localhost:" + wireMock.port())
+                .inquireCodeStatus("701285660");
+
+        assertThat(result.status()).isEqualTo(CodeStatusResult.Status.CLAIMED);
+        assertThat(result.isPaid()).as("Claimed = finalised by the customer = paid").isTrue();
+    }
+
+    @Test
+    @DisplayName("inquiry: status=TimedOut (no space) WINS over a non-zero responseCode → TIMED_OUT")
+    void inquiry_timedOutStatusWinsOverNonZeroResponseCode() {
+        stubLogin();
+        wireMock.stubFor(post(urlEqualTo("/api/code/inquiry"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("""
+                                {
+                                  "responseCode": 1,
+                                  "responseMsg": "2D Code Expired/Claimed",
+                                  "status": "TimedOut"
+                                }
+                                """)));
+
+        CodeStatusResult result = newClient("http://localhost:" + wireMock.port())
+                .inquireCodeStatus("701285660");
+
+        assertThat(result.status()).isEqualTo(CodeStatusResult.Status.TIMED_OUT);
+        assertThat(result.isPaid()).isFalse();
+    }
+
+    @Test
+    @DisplayName("inquiry: a documented status on a 4xx is still honoured (not buried as ERROR)")
+    void inquiry_recognisedStatusOnA4xx_isHonoured() {
+        stubLogin();
+        wireMock.stubFor(post(urlEqualTo("/api/code/inquiry"))
+                .willReturn(aResponse().withStatus(400)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"responseCode\":1,\"responseMsg\":\"2D Code Expired/Claimed\",\"status\":\"Claimed\"}")));
+
+        CodeStatusResult result = newClient("http://localhost:" + wireMock.port())
+                .inquireCodeStatus("701285660");
+
+        assertThat(result.status()).isEqualTo(CodeStatusResult.Status.CLAIMED);
+    }
+
+    @Test
     @DisplayName("inquiry: 400 with the Spring {errors:[...]} envelope → ERROR, not a crash, not retried")
     void inquiry_400ValidationEnvelope_isError() {
         // The exact shape staging returns for a bad inquiry — different from

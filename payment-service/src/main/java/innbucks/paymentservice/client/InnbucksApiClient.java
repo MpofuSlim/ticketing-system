@@ -213,11 +213,18 @@ public class InnbucksApiClient {
                 if (status == 401) throw new UnauthorizedException();
                 if (status >= 500) throw new InnbucksApiTransientException(
                         "InnBucks API returned HTTP " + status + " on code inquiry", status, e);
-                // 4xx — refused inquiry (unknown code, validation). Surface as
-                // ERROR so the poller counts it without mutating the row.
-                CodeStatusResult refused = classifyStatus(e.getResponseBodyAsString());
-                return new CodeStatusResult(CodeStatusResult.Status.ERROR, refused.rawStatus(),
-                        refused.responseMsg() != null ? refused.responseMsg() : "HTTP " + status);
+                // 4xx — but staging sometimes returns a real transaction state
+                // (Claimed/TimedOut) alongside a non-2xx + non-zero responseCode.
+                // If the body names a documented status, HONOUR it (a paid code
+                // must confirm even when wrapped in a 4xx); only a body with no
+                // usable status is a genuine refusal → ERROR (poller leaves it).
+                CodeStatusResult classified = classifyStatus(e.getResponseBodyAsString());
+                if (classified.status() != CodeStatusResult.Status.ERROR
+                        && classified.status() != CodeStatusResult.Status.UNKNOWN) {
+                    return classified;
+                }
+                return new CodeStatusResult(CodeStatusResult.Status.ERROR, classified.rawStatus(),
+                        classified.responseMsg() != null ? classified.responseMsg() : "HTTP " + status);
             } catch (InnbucksApiException | UnauthorizedException e) {
                 throw e;
             } catch (Exception e) {
@@ -349,26 +356,48 @@ public class InnbucksApiClient {
         Integer responseCode = parseResponseCode(parsed.get("responseCode"));
         String responseMsg = firstString(parsed, "responseMsg", "responseDescription", "description");
         String rawStatus = asString(parsed.get("status"));
+
+        // The `status` field is AUTHORITATIVE when it names a documented state —
+        // even alongside a non-zero responseCode. InnBucks returns a finalised
+        // code as e.g. {responseCode: <non-zero>, responseMsg: "2D Code
+        // Expired/Claimed", status: "Claimed"}: the status, not the
+        // responseCode, is the transaction state. Reading the responseCode as
+        // authoritative here left every Claimed/TimedOut row stuck as ERROR
+        // (paid bookings never confirmed). Claimed and Paid both = finalised
+        // by the customer (money moved); Timed Out = window exceeded, unpaid.
+        CodeStatusResult.Status mapped = mapStatus(rawStatus);
+        if (mapped != null) {
+            return new CodeStatusResult(mapped, rawStatus, responseMsg);
+        }
+
+        // No usable status field. A non-zero/absent responseCode is an ERROR
+        // (the poller leaves the row untouched — never guesses); responseCode
+        // 0 with no status is UNKNOWN (also left alone).
         if (responseCode == null || responseCode != 0) {
             return new CodeStatusResult(CodeStatusResult.Status.ERROR, rawStatus, responseMsg);
         }
-        if (rawStatus == null) {
-            return new CodeStatusResult(CodeStatusResult.Status.UNKNOWN, null, responseMsg);
+        if (rawStatus != null) {
+            log.warn("innbucks-api code inquiry returned unrecognised status='{}' — treating as UNKNOWN", rawStatus);
         }
-        // Doc vocabulary: New / Claimed / Paid / Expired / Timed Out.
+        return new CodeStatusResult(CodeStatusResult.Status.UNKNOWN, rawStatus, responseMsg);
+    }
+
+    /**
+     * Maps a raw InnBucks status string onto our enum, or null when the field
+     * is absent/blank/unrecognised. Doc vocabulary: New / Claimed / Paid /
+     * Expired / Timed Out (staging also sends the no-space "TimedOut").
+     */
+    private static CodeStatusResult.Status mapStatus(String rawStatus) {
+        if (rawStatus == null || rawStatus.isBlank()) return null;
         String normalised = rawStatus.replaceAll("[\\s_-]", "").toUpperCase(Locale.ROOT);
-        CodeStatusResult.Status status = switch (normalised) {
+        return switch (normalised) {
             case "NEW", "PENDING" -> CodeStatusResult.Status.NEW;
             case "CLAIMED" -> CodeStatusResult.Status.CLAIMED;
             case "PAID" -> CodeStatusResult.Status.PAID;
             case "EXPIRED" -> CodeStatusResult.Status.EXPIRED;
             case "TIMEDOUT" -> CodeStatusResult.Status.TIMED_OUT;
-            default -> CodeStatusResult.Status.UNKNOWN;
+            default -> null;
         };
-        if (status == CodeStatusResult.Status.UNKNOWN) {
-            log.warn("innbucks-api code query returned unrecognised status='{}' — treating as UNKNOWN", rawStatus);
-        }
-        return new CodeStatusResult(status, rawStatus, responseMsg);
     }
 
     /** responseCode arrives as number 0 or string "0"/"00"/"96" depending on the endpoint family. */
