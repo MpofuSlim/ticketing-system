@@ -77,6 +77,9 @@ public class PaymentController {
     private final BookingServiceClient bookingServiceClient;
     private final LoyaltyServiceClient loyaltyServiceClient;
     private final PaymentMetrics metrics;
+    /** PENDING rows older than this with no code are crash leftovers, not in-flight requests. */
+    private static final java.time.Duration PENDING_REPLAY_GRACE = java.time.Duration.ofSeconds(30);
+
     private final InnbucksPaymentService innbucksPaymentService;
     private final PaymentRecordService paymentRecordService;
     private final PaymentRepository paymentRepository;
@@ -195,9 +198,22 @@ public class PaymentController {
                 request.getBookingId(), PaymentRecordService.ACTIVE_OR_SUCCEEDED);
         if (existing.isPresent()) {
             Payment p = existing.get();
-            log.info("POST /payments replay bookingId={} existing paymentReference={} status={}",
-                    request.getBookingId(), p.getPaymentReference(), p.getStatus());
-            return toReplayResponse(p, request);
+            if (isOrphanedPending(p)) {
+                // A PENDING row past the in-flight window with no code ever
+                // recorded is a crash/outage leftover (we died between opening
+                // the row and recording the generate outcome). Replaying it
+                // would show the customer PROCESSING with nothing to pay —
+                // forever. Close it FAILED and run a fresh attempt right here.
+                log.warn("POST /payments replacing orphaned PENDING bookingId={} paymentReference={} ageSec={}",
+                        request.getBookingId(), p.getPaymentReference(),
+                        java.time.Duration.between(p.getCreatedAt(), java.time.Instant.now()).toSeconds());
+                paymentRecordService.markFailed(p.getId(), "stale_pending",
+                        "Orphaned PENDING row (no code recorded) replaced by a fresh attempt on customer retry");
+            } else {
+                log.info("POST /payments replay bookingId={} existing paymentReference={} status={}",
+                        request.getBookingId(), p.getPaymentReference(), p.getStatus());
+                return toReplayResponse(p, request);
+            }
         }
 
         // The payer is the booking's phone — captured at booking creation
@@ -286,8 +302,17 @@ public class PaymentController {
             case SUCCEEDED -> PaymentResponse.Status.SUCCESS;
             default -> PaymentResponse.Status.PROCESSING;
         };
-        boolean awaitingApproval = status == PaymentResponse.Status.PROCESSING
-                && p.getInnbucksCode() != null;
+        // Only a LIVE awaiting-approval code is re-surfaced (page-refresh
+        // recovery). A code past its local deadline is never advertised
+        // again — the customer would scan/type a dead code; the poller
+        // resolves the row (Expired upstream frees the slot within one
+        // interval) and the next Pay tap mints a fresh one. Paid-but-
+        // unconfirmed rows keep their code hidden too: that code is spent.
+        boolean codeStillLive = p.getCodeExpiresAt() == null
+                || p.getCodeExpiresAt().isAfter(java.time.Instant.now());
+        boolean awaitingApproval = p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED
+                && p.getInnbucksCode() != null
+                && codeStillLive;
         PaymentResponse response = PaymentResponse.builder()
                 .transactionId(p.getId())
                 .bookingId(p.getBookingId())
@@ -296,9 +321,6 @@ public class PaymentController {
                 .currency(p.getCurrency())
                 .confirmationNumber(p.getConfirmationNumber())
                 .processedAt(LocalDateTime.now(ZoneOffset.UTC))
-                // A replay while the code is still open re-surfaces it +
-                // the QR so the customer keeps seeing the same artifacts on
-                // the FE — e.g. a page refresh during checkout.
                 .paymentCode(awaitingApproval ? p.getInnbucksCode() : null)
                 .paymentCodeExpiresAt(awaitingApproval && p.getCodeExpiresAt() != null
                         ? LocalDateTime.ofInstant(p.getCodeExpiresAt(), ZoneOffset.UTC) : null)
@@ -308,11 +330,31 @@ public class PaymentController {
         if (status == PaymentResponse.Status.SUCCESS) {
             message = "Payment processed successfully";
         } else if (awaitingApproval) {
-            message = "Approve the payment in your InnBucks app — your payment code was sent to your phone";
+            message = "Approve the payment in your InnBucks app to complete your booking";
+        } else if (p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED) {
+            message = "Your previous payment code expired — tap Pay again in a moment to get a fresh one";
+        } else if (p.getStatus() == Payment.PaymentStatus.COMPLETED_UNCONFIRMED) {
+            message = "Payment received; your booking is being confirmed";
+        } else if (p.getStatus() == Payment.PaymentStatus.PENDING) {
+            message = "Your payment is already being processed — please retry in a moment";
         } else {
-            message = "Payment received; booking confirmation will follow shortly";
+            message = "Your payment is being verified — contact support if this persists";
         }
         return ResponseEntity.ok(ApiResult.ok(message, response));
+    }
+
+    /**
+     * PENDING + no code + older than the in-flight window = a crash leftover,
+     * not a concurrent request (generate's read timeout is 10s; 30s is
+     * comfortably past any genuine in-flight attempt). Younger PENDING rows
+     * replay with an honest "being processed" so a true race never
+     * double-generates.
+     */
+    private static boolean isOrphanedPending(Payment p) {
+        return p.getStatus() == Payment.PaymentStatus.PENDING
+                && p.getInnbucksCode() == null
+                && p.getCreatedAt() != null
+                && p.getCreatedAt().isBefore(java.time.Instant.now().minus(PENDING_REPLAY_GRACE));
     }
 
     /** Stable receipt id: the UUID inside our TKT-PMT-<uuid> reference. */
