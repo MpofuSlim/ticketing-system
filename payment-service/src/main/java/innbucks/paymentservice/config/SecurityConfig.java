@@ -64,6 +64,14 @@ public class SecurityConfig {
                                 "/swagger-ui.html",
                                 "/error"
                         ).permitAll()
+                        // Internal ops endpoints (workbasket + settlement recon):
+                        // authenticated by the X-Internal-Token constant-time
+                        // compare in PaymentOpsController, and blocked at the
+                        // edge by the gateway's payment-internal-deny route.
+                        // Without this permitAll the JWT chain 401s the call
+                        // before the controller's token check ever runs (the
+                        // PR #145 class of bug).
+                        .requestMatchers("/payments/internal/**").permitAll()
                         // Guest ticket checkout: POST /payments is public so a
                         // customer can pay without logging in (mirrors
                         // booking-service's public POST /bookings). Safe to
@@ -79,8 +87,7 @@ public class SecurityConfig {
                         // Everything else — /payments/transfer, /payments/withdraw,
                         // /payments/shop-checkout, /actuator/prometheus, any future
                         // endpoint — requires a valid customer JWT populated by
-                        // JwtFilter. (/payments/internal/** is gated separately by
-                        // X-Internal-Token in PaymentOpsController.)
+                        // JwtFilter.
                         .anyRequest().authenticated()
                 )
                 .exceptionHandling(ex -> ex

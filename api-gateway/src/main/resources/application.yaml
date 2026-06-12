@@ -202,6 +202,17 @@ spring:
             # easily hits 5+ GETs in a burst; the same generous 50 rps /
             # 100 burst used by /events, /bookings, /seats etc. matches
             # the FE's actual read-traffic profile.
+            # Block /payments/internal/** at the edge. Back-office ops
+            # endpoints (exception workbasket + settlement reconciliation)
+            # gated by X-Internal-Token inside payment-service — they have no
+            # business being reachable from the public internet. MUST precede
+            # both payment-service routes so SCG matches it first (mirrors
+            # loyalty-internal-deny / user-internal-deny).
+            - id: payment-internal-deny
+              uri: forward:/__edge_deny__
+              predicates:
+                - Path=/payments/internal/**
+
             - id: payment-service-read-route
               uri: lb://payment-service
               predicates:

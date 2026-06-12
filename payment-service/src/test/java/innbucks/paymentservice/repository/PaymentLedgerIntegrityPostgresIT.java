@@ -37,6 +37,9 @@ class PaymentLedgerIntegrityPostgresIT extends PostgresIntegrationTestBase {
     @Autowired
     private PaymentEventRepository events;
 
+    @Autowired
+    private ReconRunRepository recons;
+
     private static Payment row(UUID bookingId, PaymentStatus status) {
         return Payment.builder()
                 .id(UUID.randomUUID())
@@ -147,6 +150,27 @@ class PaymentLedgerIntegrityPostgresIT extends PostgresIntegrationTestBase {
         assertEquals(expiresAt, reloaded.getCodeExpiresAt());
         assertNull(reloaded.getCustomerAccount());
         assertNull(reloaded.getMerchantAccount());
+    }
+
+    @Test
+    void reconRun_roundTripsThroughV8() {
+        innbucks.paymentservice.entity.ReconRun run = recons.saveAndFlush(
+                innbucks.paymentservice.entity.ReconRun.builder()
+                        .windowStart(java.time.Instant.parse("2026-06-11T00:00:00Z"))
+                        .windowEnd(java.time.Instant.parse("2026-06-12T00:00:00Z"))
+                        .source("MINI_STATEMENT")
+                        .status(innbucks.paymentservice.entity.ReconRun.Status.DISCREPANT)
+                        .coverageComplete(false)
+                        .matchedCount(40).matchedAmountCents(160000)
+                        .oursNotTheirs(1).theirsNotOurs(0).amountMismatches(0)
+                        .discrepancyDetail("OURS_NOT_THEIRS TKT-PMT-x code=701 status=SUCCEEDED")
+                        .build());
+
+        innbucks.paymentservice.entity.ReconRun reloaded = recons.findById(run.getId()).orElseThrow();
+        assertEquals(innbucks.paymentservice.entity.ReconRun.Status.DISCREPANT, reloaded.getStatus());
+        assertEquals(160000, reloaded.getMatchedAmountCents());
+        assertEquals(run.getId(), recons.findTop30ByOrderByCreatedAtDesc().get(0).getId(),
+                "the newest run must lead the history the ops endpoint serves");
     }
 
     @Test

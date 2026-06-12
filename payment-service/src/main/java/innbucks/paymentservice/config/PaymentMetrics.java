@@ -116,4 +116,33 @@ public class PaymentMetrics {
                 .register(registry)
                 .increment();
     }
+
+    /**
+     * Settlement-reconciliation run outcomes. status={clean, discrepant,
+     * failed, skipped}. Anything other than a daily `clean` is actionable:
+     * `discrepant` → read the recon_run row; `failed` → the statement fetch
+     * broke (recon is blind); `skipped` → the merchant account id isn't
+     * configured (recon never ran at all — fine in dev, a gap in prod).
+     */
+    public void incReconRun(String status) {
+        Counter.builder("payment.recon.runs")
+                .description("Settlement reconciliation runs, by outcome status")
+                .tag("status", status)
+                .register(registry)
+                .increment();
+    }
+
+    /**
+     * Per-discrepancy counter from settlement reconciliation.
+     * type={ours_not_theirs, theirs_not_ours, amount_mismatch}. ANY non-zero
+     * value is a page — ours_not_theirs means our ledger may overstate money
+     * received; theirs_not_ours means a customer paid and got nothing.
+     */
+    public void incReconDiscrepancy(String type) {
+        Counter.builder("payment.recon.discrepancies")
+                .description("Settlement reconciliation discrepancies, by type")
+                .tag("type", type)
+                .register(registry)
+                .increment();
+    }
 }

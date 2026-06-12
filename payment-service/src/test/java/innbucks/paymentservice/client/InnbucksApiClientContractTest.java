@@ -449,4 +449,100 @@ class InnbucksApiClientContractTest {
         assertThatThrownBy(() -> dead.generatePaymentCode("TKT-PMT-x", "n", 5000))
                 .isInstanceOf(InnbucksApiTransientException.class);
     }
+
+    // ---- mini statement (settlement reconciliation) -------------------------
+
+    /** The doc's sample mini-statement (entry array is named "code"). */
+    private static final String MINI_STATEMENT_OK = """
+            {
+              "stan": "1655116056",
+              "authNumber": "7880",
+              "responseCode": 0,
+              "responseMsg": "Approved or completed successfully",
+              "code": [
+                {
+                  "amount": "4000",
+                  "code": "701848897",
+                  "codeType": null,
+                  "createDate": "2026-06-11 12:11:23",
+                  "closedDate": "2026-06-11 12:14:08",
+                  "state": "Claimed"
+                },
+                {
+                  "amount": "4000",
+                  "code": "701977985",
+                  "codeType": null,
+                  "createDate": "2026-06-11 12:07:30",
+                  "closedDate": null,
+                  "state": "Pending"
+                }
+              ]
+            }
+            """;
+
+    @Test
+    @DisplayName("mini statement: GET by accountId; parses entries with cents, state and createDate")
+    void miniStatement_parsesEntries() {
+        stubLogin();
+        wireMock.stubFor(get(urlEqualTo("/api/code/2009200566693/miniStatement"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody(MINI_STATEMENT_OK)));
+
+        java.util.List<CodeStatementEntry> entries =
+                newClient("http://localhost:" + wireMock.port()).fetchCodeMiniStatement("2009200566693");
+
+        assertThat(entries).hasSize(2);
+        CodeStatementEntry claimed = entries.get(0);
+        assertThat(claimed.code()).isEqualTo("701848897");
+        assertThat(claimed.amountCents()).isEqualTo(4000L);
+        assertThat(claimed.isFinalised()).as("Claimed = finalised per the doc").isTrue();
+        assertThat(claimed.createdAt()).isEqualTo(java.time.LocalDateTime.of(2026, 6, 11, 12, 11, 23));
+        assertThat(entries.get(1).isFinalised()).as("Pending is still in flight").isFalse();
+        wireMock.verify(getRequestedFor(urlEqualTo("/api/code/2009200566693/miniStatement"))
+                .withHeader("X-Api-Key", equalTo("test-api-key"))
+                .withHeader("Authorization", equalTo("Bearer jwt-token-1")));
+    }
+
+    @Test
+    @DisplayName("mini statement: responseCode 0 with no entry array → empty statement, not an error")
+    void miniStatement_missingArray_isEmpty() {
+        stubLogin();
+        wireMock.stubFor(get(urlEqualTo("/api/code/2009200566693/miniStatement"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"responseCode\":0,\"responseMsg\":\"ok\"}")));
+
+        assertThat(newClient("http://localhost:" + wireMock.port())
+                .fetchCodeMiniStatement("2009200566693")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("mini statement: non-zero responseCode → loud InnbucksApiException (recon must FAIL, not conclude empty)")
+    void miniStatement_nonZeroResponseCode_throws() {
+        stubLogin();
+        wireMock.stubFor(get(urlEqualTo("/api/code/2009200566693/miniStatement"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"responseCode\":96,\"responseMsg\":\"Request failed\"}")));
+
+        assertThatThrownBy(() -> newClient("http://localhost:" + wireMock.port())
+                .fetchCodeMiniStatement("2009200566693"))
+                .isInstanceOf(InnbucksApiException.class)
+                .hasMessageContaining("96");
+    }
+
+    @Test
+    @DisplayName("mini statement: 5xx IS retried (read-only) — both attempts hit the wire")
+    void miniStatement_5xx_isRetried() {
+        stubLogin();
+        wireMock.stubFor(get(urlEqualTo("/api/code/2009200566693/miniStatement"))
+                .willReturn(aResponse().withStatus(503).withBody("down")));
+
+        assertThatThrownBy(() -> newClient("http://localhost:" + wireMock.port())
+                .fetchCodeMiniStatement("2009200566693"))
+                .isInstanceOf(InnbucksApiTransientException.class);
+
+        wireMock.verify(2, getRequestedFor(urlEqualTo("/api/code/2009200566693/miniStatement")));
+    }
 }

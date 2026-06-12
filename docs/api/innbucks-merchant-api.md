@@ -86,11 +86,22 @@ code the customer may have paid is the double-charge path).
 (`POST /api/code/query/originalReference` — keyed by the authNumber — exists
 but staging 096-errors on it; we use `/api/code/inquiry` instead.)
 
+### 3. `GET /api/code/{accountId}/miniStatement` (settlement reconciliation)
+
+InnBucks' own record of recent code transactions — the counterparty truth
+the nightly `SettlementReconciliationJob` matches our ledger against
+(`accountId` = the merchant account, env `PAYMENTS_INNBUCKS_MERCHANT_ACCOUNT`;
+recon is skipped when unset). Response: `responseCode: 0` + a `code` array of
+`{amount (cents, string), code, codeType, createDate ("yyyy-MM-dd HH:mm:ss"),
+closedDate, state}` with states like `Pending` / `Claimed`. Caveat: "recent"
+with an unspecified cap — when the oldest entry is younger than the recon
+window start, the run is flagged `coverageComplete=false`.
+
 ## Other endpoints (not consumed today, candidates later)
 
-- `GET /api/code/{accountId}/miniStatement` — recent code transactions; the
-  natural source for a daily code-payment reconciliation report.
-- `POST /api/account/fullStatement` — full statement (calendar-month window).
+- `POST /api/account/fullStatement` — full statement (calendar-month window);
+  the v2 upgrade path for reconciliation once the mini statement's recency
+  cap becomes a problem.
 - `GET /api/account/msisdn/{msisdn}/details` — MSISDN → account lookup
   (MSISDN format `263772123123`, no `+`).
 - `POST /api/transaction/deposit` + `POST /bank/api/transaction/inquiry` —
