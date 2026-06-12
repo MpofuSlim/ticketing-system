@@ -52,8 +52,6 @@ class PaymentControllerTest {
     private PaymentRequest paymentFor(UUID bookingId) {
         PaymentRequest r = new PaymentRequest();
         r.setBookingId(bookingId);
-        r.setCurrency("USD");
-        r.setCardLast4("4242");
         return r;
     }
 
@@ -105,7 +103,6 @@ class PaymentControllerTest {
         assertEquals(bookingId, data.getBookingId());
         assertEquals(0, new BigDecimal("100.00").compareTo(data.getAmountPaid()));
         assertEquals("USD", data.getCurrency());
-        assertEquals("4242", data.getCardLast4());
         assertEquals("INN-20260502-AB12CD", data.getConfirmationNumber());
         // transactionId is the UUID inside our TKT-PMT-<uuid> reference — stable, not random.
         assertEquals(refUuid, data.getTransactionId());

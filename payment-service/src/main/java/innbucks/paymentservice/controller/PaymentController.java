@@ -84,22 +84,22 @@ public class PaymentController {
     @PostMapping
     @Operation(
             summary = "Pay for a ticket booking (InnBucks 2D-code)",
-            description = "Public endpoint — same contract as the historical stub: body carries only `bookingId` " +
-                    "(plus cosmetic `currency`/`cardLast4`). An InnBucks PAYMENT code is issued for the booking's " +
-                    "`totalAmount` and delivered (WhatsApp → SMS fallback) to the booking's phoneNumber captured " +
-                    "at booking time; the customer approves it in their own InnBucks app or USSD. Clients never " +
-                    "quote amounts. The normal response is `status=PROCESSING` with the additive `paymentCode` / " +
-                    "`paymentCodeExpiresAt` / `paymentQrCode` fields (the QR is InnBucks-rendered base64 — show it " +
-                    "for Scan-to-Pay) — once the customer approves, the poller confirms the booking " +
-                    "(poll the booking status for the confirmation number). " +
+            description = "Public endpoint. Body carries only `bookingId` — amount and currency are read " +
+                    "server-side from the booking. An InnBucks PAYMENT code is issued for the booking's " +
+                    "`totalAmount`; the customer approves it in their own InnBucks app (Scan-to-Pay or Pay by " +
+                    "Code). The normal response is `status=PROCESSING` with `paymentCode`, " +
+                    "`paymentCodeExpiresAt` and `paymentQrCode` — the FE renders both the typed code and the " +
+                    "InnBucks-rendered QR (base64) on the checkout screen. No out-of-band delivery: the " +
+                    "response IS the delivery. Once the customer approves, the poller confirms the booking — " +
+                    "poll the booking status for the confirmation number. " +
                     "Replay-safe: paying an already-paid or in-flight booking returns that payment's receipt, " +
-                    "including the live code while it's still awaiting approval. If the code expires unpaid, the " +
-                    "payment closes and POSTing again issues a fresh code."
+                    "including the live code + QR while it's still awaiting approval. If the code expires " +
+                    "unpaid, the payment closes and POSTing again issues a fresh code."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
-                    description = "Code issued and delivered (PROCESSING), or replay of a completed payment (SUCCESS)",
+                    description = "Code issued (PROCESSING), or replay of a completed payment (SUCCESS)",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = PaymentResponse.class),
@@ -107,14 +107,13 @@ public class PaymentController {
                                     @ExampleObject(name = "Code issued — awaiting customer approval", value = """
                                             {
                                               "code": "200 OK",
-                                              "message": "Approve the payment in your InnBucks app — your payment code was sent to your phone",
+                                              "message": "Approve the payment in your InnBucks app to complete your booking",
                                               "data": {
                                                 "transactionId": "f0e1d2c3-4567-890a-bcde-f01234567890",
                                                 "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
                                                 "status": "PROCESSING",
                                                 "amountPaid": 100.00,
                                                 "currency": "USD",
-                                                "cardLast4": "4242",
                                                 "confirmationNumber": null,
                                                 "processedAt": "2026-06-11T15:48:00",
                                                 "paymentCode": "701285660",
@@ -133,7 +132,6 @@ public class PaymentController {
                                                 "status": "SUCCESS",
                                                 "amountPaid": 100.00,
                                                 "currency": "USD",
-                                                "cardLast4": "4242",
                                                 "confirmationNumber": "INN-20260611-AB12CD",
                                                 "processedAt": "2026-06-11T15:52:00",
                                                 "paymentCode": null,
@@ -265,9 +263,8 @@ public class PaymentController {
                 .bookingId(outcome.getBookingId())
                 .status(status)
                 .amountPaid(outcome.getAmountPaid())
-                .currency(outcome.getCurrency() != null ? outcome.getCurrency()
-                        : (request.getCurrency() != null ? request.getCurrency() : "USD"))
-                .cardLast4(request.getCardLast4())
+                // Currency is always the booking's — never client-supplied.
+                .currency(outcome.getCurrency() != null ? outcome.getCurrency() : "USD")
                 .confirmationNumber(outcome.getConfirmationNumber())
                 .processedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .paymentCode(outcome.getPaymentCode())
@@ -297,12 +294,11 @@ public class PaymentController {
                 .status(status)
                 .amountPaid(p.getAmount())
                 .currency(p.getCurrency())
-                .cardLast4(request.getCardLast4())
                 .confirmationNumber(p.getConfirmationNumber())
                 .processedAt(LocalDateTime.now(ZoneOffset.UTC))
-                // A replay while the code is still open re-surfaces it (and
-                // its QR) — the customer's recovery path if the WhatsApp/SMS
-                // went missing.
+                // A replay while the code is still open re-surfaces it +
+                // the QR so the customer keeps seeing the same artifacts on
+                // the FE — e.g. a page refresh during checkout.
                 .paymentCode(awaitingApproval ? p.getInnbucksCode() : null)
                 .paymentCodeExpiresAt(awaitingApproval && p.getCodeExpiresAt() != null
                         ? LocalDateTime.ofInstant(p.getCodeExpiresAt(), ZoneOffset.UTC) : null)

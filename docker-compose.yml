@@ -479,15 +479,13 @@ services:
       # key is a required secret.
       WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-https://maximum-implicitly-treefrog.ngrok-free.app}
       WHATSAPP_API_KEY: ${WHATSAPP_API_KEY:?set WHATSAPP_API_KEY in .env}
-      # innbucks-core-gateway adapter — SMS fallback for payment-code
-      # delivery. Runs on the EC2 host (outside this compose network), so
-      # containers reach it via the EC2 private IP, same as booking/user.
-      INNBUCKS_GATEWAY_URL: ${INNBUCKS_GATEWAY_URL:-http://10.0.155.69:8088}
       # Public InnBucks Merchant API — ticket payments (POST /payments) issue
       # a 2D PAYMENT code the customer approves in their own InnBucks app;
-      # no server-side debit. All three credentials are secrets from .env and
-      # must belong to a MERCHANT-type API client allowed to generate PAYMENT
-      # codes. (Env names kept from the bank-api round — same platform creds.)
+      # no server-side debit, no out-of-band code delivery (the FE renders
+      # the code + QR from the response). All three credentials are secrets
+      # from .env and must belong to a MERCHANT-type API client allowed to
+      # generate PAYMENT codes. (Env names kept from the bank-api round —
+      # same platform creds.)
       BANK_API_URL: ${BANK_API_URL:-https://staging.innbucks.co.zw}
       BANK_API_KEY: ${BANK_API_KEY:?set BANK_API_KEY in .env}
       BANK_API_USERNAME: ${BANK_API_USERNAME:?set BANK_API_USERNAME in .env}

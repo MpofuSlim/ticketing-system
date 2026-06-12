@@ -114,8 +114,9 @@ public class Payment {
 
     /**
      * The InnBucks 2D code the customer approves in their own app/USSD
-     * ({@code code} from {@code POST /api/code/generate}). Also echoed on the
-     * {@code POST /payments} response and delivered via WhatsApp/SMS.
+     * ({@code code} from {@code POST /api/code/generate}). Echoed on the
+     * {@code POST /payments} response — the FE renders it on the checkout
+     * screen; there is no out-of-band delivery.
      */
     @Column(name = "innbucks_code", length = 32)
     private String innbucksCode;

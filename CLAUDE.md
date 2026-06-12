@@ -189,8 +189,11 @@ Non-negotiables when touching this integration:
   UNKNOWN is never auto-expired — blocked slot beats double charge.
 - The FE contract is the historical stub shape: `bookingId` in,
   SUCCESS/PROCESSING/FAILED out. `paymentCode`/`paymentCodeExpiresAt` are
-  additive. The code reaches the customer via WhatsApp→SMS
-  (`PaymentCodeNotifier`), so the current FE needs no changes.
+  additive. The code reaches the customer ONLY via the response — the FE
+  renders the code + QR on the checkout screen; there is no out-of-band
+  delivery (no WhatsApp/SMS for the payment code). Trade-off accepted: if
+  the FE drops the response, the code is lost — but that beats a
+  notification-dependency that hides outages.
 - Env vars deliberately keep their `BANK_API_*` names (same platform creds);
   the credentials must belong to a MERCHANT-type client allowed to generate
   PAYMENT codes.

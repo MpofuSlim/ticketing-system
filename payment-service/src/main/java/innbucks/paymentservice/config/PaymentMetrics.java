@@ -116,18 +116,4 @@ public class PaymentMetrics {
                 .register(registry)
                 .increment();
     }
-
-    /**
-     * Delivery channel of the InnBucks payment code to the customer.
-     * channel={whatsapp, sms, failed}. `failed` means BOTH channels failed —
-     * those customers only see the code if the FE surfaces the additive
-     * paymentCode field, so a sustained drip is a notification-stack page.
-     */
-    public void incCodeDelivery(String channel) {
-        Counter.builder("payment.payments.code_delivery")
-                .description("Payment-code delivery outcomes, by channel (whatsapp/sms/failed)")
-                .tag("channel", channel)
-                .register(registry)
-                .increment();
-    }
 }
