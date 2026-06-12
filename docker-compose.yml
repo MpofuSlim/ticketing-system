@@ -386,6 +386,10 @@ services:
       WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-https://maximum-implicitly-treefrog.ngrok-free.app}
       WHATSAPP_API_KEY: ${WHATSAPP_API_KEY:?set WHATSAPP_API_KEY in .env}
       INNBUCKS_GATEWAY_URL: ${INNBUCKS_GATEWAY_URL:-http://10.0.155.69:8088}
+      # Public gateway origin where the hosted ticket QR + view page are
+      # reachable — used to build absolute links/images in the confirmation
+      # email + WhatsApp. MUST be your public api-gateway URL in prod.
+      TICKETS_PUBLIC_BASE_URL: ${TICKETS_PUBLIC_BASE_URL:-http://localhost:8080}
     ports:
       - "127.0.0.1:8084:8084"
     healthcheck:

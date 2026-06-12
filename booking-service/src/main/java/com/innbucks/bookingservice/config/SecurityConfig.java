@@ -37,6 +37,13 @@ public class SecurityConfig {
                         .requestMatchers("/error").permitAll()
                         // Confirmation lookup is public — agents scan at the gate
                         .requestMatchers("/bookings/confirmation/**").permitAll()
+                        // Public ticket artifacts (QR PNG + HTML view page) linked
+                        // from the confirmation email/WhatsApp — opened with no app
+                        // session. Bearer-instrument model: the unguessable booking
+                        // UUID is the access control; TicketRenderingService only
+                        // renders CONFIRMED bookings. NOT under /bookings/internal/**,
+                        // so it routes through the public gateway normally.
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/bookings/*/tickets/**").permitAll()
                         // Guest web flow: customers can book without logging
                         // in. JWT is optional — when present, the customer's
                         // tier is enforced by TierAccessInterceptor. When
@@ -59,6 +66,12 @@ public class SecurityConfig {
                         // so it can return a clean 401 body. The gateway also
                         // denies /bookings/internal/** at the edge.
                         .requestMatchers(HttpMethod.POST, "/bookings/internal/**").permitAll()
+                        // S2S read for payment-service (GET /bookings/internal/{id}) —
+                        // X-Internal-Token checked in the controller, denied at the
+                        // gateway edge. Without this permit anyRequest().authenticated()
+                        // 401s the call before the controller's token check runs (the
+                        // cause of "booking-service get failed status=401").
+                        .requestMatchers(HttpMethod.GET, "/bookings/internal/**").permitAll()
                         .requestMatchers("/actuator/health", "/actuator/health/**", "/actuator/info").permitAll()
                         // Everything else requires authentication
                         .anyRequest().authenticated()

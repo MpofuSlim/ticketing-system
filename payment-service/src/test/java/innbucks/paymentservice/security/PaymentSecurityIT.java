@@ -86,6 +86,45 @@ class PaymentSecurityIT extends PostgresIntegrationTestBase {
     }
 
     @Test
+    void ticketPayment_withoutJwt_isOpenForGuests() throws Exception {
+        // Guest checkout: POST /payments must NOT 401. The payer is the
+        // booking's phoneNumber (looked up downstream), not the token.
+        // booking-service points at an *.invalid host in this IT, so the
+        // controller returns a 4xx/5xx — anything BUT 401 proves the
+        // security layer let the guest through.
+        mockMvc.perform(post("/payments")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"bookingId\":\"" + UUID.randomUUID() + "\"}"))
+                .andExpect(result -> {
+                    int s = result.getResponse().getStatus();
+                    if (s == 401) {
+                        throw new AssertionError(
+                                "Expected POST /payments to be open for guests, got 401");
+                    }
+                });
+    }
+
+    @Test
+    void transfer_withoutJwt_stillRequiresAuth() throws Exception {
+        // The exact-path /payments permit must NOT leak to the money-moving
+        // siblings. /payments/transfer derives the customer from the JWT and
+        // moves real money via Oradian — it must still 401 for a guest.
+        mockMvc.perform(post("/payments/transfer")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"sourceAccountId\":\"A1\",\"destinationAccountId\":\"A2\",\"amount\":10.00}"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("401 UNAUTHORIZED"));
+    }
+
+    @Test
+    void withdraw_withoutJwt_stillRequiresAuth() throws Exception {
+        mockMvc.perform(post("/payments/withdraw")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"accountId\":\"A1\",\"amount\":10.00}"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
     void shopCheckout_withoutJwt_returns401() throws Exception {
         ShopCheckoutRequest body = new ShopCheckoutRequest();
         body.setShopId(UUID.randomUUID());

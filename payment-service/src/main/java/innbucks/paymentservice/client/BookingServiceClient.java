@@ -67,7 +67,8 @@ public class BookingServiceClient {
     }
 
     /**
-     * Read-only fetch of a booking — used by the InnBucks payment path to
+     * Read-only S2S fetch of a booking (GET /bookings/internal/{id}, gated by
+     * X-Internal-Token) — used by the InnBucks payment path to
      * resolve {@code totalAmount} + {@code currency} BEFORE debiting veengu
      * (debit must know the amount; confirm cannot precede payment). Returns
      * the parsed data map (same shape as confirmBooking) on 2xx, throws
@@ -77,7 +78,7 @@ public class BookingServiceClient {
     public Map<String, Object> getBooking(UUID bookingId) {
         try {
             String body = restClient.get()
-                    .uri("/bookings/{id}", bookingId)
+                    .uri("/bookings/internal/{id}", bookingId)
                     .header("X-Internal-Token", internalToken)
                     .retrieve()
                     .body(String.class);

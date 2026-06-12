@@ -245,10 +245,10 @@ class InnbucksApiClientContractTest {
     }
 
     @Test
-    @DisplayName("query: wire shape — originalReference = the authNumber; Paid classifies as PAID")
-    void query_postsOriginalReference_andClassifiesPaid() {
+    @DisplayName("inquiry: wire shape — keyed by code; Paid classifies as PAID")
+    void inquiry_postsCode_andClassifiesPaid() {
         stubLogin();
-        wireMock.stubFor(post(urlEqualTo("/api/code/query/originalReference"))
+        wireMock.stubFor(post(urlEqualTo("/api/code/inquiry"))
                 .willReturn(aResponse().withStatus(200)
                         .withHeader("Content-Type", "application/json")
                         .withBody("""
@@ -265,20 +265,20 @@ class InnbucksApiClientContractTest {
                                 """)));
 
         CodeStatusResult result = newClient("http://localhost:" + wireMock.port())
-                .queryCodeStatus("1616800");
+                .inquireCodeStatus("701285660");
 
         assertThat(result.status()).isEqualTo(CodeStatusResult.Status.PAID);
         assertThat(result.isPaid()).isTrue();
-        wireMock.verify(postRequestedFor(urlEqualTo("/api/code/query/originalReference"))
+        wireMock.verify(postRequestedFor(urlEqualTo("/api/code/inquiry"))
                 .withHeader("X-Api-Key", equalTo("test-api-key"))
                 .withHeader("Authorization", equalTo("Bearer jwt-token-1"))
-                .withRequestBody(matchingJsonPath("$.originalReference", equalTo("1616800")))
+                .withRequestBody(matchingJsonPath("$.code", equalTo("701285660")))
                 .withRequestBody(matchingJsonPath("$.reference", matching("Q-.+"))));
     }
 
     @Test
-    @DisplayName("query: full status vocabulary — Claimed=paid, 'Timed Out', Expired, New, garbage=UNKNOWN")
-    void query_classifiesTheDocumentedVocabulary() {
+    @DisplayName("inquiry: full status vocabulary — Claimed=paid, 'Timed Out', Expired, New, garbage=UNKNOWN")
+    void inquiry_classifiesTheDocumentedVocabulary() {
         stubLogin();
         InnbucksApiClient client = newClient("http://localhost:" + wireMock.port());
 
@@ -288,12 +288,12 @@ class InnbucksApiClientContractTest {
                 "Expired", CodeStatusResult.Status.EXPIRED,
                 "New", CodeStatusResult.Status.NEW,
                 "SomethingNovel", CodeStatusResult.Status.UNKNOWN).entrySet()) {
-            wireMock.stubFor(post(urlEqualTo("/api/code/query/originalReference"))
+            wireMock.stubFor(post(urlEqualTo("/api/code/inquiry"))
                     .willReturn(aResponse().withStatus(200)
                             .withHeader("Content-Type", "application/json")
                             .withBody("{\"responseCode\":0,\"status\":\"" + expected.getKey() + "\"}")));
 
-            CodeStatusResult result = client.queryCodeStatus("1616800");
+            CodeStatusResult result = client.inquireCodeStatus("701285660");
 
             assertThat(result.status())
                     .as("status string '%s'", expected.getKey())
@@ -306,33 +306,122 @@ class InnbucksApiClientContractTest {
     }
 
     @Test
-    @DisplayName("query: non-zero responseCode → ERROR (row left alone by the poller)")
-    void query_nonZeroResponseCode_isError() {
+    @DisplayName("inquiry: non-zero responseCode → ERROR (row left alone by the poller)")
+    void inquiry_nonZeroResponseCode_isError() {
         stubLogin();
-        wireMock.stubFor(post(urlEqualTo("/api/code/query/originalReference"))
+        wireMock.stubFor(post(urlEqualTo("/api/code/inquiry"))
                 .willReturn(aResponse().withStatus(200)
                         .withHeader("Content-Type", "application/json")
                         .withBody("{\"responseCode\":25,\"responseMsg\":\"Unable to locate original request\"}")));
 
         CodeStatusResult result = newClient("http://localhost:" + wireMock.port())
-                .queryCodeStatus("does-not-exist");
+                .inquireCodeStatus("does-not-exist");
 
         assertThat(result.status()).isEqualTo(CodeStatusResult.Status.ERROR);
         assertThat(result.responseMsg()).contains("Unable to locate");
     }
 
     @Test
-    @DisplayName("query: 5xx IS retried (read-only) — both attempts hit the wire")
-    void query_5xx_isRetried() {
+    @DisplayName("inquiry: status=Claimed WINS over a non-zero responseCode (the paid-but-stuck bug)")
+    void inquiry_claimedStatusWinsOverNonZeroResponseCode() {
+        // The exact production shape that left paid bookings stuck: InnBucks
+        // returns the finalised state in `status` even with a non-zero
+        // responseCode + an error-ish responseMsg. The status is authoritative.
         stubLogin();
-        wireMock.stubFor(post(urlEqualTo("/api/code/query/originalReference"))
+        wireMock.stubFor(post(urlEqualTo("/api/code/inquiry"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("""
+                                {
+                                  "responseCode": 1,
+                                  "responseMsg": "2D Code Expired/Claimed",
+                                  "code": "701285660",
+                                  "status": "Claimed"
+                                }
+                                """)));
+
+        CodeStatusResult result = newClient("http://localhost:" + wireMock.port())
+                .inquireCodeStatus("701285660");
+
+        assertThat(result.status()).isEqualTo(CodeStatusResult.Status.CLAIMED);
+        assertThat(result.isPaid()).as("Claimed = finalised by the customer = paid").isTrue();
+    }
+
+    @Test
+    @DisplayName("inquiry: status=TimedOut (no space) WINS over a non-zero responseCode → TIMED_OUT")
+    void inquiry_timedOutStatusWinsOverNonZeroResponseCode() {
+        stubLogin();
+        wireMock.stubFor(post(urlEqualTo("/api/code/inquiry"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("""
+                                {
+                                  "responseCode": 1,
+                                  "responseMsg": "2D Code Expired/Claimed",
+                                  "status": "TimedOut"
+                                }
+                                """)));
+
+        CodeStatusResult result = newClient("http://localhost:" + wireMock.port())
+                .inquireCodeStatus("701285660");
+
+        assertThat(result.status()).isEqualTo(CodeStatusResult.Status.TIMED_OUT);
+        assertThat(result.isPaid()).isFalse();
+    }
+
+    @Test
+    @DisplayName("inquiry: a documented status on a 4xx is still honoured (not buried as ERROR)")
+    void inquiry_recognisedStatusOnA4xx_isHonoured() {
+        stubLogin();
+        wireMock.stubFor(post(urlEqualTo("/api/code/inquiry"))
+                .willReturn(aResponse().withStatus(400)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"responseCode\":1,\"responseMsg\":\"2D Code Expired/Claimed\",\"status\":\"Claimed\"}")));
+
+        CodeStatusResult result = newClient("http://localhost:" + wireMock.port())
+                .inquireCodeStatus("701285660");
+
+        assertThat(result.status()).isEqualTo(CodeStatusResult.Status.CLAIMED);
+    }
+
+    @Test
+    @DisplayName("inquiry: 400 with the Spring {errors:[...]} envelope → ERROR, not a crash, not retried")
+    void inquiry_400ValidationEnvelope_isError() {
+        // The exact shape staging returns for a bad inquiry — different from
+        // the {responseCode,responseMsg} envelope. Must classify ERROR (poller
+        // leaves the row) and NOT trip the retry/transient path.
+        stubLogin();
+        wireMock.stubFor(post(urlEqualTo("/api/code/inquiry"))
+                .willReturn(aResponse().withStatus(400)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("""
+                                {
+                                  "timestamp": "2026-06-12T14:43:19.278+02:00",
+                                  "status": 400,
+                                  "errors": ["Code is required"]
+                                }
+                                """)));
+
+        CodeStatusResult result = newClient("http://localhost:" + wireMock.port())
+                .inquireCodeStatus("701285660");
+
+        assertThat(result.status()).isEqualTo(CodeStatusResult.Status.ERROR);
+        // One wire hit — a 4xx is a refusal, never retried.
+        wireMock.verify(1, postRequestedFor(urlEqualTo("/api/code/inquiry")));
+    }
+
+    @Test
+    @DisplayName("inquiry: 5xx IS retried (read-only) — both attempts hit the wire")
+    void inquiry_5xx_isRetried() {
+        stubLogin();
+        wireMock.stubFor(post(urlEqualTo("/api/code/inquiry"))
                 .willReturn(aResponse().withStatus(503).withBody("down")));
 
         assertThatThrownBy(() -> newClient("http://localhost:" + wireMock.port())
-                .queryCodeStatus("1616800"))
+                .inquireCodeStatus("701285660"))
                 .isInstanceOf(InnbucksApiTransientException.class);
 
-        wireMock.verify(2, postRequestedFor(urlEqualTo("/api/code/query/originalReference")));
+        wireMock.verify(2, postRequestedFor(urlEqualTo("/api/code/inquiry")));
     }
 
     @Test

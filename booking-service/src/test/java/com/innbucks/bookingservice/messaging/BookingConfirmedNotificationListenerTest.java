@@ -1,5 +1,6 @@
 package com.innbucks.bookingservice.messaging;
 
+import com.innbucks.bookingservice.client.EmailNotificationClient;
 import com.innbucks.bookingservice.client.NotificationDeliveryException;
 import com.innbucks.bookingservice.client.SmsNotificationClient;
 import com.innbucks.bookingservice.client.WhatsAppNotificationClient;
@@ -7,6 +8,7 @@ import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
 import com.innbucks.bookingservice.event.BookingDomainEvent;
 import com.innbucks.bookingservice.repository.BookingRepository;
+import com.innbucks.bookingservice.service.TicketRenderingService;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -24,18 +26,37 @@ import static org.mockito.Mockito.*;
 /**
  * Unit tests for {@link BookingConfirmedNotificationListener}.
  *
- * <p>Pins the WhatsApp-primary → SMS-fallback channel order, best-effort
- * semantics (no exception escapes), and the skip-when-no-phone guard. Pure
- * Mockito — the listener has no Spring context dependencies once the booking
- * is mocked through the repo.
+ * <p>Pins: email + WhatsApp(→SMS) as INDEPENDENT best-effort channels, the
+ * hosted ticket link injected into every message, and that no channel failure
+ * escapes (the booking is already CONFIRMED). Pure Mockito.
  */
 class BookingConfirmedNotificationListenerTest {
 
-    private static Booking bookingFixture(String phone, int ticketCount) {
+    private static final String BASE = "https://api.test";
+
+    private record Mocks(BookingRepository repo, WhatsAppNotificationClient wa,
+                         SmsNotificationClient sms, EmailNotificationClient email,
+                         TicketRenderingService rendering,
+                         BookingConfirmedNotificationListener listener) {}
+
+    private static Mocks mocks() {
+        BookingRepository repo = mock(BookingRepository.class);
+        WhatsAppNotificationClient wa = mock(WhatsAppNotificationClient.class);
+        SmsNotificationClient sms = mock(SmsNotificationClient.class);
+        EmailNotificationClient email = mock(EmailNotificationClient.class);
+        TicketRenderingService rendering = mock(TicketRenderingService.class);
+        lenient().when(rendering.confirmationEmailHtml(any(), anyString()))
+                .thenReturn("<div>tickets</div>");
+        BookingConfirmedNotificationListener listener =
+                new BookingConfirmedNotificationListener(repo, wa, sms, email, rendering, BASE);
+        return new Mocks(repo, wa, sms, email, rendering, listener);
+    }
+
+    private static Booking bookingFixture(String phone, String emailAddr, int ticketCount) {
         Booking b = new Booking();
         b.setId(UUID.randomUUID());
         b.setPhoneNumber(phone);
-        b.setUserEmail("rufaro@example.com");
+        b.setUserEmail(emailAddr);
         b.setConfirmationNumber("INN-20260610-A1B2C3");
         b.setTotalAmount(new BigDecimal("50.00"));
         b.setItems(buildItems(ticketCount));
@@ -58,113 +79,138 @@ class BookingConfirmedNotificationListenerTest {
     }
 
     @Test
-    void confirmedBooking_sendsWhatsAppFirstAndSkipsSmsOnSuccess() {
-        BookingRepository repo = mock(BookingRepository.class);
-        WhatsAppNotificationClient wa = mock(WhatsAppNotificationClient.class);
-        SmsNotificationClient sms = mock(SmsNotificationClient.class);
-        Booking b = bookingFixture("+263771234567", 2);
-        when(repo.findById(b.getId())).thenReturn(Optional.of(b));
+    void confirmed_sendsEmailAndWhatsApp_bothCarryTheTicketLink() {
+        Mocks m = mocks();
+        Booking b = bookingFixture("+263771234567", "rufaro@example.com", 2);
+        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+        String expectedLink = BASE + "/bookings/" + b.getId() + "/tickets";
 
-        new BookingConfirmedNotificationListener(repo, wa, sms).onBookingConfirmed(eventFor(b));
+        m.listener().onBookingConfirmed(eventFor(b));
 
-        ArgumentCaptor<String> msg = ArgumentCaptor.forClass(String.class);
-        verify(wa).sendCustomNotification(eq("+263771234567"), msg.capture());
-        // Verify message content carries the data the customer needs to find their booking.
-        assertThat(msg.getValue())
-                .contains("INN-20260610-A1B2C3")
-                .contains("2 tickets")
-                .contains("50.00")
-                .contains("20260610-T1")
-                .contains("20260610-T2");
-        // SMS fallback must not fire on a WhatsApp success.
-        verifyNoInteractions(sms);
+        // Email: to the booking address, subject carries the confirmation, body
+        // is the rendered ticket HTML, reference is the booking handle.
+        ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> ref = ArgumentCaptor.forClass(String.class);
+        verify(m.email()).sendHtmlEmail(eq("rufaro@example.com"), subject.capture(),
+                body.capture(), ref.capture());
+        assertThat(subject.getValue()).contains("INN-20260610-A1B2C3");
+        assertThat(body.getValue()).isEqualTo("<div>tickets</div>");
+        assertThat(ref.getValue()).startsWith("BOOKING-CONFIRM-");
+
+        // WhatsApp: confirmation + the hosted ticket link + ticket numbers; no SMS on success.
+        ArgumentCaptor<String> wa = ArgumentCaptor.forClass(String.class);
+        verify(m.wa()).sendCustomNotification(eq("+263771234567"), wa.capture());
+        assertThat(wa.getValue())
+                .contains("INN-20260610-A1B2C3").contains("2 tickets")
+                .contains(expectedLink).contains("20260610-T1").contains("20260610-T2");
+        verifyNoInteractions(m.sms());
     }
 
     @Test
-    void singleTicket_messageSaysOneTicket_notPlural() {
-        BookingRepository repo = mock(BookingRepository.class);
-        WhatsAppNotificationClient wa = mock(WhatsAppNotificationClient.class);
-        SmsNotificationClient sms = mock(SmsNotificationClient.class);
-        Booking b = bookingFixture("+263771234567", 1);
-        when(repo.findById(b.getId())).thenReturn(Optional.of(b));
+    void singleTicket_saysOneTicket_notPlural() {
+        Mocks m = mocks();
+        Booking b = bookingFixture("+263771234567", null, 1);
+        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
 
-        new BookingConfirmedNotificationListener(repo, wa, sms).onBookingConfirmed(eventFor(b));
+        m.listener().onBookingConfirmed(eventFor(b));
 
         ArgumentCaptor<String> msg = ArgumentCaptor.forClass(String.class);
-        verify(wa).sendCustomNotification(anyString(), msg.capture());
-        assertThat(msg.getValue())
-                .contains("1 ticket")
-                .doesNotContain("1 tickets");
+        verify(m.wa()).sendCustomNotification(anyString(), msg.capture());
+        assertThat(msg.getValue()).contains("1 ticket").doesNotContain("1 tickets");
     }
 
     @Test
-    void whatsAppFails_fallsBackToSmsWithShorterMessage() {
-        BookingRepository repo = mock(BookingRepository.class);
-        WhatsAppNotificationClient wa = mock(WhatsAppNotificationClient.class);
-        SmsNotificationClient sms = mock(SmsNotificationClient.class);
-        Booking b = bookingFixture("+263771234567", 2);
-        when(repo.findById(b.getId())).thenReturn(Optional.of(b));
+    void whatsAppFails_fallsBackToSms_withTheLink_emailUnaffected() {
+        Mocks m = mocks();
+        Booking b = bookingFixture("+263771234567", "rufaro@example.com", 2);
+        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
         doThrow(new NotificationDeliveryException("gateway 503"))
-                .when(wa).sendCustomNotification(anyString(), anyString());
+                .when(m.wa()).sendCustomNotification(anyString(), anyString());
+        String expectedLink = BASE + "/bookings/" + b.getId() + "/tickets";
 
-        new BookingConfirmedNotificationListener(repo, wa, sms).onBookingConfirmed(eventFor(b));
+        m.listener().onBookingConfirmed(eventFor(b));
 
         ArgumentCaptor<String> smsMsg = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<String> ref = ArgumentCaptor.forClass(String.class);
-        verify(sms).sendSms(eq("+263771234567"), smsMsg.capture(), ref.capture());
-        assertThat(smsMsg.getValue()).contains("INN-20260610-A1B2C3").contains("2 tickets");
-        // The SMS lane omits the ticket-number dump to stay within a single segment.
-        assertThat(smsMsg.getValue())
-                .doesNotContain("20260610-T1")
-                .doesNotContain("20260610-T2");
-        assertThat(ref.getValue()).startsWith("BOOKING-CONFIRM-");
+        verify(m.sms()).sendSms(eq("+263771234567"), smsMsg.capture(), startsWith("BOOKING-CONFIRM-"));
+        assertThat(smsMsg.getValue()).contains("INN-20260610-A1B2C3").contains(expectedLink);
+        // SMS lane stays short — no ticket-number dump.
+        assertThat(smsMsg.getValue()).doesNotContain("20260610-T1");
+        // Email is an independent channel — still delivered despite WhatsApp failure.
+        verify(m.email()).sendHtmlEmail(eq("rufaro@example.com"), anyString(), anyString(), anyString());
     }
 
     @Test
-    void bothChannelsFail_doesNotThrow_bookingUnaffected() {
-        BookingRepository repo = mock(BookingRepository.class);
-        WhatsAppNotificationClient wa = mock(WhatsAppNotificationClient.class);
-        SmsNotificationClient sms = mock(SmsNotificationClient.class);
-        Booking b = bookingFixture("+263771234567", 2);
-        when(repo.findById(b.getId())).thenReturn(Optional.of(b));
+    void emailFailure_doesNotBlockWhatsApp() {
+        Mocks m = mocks();
+        Booking b = bookingFixture("+263771234567", "rufaro@example.com", 1);
+        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+        doThrow(new NotificationDeliveryException("email gw down"))
+                .when(m.email()).sendHtmlEmail(anyString(), anyString(), anyString(), anyString());
+
+        assertThatCode(() -> m.listener().onBookingConfirmed(eventFor(b))).doesNotThrowAnyException();
+        // WhatsApp still fired even though email blew up first.
+        verify(m.wa()).sendCustomNotification(eq("+263771234567"), anyString());
+    }
+
+    @Test
+    void noPhone_emailStillDelivers() {
+        Mocks m = mocks();
+        Booking b = bookingFixture(null, "rufaro@example.com", 1);
+        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+
+        m.listener().onBookingConfirmed(eventFor(b));
+
+        verify(m.email()).sendHtmlEmail(eq("rufaro@example.com"), anyString(), anyString(), anyString());
+        verifyNoInteractions(m.wa(), m.sms());
+    }
+
+    @Test
+    void noEmail_whatsAppStillDelivers() {
+        Mocks m = mocks();
+        Booking b = bookingFixture("+263771234567", null, 1);
+        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+
+        m.listener().onBookingConfirmed(eventFor(b));
+
+        verify(m.wa()).sendCustomNotification(eq("+263771234567"), anyString());
+        verifyNoInteractions(m.email());
+    }
+
+    @Test
+    void noEmailAndNoPhone_doesNothing_noThrow() {
+        Mocks m = mocks();
+        Booking b = bookingFixture(null, null, 1);
+        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+
+        assertThatCode(() -> m.listener().onBookingConfirmed(eventFor(b))).doesNotThrowAnyException();
+        verifyNoInteractions(m.wa(), m.sms(), m.email());
+    }
+
+    @Test
+    void bothPhoneChannelsFail_doesNotThrow() {
+        Mocks m = mocks();
+        Booking b = bookingFixture("+263771234567", null, 2);
+        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
         doThrow(new NotificationDeliveryException("wa down"))
-                .when(wa).sendCustomNotification(anyString(), anyString());
+                .when(m.wa()).sendCustomNotification(anyString(), anyString());
         doThrow(new NotificationDeliveryException("sms down"))
-                .when(sms).sendSms(anyString(), anyString(), anyString());
+                .when(m.sms()).sendSms(anyString(), anyString(), anyString());
 
-        // Best-effort: a total outage must not propagate after AFTER_COMMIT.
-        assertThatCode(() ->
-                new BookingConfirmedNotificationListener(repo, wa, sms).onBookingConfirmed(eventFor(b)))
-                .doesNotThrowAnyException();
-        verify(wa).sendCustomNotification(anyString(), anyString());
-        verify(sms).sendSms(anyString(), anyString(), anyString());
-    }
-
-    @Test
-    void noPhoneOnBooking_skipsBothChannels() {
-        BookingRepository repo = mock(BookingRepository.class);
-        WhatsAppNotificationClient wa = mock(WhatsAppNotificationClient.class);
-        SmsNotificationClient sms = mock(SmsNotificationClient.class);
-        Booking b = bookingFixture(null, 1);
-        when(repo.findById(b.getId())).thenReturn(Optional.of(b));
-
-        new BookingConfirmedNotificationListener(repo, wa, sms).onBookingConfirmed(eventFor(b));
-
-        verifyNoInteractions(wa, sms);
+        assertThatCode(() -> m.listener().onBookingConfirmed(eventFor(b))).doesNotThrowAnyException();
+        verify(m.wa()).sendCustomNotification(anyString(), anyString());
+        verify(m.sms()).sendSms(anyString(), anyString(), anyString());
     }
 
     @Test
     void bookingMissing_logsAndReturns_noChannelTouched() {
-        BookingRepository repo = mock(BookingRepository.class);
-        WhatsAppNotificationClient wa = mock(WhatsAppNotificationClient.class);
-        SmsNotificationClient sms = mock(SmsNotificationClient.class);
+        Mocks m = mocks();
         UUID bookingId = UUID.randomUUID();
-        when(repo.findById(bookingId)).thenReturn(Optional.empty());
+        when(m.repo().findById(bookingId)).thenReturn(Optional.empty());
 
-        new BookingConfirmedNotificationListener(repo, wa, sms).onBookingConfirmed(
-                new BookingDomainEvent.BookingConfirmed(
-                        bookingId, "gone@example.com", "INN-MISSING", Instant.now()));
+        m.listener().onBookingConfirmed(new BookingDomainEvent.BookingConfirmed(
+                bookingId, "gone@example.com", "INN-MISSING", Instant.now()));
 
-        verifyNoInteractions(wa, sms);
+        verifyNoInteractions(m.wa(), m.sms(), m.email());
     }
 }

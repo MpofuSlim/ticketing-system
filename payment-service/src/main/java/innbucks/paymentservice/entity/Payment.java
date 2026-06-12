@@ -142,8 +142,11 @@ public class Payment {
      * twin of {@link #innbucksCode}. Persisted so a replay re-surfaces the
      * exact artifact the customer was shown (and the ledger keeps it for
      * disputes); a few KB per row, only while codes are in flight.
+     * columnDefinition pins TEXT so a Hibernate-generated dev schema
+     * (ddl-auto=update) matches V7 — a bare String maps to varchar(255),
+     * which a real QR (multi-KB base64) overflows at the first payment.
      */
-    @Column(name = "code_qr_base64")
+    @Column(name = "code_qr_base64", columnDefinition = "text")
     private String codeQrBase64;
 
     @Column(name = "created_at", nullable = false, updatable = false)

@@ -1,7 +1,7 @@
 package innbucks.paymentservice.client;
 
 /**
- * Outcome of {@code POST /api/code/query/originalReference} (InnBucks
+ * Outcome of {@code POST /api/code/inquiry} (InnBucks
  * Merchant API). Status vocabulary per the doc; the doc describes BOTH
  * {@code Claimed} and {@code Paid} as "finalised by the customer", so the
  * poller treats either as money-received for a PAYMENT-type code. Anything

@@ -185,7 +185,7 @@ Non-negotiables when touching this integration:
   and the client cross-checks the generation response's amount echo — keep
   both, they are the 100x-charge guard.
 - **Code generation is NEVER retried** (a retry can mint a second live code);
-  the status query is the only retried call. A row whose upstream status is
+  the status inquiry (`POST /api/code/inquiry`, keyed by the code) is the only retried call. A row whose upstream status is
   UNKNOWN is never auto-expired — blocked slot beats double charge.
 - The FE contract is the historical stub shape: `bookingId` in,
   SUCCESS/PROCESSING/FAILED out. `paymentCode`/`paymentCodeExpiresAt` are
