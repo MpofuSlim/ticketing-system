@@ -78,6 +78,7 @@ public class ReconciliationJob {
     private final BookingServiceClient bookingServiceClient;
     private final InnbucksApiClient innbucksApiClient;
     private final PaymentMetrics metrics;
+    private final innbucks.paymentservice.service.CodePaymentResolutionService resolutionService;
     private final Duration stalePendingThreshold;
     private final int batchSize;
 
@@ -88,6 +89,7 @@ public class ReconciliationJob {
             BookingServiceClient bookingServiceClient,
             InnbucksApiClient innbucksApiClient,
             PaymentMetrics metrics,
+            innbucks.paymentservice.service.CodePaymentResolutionService resolutionService,
             @Value("${payment-service.reconciliation.stale-pending-threshold:PT5M}") Duration stalePendingThreshold,
             @Value("${payment-service.reconciliation.batch-size:100}") int batchSize) {
         this.repository = repository;
@@ -96,6 +98,7 @@ public class ReconciliationJob {
         this.bookingServiceClient = bookingServiceClient;
         this.innbucksApiClient = innbucksApiClient;
         this.metrics = metrics;
+        this.resolutionService = resolutionService;
         this.stalePendingThreshold = stalePendingThreshold;
         this.batchSize = batchSize;
     }
@@ -182,19 +185,12 @@ public class ReconciliationJob {
         // /api/code/inquiry is keyed by the CODE the customer pays, not the authNumber.
         CodeStatusResult result = innbucksApiClient.inquireCodeStatus(p.getInnbucksCode());
         switch (result.status()) {
-            case PAID, CLAIMED -> completePaidCode(p, result);
-            case EXPIRED -> {
-                paymentRecordService.markExpired(p.getId(),
-                        "InnBucks reports the code " + result.rawStatus() + " — never paid");
-                metrics.incCodeResolution("expired");
-                log.info("Code expired upstream paymentReference={} bookingId={} — slot freed",
-                        p.getPaymentReference(), p.getBookingId());
-            }
-            case TIMED_OUT -> {
-                paymentRecordService.markExpired(p.getId(),
-                        "InnBucks reports the code Timed Out — never paid");
-                metrics.incCodeResolution("expired");
-            }
+            // Terminal transitions live in CodePaymentResolutionService — the
+            // SAME implementation the customer-triggered instant check uses,
+            // so the money rules can never drift between the two paths.
+            case PAID, CLAIMED -> resolutionService.completePaid(p, result.rawStatus());
+            case EXPIRED -> resolutionService.markExpiredUpstream(p, result.rawStatus());
+            case TIMED_OUT -> resolutionService.markExpiredUpstream(p, "Timed Out");
             case NEW -> {
                 // Still waiting on the customer. Expire only once OUR deadline
                 // + grace passed — and only because upstream POSITIVELY says
@@ -221,31 +217,6 @@ public class ReconciliationJob {
         }
     }
 
-    /**
-     * InnBucks says the customer paid (Paid, or Claimed — the doc defines
-     * both as "finalised by the customer"). Confirm the booking, then promote;
-     * a confirm failure parks the row COMPLETED_UNCONFIRMED with the
-     * authNumber as the recovery handle — money HAS moved, and the
-     * confirm-retry sweep below keeps trying.
-     */
-    private void completePaidCode(Payment p, CodeStatusResult result) {
-        try {
-            Map<String, Object> confirmed = bookingServiceClient.confirmBooking(p.getBookingId());
-            Object confirmation = confirmed == null ? null : confirmed.get("confirmationNumber");
-            paymentRecordService.markSucceeded(p.getId(), p.getCodeAuthNumber(),
-                    confirmation == null ? null : confirmation.toString());
-            metrics.incCodeResolution("paid");
-            log.info("Code paid + booking confirmed paymentReference={} bookingId={} confirmation={} upstreamStatus={}",
-                    p.getPaymentReference(), p.getBookingId(), confirmation, result.rawStatus());
-        } catch (RuntimeException e) {
-            paymentRecordService.markCompletedUnconfirmed(p.getId(), p.getCodeAuthNumber(),
-                    "Customer paid the InnBucks code but booking confirm failed: " + e.getMessage());
-            metrics.incCodeResolution("paid_unconfirmed");
-            log.error("CODE PAID BUT BOOKING CONFIRM FAILED — confirm-retry will keep trying "
-                            + "paymentReference={} bookingId={} reason={}",
-                    p.getPaymentReference(), p.getBookingId(), e.getMessage());
-        }
-    }
 
     /** Ticket-payment ledger sweeps (stale watch + unconfirmed self-heal). */
     @Scheduled(fixedDelayString = "${payment-service.reconciliation.scan-interval:PT1M}")

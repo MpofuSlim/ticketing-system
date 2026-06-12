@@ -99,6 +99,38 @@ public class BookingServiceClient {
     }
 
     /**
+     * Extend the booking's seat hold to at least {@code holdUntil} — called
+     * IMMEDIATELY before minting an InnBucks payment code so the hold provably
+     * outlives the code the customer is shown (the hold-5min/code-10min
+     * paid-but-no-ticket gap). 409/404 from booking-service means the booking
+     * is already expired/cancelled/confirmed: the caller refuses the payment
+     * BEFORE any money moves.
+     */
+    public void extendHold(UUID bookingId, java.time.Instant holdUntil) {
+        try {
+            String body = restClient.patch()
+                    .uri("/bookings/internal/{id}/extend-hold", bookingId)
+                    .header("X-Internal-Token", internalToken)
+                    .header("Content-Type", "application/json")
+                    .body(Map.of("holdUntil", java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME
+                            .format(java.time.LocalDateTime.ofInstant(holdUntil, java.time.ZoneOffset.UTC))))
+                    .retrieve()
+                    .body(String.class);
+            log.debug("booking-service hold extended bookingId={} holdUntil={}", bookingId, holdUntil);
+        } catch (RestClientResponseException e) {
+            String detail = parseErrorMessage(e.getResponseBodyAsString())
+                    .orElse(e.getStatusText());
+            log.warn("booking-service extend-hold refused bookingId={} status={} detail={}",
+                    bookingId, e.getStatusCode().value(), detail);
+            throw new BookingConfirmationException(detail, e.getStatusCode().value());
+        } catch (Exception e) {
+            log.warn("booking-service extend-hold errored bookingId={} cause={}", bookingId, e.toString());
+            throw new BookingConfirmationException(
+                    "Unable to reach booking-service to extend the seat hold", 503);
+        }
+    }
+
+    /**
      * Returns the parsed envelope on a 2xx, or throws BookingConfirmationException
      * on a non-2xx so the caller can surface booking-service's reason
      * (e.g. "Seat hold expired", "Booking not found").

@@ -217,6 +217,28 @@ public class PaymentController {
                         java.time.Duration.between(p.getCreatedAt(), java.time.Instant.now()).toSeconds());
                 paymentRecordService.markFailed(p.getId(), "stale_pending",
                         "Orphaned PENDING row (no code recorded) replaced by a fresh attempt on customer retry");
+            } else if (p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED
+                    && p.getInnbucksCode() != null) {
+                // Customer-triggered instant check ("I've paid" / page refresh):
+                // ask InnBucks NOW instead of replaying blindly — confirmation
+                // lands ~1s after the customer tells us, not a poll cycle later.
+                var check = innbucksPaymentService.tryResolveOpenCode(p);
+                if (check == InnbucksPaymentService.InstantCheckOutcome.PAID) {
+                    Payment resolved = paymentRepository.findById(p.getId()).orElse(p);
+                    log.info("POST /payments instant-check PAID bookingId={} paymentReference={}",
+                            request.getBookingId(), p.getPaymentReference());
+                    return toReplayResponse(resolved, request);
+                }
+                if (check == InnbucksPaymentService.InstantCheckOutcome.EXPIRED) {
+                    // Row just went terminal (EXPIRED, slot freed) — fall
+                    // through and mint a FRESH code in this same request.
+                    log.info("POST /payments instant-check EXPIRED bookingId={} — minting a fresh code",
+                            request.getBookingId());
+                } else {
+                    log.info("POST /payments replay after instant check (still pending upstream) bookingId={} paymentReference={}",
+                            request.getBookingId(), p.getPaymentReference());
+                    return toReplayResponse(p, request);
+                }
             } else {
                 log.info("POST /payments replay bookingId={} existing paymentReference={} status={}",
                         request.getBookingId(), p.getPaymentReference(), p.getStatus());

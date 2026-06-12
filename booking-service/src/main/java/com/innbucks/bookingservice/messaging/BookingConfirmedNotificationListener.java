@@ -32,8 +32,9 @@ import java.util.List;
  *       endpoint ({@code /bookings/{id}/tickets/{tn}/qr}) so it shows in Gmail/
  *       Outlook (data-URIs are stripped), plus a link to the ticket page.</li>
  *   <li><b>WhatsApp → SMS fallback</b> (to {@code phoneNumber}, if present) —
- *       the confirmation text + a link to the hosted ticket page. The WhatsApp
- *       gateway is text-only, so the QR rides the link, not an attachment.</li>
+ *       a plain confirmation (booking ref, ticket count/numbers, total). NO
+ *       links by product direction; the scannable QR reaches the customer via
+ *       the email (and the hosted endpoints stay available for later).</li>
  * </ul>
  *
  * <p>Both links/images are absolute, built from
@@ -75,7 +76,6 @@ public class BookingConfirmedNotificationListener {
                     event.bookingId());
             return;
         }
-        String ticketLink = ticketLink(booking);
         boolean anyChannel = false;
 
         // ---- Email (independent best-effort) ----
@@ -100,14 +100,14 @@ public class BookingConfirmedNotificationListener {
         if (phone != null && !phone.isBlank()) {
             anyChannel = true;
             try {
-                whatsApp.sendCustomNotification(phone, buildWhatsAppMessage(booking, ticketLink));
+                whatsApp.sendCustomNotification(phone, buildWhatsAppMessage(booking));
                 log.info("Booking-confirm WhatsApp sent bookingId={} ref={}",
                         booking.getId(), booking.getConfirmationNumber());
             } catch (RuntimeException waEx) {
                 log.warn("Booking-confirm WhatsApp failed bookingId={}, trying SMS: {}",
                         booking.getId(), waEx.getMessage());
                 try {
-                    sms.sendSms(phone, buildSmsMessage(booking, ticketLink),
+                    sms.sendSms(phone, buildSmsMessage(booking),
                             "BOOKING-CONFIRM-" + booking.getId());
                     log.info("Booking-confirm SMS sent bookingId={} ref={}",
                             booking.getId(), booking.getConfirmationNumber());
@@ -124,11 +124,7 @@ public class BookingConfirmedNotificationListener {
         }
     }
 
-    private String ticketLink(Booking booking) {
-        return publicBaseUrl + "/bookings/" + booking.getId() + "/tickets";
-    }
-
-    private String buildWhatsAppMessage(Booking booking, String ticketLink) {
+    private String buildWhatsAppMessage(Booking booking) {
         List<BookingItem> items = booking.getItems() == null ? List.of() : booking.getItems();
         StringBuilder sb = new StringBuilder("InnBucks: your booking ")
                 .append(booking.getConfirmationNumber())
@@ -139,12 +135,11 @@ public class BookingConfirmedNotificationListener {
             sb.append(" — ").append(items.size()).append(" tickets");
         }
         appendTotal(sb, booking);
-        sb.append(".\nView & scan your ticket").append(items.size() == 1 ? "" : "s").append(": ")
-                .append(ticketLink);
-        // Keep the ticket numbers too — a manual fallback at the gate if the
-        // customer can't open the link.
+        sb.append('.');
+        // No links by product direction — just the ticket number(s) as the
+        // manual reference at the gate. The QR reaches the customer via email.
         if (!items.isEmpty()) {
-            sb.append("\nTicket number").append(items.size() > 1 ? "s" : "").append(": ");
+            sb.append(" Ticket number").append(items.size() > 1 ? "s" : "").append(": ");
             for (int i = 0; i < items.size(); i++) {
                 if (i > 0) sb.append(", ");
                 sb.append(items.get(i).getTicketNumber());
@@ -154,8 +149,8 @@ public class BookingConfirmedNotificationListener {
         return sb.toString();
     }
 
-    private String buildSmsMessage(Booking booking, String ticketLink) {
-        // SMS fallback — keep it short (one segment). The link carries the QR.
+    private String buildSmsMessage(Booking booking) {
+        // SMS fallback — one short segment, no links (product direction).
         StringBuilder sb = new StringBuilder("InnBucks: booking ")
                 .append(booking.getConfirmationNumber())
                 .append(" confirmed");
@@ -165,7 +160,8 @@ public class BookingConfirmedNotificationListener {
         } else if (n > 1) {
             sb.append(" (").append(n).append(" tickets)");
         }
-        sb.append(". Tickets: ").append(ticketLink);
+        appendTotal(sb, booking);
+        sb.append('.');
         return sb.toString();
     }
 
