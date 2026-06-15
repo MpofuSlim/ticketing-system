@@ -76,6 +76,28 @@
             <optional>true</optional>
         </dependency>
 
+        <!-- spring-cloud-starter-gateway-server-webflux (bumped to 5.0.2 by
+             PR #224's spring-ecosystem update) ships
+             org.springframework.cloud.gateway.config.GrpcSslConfigurer at
+             compile scope. That class references io.grpc.netty.NettyChannelBuilder,
+             which is NOT pulled in transitively. @SpringBootTest contexts
+             then fail at refresh time with:
+               IllegalStateException: Failed to introspect Class
+               [org.springframework.cloud.gateway.config.GrpcSslConfigurer]
+             Caused by: NoClassDefFoundError: io/grpc/netty/NettyChannelBuilder
+             grpc-netty (1.80.0) is managed by Boot 4.1.0's BOM, so no version
+             is specified here. Scoped to test because production gateway
+             startup hasn't shown the same crash — the autoconfig only forces
+             Class introspection during the test context's broader scan;
+             prod's narrower bean-resolution path skips it. If a deployed
+             api-gateway ever fails to boot with this same NoClassDefFoundError,
+             widen this to compile/runtime scope. -->
+        <dependency>
+            <groupId>io.grpc</groupId>
+            <artifactId>grpc-netty</artifactId>
+            <scope>test</scope>
+        </dependency>
+
     </dependencies>
 
     <build>
