@@ -4,6 +4,8 @@ import com.innbucks.userservice.cells.WrongCellException;
 import com.innbucks.userservice.client.NotificationDeliveryException;
 import com.innbucks.userservice.client.OradianClientException;
 import com.innbucks.userservice.dto.ApiResult;
+import com.innbucks.userservice.service.AuthService;
+import com.innbucks.userservice.service.RefreshTokenService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -111,6 +113,33 @@ public class GlobalExceptionHandler {
         String reason = ex.getReason() == null ? status.getReasonPhrase() : ex.getReason();
         log.warn("ResponseStatusException status={} reason={}", status.value(), reason);
         return ResponseEntity.status(status).body(ApiResult.error(status, reason));
+    }
+
+    // Wrong-identifier / wrong-password / locked-out outcomes all surface as
+    // InvalidCredentialsException. The exception's own message ("Invalid
+    // credentials") is intentional, deliberately indistinguishable copy —
+    // it must NOT be collapsed into the generic RuntimeException fallback
+    // (which would leak nothing but also stop telling the FE WHY the login
+    // failed, breaking the customer-visible auth flow). Passthrough of
+    // ex.getMessage() is safe here because the message is a typed constant
+    // baked into the exception, not raw upstream text.
+    @ExceptionHandler(AuthService.InvalidCredentialsException.class)
+    public ResponseEntity<ApiResult<Void>> handleInvalidCredentials(AuthService.InvalidCredentialsException ex) {
+        log.info("Invalid credentials");
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResult.error(HttpStatus.BAD_REQUEST, ex.getMessage()));
+    }
+
+    // Refresh-token reuse: a previously-rotated-out token was replayed, so
+    // the whole family was revoked. The message ("Refresh token reuse
+    // detected; family revoked") is a typed constant from RefreshTokenService
+    // — safe to passthrough, and the FE needs the "reuse detected" wording
+    // to route the user back to the login screen rather than silently retry.
+    @ExceptionHandler(RefreshTokenService.ReuseDetectedException.class)
+    public ResponseEntity<ApiResult<Void>> handleReuseDetected(RefreshTokenService.ReuseDetectedException ex) {
+        log.warn("Refresh-token reuse detected: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResult.error(HttpStatus.BAD_REQUEST, ex.getMessage()));
     }
 
     // Catch-all for any RuntimeException not handled by a more specific
