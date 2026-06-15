@@ -54,7 +54,8 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResult<Void>> handleSeatServiceUnavailable(SeatServiceUnavailableException ex) {
         log.warn("seat-service unavailable: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                .body(ApiResult.error(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage()));
+                .body(ApiResult.error(HttpStatus.SERVICE_UNAVAILABLE,
+                        "We're having trouble checking seat availability right now. Please try again in a moment."));
     }
 
     @ExceptionHandler(TierRequirementException.class)
@@ -97,7 +98,8 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ApiResult<Void>> handleDependencyUnavailable(DependencyUnavailableException ex) {
         log.warn("Dependency unavailable: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                .body(ApiResult.error(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage()));
+                .body(ApiResult.error(HttpStatus.SERVICE_UNAVAILABLE,
+                        "We're having trouble reaching part of the system right now. Please try again in a moment."));
     }
 
     /**
