@@ -7,8 +7,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-import java.util.Optional;
-
 /**
  * Verifies that an inbound request belongs to this cell — by the MSISDN
  * carried in the request body, by the {@code homeCountry} claim on a
@@ -53,19 +51,18 @@ public class CellAffinityChecker {
      * {@code /register}, customer-tier registrations).
      */
     public void requireDomesticMsisdn(String msisdn) {
-        verifyResolved(MsisdnCountryResolver.resolve(msisdn), "msisdn=" + MsisdnMasking.mask(msisdn));
+        verify(MsisdnCountryResolver.resolve(msisdn).orElse(null), "msisdn=" + MsisdnMasking.mask(msisdn));
     }
 
     /**
      * Verify a possibly-MSISDN identifier (e.g. {@code /auth/login}'s
-     * {@code identifier}, which may be an email OR a phone). When the
-     * input doesn't parse as a phone, no-op — we cannot route by email.
+     * {@code identifier}, which may be an email OR a phone). An email resolves
+     * to no country → no-op (we cannot route by email); only a phone carries a
+     * routing signal.
      */
     public void requireDomesticIfMsisdn(String identifier) {
-        Optional<String> iso = MsisdnCountryResolver.resolve(identifier);
-        if (iso.isPresent()) {
-            verifyResolved(iso, "identifier=" + MsisdnMasking.mask(identifier));
-        }
+        verify(MsisdnCountryResolver.resolve(identifier).orElse(null),
+                "identifier=" + MsisdnMasking.mask(identifier));
     }
 
     /**
@@ -75,19 +72,26 @@ public class CellAffinityChecker {
      * before the claim existed) — the JWT signature is still the auth.
      */
     public void requireDomesticCountry(String iso) {
-        if (iso == null || iso.isBlank()) return;
-        verifyResolved(Optional.of(iso), "homeCountry=" + iso);
+        verify(iso, "homeCountry=" + (iso == null ? "" : iso));
     }
 
-    private void verifyResolved(Optional<String> isoOpt, String contextForLog) {
-        isoOpt.map(String::trim).map(String::toUpperCase)
-                .filter(iso -> !iso.equalsIgnoreCase(deploymentCountry))
-                .ifPresent(iso -> {
-                    String homeUrl = registry.baseUrlFor(iso).orElse(null);
-                    log.info("[cells] wrong-cell on {} ({}): home={} redirect={}",
-                            deploymentCountry, contextForLog, iso, homeUrl == null ? "<unknown>" : homeUrl);
-                    throw new WrongCellException(iso, homeUrl);
-                });
+    /**
+     * Throws {@link WrongCellException} when {@code iso} is non-blank and
+     * resolves to a country other than this deployment's. A {@code null}/blank
+     * iso is a no-op — an unresolvable MSISDN or a legacy token with no
+     * {@code homeCountry} claim is not a wrong-cell signal.
+     *
+     * <p>Takes a plain nullable {@code String}, not an {@link java.util.Optional}
+     * — Optional is a return type, not a parameter type.
+     */
+    private void verify(String iso, String contextForLog) {
+        if (iso == null || iso.isBlank()) return;
+        String normalised = iso.trim().toUpperCase();
+        if (normalised.equalsIgnoreCase(deploymentCountry)) return;
+        String homeUrl = registry.baseUrlFor(normalised).orElse(null);
+        log.info("[cells] wrong-cell on {} ({}): home={} redirect={}",
+                deploymentCountry, contextForLog, normalised, homeUrl == null ? "<unknown>" : homeUrl);
+        throw new WrongCellException(normalised, homeUrl);
     }
 
     public String deploymentCountry() {
