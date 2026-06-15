@@ -59,12 +59,21 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
-    void handleDependencyUnavailable_returns503WithMessage() {
+    void handleDependencyUnavailable_returns503_withGenericMessage_doesNotLeakDependencyName() {
+        // The raw exception text names the failing internal dependency
+        // ("event-service down") — useful in logs, but it must NOT reach the
+        // customer. The handler returns a generic 503 message instead; the
+        // raw text is logged, not surfaced.
         ResponseEntity<ApiResult<Void>> resp = new GlobalExceptionHandler()
                 .handleDependencyUnavailable(new DependencyUnavailableException("event-service down"));
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, resp.getStatusCode());
         assertNotNull(resp.getBody());
-        assertEquals("event-service down", resp.getBody().getMessage());
+        assertEquals("We're having trouble reaching part of the system right now. Please try again in a moment.",
+                resp.getBody().getMessage());
+        // Guard against a future regression that re-introduces the passthrough leak.
+        org.junit.jupiter.api.Assertions.assertFalse(
+                resp.getBody().getMessage().contains("event-service"),
+                "503 body must not leak the internal dependency name");
     }
 
     @Test
