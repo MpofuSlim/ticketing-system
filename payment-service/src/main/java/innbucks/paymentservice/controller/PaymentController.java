@@ -80,6 +80,11 @@ public class PaymentController {
     /** PENDING rows older than this with no code are crash leftovers, not in-flight requests. */
     private static final java.time.Duration PENDING_REPLAY_GRACE = java.time.Duration.ofSeconds(30);
 
+    /** This deployment's currency (cell config) — defensive fallback only; the
+     *  service always stamps the outcome's currency. Per-cell, never hardcoded USD. */
+    @org.springframework.beans.factory.annotation.Value("${innbucks.currency:USD}")
+    private String cellCurrency;
+
     private final InnbucksPaymentService innbucksPaymentService;
     private final PaymentRecordService paymentRecordService;
     private final PaymentRepository paymentRepository;
@@ -309,8 +314,8 @@ public class PaymentController {
                 .bookingId(outcome.getBookingId())
                 .status(status)
                 .amountPaid(outcome.getAmountPaid())
-                // Currency is always the booking's — never client-supplied.
-                .currency(outcome.getCurrency() != null ? outcome.getCurrency() : "USD")
+                // Currency is always the booking/cell's — never client-supplied.
+                .currency(outcome.getCurrency() != null ? outcome.getCurrency() : cellCurrency)
                 .confirmationNumber(outcome.getConfirmationNumber())
                 .processedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .paymentCode(outcome.getPaymentCode())

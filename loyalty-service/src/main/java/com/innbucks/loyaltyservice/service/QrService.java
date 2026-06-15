@@ -26,6 +26,10 @@ public class QrService {
     private final CryptoSigner signer;
     private final int defaultTtl;
 
+    @org.springframework.beans.factory.annotation.Value("${innbucks.currency:USD}")
+    private String cellCurrency;
+
+
     public QrService(QrTokenRepository qrs, TransactionService transactionService,
                      TransferService transferService, FraudService fraud,
                      LoyaltyProperties props) {
@@ -44,7 +48,7 @@ public class QrService {
         q.setSourceId(req.sourceId());
         q.setTransactionType(req.transactionType());
         q.setAmount(req.amount());
-        if (req.currency() != null) q.setCurrency(req.currency());
+        q.setCurrency(req.currency() != null ? req.currency() : cellCurrency);
         int ttl = req.ttlSeconds() == null ? defaultTtl : Math.max(30, req.ttlSeconds());
         q.setExpiresAt(Instant.now().plusSeconds(ttl));
         q.setToken(CryptoSigner.randomToken(24));

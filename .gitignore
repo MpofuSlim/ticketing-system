@@ -40,3 +40,9 @@ build/
 
 ### H2 file-mode databases created by tests / local runs ###
 **/data/
+
+# Multi-cell deploy: real secrets per cell. The committed deploy/cells/cell.<iso>.env
+# holds non-secret defaults; the operator drops actual passwords / JWT secrets
+# / API keys in deploy/cells/cell.<iso>.local.env on the host, never in git.
+# See deploy/README.md for the layered-config workflow.
+deploy/cells/*.local.env

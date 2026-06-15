@@ -24,6 +24,10 @@ public class MerchantService {
     private final MerchantRepository merchants;
     private final UserServiceClient userServiceClient;
 
+    @org.springframework.beans.factory.annotation.Value("${innbucks.currency:USD}")
+    private String cellCurrency;
+
+
     public MerchantService(MerchantRepository merchants, UserServiceClient userServiceClient) {
         this.merchants = merchants;
         this.userServiceClient = userServiceClient;
@@ -34,7 +38,9 @@ public class MerchantService {
         m.setTenantId(tenantId);
         m.setName(req.name());
         m.setCategory(req.category());
-        if (req.currency() != null) m.setCurrency(req.currency());
+        // Default to this cell's currency (ZW=USD, KE=KES) — was a hardcoded
+        // "USD" entity default that mislabelled every KE merchant.
+        m.setCurrency(req.currency() != null ? req.currency() : cellCurrency);
         if (req.billingCycle() != null) m.setBillingCycle(req.billingCycle());
         applyFeeIssued(m, req.feeIssued());
         applyFeeRedeemed(m, req.feeRedeemed());

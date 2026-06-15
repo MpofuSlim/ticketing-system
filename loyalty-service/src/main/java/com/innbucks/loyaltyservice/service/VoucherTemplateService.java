@@ -37,7 +37,10 @@ public class VoucherTemplateService {
         t.setName(req.name());
         t.setType(req.type());
         t.setValueType(req.valueType());
-        if (req.currency() != null) t.setCurrency(req.currency());
+        // Inherit the merchant's currency when the template doesn't override it
+        // (was a hardcoded "USD" entity default).
+        t.setCurrency(req.currency() != null ? req.currency()
+                : merchants.requireMerchant(tenantId, merchantId).getCurrency());
         t.setFreeItemSku(req.freeItemSku());
         t.setUsageLimit(req.usageLimit());
         t.setValidityDays(req.validityDays());

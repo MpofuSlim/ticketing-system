@@ -55,7 +55,7 @@ class BookingConfirmedNotificationListenerTest {
         lenient().when(events.getEvent(any()))
                 .thenReturn(ApiResult.ok(EventLookupDTO.builder().title("InnBucks Gala 2026").build()));
         BookingConfirmedNotificationListener listener =
-                new BookingConfirmedNotificationListener(repo, wa, sms, email, rendering, events, BASE);
+                new BookingConfirmedNotificationListener(repo, wa, sms, email, rendering, events, BASE, "ZW");
         return new Mocks(repo, wa, sms, email, rendering, events, listener);
     }
 
@@ -281,5 +281,85 @@ class BookingConfirmedNotificationListenerTest {
                 bookingId, "gone@example.com", "INN-MISSING", Instant.now()));
 
         verifyNoInteractions(m.wa(), m.sms(), m.email());
+    }
+
+    // ---------------- country-aware phone routing (the OTP guard, ported) ----------------
+
+    private static BookingConfirmedNotificationListener listenerFor(Mocks m, String deploymentCountry) {
+        return new BookingConfirmedNotificationListener(
+                m.repo(), m.wa(), m.sms(), m.email(), m.rendering(), m.events(), BASE, deploymentCountry);
+    }
+
+    @Test
+    void foreignMsisdn_onZwDeployment_routesToWhatsAppOnly_neverFallsBackToSms() {
+        Mocks m = mocks();
+        // A Kenyan number on a ZW deployment: SMS gateway is ZW-only and
+        // would silently drop the message after a fake 2xx.
+        Booking b = bookingFixture("+254712345678", "rufaro@example.com", 1);
+        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+
+        listenerFor(m, "ZW").onBookingConfirmed(eventFor(b));
+
+        verify(m.wa()).sendCustomNotification(eq("+254712345678"), anyString());
+        // CRITICAL: SMS must NOT be attempted, success OR failure path.
+        verifyNoInteractions(m.sms());
+    }
+
+    @Test
+    void foreignMsisdn_whatsAppFails_doesNotFallBackToSms_exhaustsCleanly() {
+        Mocks m = mocks();
+        Booking b = bookingFixture("+254712345678", null, 1);
+        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+        doThrow(new NotificationDeliveryException("wa down"))
+                .when(m.wa()).sendCustomNotification(anyString(), anyString());
+
+        assertThatCode(() -> listenerFor(m, "ZW").onBookingConfirmed(eventFor(b))).doesNotThrowAnyException();
+
+        verify(m.wa()).sendCustomNotification(eq("+254712345678"), anyString());
+        // SMS would be silently dropped by the ZW gateway — better to not
+        // attempt it and emit a clear "delivery exhausted" log.
+        verifyNoInteractions(m.sms());
+    }
+
+    @Test
+    void domesticMsisdn_keepsTheWhatsAppToSmsFallback() {
+        Mocks m = mocks();
+        // ZW number on a ZW deployment: SMS fallback still applies.
+        Booking b = bookingFixture("+263771234567", null, 1);
+        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+        doThrow(new NotificationDeliveryException("wa down"))
+                .when(m.wa()).sendCustomNotification(anyString(), anyString());
+
+        listenerFor(m, "ZW").onBookingConfirmed(eventFor(b));
+
+        verify(m.wa()).sendCustomNotification(eq("+263771234567"), anyString());
+        verify(m.sms()).sendSms(eq("+263771234567"), anyString(), startsWith("BOOKING-CONFIRM-"));
+    }
+
+    @Test
+    void unresolvableMsisdn_isTreatedAsForeign_noSmsAttempt() {
+        Mocks m = mocks();
+        // Unknown prefix (+44 = UK, not in the InnBucks markets table) is
+        // safer-as-foreign — claiming a successful SMS the gateway dropped
+        // is worse than skipping SMS.
+        Booking b = bookingFixture("+447700900123", null, 1);
+        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+
+        listenerFor(m, "ZW").onBookingConfirmed(eventFor(b));
+
+        verify(m.wa()).sendCustomNotification(eq("+447700900123"), anyString());
+        verifyNoInteractions(m.sms());
+    }
+
+    @Test
+    void onKeDeployment_zwNumberIsForeign_routesToWhatsAppOnly() {
+        Mocks m = mocks();
+        Booking b = bookingFixture("+263771234567", null, 1);
+        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+
+        listenerFor(m, "KE").onBookingConfirmed(eventFor(b));
+
+        verify(m.wa()).sendCustomNotification(eq("+263771234567"), anyString());
+        verifyNoInteractions(m.sms());
     }
 }
