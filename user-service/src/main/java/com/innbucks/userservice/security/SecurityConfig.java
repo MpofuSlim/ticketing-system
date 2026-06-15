@@ -50,6 +50,10 @@ public class SecurityConfig {
                         .requestMatchers("/users/internal/**").permitAll()
                         // Public auth endpoints
                         .requestMatchers("/auth/**").permitAll()
+                        // Public cell-lookup (step 7 — the mobile app calls
+                        // /cells/lookup at signup/first login to learn which
+                        // cell hosts its MSISDN). No auth, no PII echoed.
+                        .requestMatchers("/cells/**").permitAll()
                         // Swagger UI
                         .requestMatchers("/swagger-ui/**").permitAll()
                         .requestMatchers("/swagger-ui.html").permitAll()

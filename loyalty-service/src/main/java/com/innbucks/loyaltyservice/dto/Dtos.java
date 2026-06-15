@@ -51,7 +51,7 @@ public class Dtos {
             @NotBlank String name,
             @Schema(example = "Coffee", nullable = true, description = "Business category (e.g. Coffee, Grocery, Fuel).")
             String category,
-            @Schema(example = "USD", nullable = true, description = "ISO 4217 currency code. Defaults to USD.")
+            @Schema(example = "USD", nullable = true, description = "ISO 4217 currency code. Defaults to this cell's currency (ZW=USD, KE=KES) when omitted.")
             String currency,
             @Schema(example = "MONTHLY", allowableValues = {"WEEKLY", "MONTHLY"})
             Merchant.BillingCycle billingCycle,
@@ -206,7 +206,7 @@ public class Dtos {
             @NotNull TransactionType type,
             @Schema(example = "100.00", nullable = true, description = "Transaction amount in the merchant's currency.")
             BigDecimal amount,
-            @Schema(example = "USD", nullable = true)
+            @Schema(example = "USD", nullable = true, description = "ISO 4217 currency code; defaults to the merchant's currency when omitted.")
             String currency,
             @Schema(example = "POS-20260504-0001", nullable = true, description = "External reference — must be unique per merchant to prevent duplicates.")
             String reference
@@ -263,7 +263,7 @@ public class Dtos {
                     description = "Shape of the discount the template represents. The numeric value " +
                                   "(e.g. $5, 10%) is supplied per issuance in IssueVoucherRequest.value.")
             @NotNull VoucherTemplate.ValueType valueType,
-            @Schema(example = "USD", nullable = true)
+            @Schema(example = "USD", nullable = true, description = "ISO 4217 currency code; defaults to the merchant's currency when omitted.")
             String currency,
             @Schema(example = "COFFEE-001", nullable = true, description = "SKU of the free item (FREE_ITEM type only).")
             String freeItemSku,
@@ -367,7 +367,7 @@ public class Dtos {
             @NotNull TransactionType transactionType,
             @Schema(example = "50.00", nullable = true, description = "Pre-encoded amount (optional — for fixed-amount QRs).")
             BigDecimal amount,
-            @Schema(example = "USD", nullable = true)
+            @Schema(example = "USD", nullable = true, description = "ISO 4217 currency code; defaults to the merchant's currency when omitted.")
             String currency,
             @Schema(example = "300", nullable = true, description = "Token TTL in seconds. Defaults to 300 (5 minutes).")
             Integer ttlSeconds

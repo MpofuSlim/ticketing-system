@@ -9,8 +9,10 @@ import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.test.util.ReflectionTestUtils;
+import com.innbucks.userservice.cells.CellAffinityChecker;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
@@ -31,7 +33,11 @@ class JwtFilterTest {
         // single-session gate don't have to stub it — the dedicated test
         // for SESSION_SUPERSEDED overrides this to false.
         when(tokenRevocationService.isTokenVersionCurrent(anyString(), anyLong())).thenReturn(true);
-        filter = new JwtFilter(jwtUtil, tokenRevocationService);
+        // CellAffinityChecker no-op mock — these tests cover the auth / session
+        // paths, not cell routing (CellAffinityCheckerTest does that). Default
+        // doNothing() means every token looks like a local-cell token.
+        CellAffinityChecker affinity = mock(CellAffinityChecker.class);
+        filter = new JwtFilter(jwtUtil, tokenRevocationService, affinity);
         SecurityContextHolder.clearContext();
     }
 
@@ -167,6 +173,33 @@ class JwtFilterTest {
         assertEquals(401, res.getStatus());
         assertTrue(res.getContentAsString().contains("SESSION_SUPERSEDED"),
                 "response must surface SESSION_SUPERSEDED so FE can distinguish from INVALID_TOKEN / TOKEN_REVOKED");
+        verify(chain, never()).doFilter(req, res);
+    }
+
+    @Test
+    void wrongCellJwt_writes409WithHomeCountryAndUrl_clearsSecurityContext() throws Exception {
+        // Stub the affinity check to throw a typed WrongCellException with the
+        // home URL set. Asserts the writer shape (FE-facing JSON contract) and
+        // that the SecurityContext is cleared so a foreign JWT can never act
+        // on this cell.
+        var throwingAffinity = mock(com.innbucks.userservice.cells.CellAffinityChecker.class);
+        doThrow(new com.innbucks.userservice.cells.WrongCellException("KE", "https://api-ke.innbucks.com"))
+                .when(throwingAffinity).requireDomesticCountry(any());
+        var spyFilter = new JwtFilter(jwtUtil, tokenRevocationService, throwingAffinity);
+
+        String token = jwtUtil.generateToken("user@example.com", "CUSTOMER", 1, true);
+        MockHttpServletRequest req = new MockHttpServletRequest("GET", "/customers/me");
+        req.addHeader("Authorization", "Bearer " + token);
+        MockHttpServletResponse res = new MockHttpServletResponse();
+        FilterChain chain = mock(FilterChain.class);
+
+        spyFilter.doFilterInternal(req, res, chain);
+
+        assertEquals(409, res.getStatus());
+        assertTrue(res.getContentAsString().contains("wrong_cell"));
+        assertTrue(res.getContentAsString().contains("\"homeCountry\":\"KE\""));
+        assertTrue(res.getContentAsString().contains("\"homeBaseUrl\":\"https://api-ke.innbucks.com\""));
+        assertNull(SecurityContextHolder.getContext().getAuthentication());
         verify(chain, never()).doFilter(req, res);
     }
 }

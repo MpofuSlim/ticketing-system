@@ -9,6 +9,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 import java.util.Set;
@@ -205,5 +206,36 @@ class MerchantServiceTest {
         assertThat(resp.feeIssued().type()).isEqualTo(Merchant.FeeType.FIXED);
         assertThat(resp.feeIssued().fixed()).isEqualByComparingTo("0");
         assertThat(resp.feeIssued().percentage()).isEqualByComparingTo("0");
+    }
+
+    // --- per-cell currency default (ZW=USD, KE=KES) ---------------------------
+
+    @Test
+    void create_nullCurrency_defaultsToCellCurrency_notHardcodedUsd() {
+        MerchantRepository repo = mock(MerchantRepository.class);
+        when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
+        MerchantService svc = newService(repo);
+        // KE cell: a merchant created without an explicit currency must inherit KES.
+        ReflectionTestUtils.setField(svc, "cellCurrency", "KES");
+
+        Dtos.MerchantRequest noCurrency = new Dtos.MerchantRequest(
+                "Nairobi Cafe", "F&B", null, Merchant.BillingCycle.MONTHLY, null, null);
+        Dtos.MerchantResponse resp = svc.create(UUID.randomUUID(), noCurrency);
+
+        assertThat(resp.currency()).isEqualTo("KES");
+    }
+
+    @Test
+    void create_explicitCurrency_winsOverCellDefault() {
+        MerchantRepository repo = mock(MerchantRepository.class);
+        when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
+        MerchantService svc = newService(repo);
+        ReflectionTestUtils.setField(svc, "cellCurrency", "KES");
+
+        Dtos.MerchantRequest usd = new Dtos.MerchantRequest(
+                "USD Merchant", "F&B", "USD", Merchant.BillingCycle.MONTHLY, null, null);
+        Dtos.MerchantResponse resp = svc.create(UUID.randomUUID(), usd);
+
+        assertThat(resp.currency()).isEqualTo("USD");
     }
 }

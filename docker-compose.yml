@@ -144,6 +144,13 @@ services:
     mem_reservation: 320m
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
+      # Multi-cell country pin (ISO 3166-1 alpha-2). Read at boot by every
+      # reactor service's CountryMdcConfig and validated against the
+      # InnBucks markets allowlist; ignored by infra services (discovery,
+      # gateway). Sourced from deploy/cells/cell.<iso>.env via cell.sh —
+      # required so a missing cell file fails fast rather than silently
+      # boots in the wrong country.
+      INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
       # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
       # external OTel collector (none is bundled in this stack) to export spans.
@@ -187,6 +194,21 @@ services:
       # sensitive secret still holds its `change-me-*` placeholder.
       # Override per-environment in .env to relax (e.g. `dev` for local).
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
+      # Multi-cell country pin (ISO 3166-1 alpha-2). Read at boot by every
+      # reactor service's CountryMdcConfig and validated against the
+      # InnBucks markets allowlist; ignored by infra services (discovery,
+      # gateway). Sourced from deploy/cells/cell.<iso>.env via cell.sh —
+      # required so a missing cell file fails fast rather than silently
+      # boots in the wrong country.
+      INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
+      # Step 7 — cell registry (ISO 3166-1 alpha-2 -> public base URL), JSON.
+      # ONLY user-service reads it: it holds the CellRegistry bean + the public
+      # /cells/lookup endpoint, and emits homeBaseUrl in 409 wrong_cell. Other
+      # services' JwtFilters reject wrong-cell JWTs by country alone (no URL),
+      # so they don't need it. Quoted so YAML doesn't read the braces as a flow
+      # mapping. Empty default ({}) is legal — single-cell still gets a 409 with
+      # the home country, just no redirect URL.
+      INNBUCKS_CELLS_REGISTRY: "${INNBUCKS_CELLS_REGISTRY:-{}}"
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
       # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
       # external OTel collector (none is bundled in this stack) to export spans.
@@ -266,6 +288,13 @@ services:
         condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
+      # Multi-cell country pin (ISO 3166-1 alpha-2). Read at boot by every
+      # reactor service's CountryMdcConfig and validated against the
+      # InnBucks markets allowlist; ignored by infra services (discovery,
+      # gateway). Sourced from deploy/cells/cell.<iso>.env via cell.sh —
+      # required so a missing cell file fails fast rather than silently
+      # boots in the wrong country.
+      INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
       # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
       # external OTel collector (none is bundled in this stack) to export spans.
@@ -311,6 +340,13 @@ services:
         condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
+      # Multi-cell country pin (ISO 3166-1 alpha-2). Read at boot by every
+      # reactor service's CountryMdcConfig and validated against the
+      # InnBucks markets allowlist; ignored by infra services (discovery,
+      # gateway). Sourced from deploy/cells/cell.<iso>.env via cell.sh —
+      # required so a missing cell file fails fast rather than silently
+      # boots in the wrong country.
+      INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
       # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
       # external OTel collector (none is bundled in this stack) to export spans.
@@ -358,6 +394,13 @@ services:
         condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
+      # Multi-cell country pin (ISO 3166-1 alpha-2). Read at boot by every
+      # reactor service's CountryMdcConfig and validated against the
+      # InnBucks markets allowlist; ignored by infra services (discovery,
+      # gateway). Sourced from deploy/cells/cell.<iso>.env via cell.sh —
+      # required so a missing cell file fails fast rather than silently
+      # boots in the wrong country.
+      INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
       # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
       # external OTel collector (none is bundled in this stack) to export spans.
@@ -438,6 +481,14 @@ services:
         condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
+      # Multi-cell country pin (ISO 3166-1 alpha-2). Read at boot by every
+      # reactor service's CountryMdcConfig and validated against the
+      # InnBucks markets allowlist; ignored by infra services (discovery,
+      # gateway). Sourced from deploy/cells/cell.<iso>.env via cell.sh —
+      # required so a missing cell file fails fast rather than silently
+      # boots in the wrong country.
+      INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
+      INNBUCKS_CURRENCY: ${INNBUCKS_CURRENCY:-USD}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
       # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
       # external OTel collector (none is bundled in this stack) to export spans.
@@ -524,6 +575,14 @@ services:
         condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
+      # Multi-cell country pin (ISO 3166-1 alpha-2). Read at boot by every
+      # reactor service's CountryMdcConfig and validated against the
+      # InnBucks markets allowlist; ignored by infra services (discovery,
+      # gateway). Sourced from deploy/cells/cell.<iso>.env via cell.sh —
+      # required so a missing cell file fails fast rather than silently
+      # boots in the wrong country.
+      INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
+      INNBUCKS_CURRENCY: ${INNBUCKS_CURRENCY:-USD}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
       # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
       # external OTel collector (none is bundled in this stack) to export spans.
@@ -580,6 +639,13 @@ services:
         condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
+      # Multi-cell country pin (ISO 3166-1 alpha-2). Read at boot by every
+      # reactor service's CountryMdcConfig and validated against the
+      # InnBucks markets allowlist; ignored by infra services (discovery,
+      # gateway). Sourced from deploy/cells/cell.<iso>.env via cell.sh —
+      # required so a missing cell file fails fast rather than silently
+      # boots in the wrong country.
+      INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
       # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
       # external OTel collector (none is bundled in this stack) to export spans.

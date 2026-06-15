@@ -1,5 +1,6 @@
 package com.innbucks.userservice.controller;
 
+import com.innbucks.userservice.cells.CellAffinityChecker;
 import com.innbucks.userservice.client.DepositAccount;
 import com.innbucks.userservice.util.MsisdnMasking;
 import com.innbucks.userservice.dto.*;
@@ -40,6 +41,7 @@ public class AuthController {
     private final CustomerService customerService;
     private final TokenRevocationService tokenRevocationService;
     private final OtpService otpService;
+    private final CellAffinityChecker cellAffinityChecker;
     private final JwtUtil jwtUtil;
     private final LoginRateLimiter loginRateLimiter;
     private final AuditService auditService;
@@ -102,6 +104,7 @@ public class AuthController {
                     }))
     })
     public ResponseEntity<ApiResult<AuthResponseDTO>> register(@Valid @RequestBody RegisterRequestDTO request) {
+        cellAffinityChecker.requireDomesticMsisdn(request.getPhoneNumber());
         log.info("Received registration request email={}", request.getEmail());
         AuthResponseDTO response = authService.register(request);
         log.info("Registration submitted, pending approval email={}", request.getEmail());
@@ -203,6 +206,10 @@ public class AuthController {
             HttpServletRequest httpRequest,
             @Valid @RequestBody LoginRequestDTO request,
             @RequestHeader(value = "X-Device-Id", required = false) String deviceId) {
+        // Affinity check FIRST — drop wrong-cell calls before the Redis rate
+        // limiter hit. Email identifiers fall through (we can't resolve a
+        // country from an email); JWT affinity catches them post-auth.
+        cellAffinityChecker.requireDomesticIfMsisdn(request.getIdentifier());
         loginRateLimiter.checkLogin(request.getIdentifier(), clientIp(httpRequest));
         log.info("Received login request identifier={} hasDeviceId={}",
                 request.getIdentifier(), deviceId != null && !deviceId.isBlank());
@@ -508,6 +515,7 @@ public class AuthController {
                             """))))
     public ResponseEntity<ApiResult<CustomerRegistrationResponseDTO>> customerTier1(
             @Valid @RequestBody CustomerTier1RegisterDTO request) {
+        cellAffinityChecker.requireDomesticMsisdn(request.getPhoneNumber());
         CustomerRegistrationResponseDTO response = customerService.registerTier1(request);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Customer tier 1 registration successful", response));
@@ -800,6 +808,7 @@ public class AuthController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429", description = "Retry quota exceeded — try again after the lockout expires")
     })
     public ResponseEntity<ApiResult<Void>> requestOtp(@Valid @RequestBody OtpRequestDTO request) {
+        cellAffinityChecker.requireDomesticMsisdn(request.getPhoneNumber());
         log.info("OTP request phone={}", MsisdnMasking.mask(request.getPhoneNumber()));
         try {
             otpService.sendOtp(request.getPhoneNumber());
