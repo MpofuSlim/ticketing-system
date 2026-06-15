@@ -232,7 +232,7 @@ public class VoucherService {
             fraud.record(tenantId, req.userId(), merchantId, req.code(),
                     FraudAttempt.Reason.BAD_SIGNATURE, "tampered signature",
                     req.deviceFingerprint(), req.ipAddress());
-            throw LoyaltyException.forbidden("BAD_SIGNATURE", "voucher signature invalid");
+            throw LoyaltyException.forbidden("BAD_SIGNATURE", "This voucher couldn't be verified — its signature is invalid.");
         }
 
         if (v.getExpiresAt() != null && Instant.now().isAfter(v.getExpiresAt())) {
@@ -241,7 +241,7 @@ public class VoucherService {
             fraud.record(tenantId, req.userId(), merchantId, v.getCode(),
                     FraudAttempt.Reason.EXPIRED, "redemption after expiry",
                     req.deviceFingerprint(), req.ipAddress());
-            throw LoyaltyException.badRequest("EXPIRED", "voucher has expired");
+            throw LoyaltyException.badRequest("EXPIRED", "This voucher has expired.");
         }
 
         if (v.getStatus() == Voucher.Status.REDEEMED || v.getUsesRemaining() <= 0) {
@@ -249,11 +249,11 @@ public class VoucherService {
             fraud.record(tenantId, req.userId(), merchantId, v.getCode(),
                     FraudAttempt.Reason.ALREADY_REDEEMED, "duplicate redemption attempt",
                     req.deviceFingerprint(), req.ipAddress());
-            throw LoyaltyException.conflict("ALREADY_REDEEMED", "voucher already fully redeemed");
+            throw LoyaltyException.conflict("ALREADY_REDEEMED", "This voucher has already been fully redeemed.");
         }
         if (v.getStatus() == Voucher.Status.REVOKED) {
             recordRedemption(v, merchantId, req, VoucherRedemption.Result.REJECTED, "revoked");
-            throw LoyaltyException.conflict("REVOKED", "voucher has been revoked");
+            throw LoyaltyException.conflict("REVOKED", "This voucher is no longer valid.");
         }
 
         if (v.getMerchantId() != null && !v.getMerchantId().equals(merchantId)) {
@@ -261,7 +261,7 @@ public class VoucherService {
                     FraudAttempt.Reason.WRONG_MERCHANT,
                     "expected " + v.getMerchantId() + " got " + merchantId,
                     req.deviceFingerprint(), req.ipAddress());
-            throw LoyaltyException.forbidden("WRONG_MERCHANT", "voucher not redeemable at this merchant");
+            throw LoyaltyException.forbidden("WRONG_MERCHANT", "This voucher can't be redeemed at this shop.");
         }
 
         if (req.userId() != null) {
@@ -271,7 +271,7 @@ public class VoucherService {
                 fraud.record(tenantId, req.userId(), merchantId, v.getCode(),
                         FraudAttempt.Reason.BLOCKED_USER, "blocked user attempted redemption",
                         req.deviceFingerprint(), req.ipAddress());
-                throw LoyaltyException.forbidden("USER_BLOCKED", "user is blocked");
+                throw LoyaltyException.forbidden("USER_BLOCKED", "Your account is currently suspended. Please contact support.");
             }
             // PENDING means the recipient hasn't registered yet — they can hold
             // the voucher but not redeem it. The "promote" webhook flips them

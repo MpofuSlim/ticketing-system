@@ -71,7 +71,7 @@ public class WalletService {
         }
         BigDecimal newBalance = w.getBalance().add(delta);
         if (newBalance.signum() < 0) {
-            throw LoyaltyException.badRequest("INSUFFICIENT_FUNDS", "wallet balance would go negative");
+            throw LoyaltyException.badRequest("INSUFFICIENT_FUNDS", "You don't have enough loyalty points for this.");
         }
         w.setBalance(newBalance);
 

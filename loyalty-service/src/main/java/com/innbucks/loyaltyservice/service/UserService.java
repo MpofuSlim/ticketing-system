@@ -104,8 +104,8 @@ public class UserService {
             case ACTIVE -> { /* ok */ }
             case PENDING -> throw LoyaltyException.forbidden("USER_PENDING",
                     "user has not completed registration; balance can be received but not spent");
-            case BLOCKED -> throw LoyaltyException.forbidden("USER_BLOCKED", "user is blocked");
-            case INACTIVE -> throw LoyaltyException.forbidden("USER_INACTIVE", "user is inactive");
+            case BLOCKED -> throw LoyaltyException.forbidden("USER_BLOCKED", "Your account is currently suspended. Please contact support.");
+            case INACTIVE -> throw LoyaltyException.forbidden("USER_INACTIVE", "Your account is inactive. Please contact support to reactivate it.");
         }
     }
 
@@ -178,7 +178,7 @@ public class UserService {
      */
     public int promoteByPhone(String phoneNumber) {
         if (phoneNumber == null || phoneNumber.isBlank()) {
-            throw LoyaltyException.badRequest("BAD_PHONE", "phoneNumber required");
+            throw LoyaltyException.badRequest("BAD_PHONE", "Please provide your phone number.");
         }
         List<LoyaltyUser> matches = users.findByPhoneNumber(phoneNumber);
         int promoted = 0;

@@ -33,7 +33,7 @@ public class TransferService {
 
     public BigDecimal transfer(UUID tenantId, Dtos.TransferRequest req) {
         if (req.points() == null || req.points().signum() <= 0) {
-            throw LoyaltyException.badRequest("BAD_AMOUNT", "points must be positive");
+            throw LoyaltyException.badRequest("BAD_AMOUNT", "Please enter an amount greater than zero.");
         }
         // Recipient may be a UUID (registered) or a phone (auto-enrol as PENDING).
         boolean hasToUserId = req.toUserId() != null;
@@ -56,7 +56,7 @@ public class TransferService {
                 : users.findOrCreatePending(tenantId, req.toPhone(), sender.getMerchantId());
 
         if (sender.getId().equals(recipient.getId())) {
-            throw LoyaltyException.badRequest("SELF_TRANSFER", "cannot transfer to yourself");
+            throw LoyaltyException.badRequest("SELF_TRANSFER", "You can't transfer points to yourself.");
         }
 
         UUID merchantContext = sender.getMerchantId() != null
