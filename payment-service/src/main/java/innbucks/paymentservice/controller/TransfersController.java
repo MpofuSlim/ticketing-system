@@ -715,7 +715,7 @@ public class TransfersController {
         try {
             parsed = new BigDecimal(amount);
         } catch (NumberFormatException ex) {
-            throw new BadRequestException("Please enter a valid amount.");
+            throw new BadRequestException("Please enter a valid decimal amount.");
         }
         if (parsed.signum() <= 0) {
             throw new BadRequestException("Amount must be greater than zero.");

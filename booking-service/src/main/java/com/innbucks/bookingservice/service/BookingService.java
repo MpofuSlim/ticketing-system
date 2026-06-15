@@ -150,7 +150,8 @@ public class BookingService {
                 log.warn("Booking rejected, category does not belong to event userEmail={} categoryId={} requestEventId={} actualEventId={}",
                         userEmail, categoryId, request.getEventId(), category.getEventId());
                 throw new BadRequestException(
-                        "This ticket category doesn't belong to the selected event.");
+                        "This ticket category does not belong to event '"
+                                + request.getEventId() + "'. Please pick a category for the right event.");
             }
             categoryById.put(categoryId, category);
         }
@@ -507,13 +508,13 @@ public class BookingService {
         if (booking.getStatus() == Booking.BookingStatus.CONFIRMED) {
             log.warn("Cancel rejected, booking already confirmed bookingId={}", bookingId);
             throw new BookingConflictException(
-                    "We can't cancel this booking — payment has already been processed. Please contact support if you need a refund."
+                    "We can't cancel this confirmed booking — payment has already been processed. Please contact support if you need a refund."
             );
         }
 
         if (booking.getStatus() == Booking.BookingStatus.CANCELLED) {
             log.warn("Cancel rejected, booking already cancelled bookingId={}", bookingId);
-            throw new BookingConflictException("This booking has already been cancelled.");
+            throw new BookingConflictException("This booking is already cancelled.");
         }
 
         booking.setStatus(Booking.BookingStatus.CANCELLED);
@@ -560,7 +561,7 @@ public class BookingService {
             log.warn("Reverse rejected, booking not confirmed bookingId={} status={}",
                     bookingId, booking.getStatus());
             throw new BookingConflictException(
-                    "This booking can't be reversed at its current stage. Only confirmed bookings can be reversed.");
+                    "This booking can't be reversed at its current stage. Only CONFIRMED bookings can be reversed.");
         }
 
         if (!booking.isAvailabilityReleased()) {
@@ -681,7 +682,7 @@ public class BookingService {
         if (booking.getStatus() != Booking.BookingStatus.PENDING) {
             log.warn("Confirm rejected, booking not pending bookingId={} status={}",
                     bookingId, booking.getStatus());
-            throw new BookingConflictException("This booking can't be confirmed at its current stage.");
+            throw new BookingConflictException("Only pending bookings can be confirmed — this one isn't in that state.");
         }
 
         // Reject confirms that arrive after the seat hold has lapsed — the
