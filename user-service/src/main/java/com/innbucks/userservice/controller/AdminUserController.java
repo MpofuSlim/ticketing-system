@@ -44,15 +44,19 @@ public class AdminUserController {
     @GetMapping
     @PreAuthorize("hasRole('SUPER_ADMIN')")
     @Operation(
-            summary = "List system users (no customers)",
+            summary = "List system users (no customers, no SUPER_ADMIN)",
             description = "Returns user accounts for the SUPER_ADMIN portal: every role **except CUSTOMER** " +
-                    "by default. Customers are the wallet-holding end-users of the super-app and are managed " +
-                    "via the customer-facing surface (`/auth/customer/**`), not the admin portal — listing " +
-                    "them here would drown the page in millions of rows.\n\n" +
+                    "by default, and **SUPER_ADMIN is always excluded** regardless of the other filters. " +
+                    "Customers are the wallet-holding end-users of the super-app and are managed via the " +
+                    "customer-facing surface (`/auth/customer/**`), not the admin portal — listing them " +
+                    "here would drown the page in millions of rows. SUPER_ADMIN is the platform-owner " +
+                    "account (seeded once via BOOTSTRAP_ADMIN_PASSWORD); it isn't a user under admin " +
+                    "management and never appears in any listing.\n\n" +
                     "Pass `?active=true` for approved/active accounts, `?active=false` for pending/inactive " +
                     "accounts. Omit to return all status values.\n\n" +
-                    "Pass `?includeCustomers=true` to opt back in to the full population (e.g. for support " +
-                    "triage). Defaults to `false`. Requires **SUPER_ADMIN** role."
+                    "Pass `?includeCustomers=true` to opt back in to the customer population (e.g. for " +
+                    "support triage) — SUPER_ADMIN stays excluded even then. Defaults to `false`. " +
+                    "Requires **SUPER_ADMIN** role."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -92,7 +96,13 @@ public class AdminUserController {
                     : userRepository.findAllExcludingRole(User.Role.CUSTOMER);
         }
 
+        // SUPER_ADMIN never appears in any listing — it's the platform-owner
+        // account, not a user under admin management. Filtered in-memory: a
+        // cell has 1 SUPER_ADMIN row (BOOTSTRAP_ADMIN_PASSWORD-seeded), so
+        // adding a 3rd exclusion variant of the repository query isn't worth
+        // the surface — the row count makes the filter free.
         List<UserResponseDTO> body = users.stream()
+                .filter(u -> !u.hasRole(User.Role.SUPER_ADMIN))
                 .map(UserResponseDTO::from)
                 .collect(Collectors.toList());
 
@@ -215,7 +225,12 @@ public class AdminUserController {
                     "assigned a randomly-generated one-time temporary password, flagged to change it on first " +
                     "login, and the password is delivered to the user over email/SMS/WhatsApp. Subsequent " +
                     "deactivate/reactivate toggles never reset the password. If the delivery fails, re-issue " +
-                    "the password via `POST /admin/users/{id}/reset-temp-password`. Requires **SUPER_ADMIN** role."
+                    "the password via `POST /admin/users/{id}/reset-temp-password`.\n\n" +
+                    "**Refuses to act on a SUPER_ADMIN target** — disabling the platform-owner account would " +
+                    "lock the platform out of itself, and reactivating it requires a SUPER_ADMIN, so no caller " +
+                    "is ever permitted to toggle it. The SUPER_ADMIN's `active` state is fixed at seed time " +
+                    "(BOOTSTRAP_ADMIN_PASSWORD).\n\n" +
+                    "Requires **SUPER_ADMIN** role."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -237,7 +252,16 @@ public class AdminUserController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "User not found"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Caller is not a SUPER_ADMIN")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "Caller is not a SUPER_ADMIN, OR target IS a SUPER_ADMIN (always protected)",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "403 FORBIDDEN",
+                                      "message": "The SUPER_ADMIN account cannot be activated or deactivated.",
+                                      "data": null
+                                    }
+                                    """)))
     })
     public ResponseEntity<ApiResult<UserResponseDTO>> updateActiveStatus(
             @PathVariable Long id,
