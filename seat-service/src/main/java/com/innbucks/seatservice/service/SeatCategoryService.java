@@ -73,8 +73,8 @@ public class SeatCategoryService {
         if (totalSeatsLong > MAX_TOTAL_SEATS_PER_CATEGORY) {
             log.warn("Category creation rejected, total seats exceeds cap eventId={} requested={} cap={}",
                     request.getEventId(), totalSeatsLong, MAX_TOTAL_SEATS_PER_CATEGORY);
-            throw new BadRequestException("That's too many seats for one category — the maximum is "
-                    + MAX_TOTAL_SEATS_PER_CATEGORY + " (you entered " + totalSeatsLong + ").");
+            throw new BadRequestException("This category has too many seats (" + totalSeatsLong
+                    + ") — it exceeds the per-category cap of " + MAX_TOTAL_SEATS_PER_CATEGORY + ".");
         }
         int totalSeats = (int) totalSeatsLong;
 
@@ -85,7 +85,7 @@ public class SeatCategoryService {
             if (!seenSections.add(normalized)) {
                 log.warn("Category creation rejected, duplicate section eventId={} name={} section={}",
                         request.getEventId(), request.getName(), normalized);
-                throw new BadRequestException("You've listed section '" + normalized + "' more than once. Please combine the entries.");
+                throw new BadRequestException("Duplicate section '" + normalized + "' — you've listed it more than once. Please combine the entries.");
             }
         }
 
