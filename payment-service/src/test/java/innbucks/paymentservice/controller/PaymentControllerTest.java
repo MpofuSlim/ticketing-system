@@ -68,6 +68,7 @@ class PaymentControllerTest {
         PaymentController controller = new PaymentController(
                 bookings, mock(LoyaltyServiceClient.class), newMetrics(),
                 innbucks, records, payments);
+        org.springframework.test.util.ReflectionTestUtils.setField(controller, "cellCurrency", "USD");
         // Default: the instant check reports PENDING (poller stays authoritative)
         // so replay tests exercise the plain replay path unless they say otherwise.
         lenient().when(innbucks.tryResolveOpenCode(any()))

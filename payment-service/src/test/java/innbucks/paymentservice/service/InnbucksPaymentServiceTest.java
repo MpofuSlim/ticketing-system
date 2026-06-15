@@ -66,6 +66,7 @@ class InnbucksPaymentServiceTest {
                         new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
         service = new InnbucksPaymentService(records, innbucksApi, bookings, resolution);
         ReflectionTestUtils.setField(service, "codeTtl", Duration.ofMinutes(10));
+        ReflectionTestUtils.setField(service, "cellCurrency", "USD");
 
         lenient().when(records.hasActiveOrSucceededPayment(any())).thenReturn(false);
         lenient().when(bookings.getBooking(bookingId)).thenReturn(Map.of(
@@ -326,5 +327,35 @@ class InnbucksPaymentServiceTest {
         assertEquals(InnbucksPaymentService.InstantCheckOutcome.PENDING,
                 service.tryResolveOpenCode(row));
         verifyNoInteractions(bookings);
+    }
+
+    @Test
+    void bookingWithoutCurrency_usesTheCellCurrency_notHardcodedUsd() {
+        // KE cell: booking carries no currency (single-country, no column), so
+        // the payment must inherit the cell currency (KES), never a hardcoded USD.
+        ReflectionTestUtils.setField(service, "cellCurrency", "KES");
+        when(bookings.getBooking(bookingId)).thenReturn(Map.of("totalAmount", new BigDecimal("40.00")));
+        when(innbucksApi.generatePaymentCode(anyString(), anyString(), anyLong()))
+                .thenReturn(approved("701285660", "1616800", 4000L));
+
+        InnbucksPaymentResponse resp = service.processPayment(bookingId, "+254712345678", null);
+
+        assertEquals("KES", resp.getCurrency());
+        org.mockito.ArgumentCaptor<Payment> opened = org.mockito.ArgumentCaptor.forClass(Payment.class);
+        verify(records).openPending(opened.capture());
+        assertEquals("KES", opened.getValue().getCurrency());
+    }
+
+    @Test
+    void bookingWithExplicitCurrency_winsOverCellCurrency() {
+        ReflectionTestUtils.setField(service, "cellCurrency", "KES");
+        when(bookings.getBooking(bookingId)).thenReturn(Map.of(
+                "totalAmount", new BigDecimal("40.00"), "currency", "USD"));
+        when(innbucksApi.generatePaymentCode(anyString(), anyString(), anyLong()))
+                .thenReturn(approved("701285660", "1616800", 4000L));
+
+        InnbucksPaymentResponse resp = service.processPayment(bookingId, "+254712345678", null);
+
+        assertEquals("USD", resp.getCurrency(), "an explicit booking currency must win over the cell default");
     }
 }

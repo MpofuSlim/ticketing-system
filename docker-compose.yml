@@ -480,6 +480,7 @@ services:
       # required so a missing cell file fails fast rather than silently
       # boots in the wrong country.
       INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
+      INNBUCKS_CURRENCY: ${INNBUCKS_CURRENCY:-USD}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
       # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
       # external OTel collector (none is bundled in this stack) to export spans.
@@ -573,6 +574,7 @@ services:
       # required so a missing cell file fails fast rather than silently
       # boots in the wrong country.
       INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
+      INNBUCKS_CURRENCY: ${INNBUCKS_CURRENCY:-USD}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
       # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
       # external OTel collector (none is bundled in this stack) to export spans.

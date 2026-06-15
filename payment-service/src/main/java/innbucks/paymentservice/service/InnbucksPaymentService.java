@@ -65,7 +65,6 @@ import java.util.UUID;
 public class InnbucksPaymentService {
 
     private static final String PAYMENT_REFERENCE_PREFIX = "TKT-PMT-";
-    private static final String DEFAULT_CURRENCY = "USD";
 
     private final PaymentRecordService paymentRecordService;
     private final InnbucksApiClient innbucksApiClient;
@@ -88,6 +87,15 @@ public class InnbucksPaymentService {
      */
     @Value("${payments.innbucks.code.ttl:PT10M}")
     private Duration codeTtl;
+
+    /**
+     * This deployment's currency (ZW cell = USD, KE cell = KES, ...). Used when
+     * the booking doesn't carry its own currency — which is always today, since
+     * booking is single-country per cell and has no currency column. Was a
+     * hardcoded "USD" constant; per-cell now so a KE cell labels money KES.
+     */
+    @Value("${innbucks.currency:USD}")
+    private String cellCurrency;
 
     public InnbucksPaymentResponse processPayment(UUID bookingId,
                                                   String customerMsisdn,
@@ -112,7 +120,7 @@ public class InnbucksPaymentService {
                     "Booking has no positive totalAmount; cannot request payment", 422);
         }
         String currency = asString(booking.get("currency"));
-        if (currency == null || currency.isBlank()) currency = DEFAULT_CURRENCY;
+        if (currency == null || currency.isBlank()) currency = cellCurrency;
         long amountCents = toCents(amount);
 
         // ---- Step 1.5: make the seat hold outlive the code --------------------

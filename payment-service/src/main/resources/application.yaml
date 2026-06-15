@@ -103,6 +103,11 @@ innbucks:
   # Default ZW because the current deployment is the Zimbabwe home market;
   # cell #2 onwards MUST set INNBUCKS_COUNTRY explicitly per deployment.
   country: ${INNBUCKS_COUNTRY:ZW}
+  # This cell's settlement currency (ISO 4217). ZW cell = USD, KE cell = KES.
+  # Used by InnbucksPaymentService when a booking carries no currency of its
+  # own (always today — booking is single-country per cell). Set per cell in
+  # deploy/cells/cell.<iso>.env; defaults to USD for the ZW home market.
+  currency: ${INNBUCKS_CURRENCY:USD}
   internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
   # Velocity caps on POST /payments/transfer + /payments/withdraw.
   # Per-transaction max caps a single request; per-day max caps the sum

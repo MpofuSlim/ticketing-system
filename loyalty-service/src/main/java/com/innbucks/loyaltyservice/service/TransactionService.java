@@ -164,7 +164,7 @@ public class TransactionService {
 
     public Dtos.TransactionResponse adjust(UUID tenantId, UUID userId, UUID merchantId,
                                            BigDecimal points, String reason) {
-        merchants.requireMerchant(tenantId, merchantId);
+        Merchant m = merchants.requireMerchant(tenantId, merchantId);
         LoyaltyUser u = users.require(tenantId, userId);
         LoyaltyTransaction t = new LoyaltyTransaction();
         t.setTenantId(tenantId);
@@ -172,6 +172,9 @@ public class TransactionService {
         t.setUserId(u.getId());
         t.setType(TransactionType.ADJUSTMENT);
         t.setPointsDelta(points);
+        // Adjustments inherit the merchant's currency (previously left at the
+        // entity "USD" default — the audit's mislabelled-ledger finding).
+        t.setCurrency(m.getCurrency());
         t.setReference(reason);
         transactions.save(t);
 
