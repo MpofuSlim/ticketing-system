@@ -42,7 +42,7 @@ class GatewayRouteTableTest {
 
     private static final List<String> EXPECTED_ROUTE_IDS = List.of(
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
-            "user-auth-route", "user-admin-route", "user-internal-deny", "user-self-route",
+            "user-auth-route", "cells-lookup-route", "user-admin-route", "user-internal-deny", "user-self-route",
             "event-availability-deny", "event-service-route",
             "seat-service-seat-route", "seat-service-category-route",
             "booking-internal-deny", "booking-service-route", "brand-assets-route",
@@ -170,6 +170,12 @@ class GatewayRouteTableTest {
         assertThat(filterNames("user-auth-route"))
                 .as("/auth must stay usable when Redis is down")
                 .doesNotContain("RequestRateLimiter");
+        // /cells/lookup is a pre-login surface (no token exists yet) — same
+        // no-limiter treatment as /auth/**, and it targets /cells/**.
+        assertThat(filterNames("cells-lookup-route"))
+                .as("/cells lookup is pre-login and must skip the token-keyed limiter")
+                .doesNotContain("RequestRateLimiter");
+        assertThat(predicateArgs("cells-lookup-route", "Path")).containsExactly("/cells/**");
         RATE_LIMITED_ROUTES.forEach(id ->
                 assertThat(filterNames(id)).as("rate limiter on %s", id).contains("RequestRateLimiter"));
     }
