@@ -62,21 +62,26 @@ public class GlobalExceptionHandler {
 
     // Surface Oradian middleware failures as 502 Bad Gateway so the client knows
     // the local state was rolled back — distinct from a 400 caused by user input.
+    // The raw upstream text often contains internal HTTP envelopes / Oradian
+    // operation names; it goes to logs, the user sees a friendly retry hint.
     @ExceptionHandler(OradianClientException.class)
     public ResponseEntity<ApiResult<Void>> handleOradian(OradianClientException ex) {
         log.warn("Oradian middleware call failed: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
-                .body(ApiResult.error(HttpStatus.BAD_GATEWAY, ex.getMessage()));
+                .body(ApiResult.error(HttpStatus.BAD_GATEWAY,
+                        "We're having trouble reaching the bank right now. Please try again in a moment."));
     }
 
-    // WhatsApp notification gateway failures (OTP / approval delivery). 502 so
-    // the client knows delivery failed — and, for OTP, that the rolled-back
-    // request can simply be retried.
+    // WhatsApp / SMS notification gateway failures (OTP / approval delivery).
+    // 502 so the client knows delivery failed and a rolled-back request can be
+    // retried. Raw gateway text (e.g. "msisdn rejected by provider") goes to
+    // logs only — the customer sees a generic retry hint.
     @ExceptionHandler(NotificationDeliveryException.class)
     public ResponseEntity<ApiResult<Void>> handleNotificationDelivery(NotificationDeliveryException ex) {
         log.warn("Notification delivery failed: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
-                .body(ApiResult.error(HttpStatus.BAD_GATEWAY, ex.getMessage()));
+                .body(ApiResult.error(HttpStatus.BAD_GATEWAY,
+                        "We couldn't send your verification message. Please try again in a moment."));
     }
 
     // Domain "no such resource" surface — must come BEFORE the
@@ -108,11 +113,17 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(status).body(ApiResult.error(status, reason));
     }
 
+    // Catch-all for any RuntimeException not handled by a more specific
+    // @ExceptionHandler above. Raw ex.getMessage() can carry internal text
+    // (table names, stack-trace fragments, library jargon), so it goes to
+    // logs only — the customer sees a generic message. Prefer adding a typed
+    // exception + dedicated handler over relying on this fallback.
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<ApiResult<Void>> handleRuntime(RuntimeException ex) {
-        log.warn("RuntimeException: {}", ex.getMessage());
+        log.warn("RuntimeException ({}): {}", ex.getClass().getSimpleName(), ex.getMessage());
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(ApiResult.error(HttpStatus.BAD_REQUEST, ex.getMessage()));
+                .body(ApiResult.error(HttpStatus.BAD_REQUEST,
+                        "We couldn't process your request. Please try again."));
     }
 
     /**

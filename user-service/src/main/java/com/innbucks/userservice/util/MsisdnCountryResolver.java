@@ -53,7 +53,37 @@ public final class MsisdnCountryResolver {
             Map.entry("27",  "ZA")    // South Africa
     );
 
+    /**
+     * ISO 3166-1 alpha-2 → display country name, for user-facing copy.
+     * Keep in lockstep with {@link #PREFIX_TO_ISO} above (same 10 markets).
+     * Used by error messages so a customer sees "Kenya" instead of "KE".
+     */
+    private static final Map<String, String> ISO_TO_NAME = Map.ofEntries(
+            Map.entry("NG", "Nigeria"),
+            Map.entry("KE", "Kenya"),
+            Map.entry("MZ", "Mozambique"),
+            Map.entry("ZM", "Zambia"),
+            Map.entry("ZW", "Zimbabwe"),
+            Map.entry("MW", "Malawi"),
+            Map.entry("LS", "Lesotho"),
+            Map.entry("BW", "Botswana"),
+            Map.entry("SZ", "Eswatini"),
+            Map.entry("ZA", "South Africa")
+    );
+
     private MsisdnCountryResolver() {
+    }
+
+    /**
+     * Display name for an ISO 3166-1 alpha-2 code (e.g. {@code "KE"} →
+     * {@code "Kenya"}). Returns the input back when the code is unknown
+     * or blank — better to show a recognisable token than nothing. Use for
+     * user-facing copy only; routing keys off the ISO code.
+     */
+    public static String countryName(String iso) {
+        if (iso == null || iso.isBlank()) return "";
+        String name = ISO_TO_NAME.get(iso.trim().toUpperCase());
+        return name != null ? name : iso;
     }
 
     /**
