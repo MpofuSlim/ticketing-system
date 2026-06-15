@@ -1,9 +1,12 @@
 package com.innbucks.bookingservice.messaging;
 
 import com.innbucks.bookingservice.client.EmailNotificationClient;
+import com.innbucks.bookingservice.client.EventServiceClient;
 import com.innbucks.bookingservice.client.NotificationDeliveryException;
 import com.innbucks.bookingservice.client.SmsNotificationClient;
 import com.innbucks.bookingservice.client.WhatsAppNotificationClient;
+import com.innbucks.bookingservice.dto.ApiResult;
+import com.innbucks.bookingservice.dto.EventLookupDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
 import com.innbucks.bookingservice.event.BookingDomainEvent;
@@ -36,7 +39,7 @@ class BookingConfirmedNotificationListenerTest {
 
     private record Mocks(BookingRepository repo, WhatsAppNotificationClient wa,
                          SmsNotificationClient sms, EmailNotificationClient email,
-                         TicketRenderingService rendering,
+                         TicketRenderingService rendering, EventServiceClient events,
                          BookingConfirmedNotificationListener listener) {}
 
     private static Mocks mocks() {
@@ -45,16 +48,21 @@ class BookingConfirmedNotificationListenerTest {
         SmsNotificationClient sms = mock(SmsNotificationClient.class);
         EmailNotificationClient email = mock(EmailNotificationClient.class);
         TicketRenderingService rendering = mock(TicketRenderingService.class);
+        EventServiceClient events = mock(EventServiceClient.class);
         lenient().when(rendering.confirmationEmailHtml(any(), anyString()))
                 .thenReturn("<div>tickets</div>");
+        // Default event lookup resolves a title; tests needing the fallback override this.
+        lenient().when(events.getEvent(any()))
+                .thenReturn(ApiResult.ok(EventLookupDTO.builder().title("InnBucks Gala 2026").build()));
         BookingConfirmedNotificationListener listener =
-                new BookingConfirmedNotificationListener(repo, wa, sms, email, rendering, BASE);
-        return new Mocks(repo, wa, sms, email, rendering, listener);
+                new BookingConfirmedNotificationListener(repo, wa, sms, email, rendering, events, BASE);
+        return new Mocks(repo, wa, sms, email, rendering, events, listener);
     }
 
     private static Booking bookingFixture(String phone, String emailAddr, int ticketCount) {
         Booking b = new Booking();
         b.setId(UUID.randomUUID());
+        b.setEventId(UUID.randomUUID());
         b.setPhoneNumber(phone);
         b.setUserEmail(emailAddr);
         b.setConfirmationNumber("INN-20260610-A1B2C3");
@@ -196,6 +204,71 @@ class BookingConfirmedNotificationListenerTest {
         assertThatCode(() -> m.listener().onBookingConfirmed(eventFor(b))).doesNotThrowAnyException();
         verify(m.wa()).sendCustomNotification(anyString(), anyString());
         verify(m.sms()).sendSms(anyString(), anyString(), anyString());
+    }
+
+    // ---- Scannable QR e-tickets on WhatsApp ----
+
+    @Test
+    void confirmed_sendsOneQrETicketPerTicket_withResolvedEventNameAndHostedPath() {
+        Mocks m = mocks();
+        Booking b = bookingFixture("+263771234567", "rufaro@example.com", 2);
+        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+
+        m.listener().onBookingConfirmed(eventFor(b));
+
+        // One QR send per ticket, with the resolved event name and the hosted,
+        // domain-relative QR path for that exact ticket.
+        ArgumentCaptor<String> path = ArgumentCaptor.forClass(String.class);
+        verify(m.wa(), times(2)).sendEventQrCode(eq("+263771234567"), eq("InnBucks Gala 2026"), path.capture());
+        assertThat(path.getAllValues())
+                .containsExactlyInAnyOrder(
+                        "/bookings/" + b.getId() + "/tickets/20260610-T1/qr",
+                        "/bookings/" + b.getId() + "/tickets/20260610-T2/qr");
+        // The text confirmation still goes out alongside the images.
+        verify(m.wa()).sendCustomNotification(eq("+263771234567"), anyString());
+    }
+
+    @Test
+    void qrETicket_oneTicketFails_theOthersStillSend() {
+        Mocks m = mocks();
+        Booking b = bookingFixture("+263771234567", null, 3);
+        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+        // First ticket's image is rejected; the loop must keep going.
+        doThrow(new NotificationDeliveryException("media fetch 404"))
+                .doNothing()
+                .when(m.wa()).sendEventQrCode(anyString(), anyString(),
+                        eq("/bookings/" + b.getId() + "/tickets/20260610-T1/qr"));
+
+        assertThatCode(() -> m.listener().onBookingConfirmed(eventFor(b))).doesNotThrowAnyException();
+
+        // All three were attempted despite the first failing.
+        verify(m.wa(), times(3)).sendEventQrCode(eq("+263771234567"), anyString(), anyString());
+    }
+
+    @Test
+    void qrETicket_eventLookupFails_fallsBackToGenericName() {
+        Mocks m = mocks();
+        Booking b = bookingFixture("+263771234567", null, 1);
+        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+        when(m.events().getEvent(b.getEventId()))
+                .thenThrow(new RuntimeException("event-service circuit open"));
+
+        m.listener().onBookingConfirmed(eventFor(b));
+
+        // Delivery still happens, with the cosmetic fallback name.
+        verify(m.wa()).sendEventQrCode(eq("+263771234567"), eq("your event"),
+                eq("/bookings/" + b.getId() + "/tickets/20260610-T1/qr"));
+    }
+
+    @Test
+    void qrETicket_noPhone_notAttempted() {
+        Mocks m = mocks();
+        Booking b = bookingFixture(null, "rufaro@example.com", 2);
+        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+
+        m.listener().onBookingConfirmed(eventFor(b));
+
+        verify(m.wa(), never()).sendEventQrCode(anyString(), anyString(), anyString());
     }
 
     @Test
