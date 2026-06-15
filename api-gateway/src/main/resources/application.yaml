@@ -187,6 +187,27 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
+            # Brand assets — public static images (e.g. the InnBucks MicroBank
+            # logo at /brand/innbucks-logo.png) served from booking-service's
+            # classpath:/static/brand/. Used by the FE in WhatsApp templates,
+            # HTML emails, embedded headers, etc. — same trust model as the
+            # public /bookings/*/tickets/*/qr endpoint (anonymous, the path IS
+            # the access control). Same rate-limit shape as the booking route
+            # so an attacker can't hammer the gateway with image fetches; the
+            # gatewayKeyResolver falls back to per-IP for unauthenticated
+            # callers, which is the right bucket for an anonymous static.
+            - id: brand-assets-route
+              uri: lb://booking-service
+              predicates:
+                - Path=/brand/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
+
             # /payments/** is split into READ vs WRITE routes so each gets
             # the right-sized bucket. Lumping them together meant every
             # history pagination tap counted against the same tight limit
