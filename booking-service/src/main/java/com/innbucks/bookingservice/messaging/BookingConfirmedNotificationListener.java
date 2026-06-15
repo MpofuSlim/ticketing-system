@@ -8,6 +8,8 @@ import com.innbucks.bookingservice.entity.BookingItem;
 import com.innbucks.bookingservice.event.BookingDomainEvent;
 import com.innbucks.bookingservice.repository.BookingRepository;
 import com.innbucks.bookingservice.service.TicketRenderingService;
+import com.innbucks.bookingservice.util.MsisdnCountryResolver;
+import com.innbucks.bookingservice.util.MsisdnMasking;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -34,12 +36,13 @@ import java.util.List;
  *   <li><b>WhatsApp → SMS fallback</b> (to {@code phoneNumber}, if present) —
  *       a plain confirmation (booking ref, ticket count/numbers, total). NO
  *       links by product direction; the scannable QR reaches the customer via
- *       the email (and the hosted endpoints stay available for later).</li>
+ *       the email (and the hosted endpoints stay available for later).
+ *       <b>Country-aware routing</b>: foreign MSISDNs (different country prefix
+ *       from this deployment) skip the per-country SMS gateway entirely and
+ *       use WhatsApp only — the SMS gateways accept a foreign number with a 2xx
+ *       and silently drop it, so falling back to SMS would "succeed" without
+ *       reaching the customer. Same pattern as {@code OtpService}.</li>
  * </ul>
- *
- * <p>Both links/images are absolute, built from
- * {@code innbucks.tickets.public-base-url} (the public gateway origin) so they
- * resolve from an email client or phone with no app session.
  */
 @Component
 @Slf4j
@@ -51,6 +54,7 @@ public class BookingConfirmedNotificationListener {
     private final EmailNotificationClient email;
     private final TicketRenderingService ticketRendering;
     private final String publicBaseUrl;
+    private final String deploymentCountry;
 
     public BookingConfirmedNotificationListener(
             BookingRepository bookingRepository,
@@ -58,13 +62,15 @@ public class BookingConfirmedNotificationListener {
             SmsNotificationClient sms,
             EmailNotificationClient email,
             TicketRenderingService ticketRendering,
-            @Value("${innbucks.tickets.public-base-url:}") String publicBaseUrl) {
+            @Value("${innbucks.tickets.public-base-url:}") String publicBaseUrl,
+            @Value("${innbucks.country:ZW}") String deploymentCountry) {
         this.bookingRepository = bookingRepository;
         this.whatsApp = whatsApp;
         this.sms = sms;
         this.email = email;
         this.ticketRendering = ticketRendering;
         this.publicBaseUrl = publicBaseUrl == null ? "" : publicBaseUrl.trim();
+        this.deploymentCountry = deploymentCountry == null ? "" : deploymentCountry.trim();
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
@@ -95,33 +101,61 @@ public class BookingConfirmedNotificationListener {
             }
         }
 
-        // ---- WhatsApp → SMS fallback (independent best-effort) ----
+        // ---- WhatsApp (+ SMS fallback for DOMESTIC only) ----
         String phone = booking.getPhoneNumber();
         if (phone != null && !phone.isBlank()) {
             anyChannel = true;
-            try {
-                whatsApp.sendCustomNotification(phone, buildWhatsAppMessage(booking));
-                log.info("Booking-confirm WhatsApp sent bookingId={} ref={}",
-                        booking.getId(), booking.getConfirmationNumber());
-            } catch (RuntimeException waEx) {
-                log.warn("Booking-confirm WhatsApp failed bookingId={}, trying SMS: {}",
-                        booking.getId(), waEx.getMessage());
-                try {
-                    sms.sendSms(phone, buildSmsMessage(booking),
-                            "BOOKING-CONFIRM-" + booking.getId());
-                    log.info("Booking-confirm SMS sent bookingId={} ref={}",
-                            booking.getId(), booking.getConfirmationNumber());
-                } catch (RuntimeException smsEx) {
-                    log.warn("Booking-confirm SMS also failed bookingId={} (booking still CONFIRMED): {}",
-                            booking.getId(), smsEx.getMessage());
-                }
-            }
+            dispatchPhoneChannel(booking, phone);
         }
 
         if (!anyChannel) {
             log.warn("BookingConfirmed listener: no email or phone on booking {} — no ticket delivery channel",
                     booking.getConfirmationNumber());
         }
+    }
+
+    private void dispatchPhoneChannel(Booking booking, String phone) {
+        boolean domestic = isDomesticMsisdn(phone);
+        String reference = "BOOKING-CONFIRM-" + booking.getId();
+        try {
+            whatsApp.sendCustomNotification(phone, buildWhatsAppMessage(booking));
+            log.info("Booking-confirm WhatsApp sent bookingId={} ref={} domestic={}",
+                    booking.getId(), booking.getConfirmationNumber(), domestic);
+            return;
+        } catch (RuntimeException waEx) {
+            log.warn("Booking-confirm WhatsApp failed bookingId={} domestic={}: {}",
+                    booking.getId(), domestic, waEx.getMessage());
+        }
+
+        // SMS fallback is per-country and silently drops foreign MSISDNs after
+        // a 2xx. Skipping it for foreign numbers prevents a fake "delivered"
+        // log line; the customer would never receive the message.
+        if (!domestic) {
+            log.warn("Booking-confirm delivery exhausted for foreign MSISDN on {} deployment phone={} bookingId={} — SMS would be dropped, not attempted",
+                    deploymentCountry, MsisdnMasking.mask(phone), booking.getId());
+            return;
+        }
+
+        try {
+            sms.sendSms(phone, buildSmsMessage(booking), reference);
+            log.info("Booking-confirm SMS sent bookingId={} ref={}",
+                    booking.getId(), booking.getConfirmationNumber());
+        } catch (RuntimeException smsEx) {
+            log.warn("Booking-confirm SMS also failed bookingId={} (booking still CONFIRMED): {}",
+                    booking.getId(), smsEx.getMessage());
+        }
+    }
+
+    /**
+     * True when the MSISDN's dialling prefix matches the deployment country.
+     * An unresolvable MSISDN (unknown prefix) is treated as non-domestic —
+     * safer to skip the per-country SMS gateway than claim a delivery the
+     * gateway will silently drop.
+     */
+    private boolean isDomesticMsisdn(String phoneNumber) {
+        return MsisdnCountryResolver.resolve(phoneNumber)
+                .map(c -> c.equalsIgnoreCase(deploymentCountry))
+                .orElse(false);
     }
 
     private String buildWhatsAppMessage(Booking booking) {
