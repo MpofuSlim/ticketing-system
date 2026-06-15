@@ -770,11 +770,12 @@ public class AuthController {
     @SecurityRequirements()
     @Operation(summary = "Request (or re-send) an OTP",
             description = """
-                    Generates a fresh 6-digit OTP for the supplied phone number and (nominally) sends it by SMS.
-                    Any previously-issued OTP for that phone is invalidated.
+                    Generates a fresh **random 6-digit OTP** (`SecureRandom`, 000000–999999) for the supplied
+                    phone number and sends it out-of-band by **SMS** (with **WhatsApp** as the fallback channel
+                    if SMS delivery fails). Any previously-issued OTP for that phone is invalidated.
 
-                    **Development note:** delivery is stubbed — the OTP is always `000000` and is written to the
-                    user-service logs instead of being sent by SMS. This will be swapped for a real provider later.
+                    **The OTP is never returned in the API response** — by design, it reaches the customer only
+                    on their phone, proving they own the number. The response just acknowledges the request.
 
                     **Rate limit:** a phone number may request at most **3 OTPs within any 10-minute window**.
                     The 4th request triggers a **30-minute lockout** (HTTP 429). A successful OTP verification
