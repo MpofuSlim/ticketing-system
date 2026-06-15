@@ -51,8 +51,11 @@ class GlobalExceptionHandlerTest {
                 (Exception) new RuntimeException("internal: connection pool exhausted at Lettuce"));
         assertEquals(HttpStatus.INTERNAL_SERVER_ERROR, resp.getStatusCode());
         assertNotNull(resp.getBody());
-        assertEquals("internal error", resp.getBody().get("message"));
+        assertEquals("Something went wrong on our end. Please try again.", resp.getBody().get("message"));
         // Internal detail MUST NOT reach the client.
         assertEquals(500, resp.getBody().get("status"));
+        String msg = String.valueOf(resp.getBody().get("message"));
+        org.junit.jupiter.api.Assertions.assertFalse(msg.contains("Lettuce") || msg.contains("connection pool"),
+                "500 body must not leak the internal exception detail");
     }
 }

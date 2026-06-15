@@ -312,7 +312,7 @@ public class EventService {
         // reject rather than persist an event with no country.
         if (country == null || country.isBlank()) {
             log.warn("Event create rejected, missing country claim on token tenantId={}", tenantId);
-            throw new BadRequestException("Country is required but was not present in your token");
+            throw new BadRequestException("Your session is missing country information. Please sign in again.");
         }
 
         if (eventRepository.existsByTenantIdAndTitleAndVenueAndStartDateTimeAndDeletedFalse(
@@ -352,7 +352,7 @@ public class EventService {
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
                 .orElseThrow(() -> new NotFoundException("Event not found"));
         if (event.getBannerImage() == null || event.getBannerImage().length == 0) {
-            throw new NotFoundException("Banner not found");
+            throw new NotFoundException("No banner image has been uploaded for this event yet.");
         }
         return new BannerImage(event.getBannerImage(), event.getBannerContentType());
     }
@@ -370,11 +370,11 @@ public class EventService {
     private static void applyBanner(Event event, MultipartFile file) {
         if (file == null || file.isEmpty()) return;
         if (file.getSize() > MAX_BANNER_BYTES) {
-            throw new BadRequestException("Banner image is too large (max 5MB)");
+            throw new BadRequestException("That image is too large. Please use one under 5 MB.");
         }
         String contentType = file.getContentType();
         if (contentType == null || !ALLOWED_BANNER_CONTENT_TYPES.contains(contentType.toLowerCase())) {
-            throw new BadRequestException("Banner image must be JPEG, PNG, GIF or WEBP");
+            throw new BadRequestException("Please upload a JPG, PNG, GIF, or WEBP image.");
         }
         try {
             event.setBannerImage(file.getBytes());
@@ -426,7 +426,7 @@ public class EventService {
         // the request-level @AssertTrue can't catch.
         if (event.getStartDateTime() != null && event.getEndDateTime() != null
                 && !event.getEndDateTime().isAfter(event.getStartDateTime())) {
-            throw new BadRequestException("endDateTime must be after startDateTime");
+            throw new BadRequestException("The event end time must be after the start time.");
         }
         if (request.getTotalCapacity() != null) {
             int diff = request.getTotalCapacity() - event.getTotalCapacity();

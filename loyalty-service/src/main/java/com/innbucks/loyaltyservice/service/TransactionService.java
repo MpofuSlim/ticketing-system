@@ -50,7 +50,7 @@ public class TransactionService {
     public Dtos.TransactionResponse post(UUID tenantId, UUID merchantId, Dtos.TransactionRequest req) {
         Merchant m = merchants.requireMerchant(tenantId, merchantId);
         if (m.getStatus() != Merchant.Status.ACTIVE) {
-            throw LoyaltyException.badRequest("MERCHANT_INACTIVE", "merchant is not active; no points will be awarded");
+            throw LoyaltyException.badRequest("MERCHANT_INACTIVE", "This merchant isn't accepting points right now.");
         }
         // Recipient is either an existing LoyaltyUser (userId) or a phone we
         // lazily enrol as PENDING. Exactly one input is required.
@@ -66,7 +66,7 @@ public class TransactionService {
         // Accrual is allowed for PENDING (the whole point of the feature);
         // BLOCKED still rejects so fraud holds stick.
         if (u.getStatus() == LoyaltyUser.Status.BLOCKED) {
-            throw LoyaltyException.forbidden("USER_BLOCKED", "user is blocked");
+            throw LoyaltyException.forbidden("USER_BLOCKED", "Your account is currently suspended. Please contact support.");
         }
 
         if (req.reference() != null) {
@@ -132,7 +132,7 @@ public class TransactionService {
             throw LoyaltyException.forbidden("CROSS_TENANT", "wrong tenant");
         }
         if (orig.getStatus() == LoyaltyTransaction.Status.REVERSED) {
-            throw LoyaltyException.conflict("ALREADY_REVERSED", "transaction already reversed");
+            throw LoyaltyException.conflict("ALREADY_REVERSED", "This transaction has already been reversed.");
         }
         orig.setStatus(LoyaltyTransaction.Status.REVERSED);
 

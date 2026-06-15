@@ -150,7 +150,8 @@ public class BookingService {
                 log.warn("Booking rejected, category does not belong to event userEmail={} categoryId={} requestEventId={} actualEventId={}",
                         userEmail, categoryId, request.getEventId(), category.getEventId());
                 throw new BadRequestException(
-                        "Category " + categoryId + " does not belong to event " + request.getEventId());
+                        "This ticket category does not belong to event '"
+                                + request.getEventId() + "'. Please pick a category for the right event.");
             }
             categoryById.put(categoryId, category);
         }
@@ -230,7 +231,7 @@ public class BookingService {
                 log.warn("Booking rejected, category sold out userEmail={} categoryId={} qty={}",
                         userEmail, categoryId, qty);
                 throw new BookingConflictException(
-                        "Not enough tickets remaining in category " + category.getName());
+                        "Not enough tickets left in \"" + category.getName() + "\". Please choose fewer tickets or a different category.");
             }
         }
 
@@ -277,7 +278,7 @@ public class BookingService {
         ApiResult<CategoryLookupDTO> envelope = seatServiceClient.getCategory(categoryId);
         if (envelope == null || envelope.getData() == null) {
             log.warn("Category lookup returned no data categoryId={}", categoryId);
-            throw new NotFoundException("Seat category " + categoryId + " not found");
+            throw new NotFoundException("This ticket category is no longer available.");
         }
         return envelope.getData();
     }
@@ -507,13 +508,13 @@ public class BookingService {
         if (booking.getStatus() == Booking.BookingStatus.CONFIRMED) {
             log.warn("Cancel rejected, booking already confirmed bookingId={}", bookingId);
             throw new BookingConflictException(
-                    "Cannot cancel a confirmed booking — payment already processed"
+                    "We can't cancel this confirmed booking — payment has already been processed. Please contact support if you need a refund."
             );
         }
 
         if (booking.getStatus() == Booking.BookingStatus.CANCELLED) {
             log.warn("Cancel rejected, booking already cancelled bookingId={}", bookingId);
-            throw new BookingConflictException("Booking is already cancelled");
+            throw new BookingConflictException("This booking is already cancelled.");
         }
 
         booking.setStatus(Booking.BookingStatus.CANCELLED);
@@ -560,8 +561,7 @@ public class BookingService {
             log.warn("Reverse rejected, booking not confirmed bookingId={} status={}",
                     bookingId, booking.getStatus());
             throw new BookingConflictException(
-                    "Cannot reverse booking with status " + booking.getStatus()
-                            + " — only CONFIRMED bookings can be reversed");
+                    "This booking can't be reversed at its current stage. Only CONFIRMED bookings can be reversed.");
         }
 
         if (!booking.isAvailabilityReleased()) {
@@ -634,13 +634,13 @@ public class BookingService {
                 .orElseThrow(() -> new NotFoundException("Booking not found"));
         if (booking.getStatus() != Booking.BookingStatus.PENDING) {
             throw new BookingConflictException(
-                    "Only a PENDING booking's hold can be extended (status: " + booking.getStatus() + ")");
+                    "This booking's seat hold can no longer be extended — it's not in a PENDING state.");
         }
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         if (booking.getExpiresAt() != null && booking.getExpiresAt().isBefore(now)) {
             throw new BookingConflictException(
-                    "Seat hold expired — please create a new booking and pay within "
-                            + holdTtlMinutes + " minutes");
+                    "Your seat reservation has expired. Please start a new booking and complete payment within "
+                            + holdTtlMinutes + " minutes.");
         }
         if (booking.getExpiresAt() == null || booking.getExpiresAt().isBefore(holdUntil)) {
             log.info("Extending seat hold bookingId={} from={} to={}",
@@ -682,7 +682,7 @@ public class BookingService {
         if (booking.getStatus() != Booking.BookingStatus.PENDING) {
             log.warn("Confirm rejected, booking not pending bookingId={} status={}",
                     bookingId, booking.getStatus());
-            throw new BookingConflictException("Only pending bookings can be confirmed");
+            throw new BookingConflictException("Only pending bookings can be confirmed — this one isn't in that state.");
         }
 
         // Reject confirms that arrive after the seat hold has lapsed — the
@@ -692,8 +692,8 @@ public class BookingService {
             log.warn("Confirm rejected, hold expired bookingId={} expiredAt={}",
                     bookingId, booking.getExpiresAt());
             throw new BookingConflictException(
-                    "Seat hold expired — please create a new booking and pay within "
-                            + holdTtlMinutes + " minutes");
+                    "Your seat reservation has expired. Please start a new booking and complete payment within "
+                            + holdTtlMinutes + " minutes.");
         }
 
         // Default to pure-cash if the caller didn't pass a payload. This
@@ -739,7 +739,7 @@ public class BookingService {
         }
         if (booking.getTenantId() == null) {
             if (pointsToUse.signum() > 0) {
-                throw new BadRequestException("Cannot redeem points — booking has no tenant attached");
+                throw new BadRequestException("Loyalty points can't be used on this booking.");
             }
             log.debug("No tenantId on booking; skipping loyalty earn for bookingId={}", booking.getId());
             return;
@@ -762,7 +762,7 @@ public class BookingService {
         BigDecimal diff = reconstructedTotal.subtract(booking.getTotalAmount()).abs();
         if (diff.compareTo(SPLIT_TOLERANCE) > 0) {
             throw new BadRequestException(String.format(
-                    "Payment split does not match total: points worth %s + cash %s = %s, expected %s",
+                    "Your payment doesn't add up to the booking total (points worth %s + cash %s = %s, expected %s). Please adjust and try again.",
                     pointsAsCash, cashAmount, reconstructedTotal, booking.getTotalAmount()));
         }
 

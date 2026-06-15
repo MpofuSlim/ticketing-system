@@ -135,7 +135,7 @@ public class BookingController {
             phoneNumber = request.getPhoneNumber();
         }
         if (phoneNumber == null || phoneNumber.isBlank()) {
-            throw new BadRequestException("phoneNumber is required");
+            throw new BadRequestException("Please provide your phone number.");
         }
 
         // Look up the customer's current tier in user-service — but ONLY for

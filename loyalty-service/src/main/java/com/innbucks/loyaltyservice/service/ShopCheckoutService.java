@@ -74,10 +74,10 @@ public class ShopCheckoutService {
                               BigDecimal pointsAmount, String reference,
                               boolean hasCash, boolean hasPoints) {
         if (shopId == null) {
-            throw LoyaltyException.badRequest("SHOP_REQUIRED", "shopId is required");
+            throw LoyaltyException.badRequest("SHOP_REQUIRED", "Please select a shop.");
         }
         if (phoneNumber == null || phoneNumber.isBlank()) {
-            throw LoyaltyException.badRequest("PHONE_REQUIRED", "phoneNumber is required");
+            throw LoyaltyException.badRequest("PHONE_REQUIRED", "Please provide your phone number.");
         }
         if (!hasCash && !hasPoints) {
             throw LoyaltyException.badRequest("AMOUNT_REQUIRED",
@@ -87,7 +87,7 @@ public class ShopCheckoutService {
         Shop shop = shops.findById(shopId)
                 .orElseThrow(() -> LoyaltyException.notFound("shop"));
         if (shop.getStatus() != Shop.Status.ACTIVE) {
-            throw LoyaltyException.badRequest("SHOP_INACTIVE", "shop is not active");
+            throw LoyaltyException.badRequest("SHOP_INACTIVE", "This shop isn't accepting purchases right now.");
         }
         UUID tenantId = shop.getTenantId();
         UUID merchantId = shop.getMerchantId();

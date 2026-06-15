@@ -73,7 +73,7 @@ public class QrService {
                     fraud.record(tenantId, req.userId(), null, null,
                             FraudAttempt.Reason.INVALID_CODE, "qr token not found",
                             null, null);
-                    return LoyaltyException.notFound("qr token");
+                    return new LoyaltyException(org.springframework.http.HttpStatus.NOT_FOUND, "NOT_FOUND", "This QR code is invalid or has expired.");
                 });
         if (!q.getTenantId().equals(tenantId)) {
             throw LoyaltyException.forbidden("CROSS_TENANT", "QR belongs to a different tenant");
@@ -81,17 +81,17 @@ public class QrService {
         if (!signer.verify(payload(q), req.signature())) {
             fraud.record(tenantId, req.userId(), null, null,
                     FraudAttempt.Reason.QR_BAD_SIGNATURE, "qr signature mismatch", null, null);
-            throw LoyaltyException.forbidden("BAD_SIGNATURE", "qr signature invalid");
+            throw LoyaltyException.forbidden("BAD_SIGNATURE", "This QR code couldn't be verified.");
         }
         if (q.getUsedAt() != null) {
             fraud.record(tenantId, req.userId(), null, null,
                     FraudAttempt.Reason.QR_REUSED, "qr already used", null, null);
-            throw LoyaltyException.conflict("QR_REUSED", "qr token already consumed");
+            throw LoyaltyException.conflict("QR_REUSED", "This QR code has already been used.");
         }
         if (Instant.now().isAfter(q.getExpiresAt())) {
             fraud.record(tenantId, req.userId(), null, null,
                     FraudAttempt.Reason.QR_EXPIRED, "qr expired", null, null);
-            throw LoyaltyException.badRequest("QR_EXPIRED", "qr token expired");
+            throw LoyaltyException.badRequest("QR_EXPIRED", "This QR code has expired.");
         }
         q.setUsedAt(Instant.now());
 

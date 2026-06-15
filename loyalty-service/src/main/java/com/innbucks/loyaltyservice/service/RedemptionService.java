@@ -47,7 +47,7 @@ public class RedemptionService {
      */
     public RedemptionResult redeemPoints(UUID tenantId, UUID merchantId, Dtos.RedemptionRequest req) {
         if (req.points() == null || req.points().signum() <= 0) {
-            throw LoyaltyException.badRequest("BAD_AMOUNT", "points must be positive");
+            throw LoyaltyException.badRequest("BAD_AMOUNT", "Please enter an amount greater than zero.");
         }
         var u = users.require(tenantId, req.userId());
         // PENDING (not yet registered) users may accrue but not spend.

@@ -28,7 +28,7 @@ public class GlobalExceptionHandler {
                 "timestamp", Instant.now().toString(),
                 "status", 403,
                 "code", "FORBIDDEN",
-                "message", "Forbidden - insufficient role or not the tenant owner"
+                "message", "You don't have permission to do that."
         ));
     }
 
@@ -38,7 +38,7 @@ public class GlobalExceptionHandler {
                 "timestamp", Instant.now().toString(),
                 "status", 401,
                 "code", "UNAUTHORIZED",
-                "message", "Invalid or missing token"
+                "message", "Please sign in to continue."
         ));
     }
 
@@ -122,7 +122,7 @@ public class GlobalExceptionHandler {
                 "timestamp", Instant.now().toString(),
                 "status", 500,
                 "code", "INTERNAL",
-                "message", "internal error"
+                "message", "Something went wrong on our end. Please try again."
         ));
     }
 }

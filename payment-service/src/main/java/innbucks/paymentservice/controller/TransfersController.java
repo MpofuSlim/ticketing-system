@@ -715,13 +715,13 @@ public class TransfersController {
         try {
             parsed = new BigDecimal(amount);
         } catch (NumberFormatException ex) {
-            throw new BadRequestException("amount must be a valid decimal number");
+            throw new BadRequestException("Please enter a valid decimal amount.");
         }
         if (parsed.signum() <= 0) {
-            throw new BadRequestException("amount must be greater than zero");
+            throw new BadRequestException("Amount must be greater than zero.");
         }
         if (parsed.scale() > 4) {
-            throw new BadRequestException("amount must have at most 4 decimal places");
+            throw new BadRequestException("Amount can have up to 4 decimal places.");
         }
         return parsed;
     }
