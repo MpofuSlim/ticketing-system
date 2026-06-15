@@ -15,6 +15,8 @@ public class OtpVerifyDTO {
 
     @NotBlank(message = "OTP code is required")
     @Pattern(regexp = "\\d{6}", message = "OTP must be 6 digits")
-    @Schema(description = "The 6-digit OTP the user received.", example = "000000")
+    @Schema(description = "The 6-digit OTP the user received via SMS/WhatsApp. The actual value is randomly "
+            + "generated per request (SecureRandom, 000000–999999); the example here is illustrative only.",
+            example = "472938")
     private String code;
 }

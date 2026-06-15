@@ -245,4 +245,69 @@ class OtpServiceTest {
         verify(otpRepo).delete(otp);
         verify(otpRepo, never()).save(any());
     }
+
+    // -------- country-aware channel routing (ZW deployment, default) --------
+
+    @Test
+    void sendOtp_foreignMsisdn_routesDirectlyToWhatsApp_skippingSmsGateway() {
+        // The current SMS gateway is single-country: on the ZW deployment it
+        // accepts a KE-prefix number with a 2xx and silently drops it. Detect
+        // the foreign prefix and skip SMS entirely, so the customer actually
+        // gets the OTP via WhatsApp (which is global).
+        OtpRepository otpRepo = mock(OtpRepository.class);
+        OtpRetryAttemptRepository retryRepo = mock(OtpRetryAttemptRepository.class);
+        when(retryRepo.findByPhoneNumber(anyString())).thenReturn(Optional.empty());
+        WhatsAppNotificationClient whatsApp = mock(WhatsAppNotificationClient.class);
+        SmsNotificationClient sms = mock(SmsNotificationClient.class);
+
+        // default deploymentCountry is ZW; +254 = Kenya prefix
+        newService(otpRepo, retryRepo, mock(UserRepository.class), mock(CustomerProfileRepository.class), mock(PendingRegistrationRepository.class), whatsApp, sms)
+                .sendOtp("+254712345678");
+
+        ArgumentCaptor<Otp> saved = ArgumentCaptor.forClass(Otp.class);
+        verify(otpRepo).save(saved.capture());
+        verify(whatsApp).sendCustomNotification(eq("+254712345678"), contains(saved.getValue().getCode()));
+        // SMS gateway is NEVER hit for a foreign-prefix number.
+        verifyNoInteractions(sms);
+    }
+
+    @Test
+    void sendOtp_unresolvableMsisdn_treatedAsForeign_routedToWhatsApp() {
+        // Defensive: if the prefix isn't in InnBucks' markets table, route to
+        // WhatsApp (works on any E.164) rather than claim a successful SMS
+        // that the local gateway will silently drop.
+        OtpRepository otpRepo = mock(OtpRepository.class);
+        OtpRetryAttemptRepository retryRepo = mock(OtpRetryAttemptRepository.class);
+        when(retryRepo.findByPhoneNumber(anyString())).thenReturn(Optional.empty());
+        WhatsAppNotificationClient whatsApp = mock(WhatsAppNotificationClient.class);
+        SmsNotificationClient sms = mock(SmsNotificationClient.class);
+
+        // +1 (US) is intentionally NOT in the InnBucks markets list.
+        newService(otpRepo, retryRepo, mock(UserRepository.class), mock(CustomerProfileRepository.class), mock(PendingRegistrationRepository.class), whatsApp, sms)
+                .sendOtp("+12025551234");
+
+        verify(whatsApp).sendCustomNotification(eq("+12025551234"), anyString());
+        verifyNoInteractions(sms);
+    }
+
+    @Test
+    void sendOtp_keNumberOnKeDeployment_isDomestic_smsPath() {
+        // Symmetric: a +254 number on a KE deployment IS domestic — SMS first.
+        OtpRepository otpRepo = mock(OtpRepository.class);
+        OtpRetryAttemptRepository retryRepo = mock(OtpRetryAttemptRepository.class);
+        when(retryRepo.findByPhoneNumber(anyString())).thenReturn(Optional.empty());
+        WhatsAppNotificationClient whatsApp = mock(WhatsAppNotificationClient.class);
+        SmsNotificationClient sms = mock(SmsNotificationClient.class);
+
+        OtpService service = newService(otpRepo, retryRepo, mock(UserRepository.class),
+                mock(CustomerProfileRepository.class), mock(PendingRegistrationRepository.class),
+                whatsApp, sms);
+        org.springframework.test.util.ReflectionTestUtils.setField(service, "deploymentCountry", "KE");
+
+        service.sendOtp("+254712345678");
+
+        verify(sms).sendSms(eq("+254712345678"), anyString(), anyString());
+        verifyNoInteractions(whatsApp);
+    }
+
 }

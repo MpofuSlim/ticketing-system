@@ -49,11 +49,12 @@ public class OtpService {
     private final WhatsAppNotificationClient whatsAppNotificationClient;
     private final SmsNotificationClient smsNotificationClient;
 
-    /** Deployment country fallback for the rare case where a pending
-     *  registration carries an MSISDN whose dialling prefix isn't in the
-     *  InnBucks markets table. Set via INNBUCKS_COUNTRY env var. */
+    /** Deployment country (ISO-3166-1 alpha-2) — single SMS gateway per
+     *  deployment, so a non-domestic MSISDN must skip SMS and go straight to
+     *  WhatsApp. Defaults to ZW so plain-`new` unit tests get a sensible value;
+     *  Spring's @Value overrides this from INNBUCKS_COUNTRY at runtime. */
     @Value("${innbucks.country:ZW}")
-    private String deploymentCountry;
+    private String deploymentCountry = "ZW";
 
     /**
      * Send an OTP with rate-limit enforcement. Used by the public /auth/otp/request endpoint
@@ -165,6 +166,24 @@ public class OtpService {
         String message = "Your InnBucks verification code is " + code
                 + ". It expires in " + OTP_TTL.toMinutes()
                 + " minutes. Do not share this code with anyone.";
+
+        // Country-aware channel routing. The InnBucks SMS gateway is currently
+        // a single per-country adapter (the ZW deployment ships SMS via the ZW
+        // gateway; KE has its own); it accepts a foreign-prefix number with a
+        // 2xx and silently drops it downstream, so we'd "succeed" without ever
+        // reaching the customer. Skip SMS entirely for any number that isn't
+        // domestic to this deployment, and go straight to WhatsApp — which IS
+        // global and works on any E.164 number.
+        boolean isDomestic = isDomesticMsisdn(phoneNumber);
+        if (!isDomestic) {
+            log.info("[OTP] foreign MSISDN on {} deployment — routing to WhatsApp directly phone={}",
+                    deploymentCountry, MsisdnMasking.mask(phoneNumber));
+            whatsAppNotificationClient.sendCustomNotification(phoneNumber, message);
+            log.info("[OTP] dispatched via WhatsApp (foreign MSISDN) to phone={}",
+                    MsisdnMasking.mask(phoneNumber));
+            return;
+        }
+
         try {
             smsNotificationClient.sendSms(phoneNumber, message, "OTP-" + System.currentTimeMillis());
             log.info("[OTP] dispatched via SMS to phone={}", MsisdnMasking.mask(phoneNumber));
@@ -174,6 +193,18 @@ public class OtpService {
             whatsAppNotificationClient.sendCustomNotification(phoneNumber, message);
             log.info("[OTP] dispatched via WhatsApp fallback to phone={}", MsisdnMasking.mask(phoneNumber));
         }
+    }
+
+    /**
+     * True when the MSISDN's dialling prefix resolves to the deployment's
+     * country. An unresolvable MSISDN (unknown prefix) is treated as
+     * non-domestic — safer to route to WhatsApp than to claim a successful
+     * SMS that the local gateway silently drops.
+     */
+    private boolean isDomesticMsisdn(String phoneNumber) {
+        return MsisdnCountryResolver.resolve(phoneNumber)
+                .map(c -> c.equalsIgnoreCase(deploymentCountry))
+                .orElse(false);
     }
 
     /**
