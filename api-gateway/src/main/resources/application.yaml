@@ -77,6 +77,14 @@ spring:
               predicates:
                 - Path=/auth/**
 
+            # Step 7 — public cell-lookup. Mobile app calls GET /cells/lookup
+            # at signup / first login to learn its home cell's base URL.
+            # No rate limiter (same as /auth/** — these are pre-login).
+            - id: cells-lookup-route
+              uri: lb://user-service
+              predicates:
+                - Path=/cells/**
+
             - id: user-admin-route
               uri: lb://user-service
               predicates:

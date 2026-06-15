@@ -1,5 +1,6 @@
 package com.innbucks.userservice.exception;
 
+import com.innbucks.userservice.cells.WrongCellException;
 import com.innbucks.userservice.client.NotificationDeliveryException;
 import com.innbucks.userservice.client.OradianClientException;
 import com.innbucks.userservice.dto.ApiResult;
@@ -112,5 +113,22 @@ public class GlobalExceptionHandler {
         log.warn("RuntimeException: {}", ex.getMessage());
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ApiResult.error(HttpStatus.BAD_REQUEST, ex.getMessage()));
+    }
+
+    /**
+     * Wrong-cell redirect. Carries the home country and (when the registry
+     * knows it) the home cell's public base URL so the FE can switch base
+     * URL and retry without an extra lookup round-trip.
+     */
+    @ExceptionHandler(WrongCellException.class)
+    public ResponseEntity<ApiResult<Map<String, String>>> handleWrongCell(WrongCellException ex) {
+        Map<String, String> data = new LinkedHashMap<>();
+        data.put("errorCode", "wrong_cell");
+        data.put("homeCountry", ex.getHomeCountry());
+        data.put("homeBaseUrl", ex.getHomeBaseUrl());
+        log.info("WrongCellException homeCountry={} homeBaseUrl={}",
+                ex.getHomeCountry(), ex.getHomeBaseUrl() == null ? "<unknown>" : ex.getHomeBaseUrl());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(
+                ApiResult.of(HttpStatus.CONFLICT, ex.getMessage(), data));
     }
 }

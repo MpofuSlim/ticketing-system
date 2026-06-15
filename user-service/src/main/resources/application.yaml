@@ -109,6 +109,14 @@ innbucks:
   # cell #2 onwards MUST set INNBUCKS_COUNTRY explicitly per deployment.
   country: ${INNBUCKS_COUNTRY:ZW}
   internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
+  # Step 7 — per-cell edge routing. JSON map of {ISO 3166-1 alpha-2 → public
+  # base URL}. Used by /cells/lookup (mobile app discovers its home cell)
+  # and by the MSISDN/JWT affinity checks (wrong-cell requests get a
+  # 409 wrong_cell with homeBaseUrl pointing here). Empty default is legal
+  # — wrong-cell still returns the home COUNTRY, just without a URL. Update
+  # every cell's env when a new market goes live; see deploy/cells/cell.example.env.
+  cells:
+    registry: ${INNBUCKS_CELLS_REGISTRY:{}}
   # Per-cell core-banking provider behind CoreBankingPort. `oradian` is the
   # committed default (current behaviour everywhere); the ZW cell flips to
   # `veengu` once that adapter lands (phase 2 of the provider split).

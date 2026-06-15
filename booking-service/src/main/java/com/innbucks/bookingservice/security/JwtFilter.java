@@ -8,6 +8,7 @@ import org.slf4j.MDC;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -26,6 +27,13 @@ public class JwtFilter extends OncePerRequestFilter {
     public static final String HOME_COUNTRY_MDC_KEY = "homeCountry";
 
     private final JwtUtil jwtUtil;
+
+    /** This cell's country (INNBUCKS_COUNTRY). Compared against the JWT's
+     *  {@code homeCountry} claim to spot wrong-cell requests. Non-final so
+     *  Lombok's @RequiredArgsConstructor stays untouched — Spring sets it
+     *  via field injection after construction. */
+    @Value("${innbucks.country:ZW}")
+    private String deploymentCountry;
 
     private static final List<String> EXCLUDED_PATHS = List.of(
             "/swagger-ui",
@@ -109,6 +117,19 @@ public class JwtFilter extends OncePerRequestFilter {
         // those cases. Cleared in finally so request-thread recycling doesn't
         // leak it into the next request.
         String homeCountry = jwtUtil.extractHomeCountry(token);
+        // Step 7 — wrong-cell defence in depth. A JWT minted by another cell
+        // that somehow reached this one (misrouted client, stale base URL) is
+        // rejected with 409 wrong_cell so the FE can switch base URL and retry.
+        // The homeBaseUrl is left null here — only user-service holds the cell
+        // registry; the FE either has the URL cached from /cells/lookup or
+        // calls it again. Local-cell JWTs and legacy tokens with no
+        // homeCountry claim pass through unchanged.
+        if (homeCountry != null && !homeCountry.isBlank()
+                && !homeCountry.equalsIgnoreCase(deploymentCountry)) {
+            writeWrongCell(response, homeCountry);
+            return;
+        }
+
         boolean mdcSet = false;
         if (homeCountry != null && !homeCountry.isBlank()) {
             MDC.put(HOME_COUNTRY_MDC_KEY, homeCountry);
@@ -129,6 +150,22 @@ public class JwtFilter extends OncePerRequestFilter {
         response.setContentType("application/json");
         response.getWriter().write(
                 "{\"code\":\"" + code + "\",\"message\":\"" + message + "\",\"data\":null}"
+        );
+    }
+
+    /** 409 wrong_cell when a JWT's homeCountry claim doesn't match this cell.
+     *  Shape matches user-service's GlobalExceptionHandler envelope so the FE
+     *  has one branch to handle. homeBaseUrl is null here — only user-service
+     *  holds the cell registry; the FE either has it cached from /cells/lookup
+     *  or calls it again. */
+    private void writeWrongCell(HttpServletResponse response, String homeCountry) throws IOException {
+        SecurityContextHolder.clearContext();
+        response.setStatus(HttpServletResponse.SC_CONFLICT);
+        response.setContentType("application/json");
+        response.getWriter().write(
+                "{\"code\":\"409 CONFLICT\",\"message\":\"Wrong cell \u2014 this request belongs to "
+                        + homeCountry + "\",\"data\":{\"errorCode\":\"wrong_cell\",\"homeCountry\":\""
+                        + homeCountry + "\",\"homeBaseUrl\":null}}"
         );
     }
 }

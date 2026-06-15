@@ -1,5 +1,7 @@
 package com.innbucks.userservice.security;
 
+import com.innbucks.userservice.cells.CellAffinityChecker;
+import com.innbucks.userservice.cells.WrongCellException;
 import com.innbucks.userservice.service.TokenRevocationService;
 import jakarta.servlet.*;
 import jakarta.servlet.http.*;
@@ -33,6 +35,7 @@ public class JwtFilter extends OncePerRequestFilter {
     private final JwtUtil jwtUtil;
     @Lazy
     private final TokenRevocationService tokenRevocationService;
+    private final CellAffinityChecker cellAffinityChecker;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
@@ -126,6 +129,22 @@ public class JwtFilter extends OncePerRequestFilter {
         // known InnBucks market) — we just skip the MDC put in that case
         // rather than fabricate a value.
         String homeCountry = safeExtractHomeCountry(token);
+
+        // Step 7 — wrong-cell defence in depth. A JWT minted by another cell
+        // that somehow reached this one (misrouted client, stale base URL) is
+        // rejected with 409 wrong_cell + homeBaseUrl so the FE can switch and
+        // retry. Local-cell JWTs (or legacy tokens with no homeCountry claim)
+        // pass through unchanged. Auth has already succeeded at this point —
+        // we are NOT trusting the claim to grant access, only using it to
+        // surface a routing error instead of letting the request hit a stranger
+        // customer's cell.
+        try {
+            cellAffinityChecker.requireDomesticCountry(homeCountry);
+        } catch (WrongCellException ex) {
+            writeWrongCell(response, ex);
+            return;
+        }
+
         boolean mdcSet = false;
         if (homeCountry != null && !homeCountry.isBlank()) {
             MDC.put(HOME_COUNTRY_MDC_KEY, homeCountry);
@@ -158,6 +177,27 @@ public class JwtFilter extends OncePerRequestFilter {
         response.setContentType("application/json");
         response.getWriter().write(
                 "{\"code\":\"" + code + "\",\"message\":\"" + message + "\",\"data\":null}"
+        );
+    }
+
+    /**
+     * 409 wrong_cell envelope mirroring the {@code GlobalExceptionHandler}
+     * payload for the MSISDN affinity path. Both surfaces emit the same JSON
+     * shape so the FE has one branch to handle. {@code homeBaseUrl} is JSON
+     * null when {@link CellRegistry} doesn't know the home cell's URL yet —
+     * the FE then falls back to {@code GET /cells/lookup}.
+     */
+    private void writeWrongCell(HttpServletResponse response, WrongCellException ex) throws IOException {
+        SecurityContextHolder.clearContext();
+        response.setStatus(HttpServletResponse.SC_CONFLICT);
+        response.setContentType("application/json");
+        String homeUrlJson = ex.getHomeBaseUrl() == null
+                ? "null"
+                : "\"" + ex.getHomeBaseUrl().replace("\"", "\\\"") + "\"";
+        response.getWriter().write(
+                "{\"code\":\"409 CONFLICT\",\"message\":\"" + ex.getMessage().replace("\"", "\\\"")
+                        + "\",\"data\":{\"errorCode\":\"wrong_cell\",\"homeCountry\":\""
+                        + ex.getHomeCountry() + "\",\"homeBaseUrl\":" + homeUrlJson + "}}"
         );
     }
 
