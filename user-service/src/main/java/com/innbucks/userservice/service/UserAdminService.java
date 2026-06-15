@@ -56,6 +56,18 @@ public class UserAdminService {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new NotFoundException("User not found: " + id));
 
+        // SUPER_ADMIN is the platform-owner account, seeded once by
+        // BOOTSTRAP_ADMIN_PASSWORD and never modified through the admin API.
+        // Disabling it would lock the platform out of itself (no other role
+        // can re-enable). 403 (not 400) — this isn't a malformed request,
+        // it's an action no caller is permitted to take, ever.
+        if (user.hasRole(User.Role.SUPER_ADMIN)) {
+            log.warn("setActive refused on SUPER_ADMIN target userId={} by={} attemptedActive={}",
+                    id, adminEmail == null ? "system" : adminEmail, active);
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "The SUPER_ADMIN account cannot be activated or deactivated.");
+        }
+
         // The first activation of an account is its approval: registration left
         // only an unusable placeholder password, so assign the default now and
         // force a change on first login. The `approved` flag makes this a

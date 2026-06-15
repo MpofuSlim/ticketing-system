@@ -277,6 +277,52 @@ class UserAdminServiceTest {
                         .resetTemporaryPassword(99L, "admin@innbucks.co.zw", AuditContext.none()));
     }
 
+    // ---- SUPER_ADMIN protection on setActive (cannot be disabled or re-activated) ----
+
+    @Test
+    void setActive_refusesSuperAdminTarget_403() {
+        UserRepository userRepo = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        AuditService audit = mock(AuditService.class);
+        User superAdmin = User.builder().id(1L).email("admin@innbucks.co.zw")
+                .password("pw").active(true).approved(true)
+                .roles(java.util.EnumSet.of(User.Role.SUPER_ADMIN)).build();
+        when(userRepo.findById(1L)).thenReturn(Optional.of(superAdmin));
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> new UserAdminService(userRepo, encoder,
+                        mock(WhatsAppNotificationClient.class), mock(SmsNotificationClient.class),
+                        mock(EmailNotificationClient.class), audit)
+                        .setActive(1L, /* active */ false, "admin@innbucks.co.zw", AuditContext.none()));
+
+        assertEquals(org.springframework.http.HttpStatus.FORBIDDEN, ex.getStatusCode());
+        assertTrue(ex.getReason() != null && ex.getReason().contains("SUPER_ADMIN"));
+        // Nothing written, no audit row, no notification.
+        verify(userRepo, never()).save(any());
+        verify(audit, never()).recordSuccess(any(), anyString(), anyString(), anyString(), anyString(),
+                any(), any());
+    }
+
+    @Test
+    void setActive_refusesSuperAdminTarget_evenWhenReactivating() {
+        // Same protection in the opposite direction — once SUPER_ADMIN is
+        // deactivated (it cannot be, see above), no one could re-enable it.
+        // Cover the active=true path too so a future regression that splits
+        // the guard by direction is caught.
+        UserRepository userRepo = mock(UserRepository.class);
+        User superAdmin = User.builder().id(1L).email("admin@innbucks.co.zw")
+                .password("pw").active(false).approved(true)
+                .roles(java.util.EnumSet.of(User.Role.SUPER_ADMIN)).build();
+        when(userRepo.findById(1L)).thenReturn(Optional.of(superAdmin));
+
+        assertThrows(ResponseStatusException.class,
+                () -> new UserAdminService(userRepo, mock(PasswordEncoder.class),
+                        mock(WhatsAppNotificationClient.class), mock(SmsNotificationClient.class),
+                        mock(EmailNotificationClient.class), mock(AuditService.class))
+                        .setActive(1L, /* active */ true, "admin@innbucks.co.zw", AuditContext.none()));
+        verify(userRepo, never()).save(any());
+    }
+
     // ---- audit_events recording for SUPER_ADMIN user activation/deactivation ----
 
     @Test
