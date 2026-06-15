@@ -242,6 +242,28 @@
             <artifactId>lombok</artifactId>
             <optional>true</optional>
         </dependency>
+        <!-- spring-cloud-netflix-eureka-client 5.0.2 (brought in by PR #224's
+             spring-ecosystem bump) pulls `spring-boot-grpc-test:4.1.0` onto the
+             test classpath. That test helper registers an ApplicationListener
+             whose generic signature references
+             org.springframework.grpc.server.lifecycle.GrpcServerStartedEvent —
+             but `spring-grpc-core` (which defines that class) is NOT pulled
+             in transitively. At @SpringBootTest context init Spring tries to
+             introspect the listener via Class.getGenericInterfaces() and dies
+             with TypeNotPresentException, failing every @SpringBootTest in
+             every service that pulls eureka-client.
+             Fix: declare `spring-grpc-core` at test scope so the class is on
+             the test classpath. The version is already managed by Boot 4.1.0's
+             BOM at 1.1.0 (verified via help:effective-pom), so no version
+             override needed. Test scope keeps it out of production jars —
+             this is a test-classpath-only fix.
+             Drop on the next Boot upgrade once the BOM stops shipping the
+             listener-without-its-class. -->
+        <dependency>
+            <groupId>org.springframework.grpc</groupId>
+            <artifactId>spring-grpc-core</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
