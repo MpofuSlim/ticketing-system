@@ -1,8 +1,11 @@
 package com.innbucks.bookingservice.messaging;
 
 import com.innbucks.bookingservice.client.EmailNotificationClient;
+import com.innbucks.bookingservice.client.EventServiceClient;
 import com.innbucks.bookingservice.client.SmsNotificationClient;
 import com.innbucks.bookingservice.client.WhatsAppNotificationClient;
+import com.innbucks.bookingservice.dto.ApiResult;
+import com.innbucks.bookingservice.dto.EventLookupDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
 import com.innbucks.bookingservice.event.BookingDomainEvent;
@@ -50,7 +53,11 @@ public class BookingConfirmedNotificationListener {
     private final SmsNotificationClient sms;
     private final EmailNotificationClient email;
     private final TicketRenderingService ticketRendering;
+    private final EventServiceClient eventServiceClient;
     private final String publicBaseUrl;
+
+    /** eventName fallback when the event title can't be resolved (event-service down). */
+    private static final String EVENT_NAME_FALLBACK = "your event";
 
     public BookingConfirmedNotificationListener(
             BookingRepository bookingRepository,
@@ -58,12 +65,14 @@ public class BookingConfirmedNotificationListener {
             SmsNotificationClient sms,
             EmailNotificationClient email,
             TicketRenderingService ticketRendering,
+            EventServiceClient eventServiceClient,
             @Value("${innbucks.tickets.public-base-url:}") String publicBaseUrl) {
         this.bookingRepository = bookingRepository;
         this.whatsApp = whatsApp;
         this.sms = sms;
         this.email = email;
         this.ticketRendering = ticketRendering;
+        this.eventServiceClient = eventServiceClient;
         this.publicBaseUrl = publicBaseUrl == null ? "" : publicBaseUrl.trim();
     }
 
@@ -116,12 +125,81 @@ public class BookingConfirmedNotificationListener {
                             booking.getId(), smsEx.getMessage());
                 }
             }
+
+            // ---- Scannable QR e-tickets on WhatsApp (independent best-effort) ----
+            // In ADDITION to the text confirmation above, deliver each ticket as a
+            // scannable QR image via the gateway's event-qr-code template. The QR
+            // is fetched by the gateway from our public, CONFIRMED-only ticket
+            // endpoint (BASE_URL + qrCodePath). One send per ticket — each is a
+            // separate gate-entry image; a failure on one never blocks the others
+            // (or the already-delivered text/email).
+            sendQrETickets(booking, phone);
         }
 
         if (!anyChannel) {
             log.warn("BookingConfirmed listener: no email or phone on booking {} — no ticket delivery channel",
                     booking.getConfirmationNumber());
         }
+    }
+
+    /**
+     * Sends one scannable QR e-ticket per booking item to the customer's
+     * WhatsApp. Each call is independent best-effort — a rejection on one image
+     * is logged and skipped so the rest still go out. The qrCodePath is the
+     * public hosted ticket-QR endpoint (domain-relative; the gateway prepends
+     * its BASE_URL), which only serves CONFIRMED bookings.
+     */
+    private void sendQrETickets(Booking booking, String phone) {
+        List<BookingItem> items = booking.getItems() == null ? List.of() : booking.getItems();
+        if (items.isEmpty()) {
+            return;
+        }
+        String eventName = resolveEventName(booking);
+        int sent = 0;
+        for (BookingItem item : items) {
+            String tn = item.getTicketNumber();
+            if (tn == null || tn.isBlank()) {
+                continue;
+            }
+            String qrCodePath = "/bookings/" + booking.getId() + "/tickets/" + tn + "/qr";
+            try {
+                whatsApp.sendEventQrCode(phone, eventName, qrCodePath);
+                sent++;
+            } catch (RuntimeException ex) {
+                log.warn("Booking-confirm QR e-ticket failed bookingId={} ticket={} "
+                                + "(other channels/tickets unaffected): {}",
+                        booking.getId(), tn, ex.getMessage());
+            }
+        }
+        if (sent > 0) {
+            log.info("Booking-confirm QR e-tickets sent bookingId={} ref={} count={}/{}",
+                    booking.getId(), booking.getConfirmationNumber(), sent, items.size());
+        }
+    }
+
+    /**
+     * Resolves the event's display name for the e-ticket message. Best-effort —
+     * event-service is circuit-broken, and the event name is cosmetic copy, not
+     * gate-critical data, so a lookup failure degrades to a generic fallback
+     * rather than dropping the QR delivery.
+     */
+    private String resolveEventName(Booking booking) {
+        if (booking.getEventId() == null) {
+            return EVENT_NAME_FALLBACK;
+        }
+        try {
+            ApiResult<EventLookupDTO> resp = eventServiceClient.getEvent(booking.getEventId());
+            if (resp != null && resp.getData() != null) {
+                String title = resp.getData().getTitle();
+                if (title != null && !title.isBlank()) {
+                    return title;
+                }
+            }
+        } catch (RuntimeException ex) {
+            log.warn("Event name lookup failed bookingId={} eventId={} — using fallback: {}",
+                    booking.getId(), booking.getEventId(), ex.getMessage());
+        }
+        return EVENT_NAME_FALLBACK;
     }
 
     private String buildWhatsAppMessage(Booking booking) {

@@ -7,9 +7,10 @@ import lombok.NoArgsConstructor;
 
 import java.util.UUID;
 
-// Minimal mirror of event-service's EventResponseDTO. We only need tenantId
-// at booking creation so we can attribute loyalty transactions to the
-// owning tenant — the rest of the event payload is ignored.
+// Minimal mirror of event-service's EventResponseDTO. We capture `tenantId` at
+// booking creation (to attribute loyalty transactions to the owning tenant) and
+// `title` at confirmation time (for the WhatsApp e-ticket message's eventName) —
+// the rest of the event payload is ignored.
 @Data
 @Builder
 @NoArgsConstructor
@@ -18,4 +19,6 @@ public class EventLookupDTO {
 
     private UUID eventId;
     private String tenantId;
+    // Event display name, used as `eventName` on the WhatsApp e-ticket QR message.
+    private String title;
 }

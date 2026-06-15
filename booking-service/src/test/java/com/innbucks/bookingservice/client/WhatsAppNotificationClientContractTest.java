@@ -160,4 +160,81 @@ class WhatsAppNotificationClientContractTest {
                 .hasMessageContaining("1600");
         wireMock.verify(0, postRequestedFor(urlEqualTo("/api/messages/custom-notification")));
     }
+
+    // ---- POST /api/messages/event-qr-code (scannable e-ticket) ----
+
+    @Test
+    @DisplayName("e-ticket happy path: 200 → returns normally; pins the to/eventName/qrCodePath wire shape + header")
+    void sendEventQrCode_happyPath_postsExpectedPayloadAndHeader() {
+        wireMock.stubFor(post(urlEqualTo("/api/messages/event-qr-code"))
+                .willReturn(aResponse()
+                        .withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"status\":\"queued\"}")));
+
+        client.sendEventQrCode("+263782606983", "InnBucks Annual Gala 2025",
+                "/bookings/3fa85f64-5717-4562-b3fc-2c963f66afa6/tickets/20260615-22135L/qr");
+
+        wireMock.verify(postRequestedFor(urlEqualTo("/api/messages/event-qr-code"))
+                .withHeader("Content-Type", equalTo("application/json"))
+                .withHeader("x-api-key", equalTo("test-api-key"))
+                .withRequestBody(matchingJsonPath("$.to", equalTo("+263782606983")))
+                .withRequestBody(matchingJsonPath("$.eventName", equalTo("InnBucks Annual Gala 2025")))
+                .withRequestBody(matchingJsonPath("$.qrCodePath",
+                        equalTo("/bookings/3fa85f64-5717-4562-b3fc-2c963f66afa6/tickets/20260615-22135L/qr"))));
+    }
+
+    @Test
+    @DisplayName("e-ticket gateway 4xx → NotificationDeliveryException with HTTP code")
+    void sendEventQrCode_gatewayReturns4xx_throws() {
+        wireMock.stubFor(post(urlEqualTo("/api/messages/event-qr-code"))
+                .willReturn(aResponse().withStatus(422).withBody("{\"error\":\"template rejected\"}")));
+
+        assertThatThrownBy(() -> client.sendEventQrCode("+263782606983", "Gala", "/qrcodes/t.png"))
+                .isInstanceOf(NotificationDeliveryException.class)
+                .hasMessageContaining("HTTP 422");
+    }
+
+    @Test
+    @DisplayName("e-ticket gateway unreachable → NotificationDeliveryException")
+    void sendEventQrCode_unreachable_throws() throws Exception {
+        int closedPort;
+        try (java.net.ServerSocket s = new java.net.ServerSocket(0)) {
+            closedPort = s.getLocalPort();
+        }
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(Duration.ofMillis(500));
+        factory.setReadTimeout(Duration.ofMillis(500));
+        RestClient dead = RestClient.builder()
+                .baseUrl("http://localhost:" + closedPort)
+                .requestFactory(factory)
+                .build();
+        WhatsAppNotificationClient unreachable = new WhatsAppNotificationClient(dead, props);
+
+        assertThatThrownBy(() -> unreachable.sendEventQrCode("+263782606983", "Gala", "/qrcodes/t.png"))
+                .isInstanceOf(NotificationDeliveryException.class)
+                .hasMessageContaining("unreachable");
+    }
+
+    @Test
+    @DisplayName("e-ticket: a non-relative qrCodePath is rejected client-side (gateway prepends BASE_URL)")
+    void sendEventQrCode_absolutePath_noNetwork() {
+        assertThatThrownBy(() -> client.sendEventQrCode("+263782606983", "Gala",
+                "https://api.example.com/qrcodes/t.png"))
+                .isInstanceOf(NotificationDeliveryException.class)
+                .hasMessageContaining("qrCodePath");
+        wireMock.verify(0, postRequestedFor(urlEqualTo("/api/messages/event-qr-code")));
+    }
+
+    @Test
+    @DisplayName("e-ticket: blank eventName / recipient rejected client-side; gateway never sees it")
+    void sendEventQrCode_blankInputs_noNetwork() {
+        assertThatThrownBy(() -> client.sendEventQrCode("+263782606983", "  ", "/qrcodes/t.png"))
+                .isInstanceOf(NotificationDeliveryException.class)
+                .hasMessageContaining("eventName");
+        assertThatThrownBy(() -> client.sendEventQrCode(" ", "Gala", "/qrcodes/t.png"))
+                .isInstanceOf(NotificationDeliveryException.class)
+                .hasMessageContaining("Recipient");
+        wireMock.verify(0, postRequestedFor(urlEqualTo("/api/messages/event-qr-code")));
+    }
 }
