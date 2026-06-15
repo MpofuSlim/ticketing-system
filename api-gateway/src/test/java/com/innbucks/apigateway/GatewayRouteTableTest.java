@@ -45,7 +45,7 @@ class GatewayRouteTableTest {
             "user-auth-route", "user-admin-route", "user-internal-deny", "user-self-route",
             "event-availability-deny", "event-service-route",
             "seat-service-seat-route", "seat-service-category-route",
-            "booking-internal-deny", "booking-service-route",
+            "booking-internal-deny", "booking-service-route", "brand-assets-route",
             "payment-internal-deny", "payment-service-read-route", "payment-service-write-route",
             "loyalty-internal-deny", "loyalty-service-route",
             "user-service-proxy-route", "event-service-proxy-route",
@@ -67,8 +67,9 @@ class GatewayRouteTableTest {
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
             "user-admin-route", "user-self-route", "event-service-route",
             "seat-service-seat-route", "seat-service-category-route",
-            "booking-service-route", "payment-service-read-route",
-            "payment-service-write-route", "loyalty-service-route");
+            "booking-service-route", "brand-assets-route",
+            "payment-service-read-route", "payment-service-write-route",
+            "loyalty-service-route");
 
     private static final List<String> API_DOCS_PROXY_ROUTES = List.of(
             "user-service-proxy-route", "event-service-proxy-route",
@@ -152,6 +153,16 @@ class GatewayRouteTableTest {
         assertThat(predicateArgs("user-internal-deny", "Path")).containsExactly("/users/internal/**");
         assertThat(route("booking-internal-deny").getUri()).hasToString("forward:/__edge_deny__");
         assertThat(predicateArgs("booking-internal-deny", "Path")).containsExactly("/bookings/internal/**");
+    }
+
+    @Test
+    void brandAssetsRouteTargetsBookingServiceAtBrandPrefix() {
+        // /brand/** is a public static-asset path served by booking-service from
+        // classpath:/static/brand/. Pinned so a typo in the predicate (or the
+        // route silently being deleted) surfaces as a route-table test failure
+        // instead of a runtime 404 the FE only notices in WhatsApp / email.
+        assertThat(route("brand-assets-route").getUri()).hasToString("lb://booking-service");
+        assertThat(predicateArgs("brand-assets-route", "Path")).containsExactly("/brand/**");
     }
 
     @Test

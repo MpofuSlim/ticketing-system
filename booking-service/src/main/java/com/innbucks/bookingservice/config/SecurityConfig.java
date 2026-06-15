@@ -44,6 +44,13 @@ public class SecurityConfig {
                         // renders CONFIRMED bookings. NOT under /bookings/internal/**,
                         // so it routes through the public gateway normally.
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/bookings/*/tickets/**").permitAll()
+                        // Brand assets — public PNGs served from classpath:/static/brand/
+                        // (e.g. /brand/innbucks-logo.png) for the FE's WhatsApp templates,
+                        // HTML emails, etc. Same anonymous-public model as the ticket QR.
+                        // SecurityFilterChain + the gateway brand-assets-route both
+                        // permit this path; Spring's static-resource handler serves the
+                        // file from the booking-service jar.
+                        .requestMatchers(org.springframework.http.HttpMethod.GET, "/brand/**").permitAll()
                         // Guest web flow: customers can book without logging
                         // in. JWT is optional — when present, the customer's
                         // tier is enforced by TierAccessInterceptor. When
