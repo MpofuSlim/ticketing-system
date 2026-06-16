@@ -348,6 +348,40 @@ class BookingServiceTest {
     }
 
     @Test
+    void getBookingById_missing_throwsTypedNotFound_so404NotBare500() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        when(bookingRepo.findById(any())).thenReturn(Optional.empty());
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+
+        // Pin the TYPE, not just the message: GlobalExceptionHandler maps
+        // NotFoundException -> 404; a bare RuntimeException falls to the
+        // catch-all -> 500. Internal S2S callers + Swagger expect 404.
+        assertThrows(com.innbucks.bookingservice.exception.NotFoundException.class,
+                () -> service.getBookingById(UUID.randomUUID(), "u@example.com"));
+    }
+
+    @Test
+    void getBookingById_guestBookingWithNullEmail_deniesNonAdminWithoutNpe() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+
+        UUID id = UUID.randomUUID();
+        // Guest checkout leaves userEmail null. A logged-in non-admin requesting
+        // such a booking must get a clean 403, NOT a NullPointerException -> 500
+        // from booking.getUserEmail().equals(...).
+        Booking booking = Booking.builder().id(id).userEmail(null)
+                .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN).build();
+        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+
+        org.springframework.security.access.AccessDeniedException ex = assertThrows(
+                org.springframework.security.access.AccessDeniedException.class,
+                () -> service.getBookingById(id, "someone@example.com"));
+        assertEquals("Access denied", ex.getMessage());
+    }
+
+    @Test
     void cancelBooking_byOwner_transitionsPendingToCancelled() {
         BookingRepository bookingRepo = mock(BookingRepository.class);
         BookingService service = newService(bookingRepo,
