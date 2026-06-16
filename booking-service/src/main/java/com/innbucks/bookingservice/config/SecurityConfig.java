@@ -37,6 +37,11 @@ public class SecurityConfig {
                         .requestMatchers("/error").permitAll()
                         // Confirmation lookup is public — agents scan at the gate
                         .requestMatchers("/bookings/confirmation/**").permitAll()
+                        // Public booking lookup by id — same bearer-credential model as
+                        // /bookings/confirmation/** (UUID is the access token). Distinct
+                        // path from the authenticated GET /bookings/{id} above so the
+                        // access model is explicit at the URL.
+                        .requestMatchers(HttpMethod.GET, "/bookings/public/**").permitAll()
                         // Public ticket artifacts (QR PNG + HTML view page) linked
                         // from the confirmation email/WhatsApp — opened with no app
                         // session. Bearer-instrument model: the unguessable booking
