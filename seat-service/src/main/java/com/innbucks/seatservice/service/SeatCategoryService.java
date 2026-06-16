@@ -21,7 +21,6 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -193,10 +192,11 @@ public class SeatCategoryService {
         }
 
         // One booking-service round trip covers every category in the event;
-        // empty Optional (booking-service down) → each category falls back to
+        // null counts (booking-service down) → each category falls back to
         // its stored mirror inside liveAvailableSeats.
-        Optional<Map<UUID, Long>> counts =
-                bookingServiceClient.fetchActiveCountsByCategories(categoryIds);
+        Map<UUID, Long> counts = bookingServiceClient
+                .fetchActiveCountsByCategories(categoryIds)
+                .orElse(null);
 
         return categories.stream()
                 .map(category -> toCreateResponseDTO(
@@ -304,18 +304,18 @@ public class SeatCategoryService {
      * for an event's availableTickets, so the per-category numbers and the
      * event card always tally.
      *
-     * <p>When {@code counts} is empty (booking-service unreachable) we degrade
-     * to the category's stored {@code availableSeats} mirror rather than fail
-     * the read — a public category listing must not 500 because booking-service
-     * is down. A category absent from a present {@code counts} map has zero
-     * active bookings, so it reads as full capacity.
+     * <p>When {@code counts} is {@code null} (booking-service unreachable) we
+     * degrade to the category's stored {@code availableSeats} mirror rather
+     * than fail the read — a public category listing must not 500 because
+     * booking-service is down. A category absent from a non-null {@code counts}
+     * map has zero active bookings, so it reads as full capacity.
      */
-    private int liveAvailableSeats(SeatCategory category, Optional<Map<UUID, Long>> counts) {
+    private int liveAvailableSeats(SeatCategory category, Map<UUID, Long> counts) {
         int total = category.getTotalSeats() == null ? 0 : category.getTotalSeats();
-        if (counts.isEmpty()) {
+        if (counts == null) {
             return category.getAvailableSeats() == null ? total : category.getAvailableSeats();
         }
-        long active = counts.get().getOrDefault(category.getId(), 0L);
+        long active = counts.getOrDefault(category.getId(), 0L);
         return (int) Math.max(0L, total - active);
     }
 }
