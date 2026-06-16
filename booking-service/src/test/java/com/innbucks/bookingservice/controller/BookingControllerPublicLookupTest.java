@@ -61,6 +61,11 @@ class BookingControllerPublicLookupTest {
         assertThat(resp.getBody()).isNotNull();
         assertThat(resp.getBody().getData().getId()).isEqualTo(id);
         assertThat(resp.getBody().getData().getConfirmationNumber()).isEqualTo("INN-20260615-AB12CD");
+        // Must be uncacheable: this is the FE's payment-polling target and its
+        // body transitions PENDING -> CONFIRMED. A cached PENDING snapshot would
+        // strand the customer on "awaiting confirmation", so the response pins
+        // Cache-Control: no-store. Regression-guard the header here.
+        assertThat(resp.getHeaders().getCacheControl()).contains("no-store");
         // PII-free by construction: the trimmed DTO has no email/phone/tenant
         // fields at all (compile-time guarantee, asserted here for intent).
         assertThat(PublicBookingResponseDTO.class.getDeclaredFields())
