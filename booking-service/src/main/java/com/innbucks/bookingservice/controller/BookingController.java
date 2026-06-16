@@ -8,6 +8,7 @@ import com.innbucks.bookingservice.dto.ExtendHoldRequestDTO;
 import com.innbucks.bookingservice.dto.CategoryBookingDTO;
 import com.innbucks.bookingservice.dto.ConfirmBookingRequestDTO;
 import com.innbucks.bookingservice.dto.CreateBookingRequestDTO;
+import com.innbucks.bookingservice.dto.PublicBookingResponseDTO;
 import com.innbucks.bookingservice.dto.EventActiveCountDTO;
 import com.innbucks.bookingservice.security.JwtAuthDetails;
 import com.innbucks.bookingservice.security.MinTier;
@@ -353,23 +354,23 @@ public class BookingController {
      */
     @GetMapping("/public/{id}")
     @SecurityRequirements({})
-    @Operation(summary = "Get booking by id (public)",
+    @Operation(summary = "Get booking by id (public, PII-free)",
             description = "Public lookup of a booking by UUID. No authentication required — access "
                     + "control is the unguessable UUID, same model as the existing public lookup by "
-                    + "confirmation number. Returns the same shape as the authenticated GET /bookings/{id}, "
-                    + "404 if the id is unknown.")
+                    + "confirmation number. Returns a TRIMMED, PII-free view (PublicBookingResponseDTO): "
+                    + "no userEmail / phoneNumber / tenantId / payment-split. Use the authenticated "
+                    + "GET /bookings/{id} for the full owner view. 404 if the id is unknown.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "200", description = "Booking returned",
+                    responseCode = "200", description = "Booking returned (trimmed view)",
                     content = @Content(mediaType = "application/json",
-                            schema = @Schema(implementation = BookingResponseDTO.class),
+                            schema = @Schema(implementation = PublicBookingResponseDTO.class),
                             examples = @ExampleObject(name = "Public lookup by id", value = """
                                     {
                                       "code": "200 OK",
                                       "message": "Booking retrieved successfully",
                                       "data": {
                                         "id": "a3b9c1d2-1234-5678-9abc-def012345678",
-                                        "userEmail": "alice@example.com",
                                         "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                         "confirmationNumber": "INN-20260502-AB12CD",
                                         "status": "CONFIRMED",
@@ -387,7 +388,7 @@ public class BookingController {
                                           }
                                         ],
                                         "createdAt": "2026-05-02T15:45:00",
-                                        "updatedAt": "2026-05-02T15:50:00"
+                                        "expiresAt": null
                                       }
                                     }
                                     """))),
@@ -402,7 +403,7 @@ public class BookingController {
                                     }
                                     """)))
     })
-    public ResponseEntity<ApiResult<BookingResponseDTO>> getBookingByIdPublic(@PathVariable UUID id) {
+    public ResponseEntity<ApiResult<PublicBookingResponseDTO>> getBookingByIdPublic(@PathVariable UUID id) {
         log.debug("GET /bookings/public/{} (public lookup)", id);
         return ResponseEntity.ok(ApiResult.ok("Booking retrieved successfully",
                 bookingService.getBookingByIdPublic(id)));

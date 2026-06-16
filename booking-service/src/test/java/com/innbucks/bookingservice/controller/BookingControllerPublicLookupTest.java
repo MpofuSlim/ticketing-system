@@ -2,7 +2,7 @@ package com.innbucks.bookingservice.controller;
 
 import com.innbucks.bookingservice.client.UserServiceClient;
 import com.innbucks.bookingservice.dto.ApiResult;
-import com.innbucks.bookingservice.dto.BookingResponseDTO;
+import com.innbucks.bookingservice.dto.PublicBookingResponseDTO;
 import com.innbucks.bookingservice.exception.NotFoundException;
 import com.innbucks.bookingservice.service.BookingService;
 import com.innbucks.bookingservice.service.EventChangeNotificationService;
@@ -24,10 +24,11 @@ import static org.mockito.Mockito.when;
 /**
  * Unit tests for the public {@code GET /bookings/public/{id}} lookup.
  *
- * <p>Pins the contract: returns the same {@link BookingResponseDTO} shape as
- * the authenticated lookup, requires NO authentication (the UUID is the
- * bearer credential — same model as {@code /bookings/confirmation/{number}}),
- * does NOT call the ownership-scoped service path, and 404s on unknown ids.
+ * <p>Pins the contract: returns the trimmed, PII-free
+ * {@link PublicBookingResponseDTO} (no userEmail / phoneNumber fields at all),
+ * requires NO authentication (the UUID is the bearer credential — same model
+ * as {@code /bookings/confirmation/{number}}), does NOT call the
+ * ownership-scoped service path, and 404s on unknown ids.
  */
 class BookingControllerPublicLookupTest {
 
@@ -38,10 +39,9 @@ class BookingControllerPublicLookupTest {
                 mock(EventChangeNotificationService.class));
     }
 
-    private static BookingResponseDTO bookingDto(UUID id) {
-        return BookingResponseDTO.builder()
+    private static PublicBookingResponseDTO bookingDto(UUID id) {
+        return PublicBookingResponseDTO.builder()
                 .id(id)
-                .userEmail("alice@example.com")
                 .confirmationNumber("INN-20260615-AB12CD")
                 .status(com.innbucks.bookingservice.entity.Booking.BookingStatus.CONFIRMED)
                 .totalAmount(new BigDecimal("100.00"))
@@ -54,13 +54,18 @@ class BookingControllerPublicLookupTest {
         UUID id = UUID.randomUUID();
         when(bookingService.getBookingByIdPublic(id)).thenReturn(bookingDto(id));
 
-        ResponseEntity<ApiResult<BookingResponseDTO>> resp =
+        ResponseEntity<ApiResult<PublicBookingResponseDTO>> resp =
                 controller(bookingService).getBookingByIdPublic(id);
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody()).isNotNull();
         assertThat(resp.getBody().getData().getId()).isEqualTo(id);
         assertThat(resp.getBody().getData().getConfirmationNumber()).isEqualTo("INN-20260615-AB12CD");
+        // PII-free by construction: the trimmed DTO has no email/phone/tenant
+        // fields at all (compile-time guarantee, asserted here for intent).
+        assertThat(PublicBookingResponseDTO.class.getDeclaredFields())
+                .extracting(java.lang.reflect.Field::getName)
+                .doesNotContain("userEmail", "phoneNumber", "tenantId", "pointsUsed", "cashAmount");
 
         // The ownership-scoped variant must NOT be called — that's the whole
         // point of the public path (would 403 a non-owner / NPE without an auth).

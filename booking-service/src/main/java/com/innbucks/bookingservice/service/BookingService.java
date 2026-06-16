@@ -493,13 +493,47 @@ public class BookingService {
      * {@link #getBookingById(UUID, String, boolean)} above which does scope by
      * owner email — that one stays as-is for the authenticated lookup.
      */
-    public BookingResponseDTO getBookingByIdPublic(UUID bookingId) {
+    public PublicBookingResponseDTO getBookingByIdPublic(UUID bookingId) {
         log.debug("Public fetch by id bookingId={}", bookingId);
-        return toDTO(bookingRepository.findById(bookingId)
+        return toPublicDTO(bookingRepository.findById(bookingId)
                 .orElseThrow(() -> {
                     log.warn("Public booking lookup by id failed, not found bookingId={}", bookingId);
                     return new com.innbucks.bookingservice.exception.NotFoundException("Booking not found");
                 }));
+    }
+
+    /**
+     * PII-free projection for the public {@code GET /bookings/public/{id}}
+     * lookup. Drops userEmail / phoneNumber / tenantId / pointsUsed /
+     * cashAmount / updatedAt vs {@link #toDTO}; keeps the tickets (+ QR) so a
+     * magic-link view can still render the e-tickets.
+     */
+    private PublicBookingResponseDTO toPublicDTO(Booking booking) {
+        List<BookingItemDTO> itemDTOs = booking.getItems() == null
+                ? List.of()
+                : booking.getItems().stream()
+                  .map(i -> BookingItemDTO.builder()
+                            .seatId(i.getSeatId())
+                            .categoryId(i.getCategoryId())
+                            .categoryName(i.getCategoryName())
+                            .rowLabel(i.getRowLabel())
+                            .seatNumber(i.getSeatNumber())
+                            .priceAtBooking(i.getPriceAtBooking())
+                            .ticketNumber(i.getTicketNumber())
+                            .qrCode(qrCodeGenerator.toDataUri(i.getTicketNumber()))
+                            .build())
+                  .collect(Collectors.toList());
+
+        return PublicBookingResponseDTO.builder()
+                .id(booking.getId())
+                .eventId(booking.getEventId())
+                .confirmationNumber(booking.getConfirmationNumber())
+                .status(booking.getStatus())
+                .totalAmount(booking.getTotalAmount())
+                .items(itemDTOs)
+                .createdAt(booking.getCreatedAt())
+                .expiresAt(booking.getExpiresAt())
+                .build();
     }
 
     @Transactional
