@@ -105,8 +105,8 @@ class BookingConfirmedNotificationListenerTest {
         ArgumentCaptor<String> path = ArgumentCaptor.forClass(String.class);
         verify(m.wa(), times(2)).sendEventQrCode(eq("+263771234567"), anyString(), path.capture());
         assertThat(path.getAllValues()).containsExactlyInAnyOrder(
-                "/bookings/" + b.getId() + "/tickets/20260610-T1/qr",
-                "/bookings/" + b.getId() + "/tickets/20260610-T2/qr");
+                "/bookings/" + b.getId() + "/tickets/20260610-T1/qr.png",
+                "/bookings/" + b.getId() + "/tickets/20260610-T2/qr.png");
         verify(m.wa(), never()).sendCustomNotification(anyString(), anyString());
     }
 
@@ -180,7 +180,7 @@ class BookingConfirmedNotificationListenerTest {
         doThrow(new NotificationDeliveryException("media fetch 404"))
                 .doNothing()
                 .when(m.wa()).sendEventQrCode(anyString(), anyString(),
-                        eq("/bookings/" + b.getId() + "/tickets/20260610-T1/qr"));
+                        eq("/bookings/" + b.getId() + "/tickets/20260610-T1/qr.png"));
 
         assertThatCode(() -> m.listener().onBookingConfirmed(eventFor(b))).doesNotThrowAnyException();
 

@@ -48,11 +48,20 @@ public class TicketController {
 
     private final TicketRenderingService ticketRenderingService;
 
-    @GetMapping(value = "/{bookingId}/tickets/{ticketNumber}/qr", produces = MediaType.IMAGE_PNG_VALUE)
+    // Served at both `/qr` and `/qr.png` (identical PNG bytes + Content-Type:
+    // image/png). The `.png` form is what the WhatsApp e-ticket send uses in
+    // qrCodePath, so the media URL Twilio fetches ends in a recognised image
+    // extension; `/qr` stays so the email's <img> and any cached links keep
+    // working. Boot 4 / PathPattern does no suffix stripping, so `.png` is a
+    // literal path segment (no content-negotiation surprises).
+    @GetMapping(
+            value = {"/{bookingId}/tickets/{ticketNumber}/qr", "/{bookingId}/tickets/{ticketNumber}/qr.png"},
+            produces = MediaType.IMAGE_PNG_VALUE)
     @SecurityRequirements({})
     @Operation(summary = "Scannable ticket QR (PNG)",
             description = "Public. Returns the QR image for one ticket of a CONFIRMED booking — the target of "
-                    + "the <img> in the confirmation email. 404 if the booking isn't CONFIRMED or the ticket "
+                    + "the <img> in the confirmation email and the WhatsApp e-ticket. Available at both "
+                    + "`/qr` and `/qr.png` (identical PNG). 404 if the booking isn't CONFIRMED or the ticket "
                     + "number doesn't belong to it.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
