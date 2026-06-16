@@ -14,6 +14,11 @@
     <description>Manages bookings, confirmation numbers and ticket generation</description>
 
     <dependencies>
+        <dependency>
+            <groupId>com.googlecode.libphonenumber</groupId>
+            <artifactId>libphonenumber</artifactId>
+            <version>9.0.30</version>
+        </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>

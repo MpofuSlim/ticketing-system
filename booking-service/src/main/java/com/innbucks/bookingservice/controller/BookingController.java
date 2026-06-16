@@ -76,6 +76,14 @@ public class BookingController {
     @Value("${innbucks.internal-api-token}")
     private String expectedInternalToken;
 
+    /**
+     * Cell country (ISO 3166-1 alpha-2), used as the default region when
+     * validating a customer-supplied phone number that lacks a {@code +}
+     * country code. Same pin the rest of the service uses.
+     */
+    @Value("${innbucks.country:ZW}")
+    private String deploymentCountry;
+
     @PostMapping
     @Operation(summary = "Create booking", description = "Creates a new pending booking. The customer's tier is resolved from user-service via the phone number — JWT phone wins when present, otherwise the request body's `phoneNumber`. " +
             "Returns 404 if the phone number is not registered in user-service. Per-tier seat-count limits in BookingService still apply.")
@@ -137,6 +145,18 @@ public class BookingController {
         if (phoneNumber == null || phoneNumber.isBlank()) {
             throw new BadRequestException("Please provide your phone number.");
         }
+        // Validate + canonicalise to E.164 before it's stored and later sent to
+        // WhatsApp. A malformed number (wrong length for its country, stray
+        // characters) otherwise sails through to Twilio and fails delivery with
+        // error 63024 ("invalid recipient") long after the booking is created —
+        // a silent no-ticket. Reject it here with an actionable 400 instead, and
+        // store the normalised +E.164 form so downstream always has a clean value.
+        String normalizedPhone = com.innbucks.bookingservice.util.MsisdnValidator
+                .normalizeToE164(phoneNumber, deploymentCountry)
+                .orElseThrow(() -> new BadRequestException(
+                        "That phone number doesn't look valid. Please enter it in full "
+                                + "international format, e.g. +263772000000."));
+        phoneNumber = normalizedPhone;
 
         // Look up the customer's current tier in user-service — but ONLY for
         // AUTHENTICATED callers. An anonymous (phone-only) booking is a guest
