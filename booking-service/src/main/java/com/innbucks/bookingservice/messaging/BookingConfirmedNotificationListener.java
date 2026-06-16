@@ -142,7 +142,11 @@ public class BookingConfirmedNotificationListener {
             if (tn == null || tn.isBlank()) {
                 continue;
             }
-            String qrCodePath = "/bookings/" + booking.getId() + "/tickets/" + tn + "/qr";
+            // `.png` suffix: the WhatsApp gateway / Twilio media fetch is
+            // happier with a recognised image extension on the URL. The endpoint
+            // serves the identical PNG at both /qr and /qr.png (TicketController),
+            // so this only changes the URL string, not the bytes or Content-Type.
+            String qrCodePath = "/bookings/" + booking.getId() + "/tickets/" + tn + "/qr.png";
             try {
                 whatsApp.sendEventQrCode(phone, eventName, qrCodePath);
                 sent++;
