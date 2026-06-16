@@ -182,6 +182,7 @@ public class SeatCategoryController {
                                         "name": "VIP",
                                         "description": "Front rows",
                                         "price": 100.00,
+                                        "availableSeats": 50,
                                         "sections": [
                                           { "section": "A", "seatCount": 25 },
                                           { "section": "B", "seatCount": 25 }
