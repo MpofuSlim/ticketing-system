@@ -61,7 +61,12 @@ public class SeatCategoryController {
 
     @GetMapping
     @SecurityRequirements()
-    @Operation(summary = "List categories by event", description = "Returns all active seat categories for a given event.")
+    @Operation(summary = "List categories by event",
+            description = "Returns all active seat categories for a given event, each with a live "
+                    + "`availableSeats` = totalSeats − active (PENDING + CONFIRMED) bookings, so the FE can "
+                    + "show tickets remaining per category and customers can track seats left as they sell. "
+                    + "If booking-service is unreachable this degrades to the stored mirror rather than "
+                    + "failing the listing. Public read.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -80,6 +85,7 @@ public class SeatCategoryController {
                                           "name": "VIP",
                                           "description": "Front rows",
                                           "price": 100.00,
+                                          "availableSeats": 13,
                                           "sections": [
                                             { "section": "A", "seatCount": 25 },
                                             { "section": "B", "seatCount": 25 }
@@ -91,6 +97,7 @@ public class SeatCategoryController {
                                           "name": "GA",
                                           "description": "General admission",
                                           "price": 60.00,
+                                          "availableSeats": 38,
                                           "sections": [
                                             { "section": "F", "seatCount": 50 }
                                           ]

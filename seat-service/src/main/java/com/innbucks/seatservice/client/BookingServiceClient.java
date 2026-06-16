@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.innbucks.seatservice.config.CorrelationIdPropagatingInterceptor;
 import com.innbucks.seatservice.dto.ApiResult;
+import com.innbucks.seatservice.dto.CategoryActiveCountDTO;
 import com.innbucks.seatservice.dto.CategoryBookingDTO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -14,7 +15,10 @@ import org.springframework.web.client.ResourceAccessException;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.client.RestClientException;
 
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -54,6 +58,65 @@ public class BookingServiceClient {
         f.setConnectTimeout(connectMs);
         f.setReadTimeout(readMs);
         return f;
+    }
+
+    /**
+     * Fetches the live active-booking count per category so callers can render
+     * {@code availableSeats = totalSeats − count}. Returns the counts keyed by
+     * categoryId; categories with no active bookings are absent from the map
+     * (the caller reads a missing key as "full capacity remaining").
+     *
+     * <p>This is the public {@code GET /bookings/categories/active-counts}
+     * endpoint (permitAll), so unlike the analytics calls it carries no
+     * Authorization header. On any failure (timeout, 5xx, parse) an empty
+     * Optional is returned so the category read degrades to its stored mirror
+     * rather than failing — never let booking-service downtime 500 a public
+     * category listing.
+     */
+    public Optional<Map<UUID, Long>> fetchActiveCountsByCategories(Collection<UUID> categoryIds) {
+        if (categoryIds == null || categoryIds.isEmpty()) {
+            return Optional.of(Map.of());
+        }
+        try {
+            String body = restClient.get()
+                    .uri(uriBuilder -> {
+                        uriBuilder.path("/bookings/categories/active-counts");
+                        for (UUID id : categoryIds) {
+                            uriBuilder.queryParam("categoryIds", id.toString());
+                        }
+                        return uriBuilder.build();
+                    })
+                    .retrieve()
+                    .body(String.class);
+            if (body == null) {
+                return Optional.of(Map.of());
+            }
+            ApiResult<List<CategoryActiveCountDTO>> envelope = objectMapper.readValue(
+                    body,
+                    new TypeReference<ApiResult<List<CategoryActiveCountDTO>>>() {}
+            );
+            Map<UUID, Long> counts = new HashMap<>();
+            if (envelope.getData() != null) {
+                for (CategoryActiveCountDTO row : envelope.getData()) {
+                    if (row.getCategoryId() != null) {
+                        counts.put(row.getCategoryId(), row.getCount());
+                    }
+                }
+            }
+            return Optional.of(counts);
+        } catch (ResourceAccessException e) {
+            log.warn("booking-service unreachable for category counts categoryIds={} cause={}",
+                    categoryIds, e.toString());
+            return Optional.empty();
+        } catch (RestClientException e) {
+            log.warn("booking-service returned an error for category counts categoryIds={} cause={}",
+                    categoryIds, e.toString());
+            return Optional.empty();
+        } catch (Exception e) {
+            log.warn("Failed to parse booking-service category counts categoryIds={} cause={}",
+                    categoryIds, e.toString());
+            return Optional.empty();
+        }
     }
 
     public Optional<List<CategoryBookingDTO>> fetchBookingsByCategory(UUID categoryId, String authHeader) {

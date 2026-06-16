@@ -1,5 +1,7 @@
 package com.innbucks.seatservice.service;
 
+import com.innbucks.seatservice.client.BookingServiceClient;
+import com.innbucks.seatservice.client.EventServiceClient;
 import com.innbucks.seatservice.dto.CreateCategoryRequestDTO;
 import com.innbucks.seatservice.dto.CreateCategoryResponseDTO;
 import com.innbucks.seatservice.dto.SectionSeatConfigDTO;
@@ -9,10 +11,14 @@ import com.innbucks.seatservice.repository.SeatCategoryRepository;
 import com.innbucks.seatservice.repository.SeatRepository;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.beans.factory.ObjectProvider;
 
 import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -20,6 +26,22 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.Mockito.*;
 
 class SeatCategoryServiceTest {
+
+    // The service constructor takes (categoryRepo, seatRepo, bookingServiceClient,
+    // ObjectProvider<EventServiceClient>). Most tests don't exercise the booking
+    // client, so this helper supplies a default mock; the live-availability tests
+    // pass their own stubbed client.
+    @SuppressWarnings("unchecked")
+    private SeatCategoryService service(SeatCategoryRepository catRepo,
+                                        SeatRepository seatRepo,
+                                        BookingServiceClient bookingClient) {
+        return new SeatCategoryService(catRepo, seatRepo, bookingClient,
+                (ObjectProvider<EventServiceClient>) mock(ObjectProvider.class));
+    }
+
+    private SeatCategoryService service(SeatCategoryRepository catRepo, SeatRepository seatRepo) {
+        return service(catRepo, seatRepo, mock(BookingServiceClient.class));
+    }
 
     private SectionSeatConfigDTO section(String label, int count) {
         SectionSeatConfigDTO s = new SectionSeatConfigDTO();
@@ -37,11 +59,23 @@ class SeatCategoryServiceTest {
         return req;
     }
 
+    private SeatCategory category(UUID id, UUID eventId, int total, int storedAvailable) {
+        return SeatCategory.builder()
+                .id(id)
+                .eventId(eventId)
+                .name("Cat-" + id)
+                .price(new BigDecimal("10.00"))
+                .totalSeats(total)
+                .availableSeats(storedAvailable)
+                .deleted(false)
+                .build();
+    }
+
     @Test
     void createCategory_autoGeneratesSeatsPerSection_andInitializesAvailability() {
         SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
         SeatRepository seatRepo = mock(SeatRepository.class);
-        SeatCategoryService service = new SeatCategoryService(catRepo, seatRepo, org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class));
+        SeatCategoryService service = service(catRepo, seatRepo);
         UUID eventId = UUID.randomUUID();
 
         CreateCategoryResponseDTO resp = service.createCategory(
@@ -63,13 +97,15 @@ class SeatCategoryServiceTest {
 
         assertEquals("VIP", resp.getName());
         assertEquals(2, resp.getSections().size());
+        // Just created — no bookings yet, so the response reports full capacity.
+        assertEquals(5, resp.getAvailableSeats());
     }
 
     @Test
     void createCategory_rejectsDuplicateCategoryNameForSameEvent() {
         SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
         SeatRepository seatRepo = mock(SeatRepository.class);
-        SeatCategoryService service = new SeatCategoryService(catRepo, seatRepo, org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class));
+        SeatCategoryService service = service(catRepo, seatRepo);
         UUID eventId = UUID.randomUUID();
         when(catRepo.existsByEventIdAndNameAndDeletedFalse(eventId, "VIP")).thenReturn(true);
 
@@ -82,9 +118,8 @@ class SeatCategoryServiceTest {
 
     @Test
     void createCategory_rejectsDuplicateSectionsCaseInsensitively() {
-        SeatCategoryService service = new SeatCategoryService(
-                mock(SeatCategoryRepository.class), mock(SeatRepository.class),
-                org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class));
+        SeatCategoryService service = service(
+                mock(SeatCategoryRepository.class), mock(SeatRepository.class));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
                 () -> service.createCategory(request(UUID.randomUUID(), "VIP",
@@ -96,7 +131,7 @@ class SeatCategoryServiceTest {
     void createCategory_normalizesSectionLabelToUppercase() {
         SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
         SeatRepository seatRepo = mock(SeatRepository.class);
-        SeatCategoryService service = new SeatCategoryService(catRepo, seatRepo, org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class));
+        SeatCategoryService service = service(catRepo, seatRepo);
 
         service.createCategory(request(UUID.randomUUID(), "VIP",
                 List.of(section(" a ", 2))));
@@ -112,8 +147,7 @@ class SeatCategoryServiceTest {
     void createCategory_rejectsTotalSeatsAboveAggregateCap() {
         SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
         SeatRepository seatRepo = mock(SeatRepository.class);
-        SeatCategoryService service = new SeatCategoryService(catRepo, seatRepo,
-                org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class));
+        SeatCategoryService service = service(catRepo, seatRepo);
 
         // 6 sections × 100,000 seats = 600,000 — within per-section @Max (100k)
         // and sections @Size (100), but above the service's 500k aggregate cap.
@@ -136,8 +170,7 @@ class SeatCategoryServiceTest {
     void createCategory_acceptsSeatsExactlyAtAggregateCap() {
         SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
         SeatRepository seatRepo = mock(SeatRepository.class);
-        SeatCategoryService service = new SeatCategoryService(catRepo, seatRepo,
-                org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class));
+        SeatCategoryService service = service(catRepo, seatRepo);
 
         // 5 × 100,000 = 500,000 — exactly the cap, must succeed.
         List<SectionSeatConfigDTO> sections = List.of(
@@ -154,15 +187,108 @@ class SeatCategoryServiceTest {
     @Test
     void deleteCategory_softDeletes() {
         SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
-        SeatCategoryService service = new SeatCategoryService(catRepo, mock(SeatRepository.class), org.mockito.Mockito.mock(org.springframework.beans.factory.ObjectProvider.class));
+        SeatCategoryService service = service(catRepo, mock(SeatRepository.class));
 
         UUID id = UUID.randomUUID();
         SeatCategory category = SeatCategory.builder().id(id).name("VIP").deleted(false).build();
-        when(catRepo.findById(id)).thenReturn(java.util.Optional.of(category));
+        when(catRepo.findById(id)).thenReturn(Optional.of(category));
 
         service.deleteCategory(id);
 
         assertTrue(category.isDeleted());
         verify(catRepo).save(category);
+    }
+
+    // ---- Live availableSeats on the FE-facing list endpoint ------------------
+
+    @Test
+    void getCategoriesByEvent_setsLiveAvailableSeats_fromBookingServiceCount() {
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        BookingServiceClient booking = mock(BookingServiceClient.class);
+        UUID eventId = UUID.randomUUID();
+        UUID vip = UUID.randomUUID();
+        UUID ga = UUID.randomUUID();
+
+        when(catRepo.findByEventIdAndDeletedFalse(eventId)).thenReturn(List.of(
+                category(vip, eventId, 50, 50), category(ga, eventId, 50, 50)));
+        when(seatRepo.findByCategoryIdIn(anyList())).thenReturn(List.of());
+        when(booking.fetchActiveCountsByCategories(any()))
+                .thenReturn(Optional.of(Map.of(vip, 37L, ga, 12L)));
+
+        Map<UUID, Integer> avail = availabilityByCategory(
+                service(catRepo, seatRepo, booking).getCategoriesByEvent(eventId));
+
+        assertEquals(13, avail.get(vip), "50 total − 37 active");
+        assertEquals(38, avail.get(ga), "50 total − 12 active");
+    }
+
+    @Test
+    void getCategoriesByEvent_categoryWithNoActiveBookings_readsFullCapacity() {
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        BookingServiceClient booking = mock(BookingServiceClient.class);
+        UUID eventId = UUID.randomUUID();
+        UUID vip = UUID.randomUUID();
+        UUID ga = UUID.randomUUID();
+
+        when(catRepo.findByEventIdAndDeletedFalse(eventId)).thenReturn(List.of(
+                category(vip, eventId, 50, 50), category(ga, eventId, 50, 50)));
+        when(seatRepo.findByCategoryIdIn(anyList())).thenReturn(List.of());
+        // Only VIP appears in the counts; GA is absent → no active bookings → full.
+        when(booking.fetchActiveCountsByCategories(any()))
+                .thenReturn(Optional.of(Map.of(vip, 50L)));
+
+        Map<UUID, Integer> avail = availabilityByCategory(
+                service(catRepo, seatRepo, booking).getCategoriesByEvent(eventId));
+
+        assertEquals(0, avail.get(vip), "sold out");
+        assertEquals(50, avail.get(ga), "absent from counts → full capacity");
+    }
+
+    @Test
+    void getCategoriesByEvent_clampsNegativeToZero_whenCountExceedsCapacity() {
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        BookingServiceClient booking = mock(BookingServiceClient.class);
+        UUID eventId = UUID.randomUUID();
+        UUID vip = UUID.randomUUID();
+
+        when(catRepo.findByEventIdAndDeletedFalse(eventId))
+                .thenReturn(List.of(category(vip, eventId, 50, 50)));
+        when(seatRepo.findByCategoryIdIn(anyList())).thenReturn(List.of());
+        when(booking.fetchActiveCountsByCategories(any()))
+                .thenReturn(Optional.of(Map.of(vip, 60L)));
+
+        Map<UUID, Integer> avail = availabilityByCategory(
+                service(catRepo, seatRepo, booking).getCategoriesByEvent(eventId));
+
+        assertEquals(0, avail.get(vip), "never negative");
+    }
+
+    @Test
+    void getCategoriesByEvent_bookingServiceDown_fallsBackToStoredMirror() {
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        BookingServiceClient booking = mock(BookingServiceClient.class);
+        UUID eventId = UUID.randomUUID();
+        UUID vip = UUID.randomUUID();
+
+        // Stored mirror says 20 available; booking-service is unreachable.
+        when(catRepo.findByEventIdAndDeletedFalse(eventId))
+                .thenReturn(List.of(category(vip, eventId, 50, 20)));
+        when(seatRepo.findByCategoryIdIn(anyList())).thenReturn(List.of());
+        when(booking.fetchActiveCountsByCategories(any())).thenReturn(Optional.empty());
+
+        Map<UUID, Integer> avail = availabilityByCategory(
+                service(catRepo, seatRepo, booking).getCategoriesByEvent(eventId));
+
+        assertEquals(20, avail.get(vip), "falls back to stored availableSeats");
+    }
+
+    private Map<UUID, Integer> availabilityByCategory(List<CreateCategoryResponseDTO> result) {
+        return result.stream().collect(Collectors.toMap(
+                CreateCategoryResponseDTO::getSeatCategoryId,
+                CreateCategoryResponseDTO::getAvailableSeats));
     }
 }

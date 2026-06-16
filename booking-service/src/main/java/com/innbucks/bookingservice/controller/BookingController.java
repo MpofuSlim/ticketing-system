@@ -10,6 +10,7 @@ import com.innbucks.bookingservice.dto.ConfirmBookingRequestDTO;
 import com.innbucks.bookingservice.dto.CreateBookingRequestDTO;
 import com.innbucks.bookingservice.dto.PublicBookingResponseDTO;
 import com.innbucks.bookingservice.dto.EventActiveCountDTO;
+import com.innbucks.bookingservice.dto.CategoryActiveCountDTO;
 import com.innbucks.bookingservice.security.JwtAuthDetails;
 import com.innbucks.bookingservice.security.MinTier;
 import com.innbucks.bookingservice.security.TierAccessInterceptor;
@@ -702,6 +703,43 @@ public class BookingController {
         log.debug("GET /bookings/active-counts eventIds={}", eventIds);
         return ResponseEntity.ok(ApiResult.ok("Active booking counts retrieved successfully",
                 bookingService.getActiveItemCountsByEvents(eventIds)));
+    }
+
+    @GetMapping("/categories/active-counts")
+    @SecurityRequirements()
+    @Operation(
+            summary = "Active booking item counts per category",
+            description = "Internal endpoint used by seat-service to compute a live `availableSeats` " +
+                    "per seat category (`totalSeats − count`). Returns one row per supplied categoryId " +
+                    "that has at least one PENDING or CONFIRMED booking item; categoryIds with no active " +
+                    "bookings are absent from the response (the caller reads them as full capacity). " +
+                    "CANCELLED bookings are excluded so released holds free capacity immediately."
+    )
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Counts returned",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = CategoryActiveCountDTO.class),
+                            examples = @ExampleObject(name = "Active category counts", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Active category counts retrieved successfully",
+                                      "data": [
+                                        { "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11", "count": 37 },
+                                        { "categoryId": "9e2c5b4f-2d1f-4a28-8b1c-2e5c8a7b6d22", "count": 12 }
+                                      ]
+                                    }
+                                    """)
+                    )
+            )
+    })
+    public ResponseEntity<ApiResult<List<CategoryActiveCountDTO>>> getCategoryActiveCounts(
+            @RequestParam("categoryIds") List<UUID> categoryIds) {
+        log.debug("GET /bookings/categories/active-counts categoryIds={}", categoryIds);
+        return ResponseEntity.ok(ApiResult.ok("Active category counts retrieved successfully",
+                bookingService.getActiveItemCountsByCategories(categoryIds)));
     }
 
     @GetMapping("/confirmation/{number}")

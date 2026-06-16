@@ -64,6 +64,9 @@ public class SecurityConfig {
                         // Internal endpoint: event-service reads it to compute
                         // availableTickets on every event response.
                         .requestMatchers(HttpMethod.GET, "/bookings/active-counts").permitAll()
+                        // Internal endpoint: seat-service reads it to compute a
+                        // live availableSeats per category on every category read.
+                        .requestMatchers(HttpMethod.GET, "/bookings/categories/active-counts").permitAll()
                         .requestMatchers(HttpMethod.POST, "/bookings").permitAll()
                         // Confirm is called by payment-service after a payment.
                         // No JWT is involved — payment-service authenticates via

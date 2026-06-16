@@ -20,5 +20,15 @@ public class CreateCategoryResponseDTO {
     private String name;
     private String description;
     private BigDecimal price;
+
+    /**
+     * Live tickets still sellable in this category: {@code totalSeats} minus the
+     * count of active (PENDING + CONFIRMED) bookings reported by booking-service.
+     * Decrements as customers purchase and rebounds when holds expire or bookings
+     * cancel. If booking-service is unreachable this falls back to the stored
+     * mirror so the listing never fails.
+     */
+    private Integer availableSeats;
+
     private List<SectionSeatConfigDTO> sections;
 }
