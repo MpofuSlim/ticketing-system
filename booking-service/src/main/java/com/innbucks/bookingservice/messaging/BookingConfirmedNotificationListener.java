@@ -2,7 +2,6 @@ package com.innbucks.bookingservice.messaging;
 
 import com.innbucks.bookingservice.client.EmailNotificationClient;
 import com.innbucks.bookingservice.client.EventServiceClient;
-import com.innbucks.bookingservice.client.SmsNotificationClient;
 import com.innbucks.bookingservice.client.WhatsAppNotificationClient;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.EventLookupDTO;
@@ -11,8 +10,6 @@ import com.innbucks.bookingservice.entity.BookingItem;
 import com.innbucks.bookingservice.event.BookingDomainEvent;
 import com.innbucks.bookingservice.repository.BookingRepository;
 import com.innbucks.bookingservice.service.TicketRenderingService;
-import com.innbucks.bookingservice.util.MsisdnCountryResolver;
-import com.innbucks.bookingservice.util.MsisdnMasking;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -36,19 +33,21 @@ import java.util.List;
  *       message with each seat's scannable QR, rendered from the hosted ticket
  *       endpoint ({@code /bookings/{id}/tickets/{tn}/qr}) so it shows in Gmail/
  *       Outlook (data-URIs are stripped), plus a link to the ticket page.</li>
- *   <li><b>WhatsApp (to {@code phoneNumber}, if present)</b> — two parts:
- *       <ol>
- *         <li>a plain text confirmation (booking ref, ticket count/numbers,
- *             total). <b>Country-aware routing</b>: foreign MSISDNs (different
- *             country prefix from this deployment) skip the per-country SMS
- *             gateway entirely and use WhatsApp only — the SMS gateways accept
- *             a foreign number with a 2xx and silently drop it, so an SMS
- *             fallback would "succeed" without reaching the customer. Same
- *             pattern as {@code OtpService}.</li>
- *         <li>one scannable QR e-ticket image per booking item, fetched by the
- *             gateway from our public CONFIRMED-only ticket-QR endpoint.</li>
- *       </ol></li>
+ *   <li><b>WhatsApp</b> (to {@code phoneNumber}, if present) — one approved
+ *       Twilio Content Template send per ticket via the gateway's
+ *       {@code /api/messages/event-qr-code} endpoint, delivering the scannable
+ *       QR image. The free-text booking summary (booking ref, ticket numbers,
+ *       total) is concatenated into the template's {@code eventName} variable
+ *       so it renders inline with the QR — there is NO separate
+ *       {@code /api/messages/send} text message. One endpoint, one channel.</li>
  * </ul>
+ *
+ * <p>Trade-off: WhatsApp is the only phone channel. There's no SMS fallback —
+ * if WhatsApp delivery fails, the email is the only customer-visible artifact.
+ * The QR-template send works on the Twilio business-initiated message window
+ * (no 24-hour-window restriction), so this is the most reliable phone surface
+ * we have; the previous free-text fallback only delivered inside an open
+ * customer-initiated window anyway.
  */
 @Component
 @Slf4j
@@ -56,33 +55,30 @@ public class BookingConfirmedNotificationListener {
 
     private final BookingRepository bookingRepository;
     private final WhatsAppNotificationClient whatsApp;
-    private final SmsNotificationClient sms;
     private final EmailNotificationClient email;
     private final TicketRenderingService ticketRendering;
     private final EventServiceClient eventServiceClient;
     private final String publicBaseUrl;
-    private final String deploymentCountry;
 
-    /** eventName fallback when the event title can't be resolved (event-service down). */
+    /** Event-title fallback when event-service can't be reached (cosmetic only). */
     private static final String EVENT_NAME_FALLBACK = "your event";
+
+    /** Sign-off appended to the WhatsApp confirmation text. */
+    private static final String SIGN_OFF = "• The InnBucks Team";
 
     public BookingConfirmedNotificationListener(
             BookingRepository bookingRepository,
             WhatsAppNotificationClient whatsApp,
-            SmsNotificationClient sms,
             EmailNotificationClient email,
             TicketRenderingService ticketRendering,
             EventServiceClient eventServiceClient,
-            @Value("${innbucks.tickets.public-base-url:}") String publicBaseUrl,
-            @Value("${innbucks.country:ZW}") String deploymentCountry) {
+            @Value("${innbucks.tickets.public-base-url:}") String publicBaseUrl) {
         this.bookingRepository = bookingRepository;
         this.whatsApp = whatsApp;
-        this.sms = sms;
         this.email = email;
         this.ticketRendering = ticketRendering;
         this.eventServiceClient = eventServiceClient;
         this.publicBaseUrl = publicBaseUrl == null ? "" : publicBaseUrl.trim();
-        this.deploymentCountry = deploymentCountry == null ? "" : deploymentCountry.trim();
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
@@ -113,16 +109,10 @@ public class BookingConfirmedNotificationListener {
             }
         }
 
-        // ---- WhatsApp text confirm (+ domestic-only SMS fallback), then QR e-tickets ----
+        // ---- WhatsApp QR e-tickets (only — no /send call) ----
         String phone = booking.getPhoneNumber();
         if (phone != null && !phone.isBlank()) {
             anyChannel = true;
-            // 1) Country-aware text confirmation: foreign MSISDNs skip the
-            //    per-country SMS gateway (it 2xxs then silently drops them).
-            dispatchPhoneChannel(booking, phone);
-            // 2) ADDITIONALLY, one scannable QR e-ticket image per ticket over
-            //    WhatsApp — independent best-effort; a failure here never blocks
-            //    the text confirmation or email already delivered above.
             sendQrETickets(booking, phone);
         }
 
@@ -133,56 +123,19 @@ public class BookingConfirmedNotificationListener {
     }
 
     /**
-     * Text confirmation over WhatsApp, with an SMS fallback that runs ONLY for
-     * domestic MSISDNs. The per-country SMS gateway silently drops foreign
-     * numbers after a 2xx, so for a foreign MSISDN we stop at WhatsApp rather
-     * than emit a fake "SMS delivered" the customer never receives.
-     */
-    private void dispatchPhoneChannel(Booking booking, String phone) {
-        boolean domestic = isDomesticMsisdn(phone);
-        String reference = "BOOKING-CONFIRM-" + booking.getId();
-        try {
-            whatsApp.sendCustomNotification(phone, buildWhatsAppMessage(booking));
-            log.info("Booking-confirm WhatsApp sent bookingId={} ref={} domestic={}",
-                    booking.getId(), booking.getConfirmationNumber(), domestic);
-            return;
-        } catch (RuntimeException waEx) {
-            log.warn("Booking-confirm WhatsApp failed bookingId={} domestic={}: {}",
-                    booking.getId(), domestic, waEx.getMessage());
-        }
-
-        // SMS fallback is per-country and silently drops foreign MSISDNs after
-        // a 2xx. Skipping it for foreign numbers prevents a fake "delivered"
-        // log line; the customer would never receive the message.
-        if (!domestic) {
-            log.warn("Booking-confirm delivery exhausted for foreign MSISDN on {} deployment phone={} bookingId={} — SMS would be dropped, not attempted",
-                    deploymentCountry, MsisdnMasking.mask(phone), booking.getId());
-            return;
-        }
-
-        try {
-            sms.sendSms(phone, buildSmsMessage(booking), reference);
-            log.info("Booking-confirm SMS sent bookingId={} ref={}",
-                    booking.getId(), booking.getConfirmationNumber());
-        } catch (RuntimeException smsEx) {
-            log.warn("Booking-confirm SMS also failed bookingId={} (booking still CONFIRMED): {}",
-                    booking.getId(), smsEx.getMessage());
-        }
-    }
-
-    /**
-     * Sends one scannable QR e-ticket per booking item to the customer's
-     * WhatsApp. Each call is independent best-effort — a rejection on one image
-     * is logged and skipped so the rest still go out. The qrCodePath is the
-     * public hosted ticket-QR endpoint (domain-relative; the gateway prepends
-     * its BASE_URL), which only serves CONFIRMED bookings.
+     * One Twilio Content Template send per ticket. The template body is
+     * <em>"Event confirmed! Here is your e-ticket entry for {eventName}. Only
+     * present this ticket at the gate."</em>, so we pack the actual event title
+     * AND the booking summary into the {@code eventName} variable — the
+     * customer sees the QR image plus the full confirmation text in one render.
+     * Each call is independent best-effort.
      */
     private void sendQrETickets(Booking booking, String phone) {
         List<BookingItem> items = booking.getItems() == null ? List.of() : booking.getItems();
         if (items.isEmpty()) {
             return;
         }
-        String eventName = resolveEventName(booking);
+        String eventName = buildEventNameField(booking);
         int sent = 0;
         for (BookingItem item : items) {
             String tn = item.getTicketNumber();
@@ -206,12 +159,34 @@ public class BookingConfirmedNotificationListener {
     }
 
     /**
-     * Resolves the event's display name for the e-ticket message. Best-effort —
-     * event-service is circuit-broken, and the event name is cosmetic copy, not
-     * gate-critical data, so a lookup failure degrades to a generic fallback
-     * rather than dropping the QR delivery.
+     * Build the value that goes into the Twilio template's {@code eventName}
+     * variable:
+     * <pre>
+     * {actual event title}
+     *
+     * InnBucks: your booking INN-... is confirmed — N tickets, total ....
+     * Ticket numbers: TN1, TN2.
+     *
+     * • The InnBucks Team
+     * </pre>
+     * The event title preserves per-event context across multiple bookings;
+     * the summary line replaces the dropped {@code /api/messages/send} text;
+     * the sign-off is brand copy.
      */
-    private String resolveEventName(Booking booking) {
+    private String buildEventNameField(Booking booking) {
+        return resolveEventTitle(booking)
+                + "\n\n"
+                + buildBookingSummary(booking)
+                + "\n\n"
+                + SIGN_OFF;
+    }
+
+    /**
+     * Resolves the event's actual title via event-service. Best-effort —
+     * a circuit-broken event-service degrades to a generic fallback rather
+     * than dropping the QR delivery.
+     */
+    private String resolveEventTitle(Booking booking) {
         if (booking.getEventId() == null) {
             return EVENT_NAME_FALLBACK;
         }
@@ -231,18 +206,11 @@ public class BookingConfirmedNotificationListener {
     }
 
     /**
-     * True when the MSISDN's dialling prefix matches the deployment country.
-     * An unresolvable MSISDN (unknown prefix) is treated as non-domestic —
-     * safer to skip the per-country SMS gateway than claim a delivery the
-     * gateway will silently drop.
+     * Same shape as the text formerly sent via {@code /api/messages/send}:
+     * "InnBucks: your booking {ref} is confirmed[ — N tickets][, total {amt}].
+     *  Ticket number(s): TN1, TN2."
      */
-    private boolean isDomesticMsisdn(String phoneNumber) {
-        return MsisdnCountryResolver.resolve(phoneNumber)
-                .map(c -> c.equalsIgnoreCase(deploymentCountry))
-                .orElse(false);
-    }
-
-    private String buildWhatsAppMessage(Booking booking) {
+    private String buildBookingSummary(Booking booking) {
         List<BookingItem> items = booking.getItems() == null ? List.of() : booking.getItems();
         StringBuilder sb = new StringBuilder("InnBucks: your booking ")
                 .append(booking.getConfirmationNumber())
@@ -252,10 +220,11 @@ public class BookingConfirmedNotificationListener {
         } else if (items.size() > 1) {
             sb.append(" — ").append(items.size()).append(" tickets");
         }
-        appendTotal(sb, booking);
+        BigDecimal total = booking.getTotalAmount();
+        if (total != null) {
+            sb.append(", total ").append(total.toPlainString());
+        }
         sb.append('.');
-        // No links by product direction — just the ticket number(s) as the
-        // manual reference at the gate. The QR reaches the customer via email.
         if (!items.isEmpty()) {
             sb.append(" Ticket number").append(items.size() > 1 ? "s" : "").append(": ");
             for (int i = 0; i < items.size(); i++) {
@@ -265,28 +234,5 @@ public class BookingConfirmedNotificationListener {
             sb.append('.');
         }
         return sb.toString();
-    }
-
-    private String buildSmsMessage(Booking booking) {
-        // SMS fallback — one short segment, no links (product direction).
-        StringBuilder sb = new StringBuilder("InnBucks: booking ")
-                .append(booking.getConfirmationNumber())
-                .append(" confirmed");
-        int n = booking.getItems() == null ? 0 : booking.getItems().size();
-        if (n == 1) {
-            sb.append(" (1 ticket)");
-        } else if (n > 1) {
-            sb.append(" (").append(n).append(" tickets)");
-        }
-        appendTotal(sb, booking);
-        sb.append('.');
-        return sb.toString();
-    }
-
-    private static void appendTotal(StringBuilder sb, Booking booking) {
-        BigDecimal total = booking.getTotalAmount();
-        if (total != null) {
-            sb.append(", total ").append(total.toPlainString());
-        }
     }
 }
