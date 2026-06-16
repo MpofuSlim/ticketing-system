@@ -485,6 +485,23 @@ public class BookingService {
                 }));
     }
 
+    /**
+     * Public lookup by id — same shape as {@link #getByConfirmationNumber} but
+     * keyed by the booking's UUID. NO ownership check (the UUID is the bearer
+     * credential, same model as the public {@code GET /bookings/confirmation/}
+     * and the hosted ticket-QR endpoint). Distinct from the JWT-gated
+     * {@link #getBookingById(UUID, String, boolean)} above which does scope by
+     * owner email — that one stays as-is for the authenticated lookup.
+     */
+    public BookingResponseDTO getBookingByIdPublic(UUID bookingId) {
+        log.debug("Public fetch by id bookingId={}", bookingId);
+        return toDTO(bookingRepository.findById(bookingId)
+                .orElseThrow(() -> {
+                    log.warn("Public booking lookup by id failed, not found bookingId={}", bookingId);
+                    return new com.innbucks.bookingservice.exception.NotFoundException("Booking not found");
+                }));
+    }
+
     @Transactional
     public BookingResponseDTO cancelBooking(UUID bookingId, String userEmail) {
         return cancelBooking(bookingId, userEmail, false);

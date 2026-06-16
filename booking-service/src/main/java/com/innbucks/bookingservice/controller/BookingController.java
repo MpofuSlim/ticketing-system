@@ -340,6 +340,75 @@ public class BookingController {
     }
 
     /**
+     * Public lookup by id — same response shape as {@link #getBookingById}
+     * above, but no JWT required. The UUID is the bearer credential, mirroring
+     * the existing public {@code GET /bookings/confirmation/{number}} and the
+     * hosted ticket-QR endpoint: anyone who knows the id can view the booking.
+     * Use case: a customer (or guest) following a magic link from the
+     * confirmation email/WhatsApp who isn't logged in.
+     *
+     * <p>The authenticated {@code GET /bookings/{id}} above stays unchanged
+     * (still ownership-scoped). Distinct path so the access model is explicit
+     * in the URL.
+     */
+    @GetMapping("/public/{id}")
+    @SecurityRequirements({})
+    @Operation(summary = "Get booking by id (public)",
+            description = "Public lookup of a booking by UUID. No authentication required — access "
+                    + "control is the unguessable UUID, same model as the existing public lookup by "
+                    + "confirmation number. Returns the same shape as the authenticated GET /bookings/{id}, "
+                    + "404 if the id is unknown.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "Booking returned",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = BookingResponseDTO.class),
+                            examples = @ExampleObject(name = "Public lookup by id", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Booking retrieved successfully",
+                                      "data": {
+                                        "id": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                        "userEmail": "alice@example.com",
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "confirmationNumber": "INN-20260502-AB12CD",
+                                        "status": "CONFIRMED",
+                                        "totalAmount": 100.00,
+                                        "items": [
+                                          {
+                                            "seatId": "11111111-2222-3333-4444-555555555555",
+                                            "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                            "categoryName": "VIP",
+                                            "rowLabel": "A",
+                                            "seatNumber": 12,
+                                            "priceAtBooking": 100.00,
+                                            "ticketNumber": "20260502-12345A",
+                                            "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)"
+                                          }
+                                        ],
+                                        "createdAt": "2026-05-02T15:45:00",
+                                        "updatedAt": "2026-05-02T15:50:00"
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "Booking not found",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "Booking not found",
+                                      "data": null
+                                    }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<BookingResponseDTO>> getBookingByIdPublic(@PathVariable UUID id) {
+        log.debug("GET /bookings/public/{} (public lookup)", id);
+        return ResponseEntity.ok(ApiResult.ok("Booking retrieved successfully",
+                bookingService.getBookingByIdPublic(id)));
+    }
+
+    /**
      * Service-to-service read of a booking by id — used by payment-service to
      * resolve {@code totalAmount} + {@code phoneNumber} before issuing an
      * InnBucks payment code. Distinct from the customer {@code GET /{id}}
