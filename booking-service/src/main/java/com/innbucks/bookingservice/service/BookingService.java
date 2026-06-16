@@ -462,10 +462,10 @@ public class BookingService {
         Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> {
                     log.warn("Booking lookup failed, not found bookingId={}", bookingId);
-                    return new RuntimeException("Booking not found");
+                    return new NotFoundException("Booking not found");
                 });
 
-        if (!isAdmin && !booking.getUserEmail().equals(userEmail)) {
+        if (!isAdmin && (booking.getUserEmail() == null || !booking.getUserEmail().equals(userEmail))) {
             log.warn("Booking access denied bookingId={} requesterEmail={} ownerEmail={}",
                     bookingId, userEmail, booking.getUserEmail());
             throw new org.springframework.security.access.AccessDeniedException("Access denied");
@@ -481,7 +481,7 @@ public class BookingService {
                 .orElseThrow(() -> {
                     log.warn("Booking lookup by confirmation failed, not found confirmation={}",
                             confirmationNumber);
-                    return new RuntimeException("Booking not found");
+                    return new NotFoundException("Booking not found");
                 }));
     }
 
@@ -547,10 +547,10 @@ public class BookingService {
         Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> {
                     log.warn("Cancel failed, booking not found bookingId={}", bookingId);
-                    return new RuntimeException("Booking not found");
+                    return new NotFoundException("Booking not found");
                 });
 
-        if (!isAdmin && !booking.getUserEmail().equals(userEmail)) {
+        if (!isAdmin && (booking.getUserEmail() == null || !booking.getUserEmail().equals(userEmail))) {
             log.warn("Cancel rejected, access denied bookingId={} requesterEmail={} ownerEmail={}",
                     bookingId, userEmail, booking.getUserEmail());
             throw new org.springframework.security.access.AccessDeniedException("Access denied");
@@ -603,7 +603,7 @@ public class BookingService {
         Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> {
                     log.warn("Reverse failed, booking not found bookingId={}", bookingId);
-                    return new RuntimeException("Booking not found");
+                    return new NotFoundException("Booking not found");
                 });
 
         if (booking.getStatus() != Booking.BookingStatus.CONFIRMED) {
@@ -715,7 +715,7 @@ public class BookingService {
         Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> {
                     log.warn("Confirm failed, booking not found bookingId={}", bookingId);
-                    return new RuntimeException("Booking not found");
+                    return new NotFoundException("Booking not found");
                 });
 
         // CONFIRMED: idempotent replay. payment-service's Idempotency-Key cache
