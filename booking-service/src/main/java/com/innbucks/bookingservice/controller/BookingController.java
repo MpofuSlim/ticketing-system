@@ -26,6 +26,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -405,8 +406,17 @@ public class BookingController {
     })
     public ResponseEntity<ApiResult<PublicBookingResponseDTO>> getBookingByIdPublic(@PathVariable UUID id) {
         log.debug("GET /bookings/public/{} (public lookup)", id);
-        return ResponseEntity.ok(ApiResult.ok("Booking retrieved successfully",
-                bookingService.getBookingByIdPublic(id)));
+        // no-store: this is the FE's post-payment polling target and its body
+        // transitions PENDING -> CONFIRMED as the InnBucks code is approved. As
+        // an unauthenticated GET keyed only by URL it is trivially cacheable by
+        // a CDN/proxy/browser; a cached PENDING snapshot would strand the
+        // customer on "awaiting confirmation" even after the booking is
+        // CONFIRMED (the "only updates when I refresh" symptom). Force every
+        // poll to reach the service.
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .body(ApiResult.ok("Booking retrieved successfully",
+                        bookingService.getBookingByIdPublic(id)));
     }
 
     /**
@@ -746,9 +756,13 @@ public class BookingController {
     @SecurityRequirements()
     @Operation(
             summary = "Lookup bookings by phone number",
-            description = "Public endpoint. Returns the active (PENDING / CONFIRMED) bookings attached " +
-                    "to the given phone number, most recent first. Cancelled bookings are excluded. " +
-                    "Returns an empty list if no bookings exist for that phone."
+            description = "Public endpoint. Returns the CONFIRMED bookings attached to the given phone " +
+                    "number, most recent first — i.e. the customer's paid, valid tickets. PENDING " +
+                    "(awaiting-payment) and CANCELLED bookings are excluded, so a booking only appears " +
+                    "here once payment is confirmed. Returns an empty list if no confirmed bookings " +
+                    "exist for that phone. To track an in-flight booking through payment, poll " +
+                    "GET /bookings/public/{id} instead — that endpoint surfaces the PENDING booking " +
+                    "and flips to CONFIRMED when the InnBucks code is approved."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(

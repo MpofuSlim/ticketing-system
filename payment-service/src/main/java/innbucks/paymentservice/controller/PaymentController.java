@@ -102,8 +102,9 @@ public class PaymentController {
                     "**How the FE knows it's done (status lifecycle):** this endpoint returns `PROCESSING` " +
                     "immediately; it does NOT block until payment. The customer then approves the code in " +
                     "their InnBucks app, and a background poller confirms the booking within ~20s. The FE " +
-                    "should **poll the booking** — `GET /bookings/phone/{phoneNumber}` (guest) or " +
-                    "`GET /bookings/{id}` (logged-in) — until its status flips to `CONFIRMED` (carrying the " +
+                    "should **poll the booking** by the `bookingId` it created — " +
+                    "`GET /bookings/public/{id}` (guest, no login) or `GET /bookings/{id}` (logged-in) — " +
+                    "until its status flips to `CONFIRMED` (carrying the " +
                     "confirmation number). Behind the scenes the InnBucks code moves New → Claimed/Paid " +
                     "(both mean the customer paid) → booking CONFIRMED; or New → Expired/Timed Out (unpaid) " +
                     "→ the code lapses and the FE can offer Pay again. Stop polling once the booking is " +
