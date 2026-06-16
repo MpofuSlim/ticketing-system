@@ -110,10 +110,10 @@ class BookingConfirmedNotificationListenerTest {
         verify(m.wa(), never()).sendCustomNotification(anyString(), anyString());
     }
 
-    // ---- eventName concatenation: title + summary + sign-off ----------------
+    // ---- eventName: single-line noun phrase, NO newlines (WhatsApp 63021) ----
 
     @Test
-    void eventName_concatenatesEventTitle_bookingSummary_andSignOff() {
+    void eventName_isSingleLineNounPhrase_withTitleSummaryAndTicketNumbers() {
         Mocks m = mocks();
         Booking b = bookingFixture("+263771234567", null, 2);
         when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
@@ -124,23 +124,25 @@ class BookingConfirmedNotificationListenerTest {
         verify(m.wa(), times(2)).sendEventQrCode(eq("+263771234567"), name.capture(), anyString());
         String eventName = name.getAllValues().get(0);
 
-        // Event title comes from the event-service lookup.
-        assertThat(eventName).startsWith("InnBucks Gala 2026\n\n");
-        // The booking-confirmation summary (was /api/messages/send body) follows.
+        // Reads as: "InnBucks Gala 2026 (booking INN-..., 2 tickets, total 50.00 — T1, T2)"
         assertThat(eventName)
-                .contains("InnBucks: your booking INN-20260610-A1B2C3 is confirmed")
+                .startsWith("InnBucks Gala 2026 (booking INN-20260610-A1B2C3")
                 .contains("2 tickets")
                 .contains("total 50.00")
                 .contains("20260610-T1")
-                .contains("20260610-T2");
-        // Brand sign-off at the bottom.
-        assertThat(eventName).endsWith("• The InnBucks Team");
-        // No URLs leak into the message (product direction — no link).
-        assertThat(eventName).doesNotContain("http");
+                .contains("20260610-T2")
+                .endsWith(")");
+        // CRITICAL: WhatsApp template variables reject newlines / tabs / >4
+        // consecutive spaces (Twilio 63021). Guard all three.
+        assertThat(eventName)
+                .doesNotContain("\n")
+                .doesNotContain("\t")
+                .doesNotContain("    ")
+                .doesNotContain("http");
     }
 
     @Test
-    void singleTicket_summarySaysOneTicket_notPlural() {
+    void eventName_singleTicket_saysOneTicket_notPlural() {
         Mocks m = mocks();
         Booking b = bookingFixture("+263771234567", null, 1);
         when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
@@ -150,12 +152,11 @@ class BookingConfirmedNotificationListenerTest {
         ArgumentCaptor<String> name = ArgumentCaptor.forClass(String.class);
         verify(m.wa()).sendEventQrCode(anyString(), name.capture(), anyString());
         assertThat(name.getValue()).contains("1 ticket").doesNotContain("1 tickets");
-        // Singular "Ticket number:" — no trailing 's'.
-        assertThat(name.getValue()).contains("Ticket number:").doesNotContain("Ticket numbers:");
+        assertThat(name.getValue()).doesNotContain("\n");
     }
 
     @Test
-    void eventLookupFails_eventNameFallsBackButStillIncludesSummary() {
+    void eventName_eventLookupFails_fallsBackButStaysSingleLineWithSummary() {
         Mocks m = mocks();
         Booking b = bookingFixture("+263771234567", null, 1);
         when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
@@ -166,8 +167,9 @@ class BookingConfirmedNotificationListenerTest {
 
         ArgumentCaptor<String> name = ArgumentCaptor.forClass(String.class);
         verify(m.wa()).sendEventQrCode(anyString(), name.capture(), anyString());
-        assertThat(name.getValue()).startsWith("your event\n\n");
-        assertThat(name.getValue()).contains("INN-20260610-A1B2C3");
+        assertThat(name.getValue())
+                .startsWith("your event (booking INN-20260610-A1B2C3")
+                .doesNotContain("\n");
     }
 
     // ---- Best-effort isolation: one failing channel never blocks another ----

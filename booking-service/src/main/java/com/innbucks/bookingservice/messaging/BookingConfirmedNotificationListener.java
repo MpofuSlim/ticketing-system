@@ -63,9 +63,6 @@ public class BookingConfirmedNotificationListener {
     /** Event-title fallback when event-service can't be reached (cosmetic only). */
     private static final String EVENT_NAME_FALLBACK = "your event";
 
-    /** Sign-off appended to the WhatsApp confirmation text. */
-    private static final String SIGN_OFF = "• The InnBucks Team";
-
     public BookingConfirmedNotificationListener(
             BookingRepository bookingRepository,
             WhatsAppNotificationClient whatsApp,
@@ -163,26 +160,45 @@ public class BookingConfirmedNotificationListener {
     }
 
     /**
-     * Build the value that goes into the Twilio template's {@code eventName}
-     * variable:
-     * <pre>
-     * {actual event title}
+     * Build the value injected into the Twilio template's single
+     * {@code eventName} variable. The template renders it MID-SENTENCE —
+     * <em>"Event confirmed! Here is your e-ticket entry for {eventName}. Only
+     * present this ticket at the gate."</em> — so this must read as a noun
+     * phrase, e.g.
+     * <pre>InnBucks Annual Gala 2025 (booking INN-..., 2 tickets, total 20.00 — TN1, TN2)</pre>
      *
-     * InnBucks: your booking INN-... is confirmed — N tickets, total ....
-     * Ticket numbers: TN1, TN2.
-     *
-     * • The InnBucks Team
-     * </pre>
-     * The event title preserves per-event context across multiple bookings;
-     * the summary line replaces the dropped {@code /api/messages/send} text;
-     * the sign-off is brand copy.
+     * <p><b>Must be a single line.</b> WhatsApp template variables cannot
+     * contain newlines, tabs, or &gt;4 consecutive spaces — any of those makes
+     * Twilio reject the whole message (image included) with error 63021
+     * ("channel invalid content"). The earlier multi-line version (title \n\n
+     * summary \n\n sign-off) tripped exactly that. No sign-off here either: it
+     * read awkwardly mid-sentence and the template is already branded
+     * transactional copy.
      */
     private String buildEventNameField(Booking booking) {
-        return resolveEventTitle(booking)
-                + "\n\n"
-                + buildBookingSummary(booking)
-                + "\n\n"
-                + SIGN_OFF;
+        List<BookingItem> items = booking.getItems() == null ? List.of() : booking.getItems();
+        StringBuilder sb = new StringBuilder(resolveEventTitle(booking))
+                .append(" (booking ").append(booking.getConfirmationNumber());
+        if (items.size() == 1) {
+            sb.append(", 1 ticket");
+        } else if (items.size() > 1) {
+            sb.append(", ").append(items.size()).append(" tickets");
+        }
+        BigDecimal total = booking.getTotalAmount();
+        if (total != null) {
+            sb.append(", total ").append(total.toPlainString());
+        }
+        // Ticket numbers as the gate reference, after an en-dash. Single line,
+        // comma-separated — no newlines (WhatsApp template-variable rule).
+        if (!items.isEmpty()) {
+            sb.append(" — ");
+            for (int i = 0; i < items.size(); i++) {
+                if (i > 0) sb.append(", ");
+                sb.append(items.get(i).getTicketNumber());
+            }
+        }
+        sb.append(')');
+        return sb.toString();
     }
 
     /**
@@ -207,36 +223,5 @@ public class BookingConfirmedNotificationListener {
                     booking.getId(), booking.getEventId(), ex.getMessage());
         }
         return EVENT_NAME_FALLBACK;
-    }
-
-    /**
-     * Same shape as the text formerly sent via {@code /api/messages/send}:
-     * "InnBucks: your booking {ref} is confirmed[ — N tickets][, total {amt}].
-     *  Ticket number(s): TN1, TN2."
-     */
-    private String buildBookingSummary(Booking booking) {
-        List<BookingItem> items = booking.getItems() == null ? List.of() : booking.getItems();
-        StringBuilder sb = new StringBuilder("InnBucks: your booking ")
-                .append(booking.getConfirmationNumber())
-                .append(" is confirmed");
-        if (items.size() == 1) {
-            sb.append(" — 1 ticket");
-        } else if (items.size() > 1) {
-            sb.append(" — ").append(items.size()).append(" tickets");
-        }
-        BigDecimal total = booking.getTotalAmount();
-        if (total != null) {
-            sb.append(", total ").append(total.toPlainString());
-        }
-        sb.append('.');
-        if (!items.isEmpty()) {
-            sb.append(" Ticket number").append(items.size() > 1 ? "s" : "").append(": ");
-            for (int i = 0; i < items.size(); i++) {
-                if (i > 0) sb.append(", ");
-                sb.append(items.get(i).getTicketNumber());
-            }
-            sb.append('.');
-        }
-        return sb.toString();
     }
 }
