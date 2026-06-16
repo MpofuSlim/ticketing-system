@@ -85,8 +85,35 @@ public interface BookingItemRepository extends JpaRepository<BookingItem, UUID> 
             @Param("cancelledStatus") Booking.BookingStatus cancelledStatus
     );
 
+    // Batch sibling of countActiveByCategoryId, grouped by category. Powers
+    // seat-service's live per-category availableSeats: a category returns
+    // availableSeats = totalSeats − activeCount, the same totalCapacity −
+    // activeCount formula event-service already uses at the event level (see
+    // countActiveItemsByEventIds). Counting PENDING + CONFIRMED — not just
+    // CONFIRMED — keeps the per-category "left" number and the event card's
+    // availableTickets in lock-step the instant a customer starts checkout.
+    // Categories with no active items are simply absent from the result; the
+    // caller treats a missing categoryId as "full capacity remaining".
+    @Query("""
+        SELECT i.categoryId AS categoryId, COUNT(i) AS count
+        FROM BookingItem i
+        JOIN i.booking b
+        WHERE i.categoryId IN :categoryIds
+          AND b.status <> :cancelledStatus
+        GROUP BY i.categoryId
+    """)
+    List<CategoryActiveItemCount> countActiveItemsByCategoryIds(
+            @Param("categoryIds") Collection<UUID> categoryIds,
+            @Param("cancelledStatus") Booking.BookingStatus cancelledStatus
+    );
+
     interface EventActiveItemCount {
         UUID getEventId();
+        Long getCount();
+    }
+
+    interface CategoryActiveItemCount {
+        UUID getCategoryId();
         Long getCount();
     }
 }

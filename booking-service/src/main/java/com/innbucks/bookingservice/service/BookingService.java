@@ -349,6 +349,26 @@ public class BookingService {
                 .collect(Collectors.toList());
     }
 
+    // Per-category sibling of getActiveItemCountsByEvents. seat-service calls
+    // this to surface a live availableSeats on every category read
+    // (availableSeats = totalSeats − count), mirroring how event-service uses
+    // the event-level counts. Categories with no active (PENDING + CONFIRMED)
+    // items are absent from the result — the caller reads a missing category
+    // as "full capacity remaining".
+    public List<CategoryActiveCountDTO> getActiveItemCountsByCategories(Collection<UUID> categoryIds) {
+        if (categoryIds == null || categoryIds.isEmpty()) {
+            return List.of();
+        }
+        return bookingItemRepository
+                .countActiveItemsByCategoryIds(categoryIds, Booking.BookingStatus.CANCELLED)
+                .stream()
+                .map(p -> CategoryActiveCountDTO.builder()
+                        .categoryId(p.getCategoryId())
+                        .count(p.getCount() == null ? 0L : p.getCount())
+                        .build())
+                .collect(Collectors.toList());
+    }
+
     // Same shape as getBookingsByCategory but scoped to a whole event. Lets
     // seat-service build event-level analytics in one round trip instead of
     // calling per-category.

@@ -1039,4 +1039,44 @@ class BookingServiceTest {
         assertTrue(service.getActiveItemCountsByEvents(null).isEmpty());
         verify(itemRepo, never()).countActiveItemsByEventIds(any(), any());
     }
+
+    @Test
+    void getActiveItemCountsByCategories_excludesCancelled_butIncludesPendingAndConfirmed() {
+        // seat-service's live per-category availableSeats is driven by this query.
+        // Like the event-level sibling it MUST count PENDING + CONFIRMED (anything
+        // not CANCELLED) so a category's "tickets left" and the event card stay in
+        // lock-step the moment a customer starts checkout.
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        BookingService service = newService(bookingRepo, itemRepo, mock(SeatServiceClient.class));
+        UUID categoryId = UUID.randomUUID();
+
+        BookingItemRepository.CategoryActiveItemCount row =
+                mock(BookingItemRepository.CategoryActiveItemCount.class);
+        when(row.getCategoryId()).thenReturn(categoryId);
+        when(row.getCount()).thenReturn(37L);
+        when(itemRepo.countActiveItemsByCategoryIds(eq(List.of(categoryId)), eq(Booking.BookingStatus.CANCELLED)))
+                .thenReturn(List.of(row));
+
+        var result = service.getActiveItemCountsByCategories(List.of(categoryId));
+        assertEquals(1, result.size());
+        assertEquals(categoryId, result.get(0).getCategoryId());
+        assertEquals(37L, result.get(0).getCount());
+
+        // Guards the same status-parameter drift the event-level test guards.
+        verify(itemRepo).countActiveItemsByCategoryIds(eq(List.of(categoryId)), eq(Booking.BookingStatus.CANCELLED));
+        verify(itemRepo, never()).countActiveItemsByCategoryIds(any(), eq(Booking.BookingStatus.CONFIRMED));
+        verify(itemRepo, never()).countActiveItemsByCategoryIds(any(), eq(Booking.BookingStatus.PENDING));
+    }
+
+    @Test
+    void getActiveItemCountsByCategories_emptyOrNullInput_shortCircuits_noRepoCall() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        BookingService service = newService(bookingRepo, itemRepo, mock(SeatServiceClient.class));
+
+        assertTrue(service.getActiveItemCountsByCategories(List.of()).isEmpty());
+        assertTrue(service.getActiveItemCountsByCategories(null).isEmpty());
+        verify(itemRepo, never()).countActiveItemsByCategoryIds(any(), any());
+    }
 }

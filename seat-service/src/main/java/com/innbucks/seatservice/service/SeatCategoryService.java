@@ -1,5 +1,6 @@
 package com.innbucks.seatservice.service;
 
+import com.innbucks.seatservice.client.BookingServiceClient;
 import com.innbucks.seatservice.client.EventServiceClient;
 import com.innbucks.seatservice.dto.*;
 import com.innbucks.seatservice.entity.*;
@@ -37,6 +38,7 @@ public class SeatCategoryService {
 
     private final SeatCategoryRepository categoryRepository;
     private final SeatRepository seatRepository;
+    private final BookingServiceClient bookingServiceClient;
     private final ObjectProvider<EventServiceClient> eventClientProvider;
 
     // Agent creates a category for an event and auto-generates all seats
@@ -118,7 +120,9 @@ public class SeatCategoryService {
 
         log.info("Seat category created categoryId={} eventId={} name={} totalSeats={}",
                 category.getId(), request.getEventId(), request.getName(), totalSeats);
-        return toCreateResponseDTO(category, request.getSections());
+        // Just created — no bookings yet, so the whole category is available.
+        // Skip the booking-service round trip on the create path.
+        return toCreateResponseDTO(category, request.getSections(), category.getAvailableSeats());
     }
 
     /**
@@ -138,6 +142,14 @@ public class SeatCategoryService {
                     log.warn("Category capacity lookup failed, not found categoryId={}", categoryId);
                     return new NotFoundException("Seat category not found");
                 });
+        // Deliberately the stored mirror, NOT a live booking-service count.
+        // This is the S2S endpoint booking-service hits on the booking hot path
+        // to seed its own inventory counter — it reads totalSeats/price/eventId
+        // and ignores availableSeats (it derives its own active count locally).
+        // Calling booking-service back from here would put a circular round trip
+        // on every booking for a value the caller discards. The live per-category
+        // number is surfaced on the FE-facing list endpoint (getCategoriesByEvent)
+        // instead.
         return CategoryCapacityDTO.builder()
                 .seatCategoryId(category.getId())
                 .eventId(category.getEventId())
@@ -179,10 +191,18 @@ public class SeatCategoryService {
             }
         }
 
+        // One booking-service round trip covers every category in the event;
+        // null counts (booking-service down) → each category falls back to
+        // its stored mirror inside liveAvailableSeats.
+        Map<UUID, Long> counts = bookingServiceClient
+                .fetchActiveCountsByCategories(categoryIds)
+                .orElse(null);
+
         return categories.stream()
                 .map(category -> toCreateResponseDTO(
                         category,
-                        sectionsByCategory.getOrDefault(category.getId(), List.of())
+                        sectionsByCategory.getOrDefault(category.getId(), List.of()),
+                        liveAvailableSeats(category, counts)
                 ))
                 .collect(Collectors.toList());
     }
@@ -254,7 +274,8 @@ public class SeatCategoryService {
 
     private CreateCategoryResponseDTO toCreateResponseDTO(
             SeatCategory category,
-            List<SectionSeatConfigDTO> sections
+            List<SectionSeatConfigDTO> sections,
+            Integer availableSeats
     ) {
         List<SectionSeatConfigDTO> sectionCopies = sections.stream()
                 .map(section -> {
@@ -271,7 +292,30 @@ public class SeatCategoryService {
                 .name(category.getName())
                 .description(category.getDescription())
                 .price(category.getPrice())
+                .availableSeats(availableSeats)
                 .sections(sectionCopies)
                 .build();
+    }
+
+    /**
+     * Live tickets still sellable in a category: {@code totalSeats} minus the
+     * count of active (PENDING + CONFIRMED) bookings booking-service reports.
+     * The same {@code totalCapacity − activeCount} formula event-service uses
+     * for an event's availableTickets, so the per-category numbers and the
+     * event card always tally.
+     *
+     * <p>When {@code counts} is {@code null} (booking-service unreachable) we
+     * degrade to the category's stored {@code availableSeats} mirror rather
+     * than fail the read — a public category listing must not 500 because
+     * booking-service is down. A category absent from a non-null {@code counts}
+     * map has zero active bookings, so it reads as full capacity.
+     */
+    private int liveAvailableSeats(SeatCategory category, Map<UUID, Long> counts) {
+        int total = category.getTotalSeats() == null ? 0 : category.getTotalSeats();
+        if (counts == null) {
+            return category.getAvailableSeats() == null ? total : category.getAvailableSeats();
+        }
+        long active = counts.getOrDefault(category.getId(), 0L);
+        return (int) Math.max(0L, total - active);
     }
 }
