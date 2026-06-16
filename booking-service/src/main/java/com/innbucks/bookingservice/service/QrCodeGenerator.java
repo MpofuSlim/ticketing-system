@@ -3,13 +3,14 @@ package com.innbucks.bookingservice.service;
 import com.google.zxing.BarcodeFormat;
 import com.google.zxing.EncodeHintType;
 import com.google.zxing.WriterException;
-import com.google.zxing.client.j2se.MatrixToImageWriter;
 import com.google.zxing.common.BitMatrix;
 import com.google.zxing.qrcode.QRCodeWriter;
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -61,8 +62,25 @@ public class QrCodeGenerator {
                     EncodeHintType.MARGIN, 1
             );
             BitMatrix matrix = writer.encode(payload, BarcodeFormat.QR_CODE, sizePx, sizePx, hints);
+
+            // Render into an explicit 24-bit RGB image rather than ZXing's
+            // MatrixToImageWriter, which for the default black/white colours
+            // emits a 1-bit TYPE_BYTE_BINARY PNG. WhatsApp's media validator
+            // REJECTS sub-8-bit PNGs with Twilio error 63021 ("channel invalid
+            // content"), so the e-ticket QR never delivered. TYPE_INT_RGB is
+            // 8-bit-per-channel; the QR stays pure black-on-white and scannable,
+            // it's just stored at a colour depth WhatsApp accepts. The file is
+            // a few KB larger — negligible for a 256px QR.
+            int width = matrix.getWidth();
+            int height = matrix.getHeight();
+            BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+            for (int x = 0; x < width; x++) {
+                for (int y = 0; y < height; y++) {
+                    image.setRGB(x, y, matrix.get(x, y) ? 0xFF000000 : 0xFFFFFFFF);
+                }
+            }
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            MatrixToImageWriter.writeToStream(matrix, "PNG", out);
+            ImageIO.write(image, "PNG", out);
             return out.toByteArray();
         } catch (WriterException | IOException e) {
             // QR generation failing for a string short enough to fit a ticket

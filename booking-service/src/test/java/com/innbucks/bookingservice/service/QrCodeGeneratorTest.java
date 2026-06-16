@@ -44,6 +44,38 @@ class QrCodeGeneratorTest {
     }
 
     @Test
+    void toPngBytes_isAtLeast8BitDepth_soWhatsAppAcceptsTheMedia() {
+        // WhatsApp's media validator rejects sub-8-bit PNGs with Twilio error
+        // 63021 ("channel invalid content"). ZXing's MatrixToImageWriter would
+        // emit a 1-bit TYPE_BYTE_BINARY PNG for default black/white; we render
+        // TYPE_INT_RGB instead. Guard the bit depth so this can't regress.
+        //
+        // PNG layout: 8-byte signature, then the IHDR chunk
+        // (4 len + 4 "IHDR" + 4 width + 4 height + 1 BIT-DEPTH + 1 COLOUR-TYPE).
+        // So bit depth is at byte offset 24, colour type at 25.
+        byte[] png = generator.toPngBytes("20260502-12345A");
+        assertNotNull(png);
+        int bitDepth = png[24] & 0xFF;
+        int colourType = png[25] & 0xFF;
+        assertTrue(bitDepth >= 8,
+                "PNG bit depth must be >= 8 (WhatsApp rejects 1-bit with 63021); was " + bitDepth);
+        // Colour type 2 = truecolour RGB (what TYPE_INT_RGB produces); never 0
+        // (greyscale) at 1-bit, which was the failing case.
+        assertEquals(2, colourType, "expected truecolour RGB PNG (colour type 2)");
+    }
+
+    @Test
+    void toPngBytes_isStillScannableAfterTheRgbChange() throws Exception {
+        // The colour-depth fix must not break scannability.
+        String payload = "20260616-96464V";
+        byte[] png = generator.toPngBytes(payload);
+        BufferedImage image = ImageIO.read(new ByteArrayInputStream(png));
+        Result decoded = new MultiFormatReader().decode(
+                new BinaryBitmap(new HybridBinarizer(new BufferedImageLuminanceSource(image))));
+        assertEquals(payload, decoded.getText());
+    }
+
+    @Test
     void toDataUri_returnsNullForBlankPayloads() {
         assertNull(generator.toDataUri(null));
         assertNull(generator.toDataUri(""));
