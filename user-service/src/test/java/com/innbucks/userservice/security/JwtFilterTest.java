@@ -183,7 +183,7 @@ class JwtFilterTest {
         // that the SecurityContext is cleared so a foreign JWT can never act
         // on this cell.
         var throwingAffinity = mock(com.innbucks.userservice.cells.CellAffinityChecker.class);
-        doThrow(new com.innbucks.userservice.cells.WrongCellException("KE", "https://api-ke.innbucks.com"))
+        doThrow(new com.innbucks.userservice.cells.WrongCellException("KE", "https://dtx.innbucks.co.ke"))
                 .when(throwingAffinity).requireDomesticCountry(any());
         var spyFilter = new JwtFilter(jwtUtil, tokenRevocationService, throwingAffinity);
 
@@ -198,7 +198,7 @@ class JwtFilterTest {
         assertEquals(409, res.getStatus());
         assertTrue(res.getContentAsString().contains("wrong_cell"));
         assertTrue(res.getContentAsString().contains("\"homeCountry\":\"KE\""));
-        assertTrue(res.getContentAsString().contains("\"homeBaseUrl\":\"https://api-ke.innbucks.com\""));
+        assertTrue(res.getContentAsString().contains("\"homeBaseUrl\":\"https://dtx.innbucks.co.ke\""));
         assertNull(SecurityContextHolder.getContext().getAuthentication());
         verify(chain, never()).doFilter(req, res);
     }

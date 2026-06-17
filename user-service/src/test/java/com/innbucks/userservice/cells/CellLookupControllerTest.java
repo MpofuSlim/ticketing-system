@@ -28,7 +28,7 @@ class CellLookupControllerTest {
 
     @Test
     void cellKnown_returns200WithCountryAndBaseUrl() {
-        CellLookupController c = controllerWith("{\"ZW\":\"https://api-zw.innbucks.com\"}");
+        CellLookupController c = controllerWith("{\"ZW\":\"https://dtx.innbucks.co.zw\"}");
 
         ResponseEntity<ApiResult<CellLookupController.HomeCellLookup>> resp =
                 c.lookup("+263772123456");
@@ -36,7 +36,7 @@ class CellLookupControllerTest {
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody()).isNotNull();
         assertThat(resp.getBody().getData().homeCountry()).isEqualTo("ZW");
-        assertThat(resp.getBody().getData().homeBaseUrl()).isEqualTo("https://api-zw.innbucks.com");
+        assertThat(resp.getBody().getData().homeBaseUrl()).isEqualTo("https://dtx.innbucks.co.zw");
         assertThat(resp.getBody().getMessage()).isEqualTo("Home cell resolved");
     }
 
@@ -44,7 +44,7 @@ class CellLookupControllerTest {
     void countryKnownButNoCellDeployedYet_returns200WithNullUrl() {
         // Prefix resolves to KE, but the registry only has ZW. The client
         // gets a meaningful "your market isn't live yet" — distinct from 404.
-        CellLookupController c = controllerWith("{\"ZW\":\"https://api-zw.innbucks.com\"}");
+        CellLookupController c = controllerWith("{\"ZW\":\"https://dtx.innbucks.co.zw\"}");
 
         ResponseEntity<ApiResult<CellLookupController.HomeCellLookup>> resp =
                 c.lookup("+254712345678");
@@ -59,7 +59,7 @@ class CellLookupControllerTest {
     @Test
     void unknownMsisdnPrefix_returns404() {
         // A US number isn't in any InnBucks market — 404, not 200 with null URL.
-        CellLookupController c = controllerWith("{\"ZW\":\"https://api-zw.innbucks.com\"}");
+        CellLookupController c = controllerWith("{\"ZW\":\"https://dtx.innbucks.co.zw\"}");
 
         ResponseEntity<ApiResult<CellLookupController.HomeCellLookup>> resp =
                 c.lookup("+19995551212");
