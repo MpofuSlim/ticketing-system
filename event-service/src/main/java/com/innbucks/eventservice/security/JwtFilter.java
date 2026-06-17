@@ -14,7 +14,10 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 @Component
 @RequiredArgsConstructor
@@ -109,6 +112,19 @@ public class JwtFilter extends OncePerRequestFilter {
             }
 
             var auth = new UsernamePasswordAuthenticationToken(email, null, authorities);
+            // Stash the JWT's UUID claims on the auth details map so
+            // controllers / services can resolve the caller's stable
+            // identifier (and their team-scoping organizerUuid) without
+            // re-parsing the token. Read via
+            // {@link AuthenticatedCaller#userUuid(Authentication)}.
+            UUID userUuid = jwtUtil.extractUserUuid(token);
+            UUID organizerUuid = jwtUtil.extractOrganizerUuid(token);
+            if (userUuid != null || organizerUuid != null) {
+                Map<String, Object> details = new LinkedHashMap<>();
+                if (userUuid != null) details.put(AuthDetailsKeys.USER_UUID, userUuid);
+                if (organizerUuid != null) details.put(AuthDetailsKeys.ORGANIZER_UUID, organizerUuid);
+                auth.setDetails(details);
+            }
             SecurityContextHolder.getContext().setAuthentication(auth);
             log.debug("JWT authenticated subject={} roles={} services={} tier={} path={}",
                     email, roles, services, tier, request.getRequestURI());

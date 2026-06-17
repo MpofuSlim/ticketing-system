@@ -188,7 +188,7 @@ public class EventController {
 
 
     @GetMapping("/my")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','TEAM_MEMBER','SUPER_ADMIN')")
     @Operation(
             summary = "List the authenticated organizer's own events",
             description = """
@@ -236,10 +236,19 @@ public class EventController {
         String tenantId = authentication.getName();
         LocalDateTime fromDateTime = from == null ? null : from.atStartOfDay();
         LocalDateTime toDateTime = to == null ? null : to.atTime(LocalTime.MAX);
-        log.info("GET /events/my tenantId={} from={} to={} venue={} page={} size={}",
-                tenantId, from, to, venue, page, size);
-        Page<EventResponseDTO> result = eventService.getMyEvents(
-                tenantId, fromDateTime, toDateTime, venue, page, size, sortBy);
+        // Prefer the stable organizerUuid claim when the JWT carries it —
+        // that's the right scope for both EVENT_ORGANIZERs (their own uuid)
+        // and TEAM_MEMBERs (their parent organizer's uuid). Fall back to
+        // the legacy email-based query for pre-V20 tokens.
+        java.util.UUID organizerUuid = com.innbucks.eventservice.security.AuthenticatedCaller
+                .organizerUuid(authentication);
+        log.info("GET /events/my tenantId={} organizerUuid={} from={} to={} venue={} page={} size={}",
+                tenantId, organizerUuid, from, to, venue, page, size);
+        Page<EventResponseDTO> result = organizerUuid != null
+                ? eventService.getMyEventsByOrganizerUuid(
+                        organizerUuid, fromDateTime, toDateTime, venue, page, size, sortBy)
+                : eventService.getMyEvents(
+                        tenantId, fromDateTime, toDateTime, venue, page, size, sortBy);
         return ResponseEntity.ok(ApiResult.ok("Events retrieved successfully", result));
     }
 
@@ -950,10 +959,17 @@ public class EventController {
             Authentication authentication
     ) {
         String tenantId = authentication.getName();
-        log.info("Creating event tenantId={} country={} title={} venue={} hasBanner={}",
-                tenantId, country, request.getTitle(), request.getVenue(),
+        // For an EVENT_ORGANIZER, organizerUuid equals their own userUuid —
+        // the JWT mint path in user-service computes it that way. We dual-
+        // write this onto the row so every new event has the stable
+        // identifier from day one (the email-based tenantId stays too,
+        // until the FE migrates off it).
+        java.util.UUID tenantUserUuid = com.innbucks.eventservice.security.AuthenticatedCaller
+                .organizerUuid(authentication);
+        log.info("Creating event tenantId={} tenantUserUuid={} country={} title={} venue={} hasBanner={}",
+                tenantId, tenantUserUuid, country, request.getTitle(), request.getVenue(),
                 eventBanner != null && !eventBanner.isEmpty());
-        EventResponseDTO created = eventService.createEvent(tenantId, country, request, eventBanner);
+        EventResponseDTO created = eventService.createEvent(tenantId, tenantUserUuid, country, request, eventBanner);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Event created successfully", created));
     }

@@ -13,6 +13,7 @@ public class EventMapper {
         return EventResponseDTO.builder()
                 .eventId(event.getEventId())
                 .tenantId(event.getTenantId())
+                .tenantUserUuid(event.getTenantUserUuid())
                 .title(event.getTitle())
                 .description(event.getDescription())
                 .venue(event.getVenue())

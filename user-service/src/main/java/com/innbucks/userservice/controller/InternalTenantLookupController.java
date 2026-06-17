@@ -1,6 +1,7 @@
 package com.innbucks.userservice.controller;
 
 import com.innbucks.userservice.dto.ApiResult;
+import com.innbucks.userservice.dto.EmailToUserUuidDTO;
 import com.innbucks.userservice.dto.TenantLookupDTO;
 import com.innbucks.userservice.entity.TenantProfile;
 import com.innbucks.userservice.entity.User;
@@ -88,8 +89,40 @@ public class InternalTenantLookupController {
         return ResponseEntity.ok(ApiResult.ok("Tenants resolved", body));
     }
 
+    @PostMapping("/users/by-email")
+    @Operation(summary = "(S2S) Resolve user_uuid by account email",
+            description = "Given a list of emails, returns each one's stable user_uuid. Emails that " +
+                          "don't resolve to a user are simply absent from the result. Used by event-" +
+                          "service to backfill events.tenant_user_uuid for rows that were created " +
+                          "before the V6 migration landed (their tenant_id is still the email string).")
+    public ResponseEntity<?> resolveUuidsByEmail(
+            @RequestHeader(value = "X-Internal-Token", required = false) String token,
+            @RequestBody EmailLookupRequest request) {
+        if (!authorized(token)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        List<String> emails = request == null ? null : request.emails();
+        if (emails == null || emails.isEmpty()) {
+            return ResponseEntity.ok(ApiResult.ok("No emails requested", Collections.emptyList()));
+        }
+
+        List<User> users = userRepository.findByEmailIn(emails);
+        List<EmailToUserUuidDTO> body = users.stream()
+                .filter(u -> u.getEmail() != null && u.getUserUuid() != null)
+                .map(u -> EmailToUserUuidDTO.builder()
+                        .email(u.getEmail())
+                        .userUuid(u.getUserUuid())
+                        .build())
+                .toList();
+        log.debug("Internal email->uuid lookup requested={} resolved={}", emails.size(), body.size());
+        return ResponseEntity.ok(ApiResult.ok("UUIDs resolved", body));
+    }
+
     /** Request body: {@code {"tenantIds": ["alice@x.co", "bob@y.co"]}}. */
     public record LookupRequest(List<String> tenantIds) {}
+
+    /** Request body: {@code {"emails": ["alice@x.co", "bob@y.co"]}}. */
+    public record EmailLookupRequest(List<String> emails) {}
 
     private boolean authorized(String presented) {
         if (expectedToken == null || expectedToken.isBlank()) {
