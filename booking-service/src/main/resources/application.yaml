@@ -181,13 +181,14 @@ innbucks:
 
   # Ticket-scan per-event assignment check. When a TEAM_MEMBER scans, booking-
   # service asks user-service whether they're assigned to the event. If
-  # user-service is unreachable mid-scan, fail-open=true (default) falls back to
-  # the organizer-wide access already verified (keeps the gate moving; degraded
-  # state == the pre-restriction security posture). Set false to fail closed
-  # (deny the scan until user-service is back) for stricter deployments.
+  # user-service is unreachable mid-scan, fail-open=false (default) DENIES the
+  # scan (NOT_ASSIGNED_TO_EVENT) until user-service is back — a restricted team
+  # member is never silently widened to the organizer's whole event set, and
+  # this matches the LIST path, which already fails closed. Set true ONLY as a
+  # deliberate break-glass for an outage at the gate (it re-opens that gap).
   scan:
     assignment-check:
-      fail-open: ${SCAN_ASSIGNMENT_CHECK_FAIL_OPEN:true}
+      fail-open: ${SCAN_ASSIGNMENT_CHECK_FAIL_OPEN:false}
 
 # External WhatsApp notification gateway used by BookingConfirmedNotificationListener
 # to deliver booking-confirm notifications. Third-party service (not in Eureka),

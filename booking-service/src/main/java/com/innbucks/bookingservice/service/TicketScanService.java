@@ -52,14 +52,23 @@ public class TicketScanService {
 
     /**
      * What to do when user-service can't be reached to resolve a team
-     * member's per-event assignment. true (default) = fall back to the
-     * organizer-wide access already verified above, so a user-service blip
-     * keeps the gate moving; the degraded state equals the pre-restriction
-     * security posture (still confined to the member's own organizer).
-     * false = deny the scan (NOT_ASSIGNED_TO_EVENT) until user-service
-     * is back. Flip to false for deployments that prefer fail-closed.
+     * member's per-event assignment.
+     *
+     * <p><b>Fail CLOSED by default</b> (false): deny the scan
+     * (NOT_ASSIGNED_TO_EVENT) until user-service is back. A restricted team
+     * member must NEVER be silently widened to the organizer's whole event
+     * set just because the assignment system of record is down — that would
+     * lapse the deny-by-default invariant the per-event restriction exists to
+     * enforce, and it is asymmetric with the LIST path
+     * ({@code UserUuidLookupGateway.assignedEventIdsFor}), which already
+     * fails closed (empty list) on an outage.
+     *
+     * <p>true = break-glass ONLY: fall back to the organizer-wide access
+     * already verified above so the gate keeps moving during an outage. This
+     * re-opens the gap above, so it must be a deliberate, time-boxed operator
+     * decision — never the steady-state default.
      */
-    @Value("${innbucks.scan.assignment-check.fail-open:true}")
+    @Value("${innbucks.scan.assignment-check.fail-open:false}")
     private boolean assignmentCheckFailOpen;
 
     @Transactional
