@@ -23,6 +23,10 @@ import java.util.UUID;
  *   <li>{@code WRONG_ORGANIZER} — the scanner doesn't work for this event's
  *       organizer (e.g. a TEAM_MEMBER scanned a ticket for someone else's
  *       event). Returned with no audit fields.</li>
+ *   <li>{@code NOT_ASSIGNED_TO_EVENT} — the scanner belongs to the right
+ *       organizer but has been restricted to specific events and this isn't
+ *       one of them. Distinct from WRONG_ORGANIZER so the scanner app can
+ *       say "you're not on the roster for this event" vs "wrong organizer".</li>
  * </ul>
  */
 @Data
@@ -59,6 +63,7 @@ public class ScanTicketResponseDTO {
         ALREADY_REDEEMED,
         TICKET_NOT_FOUND,
         BOOKING_NOT_CONFIRMED,
-        WRONG_ORGANIZER
+        WRONG_ORGANIZER,
+        NOT_ASSIGNED_TO_EVENT
     }
 }

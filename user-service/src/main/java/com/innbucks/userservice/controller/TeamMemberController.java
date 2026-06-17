@@ -307,4 +307,107 @@ public class TeamMemberController {
         return ResponseEntity.ok(ApiResult.ok("Team member enabled",
                 teamMemberService.enableTeamMember(teamMemberUuid)));
     }
+
+    // ===================== event assignments =====================
+
+    @GetMapping("/{teamMemberUuid}/events")
+    @PreAuthorize("hasRole('EVENT_ORGANIZER')")
+    @Operation(
+            summary = "List the events a team member is assigned to",
+            description = "Returns the event IDs this team member is restricted to. An EMPTY list " +
+                          "means the member is NOT restricted — they can scan every event you own " +
+                          "(organizer-wide, the default). Assign at least one event to switch them to " +
+                          "'assigned events only'. Requires **EVENT_ORGANIZER** role."
+    )
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "Assigned event IDs (empty = organizer-wide)",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Assigned events retrieved",
+                                      "data": ["3fa85f64-5717-4562-b3fc-2c963f66afa6"]
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404", description = "No such team member under your organizer account",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "404 NOT_FOUND", "message": "Team member not found", "data": null }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<List<UUID>>> listAssignedEvents(@PathVariable UUID teamMemberUuid) {
+        return ResponseEntity.ok(ApiResult.ok("Assigned events retrieved",
+                teamMemberService.listAssignedEvents(teamMemberUuid)));
+    }
+
+    @PutMapping("/{teamMemberUuid}/events/{eventId}")
+    @PreAuthorize("hasRole('EVENT_ORGANIZER')")
+    @Operation(
+            summary = "Assign a team member to an event",
+            description = "Restricts the team member to this event (and any others already assigned). " +
+                          "The FIRST assignment flips them from organizer-wide to 'assigned events " +
+                          "only'. Idempotent — assigning an already-assigned event is a no-op. " +
+                          "Returns the member's full current assignment set so the UI can refresh in " +
+                          "one call. NOTE: assigning an event you don't own is accepted but useless — " +
+                          "the scan still fails the organizer-ownership check. Requires " +
+                          "**EVENT_ORGANIZER** role."
+    )
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "Event assigned; returns the full assignment set",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Event assigned",
+                                      "data": ["3fa85f64-5717-4562-b3fc-2c963f66afa6"]
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404", description = "No such team member under your organizer account",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "404 NOT_FOUND", "message": "Team member not found", "data": null }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<List<UUID>>> assignEvent(@PathVariable UUID teamMemberUuid,
+                                                             @PathVariable UUID eventId) {
+        return ResponseEntity.ok(ApiResult.ok("Event assigned",
+                teamMemberService.assignEvent(teamMemberUuid, eventId)));
+    }
+
+    @DeleteMapping("/{teamMemberUuid}/events/{eventId}")
+    @PreAuthorize("hasRole('EVENT_ORGANIZER')")
+    @Operation(
+            summary = "Remove a team member's event assignment",
+            description = "Unrestricts the team member from this event. Idempotent. If this was their " +
+                          "LAST assignment they revert to organizer-wide scanning (can scan every " +
+                          "event you own). Returns the member's full current assignment set. " +
+                          "Requires **EVENT_ORGANIZER** role."
+    )
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "Event unassigned; returns the remaining assignment set",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Event unassigned",
+                                      "data": []
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404", description = "No such team member under your organizer account",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "404 NOT_FOUND", "message": "Team member not found", "data": null }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<List<UUID>>> unassignEvent(@PathVariable UUID teamMemberUuid,
+                                                               @PathVariable UUID eventId) {
+        return ResponseEntity.ok(ApiResult.ok("Event unassigned",
+                teamMemberService.unassignEvent(teamMemberUuid, eventId)));
+    }
 }

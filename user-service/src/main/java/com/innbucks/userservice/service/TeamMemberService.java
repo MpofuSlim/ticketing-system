@@ -4,8 +4,10 @@ import com.innbucks.userservice.client.EmailNotificationClient;
 import com.innbucks.userservice.client.SmsNotificationClient;
 import com.innbucks.userservice.dto.CreateTeamMemberDTO;
 import com.innbucks.userservice.dto.UserResponseDTO;
+import com.innbucks.userservice.entity.TeamMemberEventAssignment;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.repository.RefreshTokenRepository;
+import com.innbucks.userservice.repository.TeamMemberEventAssignmentRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.security.AuthenticatedCaller;
 import com.innbucks.userservice.util.TemporaryPasswordGenerator;
@@ -50,6 +52,7 @@ public class TeamMemberService {
 
     private final UserRepository userRepository;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final TeamMemberEventAssignmentRepository assignmentRepository;
     private final PasswordEncoder passwordEncoder;
     private final EmailNotificationClient emailNotificationClient;
     private final SmsNotificationClient smsNotificationClient;
@@ -150,6 +153,74 @@ public class TeamMemberService {
         log.info("Re-enabled TEAM_MEMBER userUuid={} organizerUuid={} by={}",
                 member.getUserUuid(), caller.getUserUuid(), caller.getEmail());
         return UserResponseDTO.from(member);
+    }
+
+    // ===================== event assignments =====================
+
+    /**
+     * Assigns the team member to an event (idempotent). The first assignment
+     * for a member flips them from organizer-wide scanning to "assigned events
+     * only" — see {@link #canScanEvent}. Returns the member's full current
+     * assignment set so the caller can refresh its view in one round trip.
+     */
+    @Transactional
+    public List<UUID> assignEvent(UUID teamMemberUuid, UUID eventId) {
+        User caller = requireOrganizerCaller();
+        loadMemberOwnedByCaller(teamMemberUuid, caller.getUserUuid());
+        if (!assignmentRepository.existsByTeamMemberUserUuidAndEventId(teamMemberUuid, eventId)) {
+            assignmentRepository.save(TeamMemberEventAssignment.builder()
+                    .teamMemberUserUuid(teamMemberUuid)
+                    .eventId(eventId)
+                    .assignedByOrganizerUuid(caller.getUserUuid())
+                    .build());
+            log.info("Assigned TEAM_MEMBER userUuid={} to eventId={} by organizerUuid={}",
+                    teamMemberUuid, eventId, caller.getUserUuid());
+        }
+        return assignedEventIds(teamMemberUuid);
+    }
+
+    /**
+     * Removes an event assignment (idempotent). If this was the member's last
+     * assignment they revert to organizer-wide scanning (no rows = wide open).
+     */
+    @Transactional
+    public List<UUID> unassignEvent(UUID teamMemberUuid, UUID eventId) {
+        User caller = requireOrganizerCaller();
+        loadMemberOwnedByCaller(teamMemberUuid, caller.getUserUuid());
+        long removed = assignmentRepository.deleteByTeamMemberUserUuidAndEventId(teamMemberUuid, eventId);
+        if (removed > 0) {
+            log.info("Unassigned TEAM_MEMBER userUuid={} from eventId={} by organizerUuid={}",
+                    teamMemberUuid, eventId, caller.getUserUuid());
+        }
+        return assignedEventIds(teamMemberUuid);
+    }
+
+    @Transactional(readOnly = true)
+    public List<UUID> listAssignedEvents(UUID teamMemberUuid) {
+        User caller = requireOrganizerCaller();
+        loadMemberOwnedByCaller(teamMemberUuid, caller.getUserUuid());
+        return assignedEventIds(teamMemberUuid);
+    }
+
+    /**
+     * Scan-time authorization data for booking-service (called S2S, NOT through
+     * an organizer session — so no ownership check here; the caller is trusted
+     * via X-Internal-Token). Implements the product rule: a member with no
+     * assignment rows is organizer-wide (allowed); a member with rows may scan
+     * only the events they're assigned to.
+     */
+    @Transactional(readOnly = true)
+    public boolean canScanEvent(UUID teamMemberUuid, UUID eventId) {
+        if (!assignmentRepository.existsByTeamMemberUserUuid(teamMemberUuid)) {
+            return true;
+        }
+        return assignmentRepository.existsByTeamMemberUserUuidAndEventId(teamMemberUuid, eventId);
+    }
+
+    private List<UUID> assignedEventIds(UUID teamMemberUuid) {
+        return assignmentRepository.findByTeamMemberUserUuid(teamMemberUuid).stream()
+                .map(TeamMemberEventAssignment::getEventId)
+                .toList();
     }
 
     private User loadMemberOwnedByCaller(UUID teamMemberUuid, UUID organizerUuid) {
