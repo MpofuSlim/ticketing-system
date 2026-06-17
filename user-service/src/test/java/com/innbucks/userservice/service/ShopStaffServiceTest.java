@@ -115,7 +115,9 @@ class ShopStaffServiceTest {
         verify(passwordEncoder).encode(pw.capture());
         String generated = pw.getValue();
         assertThat(generated).isNotEqualTo("#Pass123")
-                .matches("[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}");
+                // 2 groups of 5 (10 password chars + 1 hyphen). Exact alphabet
+                // pinned in TemporaryPasswordGeneratorTest.
+                .matches("[A-Za-z0-9]{5}-[A-Za-z0-9]{5}");
 
         assertThat(to.getValue()).isEqualTo("tendai@shop.co.zw");
         assertThat(subject.getValue()).contains("Welcome to InnBucks");

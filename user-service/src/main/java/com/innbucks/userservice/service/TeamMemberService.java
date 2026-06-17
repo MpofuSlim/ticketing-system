@@ -2,6 +2,7 @@ package com.innbucks.userservice.service;
 
 import com.innbucks.userservice.client.EmailNotificationClient;
 import com.innbucks.userservice.client.SmsNotificationClient;
+import com.innbucks.userservice.client.WhatsAppNotificationClient;
 import com.innbucks.userservice.dto.CreateTeamMemberDTO;
 import com.innbucks.userservice.dto.UserResponseDTO;
 import com.innbucks.userservice.entity.TeamMemberEventAssignment;
@@ -28,6 +29,7 @@ import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Onboards EVENT_ORGANIZER team members (gate-staff / scanner operators).
@@ -56,6 +58,7 @@ public class TeamMemberService {
     private final PasswordEncoder passwordEncoder;
     private final EmailNotificationClient emailNotificationClient;
     private final SmsNotificationClient smsNotificationClient;
+    private final WhatsAppNotificationClient whatsAppNotificationClient;
 
     /** Deployment country pin. Team members are anchored to this cell — see
      *  {@link ShopStaffService#deploymentCountry} for the reasoning. */
@@ -262,38 +265,109 @@ public class TeamMemberService {
         return caller;
     }
 
+    /**
+     * Multi-channel credential delivery for a freshly-onboarded team member.
+     *
+     * <p>Fires <b>email AND WhatsApp in parallel</b> (the two zero-marginal-cost
+     * channels) and only falls back to <b>SMS</b> when BOTH fail. The rationale:
+     * deliverability for gate-staff onboarding can't depend on a single
+     * provider (Gmail spam-flagging the InnBucks domain, a WhatsApp gateway
+     * rotation), but we don't want to spend on SMS when at least one free
+     * channel succeeded. Worst case: 1 email + 1 WhatsApp + 1 SMS. Best case:
+     * 1 email + 1 WhatsApp, no SMS.
+     *
+     * <p>Best-effort: a delivery failure on EVERY channel logs loudly but never
+     * rolls the account back — the temporary password can be re-issued via a
+     * separate reset flow if needed. Never logs the password itself.
+     *
+     * <p>The two parallel calls run on the common ForkJoin pool — the call
+     * volume is low (organizer onboards staff manually, not at scale) and each
+     * call already has a 10s read timeout inside its gateway client, so no
+     * dedicated executor is warranted.
+     */
     private void notifyOnboarding(User member, String tempPassword) {
         String roleLabel = "Team Member";
         String email = member.getEmail();
-        if (email != null && !email.isBlank()) {
-            try {
-                emailNotificationClient.sendEmail(
-                        email,
-                        "Welcome to InnBucks — your team-member account is ready",
-                        buildOnboardingHtml(member.getFirstName(), email, roleLabel, tempPassword),
-                        "TEAM-ONBOARD-" + member.getId());
-                log.info("Onboarding email sent userId={}", member.getId());
-                return;
-            } catch (RuntimeException emailEx) {
-                log.warn("Onboarding email failed userId={}, trying SMS: {}",
-                        member.getId(), emailEx.getMessage());
-            }
-        }
         String phone = member.getPhoneNumber();
-        if (phone == null || phone.isBlank()) {
-            log.warn("New team member has no usable contact channel userId={}", member.getId());
+        String ref = "TEAM-ONBOARD-" + member.getId();
+        String firstName = member.getFirstName();
+        String htmlBody = buildOnboardingHtml(firstName, email, roleLabel, tempPassword);
+        String plainBody = buildOnboardingPlainText(email, tempPassword);
+
+        // Fire the two free channels concurrently.
+        CompletableFuture<Boolean> emailFuture = CompletableFuture.supplyAsync(
+                () -> trySendEmail(member, email, htmlBody, ref));
+        CompletableFuture<Boolean> whatsappFuture = CompletableFuture.supplyAsync(
+                () -> trySendWhatsapp(member, phone, plainBody));
+
+        CompletableFuture.allOf(emailFuture, whatsappFuture).join();
+        boolean emailOk = emailFuture.join();
+        boolean whatsappOk = whatsappFuture.join();
+
+        if (emailOk || whatsappOk) {
+            log.info("Onboarding delivered userId={} email={} whatsapp={}",
+                    member.getId(), emailOk, whatsappOk);
             return;
         }
-        String account = (email != null && !email.isBlank()) ? " (" + email + ")" : "";
-        String sms = "Welcome to InnBucks. Your team-member account" + account
-                + " is ready. Temporary password: " + tempPassword
-                + ". Log in and change it immediately.";
+
+        // Both free channels failed — fall back to SMS.
+        if (phone == null || phone.isBlank()) {
+            log.warn("Onboarding email + WhatsApp both failed and no phone on file " +
+                    "(account still created) userId={}", member.getId());
+            return;
+        }
         try {
-            smsNotificationClient.sendSms(phone, sms, "TEAM-ONBOARD-" + member.getId());
+            smsNotificationClient.sendSms(phone, plainBody, ref);
+            log.info("Onboarding SMS fallback delivered userId={}", member.getId());
         } catch (RuntimeException smsEx) {
-            log.warn("Onboarding notification failed userId={} (account still created): {}",
+            log.warn("Onboarding failed on all channels (email, WhatsApp, SMS); " +
+                    "account still created userId={} smsError={}",
                     member.getId(), smsEx.getMessage());
         }
+    }
+
+    /** Returns true iff the email was accepted by the gateway. Skipped (false)
+     *  when the member has no email on file; that's reported once via the
+     *  aggregate log line, not here. */
+    private boolean trySendEmail(User member, String email, String htmlBody, String ref) {
+        if (email == null || email.isBlank()) {
+            return false;
+        }
+        try {
+            emailNotificationClient.sendEmail(
+                    email,
+                    "Welcome to InnBucks — your team-member account is ready",
+                    htmlBody,
+                    ref);
+            return true;
+        } catch (RuntimeException ex) {
+            log.warn("Onboarding email failed userId={} reason={}", member.getId(), ex.getMessage());
+            return false;
+        }
+    }
+
+    /** Returns true iff WhatsApp accepted the message. Skipped (false) when
+     *  the member has no phone on file. */
+    private boolean trySendWhatsapp(User member, String phone, String plainBody) {
+        if (phone == null || phone.isBlank()) {
+            return false;
+        }
+        try {
+            whatsAppNotificationClient.sendCustomNotification(phone, plainBody);
+            return true;
+        } catch (RuntimeException ex) {
+            log.warn("Onboarding WhatsApp failed userId={} reason={}", member.getId(), ex.getMessage());
+            return false;
+        }
+    }
+
+    /** Single SMS / WhatsApp body — same wording on both, kept short so SMS
+     *  segments don't multiply needlessly. */
+    private String buildOnboardingPlainText(String email, String tempPassword) {
+        String account = (email != null && !email.isBlank()) ? " (" + email + ")" : "";
+        return "Welcome to InnBucks. Your team-member account" + account
+                + " is ready. Temporary password: " + tempPassword
+                + ". Log in and change it immediately.";
     }
 
     private String buildOnboardingHtml(String firstName, String email, String roleLabel, String tempPassword) {

@@ -2,6 +2,8 @@ package com.innbucks.userservice.service;
 
 import com.innbucks.userservice.client.EmailNotificationClient;
 import com.innbucks.userservice.client.SmsNotificationClient;
+import com.innbucks.userservice.client.WhatsAppNotificationClient;
+import com.innbucks.userservice.client.NotificationDeliveryException;
 import com.innbucks.userservice.dto.CreateTeamMemberDTO;
 import com.innbucks.userservice.dto.UserResponseDTO;
 import com.innbucks.userservice.entity.TeamMemberEventAssignment;
@@ -34,6 +36,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -63,6 +66,7 @@ class TeamMemberServiceTest {
     @Mock private PasswordEncoder passwordEncoder;
     @Mock private EmailNotificationClient emailNotificationClient;
     @Mock private SmsNotificationClient smsNotificationClient;
+    @Mock private WhatsAppNotificationClient whatsAppNotificationClient;
 
     @InjectMocks private TeamMemberService service;
 
@@ -382,5 +386,95 @@ class TeamMemberServiceTest {
 
         assertThat(service.canScanEvent(memberUuid, assignedEvent)).isTrue();
         assertThat(service.canScanEvent(memberUuid, otherEvent)).isFalse();
+    }
+
+    // ----- credential delivery (parallel email + WhatsApp, SMS fallback) -----
+
+    /** Shared minimal happy-path setup for the create flow — every delivery
+     *  test below needs the same repo / encoder stubs. */
+    private void primeCreateHappyPath() {
+        authenticateAs(organizer(UUID.randomUUID()));
+        when(userRepository.existsByEmail(any())).thenReturn(false);
+        when(userRepository.existsByPhoneNumberAndHomeCountry(any(), any())).thenReturn(false);
+        when(passwordEncoder.encode(any())).thenReturn("HASHED");
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> {
+            User u = inv.getArgument(0);
+            u.setId(99L);
+            return u;
+        });
+    }
+
+    @Test
+    void create_deliversCredentialsToBothEmailAndWhatsapp_andDoesNotFallBackToSms() {
+        // Both free channels succeed in parallel — SMS must NOT be touched.
+        // This is the steady-state path and pins the "no double-spend on SMS"
+        // contract.
+        primeCreateHappyPath();
+
+        service.createTeamMember(createDto());
+
+        verify(emailNotificationClient).sendEmail(eq("tariro@harare-arena.co.zw"),
+                any(), any(), any());
+        verify(whatsAppNotificationClient).sendCustomNotification(eq("+263773456789"), any());
+        verify(smsNotificationClient, never()).sendSms(any(), any(), any());
+    }
+
+    @Test
+    void create_emailFailsWhatsappSucceeds_stillSkipsSmsFallback() {
+        // Single-channel success is enough — SMS is reserved for the BOTH-failed
+        // case so we don't pay for redundant delivery whenever Gmail/SES
+        // throttles us briefly.
+        primeCreateHappyPath();
+        doThrow(new NotificationDeliveryException("gateway 502"))
+                .when(emailNotificationClient).sendEmail(any(), any(), any(), any());
+
+        service.createTeamMember(createDto());
+
+        verify(whatsAppNotificationClient).sendCustomNotification(any(), any());
+        verify(smsNotificationClient, never()).sendSms(any(), any(), any());
+    }
+
+    @Test
+    void create_whatsappFailsEmailSucceeds_stillSkipsSmsFallback() {
+        primeCreateHappyPath();
+        doThrow(new NotificationDeliveryException("WA unreachable"))
+                .when(whatsAppNotificationClient).sendCustomNotification(any(), any());
+
+        service.createTeamMember(createDto());
+
+        verify(emailNotificationClient).sendEmail(any(), any(), any(), any());
+        verify(smsNotificationClient, never()).sendSms(any(), any(), any());
+    }
+
+    @Test
+    void create_bothEmailAndWhatsappFail_fallsBackToSms() {
+        // The "buy SMS only when truly needed" branch.
+        primeCreateHappyPath();
+        doThrow(new NotificationDeliveryException("gateway 502"))
+                .when(emailNotificationClient).sendEmail(any(), any(), any(), any());
+        doThrow(new NotificationDeliveryException("WA unreachable"))
+                .when(whatsAppNotificationClient).sendCustomNotification(any(), any());
+
+        service.createTeamMember(createDto());
+
+        verify(smsNotificationClient).sendSms(eq("+263773456789"), any(), any());
+    }
+
+    @Test
+    void create_allThreeChannelsFail_doesNotRollBackTheAccount() {
+        // Best-effort delivery: a triple failure must still leave the row
+        // created. The organizer can resend creds via a future reset flow.
+        primeCreateHappyPath();
+        doThrow(new NotificationDeliveryException("email down"))
+                .when(emailNotificationClient).sendEmail(any(), any(), any(), any());
+        doThrow(new NotificationDeliveryException("WA down"))
+                .when(whatsAppNotificationClient).sendCustomNotification(any(), any());
+        doThrow(new NotificationDeliveryException("SMS down"))
+                .when(smsNotificationClient).sendSms(any(), any(), any());
+
+        // Must not throw — the existing save() captor confirms the row was persisted.
+        service.createTeamMember(createDto());
+
+        verify(userRepository).save(any(User.class));
     }
 }
