@@ -6,6 +6,7 @@ import org.springframework.cloud.gateway.support.ipresolver.RemoteAddressResolve
 import org.springframework.cloud.gateway.support.ipresolver.XForwardedRemoteAddressResolver;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpHeaders;
 import reactor.core.publisher.Mono;
 
@@ -51,6 +52,12 @@ public class RateLimiterConfig {
         return XForwardedRemoteAddressResolver.maxTrustedIndex(trustedProxyCount);
     }
 
+    // @Primary so requestRateLimiterGatewayFilterFactory's KeyResolver
+    // autowire picks this one as the default. Other KeyResolver beans
+    // (e.g. paymentsInnbucksIpKeyResolver below) must be referenced
+    // explicitly by name via SpEL in the route YAML
+    // (key-resolver: "#{@paymentsInnbucksIpKeyResolver}").
+    @Primary
     @Bean
     public KeyResolver gatewayKeyResolver(RemoteAddressResolver gatewayRemoteAddressResolver) {
         return exchange -> {
@@ -66,6 +73,28 @@ public class RateLimiterConfig {
                 return Mono.just("ip:" + remote.getAddress().getHostAddress());
             }
             return Mono.just("anonymous");
+        };
+    }
+
+    /**
+     * IP-ONLY resolver for the public, no-bearer checkout route
+     * (POST /payments/innbucks). The default {@link #gatewayKeyResolver}
+     * also falls back to IP when there's no bearer, but that fallback chain
+     * is implicit — a future refactor that drops the IP arm (or shares the
+     * route with a bearer-keyed flow) would silently widen the bucket. This
+     * resolver hardcodes IP-keying so the public payment-initiation route
+     * cannot be widened by accident. Falls back to a deliberately tight
+     * shared "anonymous" bucket only when the remote address is genuinely
+     * unresolvable (defensive — shouldn't happen behind a real proxy).
+     */
+    @Bean
+    public KeyResolver paymentsInnbucksIpKeyResolver(RemoteAddressResolver gatewayRemoteAddressResolver) {
+        return exchange -> {
+            InetSocketAddress remote = gatewayRemoteAddressResolver.resolve(exchange);
+            if (remote != null && remote.getAddress() != null) {
+                return Mono.just("ip:" + remote.getAddress().getHostAddress());
+            }
+            return Mono.just("anonymous-payments-innbucks");
         };
     }
 }
