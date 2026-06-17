@@ -34,14 +34,14 @@ class CellAffinityCheckerTest {
     @Test
     void requireDomesticMsisdn_foreignKe_throwsWithHomeCountryAndBaseUrl() {
         CellAffinityChecker checker = zwChecker(
-                "{\"KE\":\"https://api-ke.innbucks.com\"}");
+                "{\"KE\":\"https://dtx.innbucks.co.ke\"}");
 
         assertThatThrownBy(() -> checker.requireDomesticMsisdn("+254712345678"))
                 .isInstanceOf(WrongCellException.class)
                 .asInstanceOf(throwable(WrongCellException.class))
                 .satisfies(ex -> {
                     assertThat(ex.getHomeCountry()).isEqualTo("KE");
-                    assertThat(ex.getHomeBaseUrl()).isEqualTo("https://api-ke.innbucks.com");
+                    assertThat(ex.getHomeBaseUrl()).isEqualTo("https://dtx.innbucks.co.ke");
                 });
     }
 
@@ -49,7 +49,7 @@ class CellAffinityCheckerTest {
     void requireDomesticMsisdn_foreignKe_noRegistryEntry_throwsWithNullBaseUrl() {
         // KE is foreign, registry has only ZW — wrong_cell still surfaces, just
         // without a redirect URL. FE falls back to GET /cells/lookup.
-        CellAffinityChecker checker = zwChecker("{\"ZW\":\"https://api-zw.innbucks.com\"}");
+        CellAffinityChecker checker = zwChecker("{\"ZW\":\"https://dtx.innbucks.co.zw\"}");
 
         assertThatThrownBy(() -> checker.requireDomesticMsisdn("+254712345678"))
                 .isInstanceOf(WrongCellException.class)
@@ -114,14 +114,14 @@ class CellAffinityCheckerTest {
     @Test
     void requireDomesticCountry_foreignClaim_throwsWithRedirect() {
         CellAffinityChecker checker = zwChecker(
-                "{\"KE\":\"https://api-ke.innbucks.com\"}");
+                "{\"KE\":\"https://dtx.innbucks.co.ke\"}");
 
         assertThatThrownBy(() -> checker.requireDomesticCountry("KE"))
                 .isInstanceOf(WrongCellException.class)
                 .asInstanceOf(throwable(WrongCellException.class))
                 .satisfies(ex -> {
                     assertThat(ex.getHomeCountry()).isEqualTo("KE");
-                    assertThat(ex.getHomeBaseUrl()).isEqualTo("https://api-ke.innbucks.com");
+                    assertThat(ex.getHomeBaseUrl()).isEqualTo("https://dtx.innbucks.co.ke");
                 });
     }
 }

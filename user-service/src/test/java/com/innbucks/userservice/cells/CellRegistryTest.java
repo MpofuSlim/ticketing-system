@@ -25,12 +25,12 @@ class CellRegistryTest {
 
     @Test
     void parsesTwoCells_lookupIsCaseInsensitive() {
-        CellRegistry r = build("{\"ZW\":\"https://api-zw.innbucks.com\",\"KE\":\"https://api-ke.innbucks.com\"}");
+        CellRegistry r = build("{\"ZW\":\"https://dtx.innbucks.co.zw\",\"KE\":\"https://dtx.innbucks.co.ke\"}");
 
         assertThat(r.countries()).containsExactlyInAnyOrder("ZW", "KE");
-        assertThat(r.baseUrlFor("ZW")).hasValue("https://api-zw.innbucks.com");
-        assertThat(r.baseUrlFor("zw")).hasValue("https://api-zw.innbucks.com");
-        assertThat(r.baseUrlFor("ke")).hasValue("https://api-ke.innbucks.com");
+        assertThat(r.baseUrlFor("ZW")).hasValue("https://dtx.innbucks.co.zw");
+        assertThat(r.baseUrlFor("zw")).hasValue("https://dtx.innbucks.co.zw");
+        assertThat(r.baseUrlFor("ke")).hasValue("https://dtx.innbucks.co.ke");
         assertThat(r.baseUrlFor("ng")).isEmpty();
         assertThat(r.baseUrlFor(null)).isEmpty();
         assertThat(r.baseUrlFor("")).isEmpty();
@@ -60,14 +60,14 @@ class CellRegistryTest {
 
     @Test
     void entriesWithBlankKeyOrValue_areDropped() {
-        CellRegistry r = build("{\"ZW\":\"https://api-zw.innbucks.com\",\"\":\"https://api-na.innbucks.com\",\"KE\":\"\"}");
+        CellRegistry r = build("{\"ZW\":\"https://dtx.innbucks.co.zw\",\"\":\"https://api-na.innbucks.com\",\"KE\":\"\"}");
         assertThat(r.countries()).containsExactly("ZW");
     }
 
     @Test
     void keysAreNormalisedToUpperCase_andValuesTrimmed() {
-        CellRegistry r = build("{\"zw\":\"  https://api-zw.innbucks.com  \"}");
+        CellRegistry r = build("{\"zw\":\"  https://dtx.innbucks.co.zw  \"}");
         assertThat(r.countries()).containsExactly("ZW");
-        assertThat(r.baseUrlFor("ZW")).hasValue("https://api-zw.innbucks.com");
+        assertThat(r.baseUrlFor("ZW")).hasValue("https://dtx.innbucks.co.zw");
     }
 }

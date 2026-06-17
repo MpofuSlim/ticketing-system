@@ -63,7 +63,7 @@ public class CellLookupController {
                                               "message": "Home cell resolved",
                                               "data": {
                                                 "homeCountry": "ZW",
-                                                "homeBaseUrl": "https://api-zw.innbucks.com"
+                                                "homeBaseUrl": "https://dtx.innbucks.co.zw"
                                               }
                                             }
                                             """),
@@ -117,6 +117,6 @@ public class CellLookupController {
             @Schema(description = "ISO 3166-1 alpha-2 of the customer's home country.", example = "ZW")
             String homeCountry,
             @Schema(description = "Public base URL of the home cell — null when no cell is deployed for that country yet.",
-                    example = "https://api-zw.innbucks.com", nullable = true)
+                    example = "https://dtx.innbucks.co.zw", nullable = true)
             String homeBaseUrl) {}
 }
