@@ -1,5 +1,6 @@
 package com.innbucks.eventservice.controller;
 
+import com.innbucks.eventservice.client.UserUuidLookupGateway;
 import com.innbucks.eventservice.dto.ApiResult;
 import com.innbucks.eventservice.dto.EventResponseDTO;
 import com.innbucks.eventservice.service.EventService;
@@ -31,11 +32,16 @@ class EventControllerEmptyTest {
     @Test
     void getAllEvents_emptyResult_returns200WithEmptyPage_notNotFound() {
         EventService svc = mock(EventService.class);
+        // UserUuidLookupGateway is a constructor dependency of EventController
+        // (used by /events/my for the team-member deny-by-default path); the
+        // /events endpoint exercised here doesn't touch it, so a bare mock
+        // with no stubbing is sufficient.
+        UserUuidLookupGateway gateway = mock(UserUuidLookupGateway.class);
         when(svc.getAllActiveEvents(any(), any(), any(), anyInt(), anyInt(), any()))
                 .thenReturn(Page.empty());
 
         ResponseEntity<ApiResult<Page<EventResponseDTO>>> resp =
-                new EventController(svc).getAllEvents(null, null, null, null, 0, 10, "startDateTime");
+                new EventController(svc, gateway).getAllEvents(null, null, null, null, 0, 10, "startDateTime");
 
         assertEquals(HttpStatus.OK, resp.getStatusCode(), "empty list must be 200, never 404");
         assertNotNull(resp.getBody());
