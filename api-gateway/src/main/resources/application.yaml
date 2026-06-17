@@ -97,6 +97,22 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
+            # EVENT_ORGANIZER team-member management. Owned by user-service
+            # (identity lives there). Same rate-limit shape as /admin/**.
+            # Sibling /event-organizer/** prefixes can be added here as
+            # the organizer self-service surface grows.
+            - id: user-event-organizer-route
+              uri: lb://user-service
+              predicates:
+                - Path=/event-organizer/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
+
             # Self-service endpoints under /users/me/** (e.g. service requests).
             # Block /users/internal/** at the edge. These are service-to-service
             # endpoints (event-service -> user-service tenant lookup) gated by
@@ -187,6 +203,21 @@ spring:
               uri: lb://booking-service
               predicates:
                 - Path=/bookings/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
+
+            # Gate-side ticket redemption (POST /tickets/scan, owned by
+            # EVENT_ORGANIZER + TEAM_MEMBER scanners). Lives in
+            # booking-service alongside the booking_items it updates.
+            - id: booking-tickets-route
+              uri: lb://booking-service
+              predicates:
+                - Path=/tickets/**
               filters:
                 - name: RequestRateLimiter
                   args:

@@ -9,6 +9,7 @@ import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.List;
+import java.util.UUID;
 
 @Component
 public class JwtUtil {
@@ -82,6 +83,32 @@ public class JwtUtil {
         try {
             String home = getClaims(token).get("homeCountry", String.class);
             return (home == null || home.isBlank()) ? null : home;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** Stable cross-service identifier of the caller (user_uuid). Null on
+     *  legacy tokens minted before user-service's V20. */
+    public UUID extractUserUuid(String token) {
+        return extractUuidClaim(token, "userUuid");
+    }
+
+    /**
+     * Team-scoping identifier. EVENT_ORGANIZER: their own user_uuid;
+     * TEAM_MEMBER: the parent organizer's user_uuid. Drives the
+     * ticket-scan authorization check — must equal the booking's
+     * tenant_user_uuid for the scan to land.
+     */
+    public UUID extractOrganizerUuid(String token) {
+        return extractUuidClaim(token, "organizerUuid");
+    }
+
+    private UUID extractUuidClaim(String token, String name) {
+        try {
+            String raw = getClaims(token).get(name, String.class);
+            if (raw == null || raw.isBlank()) return null;
+            return UUID.fromString(raw);
         } catch (Exception e) {
             return null;
         }

@@ -172,16 +172,22 @@ public class BookingService {
 
         // Resolve the owning tenant once so loyalty earn/redeem can be
         // attributed at confirm without another event-service round trip.
-        // Best-effort; skipped for guest bookings (no loyalty account).
-        String tenantId = userEmail == null
+        // Also captures the stable cross-service organizer uuid that
+        // backs the team-member scan-authorization check. Best-effort —
+        // a null EventLookupDTO leaves both fields null and the scan
+        // path falls back to the email-based tenantId comparison.
+        EventLookupDTO eventLookup = userEmail == null
                 ? null
-                : lookupTenantId(request.getEventId());
+                : lookupEvent(request.getEventId());
+        String tenantId = eventLookup == null ? null : eventLookup.getTenantId();
+        UUID tenantUserUuid = eventLookup == null ? null : eventLookup.getTenantUserUuid();
 
         Booking booking = Booking.builder()
                 .userEmail(userEmail)
                 .phoneNumber(phoneNumber)
                 .eventId(request.getEventId())
                 .tenantId(tenantId)
+                .tenantUserUuid(tenantUserUuid)
                 .confirmationNumber(confirmationNumber)
                 .status(Booking.BookingStatus.PENDING)
                 .totalAmount(total)
@@ -921,17 +927,24 @@ public class BookingService {
         }
     }
 
-    private String lookupTenantId(UUID eventId) {
+    /**
+     * Best-effort event lookup. Returns the {@link EventLookupDTO} verbatim
+     * so callers can read every field we care about (tenantId for loyalty
+     * attribution, tenantUserUuid for scan authorization) without a second
+     * cross-service call. Returns null on any failure — every consumer
+     * treats null as "feature degrades gracefully" rather than blocking
+     * booking creation.
+     */
+    private EventLookupDTO lookupEvent(UUID eventId) {
         EventServiceClient event = eventClientProvider == null ? null : eventClientProvider.getIfAvailable();
         if (event == null) {
             return null;
         }
         try {
             ApiResult<EventLookupDTO> envelope = event.getEvent(eventId);
-            EventLookupDTO data = envelope == null ? null : envelope.getData();
-            return data == null ? null : data.getTenantId();
+            return envelope == null ? null : envelope.getData();
         } catch (Exception ex) {
-            log.warn("Failed to fetch event for tenant lookup eventId={} reason={}", eventId, ex.getMessage());
+            log.warn("Failed to fetch event lookup eventId={} reason={}", eventId, ex.getMessage());
             return null;
         }
     }
@@ -1014,6 +1027,7 @@ public class BookingService {
                 .phoneNumber(booking.getPhoneNumber())
                 .eventId(booking.getEventId())
                 .tenantId(booking.getTenantId())
+                .tenantUserUuid(booking.getTenantUserUuid())
                 .confirmationNumber(booking.getConfirmationNumber())
                 .status(booking.getStatus())
                 .totalAmount(booking.getTotalAmount())

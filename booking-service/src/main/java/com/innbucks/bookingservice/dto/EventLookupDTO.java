@@ -19,6 +19,11 @@ public class EventLookupDTO {
 
     private UUID eventId;
     private String tenantId;
+    // Stable cross-service organizer identifier. Captured alongside tenantId at
+    // booking creation and mirrored onto bookings.tenant_user_uuid so the
+    // ticket-scan handler can authorize "scanner's organizerUuid == booking's
+    // tenantUserUuid" without a per-scan cross-service call to event-service.
+    private UUID tenantUserUuid;
     // Event display name, used as `eventName` on the WhatsApp e-ticket QR message.
     private String title;
 }
