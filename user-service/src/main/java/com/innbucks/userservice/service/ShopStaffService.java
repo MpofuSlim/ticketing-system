@@ -145,6 +145,135 @@ public class ShopStaffService {
                 .toList();
     }
 
+    /**
+     * Re-issues a temp password for a shop-staff member and re-delivers it via
+     * the same email → SMS pipeline used at onboarding. Use case: the original
+     * onboarding notification never reached them and they can't log in.
+     *
+     * <p>Authorization is role-aware to mirror the creation hierarchy:
+     * <ul>
+     *   <li>A {@link User.Role#SHOP_ADMIN} may reset a {@link User.Role#SHOP_USER}
+     *       at <b>their own shop</b> (matching {@code loyaltyShopId}).</li>
+     *   <li>A {@link User.Role#MERCHANT_ADMIN} may reset either a SHOP_ADMIN or a
+     *       SHOP_USER at <b>their own merchant</b> (matching {@code loyaltyMerchantId}).</li>
+     * </ul>
+     *
+     * <p>Out-of-scope targets return 404 (don't disclose existence of staff at
+     * other shops / merchants). SUPER_ADMIN intentionally is NOT routed through
+     * here — they use {@code POST /admin/users/{id}/reset-temp-password} which
+     * handles every user type uniformly.
+     *
+     * <p>Sets {@code mustChangePassword=true}; does NOT bump {@code tokenVersion}
+     * — matching the SUPER_ADMIN reset path. If you need to terminate
+     * outstanding sessions too, deactivate the user first via a future disable
+     * endpoint. Best-effort delivery: the password rotation commits even if
+     * email and SMS both fail (re-run the reset to retry notification).
+     */
+    @Transactional
+    public UserResponseDTO resetTemporaryPassword(UUID userUuid) {
+        User caller = requireCaller();
+        User target = userRepository.findByUserUuid(userUuid)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Staff member not found"));
+        if (!callerMayResetTarget(caller, target)) {
+            // 404 not 403 — same disclosure rule as TeamMemberService.
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Staff member not found");
+        }
+
+        String tempPassword = TemporaryPasswordGenerator.generate();
+        target.setPassword(passwordEncoder.encode(tempPassword));
+        target.setMustChangePassword(true);
+        userRepository.save(target);
+        log.info("Reset shop-staff temp password targetUserUuid={} targetRole={} by={}",
+                target.getUserUuid(),
+                target.hasRole(User.Role.SHOP_ADMIN) ? "SHOP_ADMIN" : "SHOP_USER",
+                caller.getEmail());
+
+        notifyPasswordReset(target, tempPassword);
+        return UserResponseDTO.from(target);
+    }
+
+    /**
+     * Encodes the creator-resets-subordinate hierarchy. Returns false (and the
+     * caller surfaces 404) for cross-shop, cross-merchant, or wrong-role
+     * combinations. Top-level callers (SUPER_ADMIN) intentionally fall through
+     * to false here — they go via {@code /admin/users/{id}/reset-temp-password}
+     * instead.
+     */
+    private boolean callerMayResetTarget(User caller, User target) {
+        if (caller.hasRole(User.Role.MERCHANT_ADMIN)) {
+            if (!target.hasRole(User.Role.SHOP_ADMIN) && !target.hasRole(User.Role.SHOP_USER)) {
+                return false;
+            }
+            UUID callerMerchant = caller.getLoyaltyMerchantId();
+            UUID targetMerchant = target.getLoyaltyMerchantId();
+            return callerMerchant != null && callerMerchant.equals(targetMerchant);
+        }
+        if (caller.hasRole(User.Role.SHOP_ADMIN)) {
+            if (!target.hasRole(User.Role.SHOP_USER)) {
+                // A SHOP_ADMIN can't reset a peer SHOP_ADMIN — only the
+                // MERCHANT_ADMIN above them can. Reset by the merchant
+                // admin keeps shop authority unambiguous.
+                return false;
+            }
+            UUID callerShop = caller.getLoyaltyShopId();
+            UUID targetShop = target.getLoyaltyShopId();
+            return callerShop != null && callerShop.equals(targetShop);
+        }
+        return false;
+    }
+
+    private void notifyPasswordReset(User staff, String tempPassword) {
+        String roleLabel = staff.hasRole(User.Role.SHOP_ADMIN) ? "Shop Administrator" : "Shop User";
+        String email = staff.getEmail();
+        String ref = "STAFF-RESET-" + staff.getId() + "-" + System.currentTimeMillis();
+        if (email != null && !email.isBlank()) {
+            try {
+                emailNotificationClient.sendEmail(
+                        email,
+                        "Your InnBucks " + roleLabel + " password has been reset",
+                        buildResetHtml(staff.getFirstName(), email, roleLabel, tempPassword),
+                        ref);
+                log.info("Password-reset email sent userId={} role={}", staff.getId(), roleLabel);
+                return;
+            } catch (RuntimeException ex) {
+                log.warn("Password-reset email failed userId={}, trying SMS: {}",
+                        staff.getId(), ex.getMessage());
+            }
+        }
+        String phone = staff.getPhoneNumber();
+        if (phone == null || phone.isBlank()) {
+            log.warn("Password-reset has no email or phone target userId={} (password still rotated)",
+                    staff.getId());
+            return;
+        }
+        String account = (email != null && !email.isBlank()) ? " (" + email + ")" : "";
+        String sms = "Your InnBucks account" + account
+                + " password has been reset. New temporary password: " + tempPassword
+                + ". Log in and change it immediately.";
+        try {
+            smsNotificationClient.sendSms(phone, sms, ref);
+            log.info("Password-reset SMS sent userId={}", staff.getId());
+        } catch (RuntimeException ex) {
+            log.warn("Password-reset notification failed on all channels userId={} " +
+                    "(password still rotated): {}", staff.getId(), ex.getMessage());
+        }
+    }
+
+    private String buildResetHtml(String firstName, String email, String roleLabel, String tempPassword) {
+        String name = (firstName != null && !firstName.isBlank())
+                ? HtmlUtils.htmlEscape(firstName) : "there";
+        return "<p>Hi " + name + ",</p>"
+                + "<p>Your InnBucks <strong>" + roleLabel + "</strong> password has been reset.</p>"
+                + "<p>Use these credentials to sign in:</p>"
+                + "<ul>"
+                + "<li><strong>Username:</strong> " + HtmlUtils.htmlEscape(email) + "</li>"
+                + "<li><strong>New temporary password:</strong> " + HtmlUtils.htmlEscape(tempPassword) + "</li>"
+                + "</ul>"
+                + "<p>For your security, please log in and change your password immediately. "
+                + "If you didn't request this reset, contact your administrator.</p>"
+                + "<p>— The InnBucks Team</p>";
+    }
+
     private User buildStaff(String firstName, String middleName, String lastName,
                             String email, String phone,
                             User.Role role, UUID merchantId, UUID shopId, String tempPassword) {

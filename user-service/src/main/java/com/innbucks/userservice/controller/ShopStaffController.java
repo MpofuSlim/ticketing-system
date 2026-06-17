@@ -379,4 +379,63 @@ public class ShopStaffController {
         List<UserResponseDTO> data = shopStaffService.listForShop(shopId);
         return ResponseEntity.ok(ApiResult.ok("Shop staff retrieved", data));
     }
+
+    @PostMapping("/{userUuid}/reset-password")
+    @PreAuthorize("hasAnyRole('SHOP_ADMIN','MERCHANT_ADMIN')")
+    @Operation(
+            summary = "Re-issue a shop-staff member's temporary password",
+            description = "Mints a fresh temporary password for a shop-staff member (SHOP_ADMIN or " +
+                          "SHOP_USER) and re-delivers it via email → SMS fallback. Use this when " +
+                          "the original onboarding notification never reached them. " +
+                          "Authorization is role-aware: a **SHOP_ADMIN** may reset SHOP_USERs at " +
+                          "their own shop; a **MERCHANT_ADMIN** may reset both SHOP_ADMINs and " +
+                          "SHOP_USERs at their own merchant. Cross-shop / cross-merchant targets " +
+                          "return 404 (we never disclose staff at other scopes). " +
+                          "SUPER_ADMINs use the platform-wide " +
+                          "`POST /admin/users/{id}/reset-temp-password` instead. " +
+                          "The response NEVER contains the password — it travels only via the " +
+                          "notification channels."
+    )
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "Password reset and re-delivery dispatched",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Shop staff password reset",
+                                      "data": {
+                                        "id": 74,
+                                        "userUuid": "7fa0d1c2-3456-789a-bcde-f0123456789a",
+                                        "firstName": "Rufaro",
+                                        "middleName": "T",
+                                        "lastName": "Ncube",
+                                        "email": "rufaro@pizza-avondale.co.zw",
+                                        "phoneNumber": "+263772345678",
+                                        "roles": ["SHOP_USER"],
+                                        "defaultServices": ["loyalty"],
+                                        "active": true,
+                                        "createdAt": "2026-05-11T10:20:00",
+                                        "loyaltyMerchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                        "loyaltyShopId": "11111111-aaaa-bbbb-cccc-222222222222"
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404", description = "No such staff member visible to this caller",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "404 NOT_FOUND", "message": "Staff member not found", "data": null }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403", description = "Caller is not a SHOP_ADMIN or MERCHANT_ADMIN",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "403 FORBIDDEN", "message": "Forbidden", "data": null }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<UserResponseDTO>> resetShopStaffPassword(@PathVariable UUID userUuid) {
+        UserResponseDTO data = shopStaffService.resetTemporaryPassword(userUuid);
+        return ResponseEntity.ok(ApiResult.ok("Shop staff password reset", data));
+    }
 }

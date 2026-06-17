@@ -477,4 +477,90 @@ class TeamMemberServiceTest {
 
         verify(userRepository).save(any(User.class));
     }
+
+    // ----- password reset (organizer-initiated re-issue) -----
+
+    @Test
+    void resetTemporaryPassword_rotatesPasswordAndFlagsForceChange() {
+        UUID organizerUuid = UUID.randomUUID();
+        UUID memberUuid = UUID.randomUUID();
+        User member = teamMember(memberUuid, organizerUuid);
+        member.setPassword("OLD_HASH");
+        member.setMustChangePassword(false); // pretend they had set a permanent password
+        authenticateAs(organizer(organizerUuid));
+        when(userRepository.findByUserUuid(memberUuid)).thenReturn(Optional.of(member));
+        when(passwordEncoder.encode(any())).thenReturn("NEW_HASH");
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        UserResponseDTO result = service.resetTemporaryPassword(memberUuid);
+
+        assertThat(result.getUserUuid()).isEqualTo(memberUuid);
+        assertThat(member.getPassword()).isEqualTo("NEW_HASH");
+        assertThat(member.isMustChangePassword()).isTrue();
+        // Reset MUST re-deliver via the multi-channel pipeline — at least one
+        // free channel was attempted; SMS was NOT (both succeeded by default).
+        verify(emailNotificationClient).sendEmail(eq("tariro@harare-arena.co.zw"),
+                any(), any(), any());
+        verify(whatsAppNotificationClient).sendCustomNotification(eq("+263773456789"), any());
+        verify(smsNotificationClient, never()).sendSms(any(), any(), any());
+    }
+
+    @Test
+    void resetTemporaryPassword_returns404WhenMemberBelongsToDifferentOrganizer() {
+        UUID callerUuid = UUID.randomUUID();
+        UUID otherOrganizerUuid = UUID.randomUUID();
+        UUID memberUuid = UUID.randomUUID();
+        authenticateAs(organizer(callerUuid));
+        when(userRepository.findByUserUuid(memberUuid))
+                .thenReturn(Optional.of(teamMember(memberUuid, otherOrganizerUuid)));
+
+        assertThatThrownBy(() -> service.resetTemporaryPassword(memberUuid))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.NOT_FOUND));
+        // Crucially: no password write on a foreign member.
+        verify(userRepository, never()).save(any(User.class));
+        verify(passwordEncoder, never()).encode(any());
+    }
+
+    @Test
+    void resetTemporaryPassword_emailAndWhatsappFail_fallsBackToSms() {
+        // The reset path MUST reuse the same SMS-fallback contract as create.
+        UUID organizerUuid = UUID.randomUUID();
+        UUID memberUuid = UUID.randomUUID();
+        User member = teamMember(memberUuid, organizerUuid);
+        authenticateAs(organizer(organizerUuid));
+        when(userRepository.findByUserUuid(memberUuid)).thenReturn(Optional.of(member));
+        when(passwordEncoder.encode(any())).thenReturn("NEW_HASH");
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        doThrow(new NotificationDeliveryException("email down"))
+                .when(emailNotificationClient).sendEmail(any(), any(), any(), any());
+        doThrow(new NotificationDeliveryException("WA down"))
+                .when(whatsAppNotificationClient).sendCustomNotification(any(), any());
+
+        service.resetTemporaryPassword(memberUuid);
+
+        verify(smsNotificationClient).sendSms(eq("+263773456789"), any(), any());
+    }
+
+    @Test
+    void resetTemporaryPassword_doesNotBumpTokenVersionOrRevokeRefreshTokens() {
+        // Reset is a "re-send credentials" operation, NOT a "kick this user
+        // out" operation. Matches the SUPER_ADMIN reset behaviour. If you also
+        // need to terminate sessions, the caller must disableTeamMember first
+        // (which DOES revoke).
+        UUID organizerUuid = UUID.randomUUID();
+        UUID memberUuid = UUID.randomUUID();
+        User member = teamMember(memberUuid, organizerUuid);
+        long versionBefore = member.getTokenVersion();
+        authenticateAs(organizer(organizerUuid));
+        when(userRepository.findByUserUuid(memberUuid)).thenReturn(Optional.of(member));
+        when(passwordEncoder.encode(any())).thenReturn("NEW_HASH");
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.resetTemporaryPassword(memberUuid);
+
+        assertThat(member.getTokenVersion()).isEqualTo(versionBefore);
+        verify(refreshTokenRepository, never()).revokeAllForUser(anyLong(), any(Instant.class));
+    }
 }

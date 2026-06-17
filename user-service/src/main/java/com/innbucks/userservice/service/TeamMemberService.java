@@ -158,6 +158,42 @@ public class TeamMemberService {
         return UserResponseDTO.from(member);
     }
 
+    /**
+     * Mints a fresh temporary password for a team member and re-delivers it via
+     * the same parallel(email + WhatsApp) → SMS-fallback dispatcher used at
+     * onboarding. Use case: the original onboarding notification never reached
+     * the member (spam-filtered, wrong number, etc.) and they can't log in.
+     *
+     * <p>Always flips {@code must_change_password=true} — the new password is
+     * a one-time value the member must rotate on first login, regardless of
+     * whether they had previously set a real password. Does NOT bump
+     * {@code token_version} or revoke refresh families: this matches the
+     * SUPER_ADMIN reset path in {@link UserAdminService} and is correct for
+     * the common case ("re-send creds because the channel failed"). If you
+     * also need to kill outstanding sessions, call {@link #disableTeamMember}
+     * first (which does revoke).
+     *
+     * <p>Best-effort delivery: a triple-channel failure still commits the
+     * password rotation (the organizer can re-issue), and the member's old
+     * password no longer works. The response never contains the new password
+     * itself — it travels only via the notification channels.
+     */
+    @Transactional
+    public UserResponseDTO resetTemporaryPassword(UUID teamMemberUuid) {
+        User caller = requireOrganizerCaller();
+        User member = loadMemberOwnedByCaller(teamMemberUuid, caller.getUserUuid());
+
+        String tempPassword = TemporaryPasswordGenerator.generate();
+        member.setPassword(passwordEncoder.encode(tempPassword));
+        member.setMustChangePassword(true);
+        userRepository.save(member);
+        log.info("Reset TEAM_MEMBER temp password userUuid={} organizerUuid={} by={}",
+                member.getUserUuid(), caller.getUserUuid(), caller.getEmail());
+
+        notifyPasswordReset(member, tempPassword);
+        return UserResponseDTO.from(member);
+    }
+
     // ===================== event assignments =====================
 
     /**
@@ -286,69 +322,91 @@ public class TeamMemberService {
      * dedicated executor is warranted.
      */
     private void notifyOnboarding(User member, String tempPassword) {
-        String roleLabel = "Team Member";
-        String email = member.getEmail();
-        String phone = member.getPhoneNumber();
-        String ref = "TEAM-ONBOARD-" + member.getId();
-        String firstName = member.getFirstName();
-        String htmlBody = buildOnboardingHtml(firstName, email, roleLabel, tempPassword);
-        String plainBody = buildOnboardingPlainText(email, tempPassword);
+        deliverCredentials(member, tempPassword,
+                "Welcome to InnBucks — your team-member account is ready",
+                buildOnboardingHtml(member.getFirstName(), member.getEmail(), tempPassword),
+                buildOnboardingPlainText(member.getEmail(), tempPassword),
+                "TEAM-ONBOARD-" + member.getId(),
+                "Onboarding");
+    }
 
-        // Fire the two free channels concurrently.
+    /** Reset variant of {@link #notifyOnboarding}. Same multi-channel dispatch,
+     *  different wording so the recipient understands this is a re-issue. */
+    private void notifyPasswordReset(User member, String tempPassword) {
+        deliverCredentials(member, tempPassword,
+                "Your InnBucks team-member password has been reset",
+                buildResetHtml(member.getFirstName(), member.getEmail(), tempPassword),
+                buildResetPlainText(member.getEmail(), tempPassword),
+                "TEAM-RESET-" + member.getId() + "-" + System.currentTimeMillis(),
+                "Password reset");
+    }
+
+    /**
+     * Generic credential dispatcher used by both onboarding and password-reset.
+     * Fires <b>email AND WhatsApp in parallel</b> and only falls back to
+     * <b>SMS</b> when BOTH fail. Best-effort: a triple failure logs loudly but
+     * never rolls back the underlying state change (account creation / password
+     * update); the password can always be re-issued. Never logs the password.
+     *
+     * <p>The two parallel calls run on the common ForkJoin pool — call volume
+     * is low (manual organizer ops) and each gateway client enforces a 10s
+     * read timeout, so no dedicated executor is warranted.
+     */
+    private void deliverCredentials(User member, String tempPassword,
+                                    String subject, String htmlBody, String plainBody,
+                                    String ref, String logTag) {
+        String phone = member.getPhoneNumber();
+
         CompletableFuture<Boolean> emailFuture = CompletableFuture.supplyAsync(
-                () -> trySendEmail(member, email, htmlBody, ref));
+                () -> trySendEmail(member, subject, htmlBody, ref, logTag));
         CompletableFuture<Boolean> whatsappFuture = CompletableFuture.supplyAsync(
-                () -> trySendWhatsapp(member, phone, plainBody));
+                () -> trySendWhatsapp(member, phone, plainBody, logTag));
 
         CompletableFuture.allOf(emailFuture, whatsappFuture).join();
         boolean emailOk = emailFuture.join();
         boolean whatsappOk = whatsappFuture.join();
 
         if (emailOk || whatsappOk) {
-            log.info("Onboarding delivered userId={} email={} whatsapp={}",
-                    member.getId(), emailOk, whatsappOk);
+            log.info("{} delivered userId={} email={} whatsapp={}",
+                    logTag, member.getId(), emailOk, whatsappOk);
             return;
         }
-
-        // Both free channels failed — fall back to SMS.
         if (phone == null || phone.isBlank()) {
-            log.warn("Onboarding email + WhatsApp both failed and no phone on file " +
-                    "(account still created) userId={}", member.getId());
+            log.warn("{} email + WhatsApp both failed and no phone on file " +
+                    "(state change still committed) userId={}", logTag, member.getId());
             return;
         }
         try {
             smsNotificationClient.sendSms(phone, plainBody, ref);
-            log.info("Onboarding SMS fallback delivered userId={}", member.getId());
+            log.info("{} SMS fallback delivered userId={}", logTag, member.getId());
         } catch (RuntimeException smsEx) {
-            log.warn("Onboarding failed on all channels (email, WhatsApp, SMS); " +
-                    "account still created userId={} smsError={}",
-                    member.getId(), smsEx.getMessage());
+            log.warn("{} failed on all channels (email, WhatsApp, SMS); state change still " +
+                    "committed userId={} smsError={}",
+                    logTag, member.getId(), smsEx.getMessage());
         }
     }
 
     /** Returns true iff the email was accepted by the gateway. Skipped (false)
      *  when the member has no email on file; that's reported once via the
      *  aggregate log line, not here. */
-    private boolean trySendEmail(User member, String email, String htmlBody, String ref) {
+    private boolean trySendEmail(User member, String subject, String htmlBody,
+                                 String ref, String logTag) {
+        String email = member.getEmail();
         if (email == null || email.isBlank()) {
             return false;
         }
         try {
-            emailNotificationClient.sendEmail(
-                    email,
-                    "Welcome to InnBucks — your team-member account is ready",
-                    htmlBody,
-                    ref);
+            emailNotificationClient.sendEmail(email, subject, htmlBody, ref);
             return true;
         } catch (RuntimeException ex) {
-            log.warn("Onboarding email failed userId={} reason={}", member.getId(), ex.getMessage());
+            log.warn("{} email failed userId={} reason={}", logTag, member.getId(), ex.getMessage());
             return false;
         }
     }
 
     /** Returns true iff WhatsApp accepted the message. Skipped (false) when
      *  the member has no phone on file. */
-    private boolean trySendWhatsapp(User member, String phone, String plainBody) {
+    private boolean trySendWhatsapp(User member, String phone, String plainBody, String logTag) {
         if (phone == null || phone.isBlank()) {
             return false;
         }
@@ -356,7 +414,7 @@ public class TeamMemberService {
             whatsAppNotificationClient.sendCustomNotification(phone, plainBody);
             return true;
         } catch (RuntimeException ex) {
-            log.warn("Onboarding WhatsApp failed userId={} reason={}", member.getId(), ex.getMessage());
+            log.warn("{} WhatsApp failed userId={} reason={}", logTag, member.getId(), ex.getMessage());
             return false;
         }
     }
@@ -370,18 +428,39 @@ public class TeamMemberService {
                 + ". Log in and change it immediately.";
     }
 
-    private String buildOnboardingHtml(String firstName, String email, String roleLabel, String tempPassword) {
+    private String buildOnboardingHtml(String firstName, String email, String tempPassword) {
         String name = (firstName != null && !firstName.isBlank())
                 ? HtmlUtils.htmlEscape(firstName) : "there";
         return "<p>Hi " + name + ",</p>"
-                + "<p>An InnBucks account has been created for you as a <strong>"
-                + roleLabel + "</strong>.</p>"
+                + "<p>An InnBucks account has been created for you as a <strong>Team Member</strong>.</p>"
                 + "<p>Use these credentials to sign in to the scanner app:</p>"
                 + "<ul>"
                 + "<li><strong>Username:</strong> " + HtmlUtils.htmlEscape(email) + "</li>"
                 + "<li><strong>Temporary password:</strong> " + HtmlUtils.htmlEscape(tempPassword) + "</li>"
                 + "</ul>"
                 + "<p>For your security, please log in and change your password immediately.</p>"
+                + "<p>— The InnBucks Team</p>";
+    }
+
+    private String buildResetPlainText(String email, String tempPassword) {
+        String account = (email != null && !email.isBlank()) ? " (" + email + ")" : "";
+        return "Your InnBucks team-member password" + account
+                + " has been reset. New temporary password: " + tempPassword
+                + ". Log in and change it immediately. If you didn't request this, contact your organizer.";
+    }
+
+    private String buildResetHtml(String firstName, String email, String tempPassword) {
+        String name = (firstName != null && !firstName.isBlank())
+                ? HtmlUtils.htmlEscape(firstName) : "there";
+        return "<p>Hi " + name + ",</p>"
+                + "<p>Your InnBucks team-member password has been reset by your organizer.</p>"
+                + "<p>Use these credentials to sign in:</p>"
+                + "<ul>"
+                + "<li><strong>Username:</strong> " + HtmlUtils.htmlEscape(email) + "</li>"
+                + "<li><strong>New temporary password:</strong> " + HtmlUtils.htmlEscape(tempPassword) + "</li>"
+                + "</ul>"
+                + "<p>For your security, please log in and change your password immediately. "
+                + "If you didn't request this reset, contact your organizer.</p>"
                 + "<p>— The InnBucks Team</p>";
     }
 
