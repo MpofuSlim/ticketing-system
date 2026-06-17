@@ -80,6 +80,23 @@ public class JwtUtil {
         return parseOrNull(token) != null;
     }
 
+    /**
+     * True when the JWT carries the {@code mustChangePassword} claim. The
+     * filter uses this to gate every authenticated request — a user who
+     * hasn't rotated their temp password may not call any endpoint in this
+     * service. Returns false for absent / unparseable claims.
+     */
+    public boolean extractMustChangePassword(String token) {
+        Claims c = parseOrNull(token);
+        if (c == null) return false;
+        try {
+            Boolean v = c.get("mustChangePassword", Boolean.class);
+            return Boolean.TRUE.equals(v);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private Claims parseOrNull(String token) {
         if (token == null || token.isBlank()) return null;
         try {

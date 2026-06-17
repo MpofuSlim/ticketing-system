@@ -81,6 +81,17 @@ public class JwtFilter extends OncePerRequestFilter {
                 return;
             }
 
+            // mustChangePassword gate. user-service mints tokens with this
+            // claim for accounts that haven't rotated their temp password
+            // yet; every other service must reject those tokens until the
+            // password is rotated (and the resulting new login mints a
+            // fresh token without the claim). The FE branches on the typed
+            // errorCode to redirect to its change-password screen.
+            if (jwtUtil.extractMustChangePassword(token)) {
+                writePasswordChangeRequired(response);
+                return;
+            }
+
             String email = jwtUtil.extractEmail(token);
             List<String> roles = jwtUtil.extractRoles(token);
             List<String> services = jwtUtil.extractServices(token);
@@ -173,6 +184,19 @@ public class JwtFilter extends OncePerRequestFilter {
         response.setContentType("application/json");
         response.getWriter().write(
                 "{\"code\":\"" + code + "\",\"message\":\"" + message + "\",\"data\":null}"
+        );
+    }
+
+    /** 403 with errorCode=password_change_required — matches user-service's
+     *  envelope so the FE branches on the same shape regardless of which
+     *  service rejected the request. */
+    private void writePasswordChangeRequired(HttpServletResponse response) throws IOException {
+        SecurityContextHolder.clearContext();
+        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+        response.setContentType("application/json");
+        response.getWriter().write(
+                "{\"code\":\"403 FORBIDDEN\",\"message\":\"Password change required before " +
+                "this account can use the rest of the app\",\"data\":{\"errorCode\":\"password_change_required\"}}"
         );
     }
 

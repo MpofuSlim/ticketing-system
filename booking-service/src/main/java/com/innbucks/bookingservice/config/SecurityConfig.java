@@ -74,7 +74,10 @@ public class SecurityConfig {
                         // BookingController#confirmBooking. We permit at the
                         // Spring layer so the controller can return a clean
                         // ApiResult body instead of Spring's opaque default 401.
-                        .requestMatchers(HttpMethod.PATCH, "/bookings/*/confirm").permitAll()
+                        // Path is under /bookings/internal/** so the gateway's
+                        // booking-internal-deny rule also blocks any public
+                        // attempt (the "three files agree" contract).
+                        .requestMatchers(HttpMethod.PATCH, "/bookings/internal/*/confirm").permitAll()
                         // Internal-only: event-service triggers the attendee
                         // notification fan-out here. The controller enforces the
                         // shared X-Internal-Token; we permit at the Spring layer

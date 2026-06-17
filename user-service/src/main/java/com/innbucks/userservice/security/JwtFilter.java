@@ -85,6 +85,18 @@ public class JwtFilter extends OncePerRequestFilter {
                         "This session has been ended by a newer login");
                 return;
             }
+            // mustChangePassword gate: a JWT minted for a freshly-onboarded /
+            // freshly-reset user carries this claim. Only the /auth/** paths
+            // (excluded from this filter via shouldNotFilter) can be reached
+            // until the password is rotated — every other endpoint here is
+            // blocked with a typed error code the FE branches on to redirect
+            // to the change-password screen. AuthService bumps token_version
+            // on successful change, so the claim-carrying JWT is invalid
+            // immediately afterward and the next login mints a fresh token.
+            if (jwtUtil.extractMustChangePassword(token)) {
+                writePasswordChangeRequired(response);
+                return;
+            }
             List<String> roles = jwtUtil.extractRoles(token);
             List<String> services = jwtUtil.extractServices(token);
             Integer tier = jwtUtil.extractTier(token);
@@ -194,6 +206,22 @@ public class JwtFilter extends OncePerRequestFilter {
         response.setContentType("application/json");
         response.getWriter().write(
                 "{\"code\":\"" + code + "\",\"message\":\"" + message + "\",\"data\":null}"
+        );
+    }
+
+    /**
+     * 403 envelope for a JWT that carries {@code mustChangePassword: true}
+     * hitting a non-auth path. The FE branches on the {@code errorCode}
+     * ({@code password_change_required}) to redirect to the change-password
+     * screen rather than the generic 403 / 401 handler.
+     */
+    private void writePasswordChangeRequired(HttpServletResponse response) throws IOException {
+        SecurityContextHolder.clearContext();
+        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+        response.setContentType("application/json");
+        response.getWriter().write(
+                "{\"code\":\"403 FORBIDDEN\",\"message\":\"Password change required before " +
+                "this account can use the rest of the app\",\"data\":{\"errorCode\":\"password_change_required\"}}"
         );
     }
 
