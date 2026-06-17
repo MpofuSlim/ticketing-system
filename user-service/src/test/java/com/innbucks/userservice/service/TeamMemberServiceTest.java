@@ -367,12 +367,17 @@ class TeamMemberServiceTest {
     }
 
     @Test
-    void canScanEvent_noAssignments_isOrganizerWide() {
+    void canScanEvent_noAssignments_deniesEveryEvent() {
+        // Deny-by-default: a team member with NO assignments may scan nothing.
+        // Flipped from the original "no rows = organizer-wide" behaviour at
+        // operator request — the previous default surprised organizers by
+        // showing team members every event before any explicit assignment.
         UUID memberUuid = UUID.randomUUID();
-        when(assignmentRepository.existsByTeamMemberUserUuid(memberUuid)).thenReturn(false);
+        UUID anyEventId = UUID.randomUUID();
+        when(assignmentRepository.existsByTeamMemberUserUuidAndEventId(memberUuid, anyEventId))
+                .thenReturn(false);
 
-        // No rows => allowed for ANY event (organizer-wide default).
-        assertThat(service.canScanEvent(memberUuid, UUID.randomUUID())).isTrue();
+        assertThat(service.canScanEvent(memberUuid, anyEventId)).isFalse();
     }
 
     @Test
@@ -380,12 +385,37 @@ class TeamMemberServiceTest {
         UUID memberUuid = UUID.randomUUID();
         UUID assignedEvent = UUID.randomUUID();
         UUID otherEvent = UUID.randomUUID();
-        when(assignmentRepository.existsByTeamMemberUserUuid(memberUuid)).thenReturn(true);
         when(assignmentRepository.existsByTeamMemberUserUuidAndEventId(memberUuid, assignedEvent)).thenReturn(true);
         when(assignmentRepository.existsByTeamMemberUserUuidAndEventId(memberUuid, otherEvent)).thenReturn(false);
 
         assertThat(service.canScanEvent(memberUuid, assignedEvent)).isTrue();
         assertThat(service.canScanEvent(memberUuid, otherEvent)).isFalse();
+    }
+
+    @Test
+    void assignedEventIdsFor_returnsEventIdsFromAssignmentRows() {
+        // event-service uses this to scope /events/my for a team member to
+        // ONLY the events they've been assigned to (deny-by-default). No
+        // ownership check here — the caller is trusted via X-Internal-Token.
+        UUID memberUuid = UUID.randomUUID();
+        UUID eventA = UUID.randomUUID();
+        UUID eventB = UUID.randomUUID();
+        when(assignmentRepository.findByTeamMemberUserUuid(memberUuid))
+                .thenReturn(List.of(
+                        TeamMemberEventAssignment.builder().teamMemberUserUuid(memberUuid)
+                                .eventId(eventA).assignedByOrganizerUuid(UUID.randomUUID()).build(),
+                        TeamMemberEventAssignment.builder().teamMemberUserUuid(memberUuid)
+                                .eventId(eventB).assignedByOrganizerUuid(UUID.randomUUID()).build()));
+
+        assertThat(service.assignedEventIdsFor(memberUuid)).containsExactlyInAnyOrder(eventA, eventB);
+    }
+
+    @Test
+    void assignedEventIdsFor_emptyWhenNoAssignments() {
+        UUID memberUuid = UUID.randomUUID();
+        when(assignmentRepository.findByTeamMemberUserUuid(memberUuid)).thenReturn(List.of());
+
+        assertThat(service.assignedEventIdsFor(memberUuid)).isEmpty();
     }
 
     // ----- credential delivery (parallel email + WhatsApp, SMS fallback) -----

@@ -132,6 +132,40 @@ public class EventService {
     }
 
     /**
+     * Team-member view of {@code /events/my}: returns only the events the
+     * member is explicitly assigned to (deny-by-default). The
+     * {@code organizerUuid} comes from the JWT's {@code organizerUuid} claim
+     * (the parent organizer's uuid for a TEAM_MEMBER) and is enforced as a
+     * defence-in-depth ownership filter so a stale assignment row pointing
+     * at a foreign organizer's event can never leak through.
+     *
+     * <p>An empty {@code assignedEventIds} short-circuits to an empty page —
+     * Spring JPA forbids an empty {@code IN (...)} list in some dialects, and
+     * a "no events" answer is the correct semantic in deny-by-default mode.
+     */
+    public Page<EventResponseDTO> getMyAssignedEvents(
+            UUID organizerUuid,
+            java.util.Collection<UUID> assignedEventIds,
+            LocalDateTime from,
+            LocalDateTime to,
+            String venue,
+            int page,
+            int size,
+            String sortBy
+    ) {
+        Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
+        if (assignedEventIds == null || assignedEventIds.isEmpty()) {
+            log.debug("Team-member has no event assignments organizerUuid={} -> empty page", organizerUuid);
+            return Page.empty(pageable);
+        }
+        log.debug("Fetching assigned events for team-member organizerUuid={} assignedCount={} page={} size={}",
+                organizerUuid, assignedEventIds.size(), page, size);
+        return enrichWithAvailability(
+                eventRepository.findByTenantUserUuidAndEventIdIn(
+                        organizerUuid, assignedEventIds, from, to, venue, pageable));
+    }
+
+    /**
      * Same as {@link #getMyEvents} but additionally filters {@code active=true}.
      * Used so an EVENT_ORGANIZER hitting the public {@code /events/active}
      * listing only sees their own bookable events.

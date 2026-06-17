@@ -110,6 +110,45 @@ public class UserUuidLookupGateway {
         }
     }
 
+    /**
+     * Returns the event UUIDs a team member is assigned to. Empty list means
+     * the team member has no scan access (deny-by-default). Empty list is
+     * ALSO returned on any S2S failure — the team-member /events/my caller
+     * then sees no events, which is safer than leaking the wider organizer
+     * set during a user-service outage.
+     */
+    public List<UUID> assignedEventIdsFor(UUID teamMemberUuid) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("X-Internal-Token", internalToken);
+        HttpEntity<Void> request = new HttpEntity<>(headers);
+        String url = userServiceBaseUrl + "/users/internal/team-members/"
+                + teamMemberUuid + "/assigned-events";
+        try {
+            Map<String, Object> raw = restTemplate
+                    .exchange(url, HttpMethod.GET, request, Map.class)
+                    .getBody();
+            if (raw == null) return List.of();
+            Object data = raw.get("data");
+            if (!(data instanceof List<?> list) || list.isEmpty()) {
+                return List.of();
+            }
+            List<UUID> out = new java.util.ArrayList<>(list.size());
+            for (Object item : list) {
+                if (item == null) continue;
+                try {
+                    out.add(UUID.fromString(item.toString()));
+                } catch (IllegalArgumentException ignore) {
+                    log.warn("Skipping malformed assigned-event uuid for teamMemberUuid={}", teamMemberUuid);
+                }
+            }
+            return out;
+        } catch (RestClientException ex) {
+            log.warn("assigned-events lookup failed teamMemberUuid={} reason={}",
+                    teamMemberUuid, ex.getMessage());
+            return List.of();
+        }
+    }
+
     private static final class Row {
         public String email;
         public String userUuid;

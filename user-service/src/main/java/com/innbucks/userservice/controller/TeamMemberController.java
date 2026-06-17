@@ -364,14 +364,15 @@ public class TeamMemberController {
     @PreAuthorize("hasRole('EVENT_ORGANIZER')")
     @Operation(
             summary = "List the events a team member is assigned to",
-            description = "Returns the event IDs this team member is restricted to. An EMPTY list " +
-                          "means the member is NOT restricted — they can scan every event you own " +
-                          "(organizer-wide, the default). Assign at least one event to switch them to " +
-                          "'assigned events only'. Requires **EVENT_ORGANIZER** role."
+            description = "Returns the event IDs this team member may scan. **Deny-by-default**: " +
+                          "an EMPTY list means the member can scan NOTHING — assign at least one " +
+                          "event to make them useful at the gate. Adding/removing assignments takes " +
+                          "effect on the next scan (no JWT re-issue required). " +
+                          "Requires **EVENT_ORGANIZER** role."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "200", description = "Assigned event IDs (empty = organizer-wide)",
+                    responseCode = "200", description = "Assigned event IDs (empty = no events visible / scannable)",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     {
@@ -396,10 +397,11 @@ public class TeamMemberController {
     @PreAuthorize("hasRole('EVENT_ORGANIZER')")
     @Operation(
             summary = "Assign a team member to an event",
-            description = "Restricts the team member to this event (and any others already assigned). " +
-                          "The FIRST assignment flips them from organizer-wide to 'assigned events " +
-                          "only'. Idempotent — assigning an already-assigned event is a no-op. " +
-                          "Returns the member's full current assignment set so the UI can refresh in " +
+            description = "Grants the team member access to this event. **Deny-by-default**: without " +
+                          "at least one assignment a team member can see and scan NOTHING, so this " +
+                          "is the call that makes them useful at the gate. Idempotent — assigning " +
+                          "an already-assigned event is a no-op. Returns the member's full current " +
+                          "assignment set so the UI can refresh in " +
                           "one call. NOTE: assigning an event you don't own is accepted but useless — " +
                           "the scan still fails the organizer-ownership check. Requires " +
                           "**EVENT_ORGANIZER** role."
@@ -432,9 +434,10 @@ public class TeamMemberController {
     @PreAuthorize("hasRole('EVENT_ORGANIZER')")
     @Operation(
             summary = "Remove a team member's event assignment",
-            description = "Unrestricts the team member from this event. Idempotent. If this was their " +
-                          "LAST assignment they revert to organizer-wide scanning (can scan every " +
-                          "event you own). Returns the member's full current assignment set. " +
+            description = "Revokes the team member's access to this event. Idempotent. If this was " +
+                          "their LAST assignment they lose all scan access (deny-by-default — they " +
+                          "must be assigned at least one event to scan anything). Returns the " +
+                          "member's full current assignment set. " +
                           "Requires **EVENT_ORGANIZER** role."
     )
     @ApiResponses({
