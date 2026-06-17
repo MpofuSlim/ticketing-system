@@ -72,6 +72,21 @@ public class JwtUtil {
     }
 
     /**
+     * True when the JWT carries the {@code mustChangePassword} claim. The
+     * filter uses this to gate every authenticated request — a user who
+     * hasn't rotated their temp password may not call any endpoint in this
+     * service. Returns false for absent / unparseable claims.
+     */
+    public boolean extractMustChangePassword(String token) {
+        try {
+            Boolean v = getClaims(token).get("mustChangePassword", Boolean.class);
+            return Boolean.TRUE.equals(v);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
      * Extract the {@code homeCountry} claim (ISO 3166-1 alpha-2, e.g.
      * {@code ZW}) — the customer's MSISDN-derived routing key set by
      * user-service's JwtUtil at mint time. Returns null on any failure or

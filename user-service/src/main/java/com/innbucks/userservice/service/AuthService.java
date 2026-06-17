@@ -315,10 +315,14 @@ public class AuthService {
     }
 
     /**
-     * Rotates the caller's password. Requires the existing (current) password as a
-     * re-authentication step. The bearer token stays valid until its natural expiry —
-     * other services already accept tokens until then, so forcing immediate revocation
-     * here would just create UX friction without a meaningful security gain.
+     * Rotates the caller's password. Requires the existing (current) password
+     * as a re-authentication step. Bumps {@code token_version} as part of the
+     * same write so the current JWT (which may carry
+     * {@code mustChangePassword: true}) is immediately rejected by every
+     * service's JwtFilter — the user re-logs in with the new password to get
+     * a fresh JWT without the must-change claim. The cross-service eviction is
+     * intentional: it stops a leaked temp password from being used to call any
+     * other endpoint after the rightful owner has rotated it.
      */
     @Transactional
     public void changePassword(String token, ChangePasswordRequestDTO request, AuditContext auditContext) {
@@ -346,6 +350,11 @@ public class AuthService {
 
         user.setPassword(passwordEncoder.encode(request.getNewPassword()));
         user.setMustChangePassword(false);
+        // Bump the session epoch — the current JWT may carry
+        // mustChangePassword: true; every service's JwtFilter compares the
+        // claim's tokenVersion against users.token_version and rejects on
+        // mismatch. The next login mints a fresh JWT with the flag off.
+        user.setTokenVersion(user.getTokenVersion() + 1);
         userRepository.save(user);
         log.info("Password changed userId={} subject={}", user.getId(), subject);
         auditService.recordSuccess(
@@ -491,7 +500,7 @@ public class AuthService {
         String newToken = jwtUtil.generateToken(subject, roleNames, new ArrayList<>(microservices),
                 tier, verified, user.getPhoneNumber(), loyaltyMerchantId, loyaltyShopId,
                 firstName, middleName, lastName, user.getTokenVersion(), country,
-                user.getUserUuid(), organizerUuid);
+                user.getUserUuid(), organizerUuid, user.isMustChangePassword());
 
         return AuthResponseDTO.builder()
                 .token(newToken)

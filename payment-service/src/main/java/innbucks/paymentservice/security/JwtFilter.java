@@ -88,6 +88,13 @@ public class JwtFilter extends OncePerRequestFilter {
                 writeUnauthorized(response, "INVALID_TOKEN", "Token is invalid or expired");
                 return;
             }
+            // mustChangePassword gate. A user with a temp password may not
+            // touch /payments/** until they've rotated it via user-service's
+            // /auth/change-password. Same rule as the other services.
+            if (jwtUtil.extractMustChangePassword(token)) {
+                writePasswordChangeRequired(response);
+                return;
+            }
             String phoneNumber = jwtUtil.extractPhoneNumber(token);
             if (phoneNumber == null) {
                 // Token is signature-valid but missing the phoneNumber claim
@@ -146,6 +153,19 @@ public class JwtFilter extends OncePerRequestFilter {
         response.setContentType("application/json");
         response.getWriter().write(
                 "{\"code\":\"" + code + "\",\"message\":\"" + message + "\",\"data\":null}"
+        );
+    }
+
+    /** 403 with errorCode=password_change_required — matches user-service's
+     *  envelope so the FE branches on the same shape regardless of which
+     *  service rejected the request. */
+    private void writePasswordChangeRequired(HttpServletResponse response) throws IOException {
+        SecurityContextHolder.clearContext();
+        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
+        response.setContentType("application/json");
+        response.getWriter().write(
+                "{\"code\":\"403 FORBIDDEN\",\"message\":\"Password change required before " +
+                "this account can use the rest of the app\",\"data\":{\"errorCode\":\"password_change_required\"}}"
         );
     }
 

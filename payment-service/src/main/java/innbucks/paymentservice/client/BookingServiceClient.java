@@ -138,7 +138,10 @@ public class BookingServiceClient {
     public Map<String, Object> confirmBooking(UUID bookingId) {
         try {
             String body = restClient.patch()
-                    .uri("/bookings/{id}/confirm", bookingId)
+                    // /bookings/internal/** is gateway-edge-denied + permitted in
+                    // booking-service SecurityConfig + X-Internal-Token gated in
+                    // the controller — the "three files agree" S2S contract.
+                    .uri("/bookings/internal/{id}/confirm", bookingId)
                     .header("X-Internal-Token", internalToken)
                     .retrieve()
                     .body(String.class);

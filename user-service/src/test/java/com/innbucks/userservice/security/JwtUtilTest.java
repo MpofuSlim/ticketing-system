@@ -220,4 +220,37 @@ class JwtUtilTest {
         assertNull(jwtUtil.extractUserUuid(legacy));
         assertNull(jwtUtil.extractOrganizerUuid(legacy));
     }
+
+    @Test
+    void generateToken_emitsMustChangePasswordClaimWhenFlagged() {
+        // The defence-in-depth gate. Every service's JwtFilter reads this
+        // claim and rejects every non-auth request with 403 password_change_
+        // required until the user rotates the temp password. A regression
+        // that drops the claim from the wire would re-leak the temp-password
+        // session as a full-access JWT — the exact security gap this gate
+        // closes.
+        String token = jwtUtil.generateToken("temp-pwd-user@example.com",
+                java.util.List.of("EVENT_ORGANIZER"), java.util.List.of("ticketing"),
+                4, true, "+263771234567",
+                null, null, null, null, null, 1L, "Zimbabwe",
+                java.util.UUID.randomUUID(), java.util.UUID.randomUUID(),
+                true);
+
+        assertTrue(jwtUtil.extractMustChangePassword(token));
+    }
+
+    @Test
+    void generateToken_omitsMustChangePasswordClaimWhenNotFlagged() {
+        // Steady-state: a normal login does NOT carry the claim. The
+        // extractor returns false on absent claims so legacy / steady-state
+        // tokens are unaffected.
+        String token = jwtUtil.generateToken("happy-user@example.com",
+                java.util.List.of("EVENT_ORGANIZER"), java.util.List.of("ticketing"),
+                4, true, "+263771234567",
+                null, null, null, null, null, 1L, "Zimbabwe",
+                java.util.UUID.randomUUID(), java.util.UUID.randomUUID(),
+                false);
+
+        assertFalse(jwtUtil.extractMustChangePassword(token));
+    }
 }

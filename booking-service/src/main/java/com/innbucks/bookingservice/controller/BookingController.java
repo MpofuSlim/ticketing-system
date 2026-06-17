@@ -981,8 +981,12 @@ public class BookingController {
                 bookingService.reverseConfirmedBooking(id, adminEmail)));
     }
 
-    @PatchMapping("/{id}/confirm")
-    @Operation(summary = "Confirm booking", description = "Marks a booking as confirmed (typically called by payment flow).")
+    @PatchMapping("/internal/{id}/confirm")
+    @Operation(summary = "Confirm booking (internal S2S)",
+            description = "Marks a booking as confirmed — called by payment-service when a " +
+                          "payment lands. Moved under /bookings/internal/** so the gateway's " +
+                          "edge-deny rule blocks any public attempt (defence-in-depth on top " +
+                          "of the X-Internal-Token check below).")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",

@@ -73,7 +73,8 @@ public class JwtUtil {
                                 UUID merchantId, UUID shopId,
                                 String firstName, String middleName, String lastName,
                                 long tokenVersion, String country,
-                                UUID userUuid, UUID organizerUuid) {
+                                UUID userUuid, UUID organizerUuid,
+                                boolean mustChangePassword) {
         List<String> roleList = roles == null ? List.of()
                 : roles.stream().filter(r -> r != null && !r.isBlank()).collect(Collectors.toList());
         List<String> serviceList = defaultServices == null ? List.of()
@@ -109,6 +110,18 @@ public class JwtUtil {
         // Same omit-when-null rule as above.
         if (organizerUuid != null) {
             builder.claim("organizerUuid", organizerUuid.toString());
+        }
+        // Defence-in-depth gate for the temp-password handoff. When true, every
+        // service's JwtFilter (except /auth/** in user-service, which is needed
+        // to actually rotate the password) returns 403 password_change_required
+        // — so a leaked / intercepted temp password can't be used to call any
+        // other endpoint. AuthService bumps token_version on successful
+        // password rotation, so the JWT carrying this claim becomes invalid
+        // immediately afterward; the user re-logs in with the new password to
+        // get a fresh JWT with mustChangePassword=false. Omitted from the wire
+        // (claim NOT set) when false to keep the token slim.
+        if (mustChangePassword) {
+            builder.claim("mustChangePassword", true);
         }
         if (country != null && !country.isBlank()) {
             builder.claim("country", country);
@@ -173,10 +186,25 @@ public class JwtUtil {
     }
 
     /**
+     * Legacy overload — preserved for callers (mainly tests) that don't supply
+     * userUuid/organizerUuid/mustChangePassword. Defaults the must-change flag
+     * to false so legacy tokens behave the same as before.
+     */
+    public String generateToken(String email, Collection<String> roles, Collection<String> defaultServices,
+                                int tier, boolean verified, String phoneNumber,
+                                UUID merchantId, UUID shopId,
+                                String firstName, String middleName, String lastName,
+                                long tokenVersion, String country,
+                                UUID userUuid, UUID organizerUuid) {
+        return generateToken(email, roles, defaultServices, tier, verified, phoneNumber,
+                merchantId, shopId, firstName, middleName, lastName, tokenVersion, country,
+                userUuid, organizerUuid, false);
+    }
+
+    /**
      * Legacy overload — same shape as the original 13-arg method, preserved
      * for callers (mainly tests) that don't supply userUuid/organizerUuid.
-     * Production paths call the full 15-arg version above and emit both
-     * UUID claims.
+     * Production paths call the full version above and emit both UUID claims.
      */
     public String generateToken(String email, Collection<String> roles, Collection<String> defaultServices,
                                 int tier, boolean verified, String phoneNumber,
@@ -331,6 +359,23 @@ public class JwtUtil {
     /** Stable cross-service identifier for the caller. Null on tokens minted before V20. */
     public UUID extractUserUuid(String token) {
         return extractUuidClaim(token, "userUuid");
+    }
+
+    /**
+     * True when the JWT carries the {@code mustChangePassword} claim. Every
+     * service's JwtFilter enforces this: tokens with the flag set may not call
+     * anything beyond the password-rotation endpoints (in user-service,
+     * {@code /auth/**} is excluded from the filter so /auth/change-password
+     * and /auth/logout still work). Returns false when the claim is absent
+     * or unparseable — pre-claim tokens behave as if the flag is off.
+     */
+    public boolean extractMustChangePassword(String token) {
+        try {
+            Boolean v = getClaims(token).get("mustChangePassword", Boolean.class);
+            return Boolean.TRUE.equals(v);
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     /**

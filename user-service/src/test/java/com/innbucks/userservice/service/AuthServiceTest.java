@@ -286,7 +286,7 @@ class AuthServiceTest {
         // MERCHANT_ADMIN — JwtUtil emits no name claims for staff roles.
         when(jwt.generateToken(eq("u@example.com"), eq(List.of("MERCHANT_ADMIN")),
                 eq(List.of("loyalty", "payments")), eq(4), eq(true), isNull(), isNull(), isNull(),
-                isNull(), isNull(), isNull(), anyLong(), isNull(), any(), any())).thenReturn("tok");
+                isNull(), isNull(), isNull(), anyLong(), isNull(), any(), any(), anyBoolean())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("u@example.com"); req.setPassword("pw");
@@ -316,7 +316,7 @@ class AuthServiceTest {
         // This superadmin has no stored country, so the JWT country claim
         // defaults to Zimbabwe (see login_superAdminWithoutCountry_* below).
         when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), isNull(), isNull(), isNull(),
-                any(), any(), any(), anyLong(), eq("Zimbabwe"), any(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), eq("Zimbabwe"), any(), any(), anyBoolean())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("admin@innbucks.co.zw"); req.setPassword("pw");
@@ -330,7 +330,7 @@ class AuthServiceTest {
         // Verify the JWT was issued with the expanded set covering every microservice.
         ArgumentCaptor<List<String>> servicesCaptor = ArgumentCaptor.forClass(List.class);
         verify(jwt).generateToken(any(), any(), servicesCaptor.capture(), anyInt(), anyBoolean(), isNull(), isNull(), isNull(),
-                any(), any(), any(), anyLong(), eq("Zimbabwe"), any(), any());
+                any(), any(), any(), anyLong(), eq("Zimbabwe"), any(), any(), anyBoolean());
         List<String> services = servicesCaptor.getValue();
         assertTrue(services.contains("events"));
         assertTrue(services.contains("seats"));
@@ -356,7 +356,7 @@ class AuthServiceTest {
         when(userRepo.findByEmail("admin@innbucks.co.zw")).thenReturn(Optional.of(user));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
         when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), any(), any(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("admin@innbucks.co.zw"); req.setPassword("pw");
@@ -366,7 +366,7 @@ class AuthServiceTest {
 
         ArgumentCaptor<String> countryCaptor = ArgumentCaptor.forClass(String.class);
         verify(jwt).generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), countryCaptor.capture(), any(), any());
+                any(), any(), any(), anyLong(), countryCaptor.capture(), any(), any(), anyBoolean());
         assertEquals("Zimbabwe", countryCaptor.getValue(),
                 "SUPER_ADMIN with no stored country must default the JWT country claim to Zimbabwe");
     }
@@ -387,7 +387,7 @@ class AuthServiceTest {
         when(userRepo.findByEmail("admin-ke@innbucks.co.ke")).thenReturn(Optional.of(user));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
         when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), any(), any(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("admin-ke@innbucks.co.ke"); req.setPassword("pw");
@@ -397,7 +397,7 @@ class AuthServiceTest {
 
         ArgumentCaptor<String> countryCaptor = ArgumentCaptor.forClass(String.class);
         verify(jwt).generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), countryCaptor.capture(), any(), any());
+                any(), any(), any(), anyLong(), countryCaptor.capture(), any(), any(), anyBoolean());
         assertEquals("Kenya", countryCaptor.getValue(),
                 "An explicit country on a SUPER_ADMIN must NOT be overridden by the Zimbabwe default");
     }
@@ -420,7 +420,7 @@ class AuthServiceTest {
         when(encoder.matches("pw", "hashed")).thenReturn(true);
         when(jwt.generateToken(eq("0777000099"), eq(List.of("CUSTOMER")),
                 any(), eq(2), eq(false), eq("0777000099"), isNull(), isNull(),
-                any(), any(), any(), anyLong(), isNull(), any(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("0777000099"); req.setPassword("pw");
@@ -500,7 +500,7 @@ class AuthServiceTest {
         when(encoder.matches(any(), any())).thenReturn(true);
         when(jwt.generateToken(eq("u@example.com"), eq(List.of("CUSTOMER")),
                 any(), anyInt(), anyBoolean(), isNull(), isNull(), isNull(),
-                any(), any(), any(), anyLong(), isNull(), any(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("u@example.com"); req.setPassword("pw");
@@ -540,7 +540,7 @@ class AuthServiceTest {
         when(userRepo.findByEmail("u@example.com")).thenReturn(Optional.of(user));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
         when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), isNull(), any(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier("u@example.com"); req.setPassword("pw");
@@ -557,7 +557,7 @@ class AuthServiceTest {
         // be rejected by JwtFilter on the next request.
         ArgumentCaptor<Long> versionCaptor = ArgumentCaptor.forClass(Long.class);
         verify(jwt).generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), versionCaptor.capture(), isNull(), any(), any());
+                any(), any(), any(), versionCaptor.capture(), isNull(), any(), any(), anyBoolean());
         assertEquals(8L, versionCaptor.getValue());
     }
 
@@ -731,7 +731,7 @@ class AuthServiceTest {
         when(customerRepo.findByUserId(101L)).thenReturn(Optional.of(profile));
         when(encoder.matches("right", "hashed")).thenReturn(true);
         when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), isNull(), any(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean())).thenReturn("tok");
 
         AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),
                 customerRepo, encoder, jwt).login(loginReq("right"), null, com.innbucks.userservice.service.AuditContext.none());
@@ -864,7 +864,7 @@ class AuthServiceTest {
         when(customerRepo.findByUserId(101L)).thenReturn(Optional.of(profile));
         when(encoder.matches("right", "hashed")).thenReturn(true);
         when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
-                any(), any(), any(), anyLong(), isNull(), any(), any())).thenReturn("tok");
+                any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean())).thenReturn("tok");
 
         newService(userRepo, mock(TenantProfileRepository.class), customerRepo, encoder, jwt)
                 .login(loginReq("right"), null, com.innbucks.userservice.service.AuditContext.none());

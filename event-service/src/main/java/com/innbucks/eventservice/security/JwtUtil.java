@@ -100,6 +100,21 @@ public class JwtUtil {
     }
 
     /**
+     * True when the JWT carries the {@code mustChangePassword} claim. The
+     * filter uses this to gate every authenticated request — a user who
+     * hasn't rotated their temp password may not call any endpoint in this
+     * service. Returns false for absent / unparseable claims.
+     */
+    public boolean extractMustChangePassword(String token) {
+        try {
+            Boolean v = getClaims(token).get("mustChangePassword", Boolean.class);
+            return Boolean.TRUE.equals(v);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
      * Team-scoping identifier. For an EVENT_ORGANIZER this equals the
      * caller's own user_uuid; for a TEAM_MEMBER it equals the parent
      * organizer's user_uuid (so a team member's scan/list-my-events flows
