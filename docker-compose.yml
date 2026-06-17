@@ -46,6 +46,19 @@ services:
     restart: unless-stopped
     mem_limit: 1024m
     mem_reservation: 512m
+    # max_connections=150 gives ~30 slots of headroom over the fleet's summed
+    # Hikari pools (6 services x 20 = 120 after the loyalty right-size) for
+    # psql/admin/healthcheck use. shared_buffers=128MB is conservative within
+    # the 1024m container budget (~12.5% of RAM, leaving room for work_mem,
+    # WAL, and per-connection backend memory at ~10MB each). Raising
+    # max_connections further requires either bumping mem_limit or fronting
+    # with PgBouncer.
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=${POSTGRES_MAX_CONNECTIONS:-150}"
+      - "-c"
+      - "shared_buffers=${POSTGRES_SHARED_BUFFERS:-128MB}"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
@@ -133,6 +146,17 @@ services:
   # siblings by name; the api-gateway resolves its lb:// route targets the same
   # way. Started first (others depend_on it healthy) so first registration
   # succeeds promptly.
+  # Eureka HA: discovery-server + discovery-server-2 run as peer-replicated
+  # nodes. Each registers with the OTHER's zone and fetches its snapshot, so
+  # if either node restarts the fleet's view from the surviving node stays
+  # complete. Both nodes share the same data model — there's no leader; the
+  # registry is eventually-consistent across peers.
+  #
+  # Single-VM caveat: peers on the same docker host don't survive a host
+  # crash (the VM going down takes both with it). The win on a single VM is
+  # "registry restart no longer evicts every instance fleet-wide" — useful
+  # for safe redeploys. For real HA, run the second node on a second VM by
+  # overriding EUREKA_INSTANCE_HOSTNAME / EUREKA_PEER_URL via env.
   discovery-server:
     build:
       context: .
@@ -159,6 +183,10 @@ services:
       # Self-zone hostname so the registry advertises itself on the shared
       # network as discovery-server (not its container id).
       EUREKA_INSTANCE_HOSTNAME: discovery-server
+      # Peer URL: this node points at discovery-server-2 as its replication
+      # partner. The leading comma is required so the value is appended as a
+      # second zone entry on application.yaml's defaultZone string.
+      EUREKA_PEER_URL: ",http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server-2:8761/eureka/"
       # Registry Basic-auth credential (enforced under the prod profile). Clients
       # embed it in their eureka defaultZone URL, so use a URL-safe value
       # (openssl rand -hex 24) — '@' / ':' / '/' would break URL parsing.
@@ -166,6 +194,38 @@ services:
       EUREKA_PASSWORD: ${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}
     ports:
       - "127.0.0.1:18761:8761"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8761/actuator/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+
+  # Eureka peer — second registry node. Identical config except for its
+  # hostname (advertises as discovery-server-2 on the shared docker network)
+  # and the peer URL (points back at discovery-server).
+  discovery-server-2:
+    build:
+      context: .
+      dockerfile: discovery-server/Dockerfile
+    image: ghcr.io/${GHCR_OWNER:-mpofuslim}/discovery-server:${IMAGE_TAG:-dev}
+    container_name: innbucks-discovery-server-2
+    restart: unless-stopped
+    mem_limit: 512m
+    mem_reservation: 320m
+    environment:
+      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
+      INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
+      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
+      TRACING_ENABLED: ${TRACING_ENABLED:-false}
+      OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
+      EUREKA_INSTANCE_HOSTNAME: discovery-server-2
+      EUREKA_PEER_URL: ",http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/"
+      EUREKA_USERNAME: ${EUREKA_USERNAME:-eureka}
+      EUREKA_PASSWORD: ${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}
+    ports:
+      # Different host port to avoid clashing with the first node's :18761.
+      - "127.0.0.1:18762:8761"
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8761/actuator/health"]
       interval: 10s
@@ -214,7 +274,9 @@ services:
       # external OTel collector (none is bundled in this stack) to export spans.
       TRACING_ENABLED: ${TRACING_ENABLED:-false}
       OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
-      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/
+      # Both Eureka peers are listed comma-separated so the Eureka client fails
+      # over to the surviving node if one peer is restarting or unreachable.
+      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/,http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD}@discovery-server-2:8761/eureka/
       # Dual-homed (default + shared) -> register by service name, not a single
       # fixed IP, so Docker DNS resolves it per-network for every caller. See
       # the eureka.instance comment in user-service application.yaml.
@@ -311,7 +373,9 @@ services:
       # Required from booking-service on PATCH /events/{id}/availability/consume.
       # Must match INTERNAL_API_TOKEN on the booking-service side.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
-      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/
+      # Both Eureka peers are listed comma-separated so the Eureka client fails
+      # over to the surviving node if one peer is restarting or unreachable.
+      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/,http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD}@discovery-server-2:8761/eureka/
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
     ports:
       - "127.0.0.1:8082:8082"
@@ -352,7 +416,9 @@ services:
       # external OTel collector (none is bundled in this stack) to export spans.
       TRACING_ENABLED: ${TRACING_ENABLED:-false}
       OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
-      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/
+      # Both Eureka peers are listed comma-separated so the Eureka client fails
+      # over to the surviving node if one peer is restarting or unreachable.
+      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/,http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD}@discovery-server-2:8761/eureka/
       DB_URL: jdbc:postgresql://postgres:5432/seat_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
@@ -419,7 +485,9 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}
       IDEMPOTENCY_STORE: redis
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/
+      # Both Eureka peers are listed comma-separated so the Eureka client fails
+      # over to the surviving node if one peer is restarting or unreachable.
+      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/,http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD}@discovery-server-2:8761/eureka/
       # Presented to event-service on the internal availability/consume call.
       # Must match INTERNAL_API_TOKEN on the event-service side.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
@@ -512,7 +580,9 @@ services:
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}
       IDEMPOTENCY_STORE: redis
-      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/
+      # Both Eureka peers are listed comma-separated so the Eureka client fails
+      # over to the surviving node if one peer is restarting or unreachable.
+      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/,http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD}@discovery-server-2:8761/eureka/
       # Dual-homed (default + shared) -> register by service name, not a single
       # fixed IP, so Docker DNS resolves it per-network for every caller. See
       # the eureka.instance comment in payment-service application.yaml.
@@ -588,7 +658,9 @@ services:
       # external OTel collector (none is bundled in this stack) to export spans.
       TRACING_ENABLED: ${TRACING_ENABLED:-false}
       OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
-      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/
+      # Both Eureka peers are listed comma-separated so the Eureka client fails
+      # over to the surviving node if one peer is restarting or unreachable.
+      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/,http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD}@discovery-server-2:8761/eureka/
       DB_URL: jdbc:postgresql://postgres:5432/loyalty_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
@@ -651,7 +723,9 @@ services:
       # external OTel collector (none is bundled in this stack) to export spans.
       TRACING_ENABLED: ${TRACING_ENABLED:-false}
       OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
-      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/
+      # Both Eureka peers are listed comma-separated so the Eureka client fails
+      # over to the surviving node if one peer is restarting or unreachable.
+      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/,http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD}@discovery-server-2:8761/eureka/
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
       # Redis backs the gateway's RequestRateLimiter token bucket store.
       REDIS_HOST: redis
@@ -660,9 +734,18 @@ services:
       RATE_LIMIT_REPLENISH_PER_SECOND: ${RATE_LIMIT_REPLENISH_PER_SECOND:-50}
       RATE_LIMIT_BURST_CAPACITY: ${RATE_LIMIT_BURST_CAPACITY:-100}
     ports:
+      # Public API. The only entry point exposed on all interfaces; everything
+      # else (including the management port below) is host-loopback only.
       - "18080:8080"
+      # Management/actuator endpoints (health/info/prometheus). Published ONLY
+      # to host loopback so a host-resident Prometheus can scrape while the
+      # internet cannot — the gateway has no Spring Security and used to leak
+      # /actuator/prometheus when these endpoints shared the 8080 port.
+      - "127.0.0.1:19090:9090"
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/actuator/health"]
+      # Health now lives on the dedicated management port (9090). Wget the same
+      # container-internal path the actuator binds to.
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/actuator/health"]
       interval: 10s
       timeout: 3s
       retries: 10
