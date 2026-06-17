@@ -47,7 +47,8 @@ class GatewayRouteTableTest {
             "event-availability-deny", "event-service-route",
             "seat-service-seat-route", "seat-service-category-route",
             "booking-internal-deny", "booking-service-route", "booking-tickets-route", "brand-assets-route",
-            "payment-internal-deny", "payment-service-read-route", "payment-service-write-route",
+            "payment-internal-deny", "payment-service-read-route",
+            "payments-innbucks-write-route", "payment-service-write-route",
             "loyalty-internal-deny", "loyalty-service-route",
             "user-service-proxy-route", "event-service-proxy-route",
             "seat-service-proxy-route", "booking-service-proxy-route",
@@ -73,7 +74,7 @@ class GatewayRouteTableTest {
             "user-admin-route", "user-event-organizer-route", "user-self-route", "event-service-route",
             "seat-service-seat-route", "seat-service-category-route",
             "booking-service-route", "booking-tickets-route", "brand-assets-route",
-            "payment-service-read-route", "payment-service-write-route",
+            "payment-service-read-route", "payments-innbucks-write-route", "payment-service-write-route",
             "loyalty-service-route");
 
     private static final List<String> API_DOCS_PROXY_ROUTES = List.of(
@@ -142,9 +143,18 @@ class GatewayRouteTableTest {
                 .as("booking-internal-deny must match before /bookings/**")
                 .isBetween(0, order.indexOf("booking-service-route") - 1);
         assertThat(order.indexOf("payment-internal-deny"))
-                .as("payment-internal-deny must match before both /payments/** routes")
+                .as("payment-internal-deny must match before all /payments/** routes")
                 .isBetween(0, Math.min(order.indexOf("payment-service-read-route"),
-                        order.indexOf("payment-service-write-route")) - 1);
+                        Math.min(order.indexOf("payments-innbucks-write-route"),
+                                order.indexOf("payment-service-write-route"))) - 1);
+        // The dedicated /payments/innbucks bucket only kicks in if SCG matches
+        // it BEFORE the broader payment-service-write-route catch-all (both
+        // accept POST on a /payments path). A reordering that flips them
+        // silently merges /payments/innbucks back into the bearer-keyed bucket
+        // and reopens the harvest/abuse window we just closed.
+        assertThat(order.indexOf("payments-innbucks-write-route"))
+                .as("payments-innbucks-write-route must match before the /payments/** write catch-all")
+                .isBetween(0, order.indexOf("payment-service-write-route") - 1);
     }
 
     @Test
@@ -215,6 +225,26 @@ class GatewayRouteTableTest {
         assertThat(predicateArgs("payment-service-read-route", "Method")).containsExactly("GET");
         assertThat(predicateArgs("payment-service-write-route", "Method"))
                 .containsExactlyInAnyOrder("POST", "PUT", "PATCH", "DELETE");
+    }
+
+    @Test
+    void paymentsInnbucksWriteRouteIsIpKeyedAtPaymentsInnbucksOnly() {
+        // The route exists to give the public POST /payments/innbucks call
+        // (no bearer) its own IP-keyed bucket — separate from the broader
+        // /payments/** bearer-keyed write route. Pin the path, the method
+        // AND the resolver bean so a refactor that silently widens the path
+        // or swaps the resolver fails CI instead of reopening the abuse window.
+        assertThat(predicateArgs("payments-innbucks-write-route", "Path"))
+                .containsExactly("/payments/innbucks");
+        assertThat(predicateArgs("payments-innbucks-write-route", "Method"))
+                .containsExactly("POST");
+        boolean usesIpResolver = route("payments-innbucks-write-route").getFilters().stream()
+                .filter(f -> "RequestRateLimiter".equals(f.getName()))
+                .flatMap(f -> f.getArgs().values().stream())
+                .anyMatch(v -> v != null && v.contains("paymentsInnbucksIpKeyResolver"));
+        assertThat(usesIpResolver)
+                .as("the IP-only key resolver bean is what closes the bearer-fallback ambiguity")
+                .isTrue();
     }
 
     @Test

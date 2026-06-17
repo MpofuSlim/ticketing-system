@@ -8,6 +8,7 @@ import innbucks.paymentservice.dto.InnbucksPaymentResponse.Status;
 import innbucks.paymentservice.idempotency.IdempotencyFilter;
 import innbucks.paymentservice.service.InnbucksPaymentService;
 import innbucks.paymentservice.service.InnbucksPaymentService.InvalidPaymentRequestException;
+import innbucks.paymentservice.util.BookingIdMasking;
 import innbucks.paymentservice.util.MsisdnMasking;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -192,8 +193,10 @@ public class InnbucksPaymentController {
                             .build());
         }
 
+        // bookingId is the public-ticket access token; logs use the first-8 mask
+        // so a log leak isn't an out-of-band confirmation / ticket dump.
         log.info("POST /payments/innbucks bookingId={} msisdn={} idempotencyKey={}",
-                request.getBookingId(), MsisdnMasking.mask(msisdn), idempotencyKey);
+                BookingIdMasking.mask(request.getBookingId()), MsisdnMasking.mask(msisdn), idempotencyKey);
 
         InnbucksPaymentResponse response;
         try {
@@ -202,7 +205,7 @@ public class InnbucksPaymentController {
             HttpStatus status = HttpStatus.resolve(e.getStatusCode());
             if (status == null) status = HttpStatus.BAD_GATEWAY;
             log.warn("InnBucks payment booking fetch/confirm failed bookingId={} status={} reason={}",
-                    request.getBookingId(), status.value(), e.getMessage());
+                    BookingIdMasking.mask(request.getBookingId()), status.value(), e.getMessage());
             return ResponseEntity.status(status).body(
                     ApiResult.<InnbucksPaymentResponse>builder()
                             .code(status.value() + " " + status.name())
@@ -213,7 +216,7 @@ public class InnbucksPaymentController {
             HttpStatus status = HttpStatus.resolve(e.getStatusCode());
             if (status == null) status = HttpStatus.UNPROCESSABLE_ENTITY;
             log.warn("InnBucks payment validation failed bookingId={} reason={}",
-                    request.getBookingId(), e.getMessage());
+                    BookingIdMasking.mask(request.getBookingId()), e.getMessage());
             return ResponseEntity.status(status).body(
                     ApiResult.<InnbucksPaymentResponse>builder()
                             .code(status.value() + " " + status.name())

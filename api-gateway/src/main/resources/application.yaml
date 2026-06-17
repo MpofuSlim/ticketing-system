@@ -286,6 +286,32 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
+            # POST /payments/innbucks — public checkout (NO bearer token; the
+            # customer is paying without an account). The default key resolver
+            # also falls back to IP when there's no bearer, but that's an
+            # implicit chain — make it explicit + give it its own (tighter)
+            # bucket so a single abusive IP can't harvest payment codes or
+            # grief the booking pipeline. MUST precede payment-service-write-
+            # route below so SCG matches it first.
+            - id: payments-innbucks-write-route
+              uri: lb://payment-service
+              predicates:
+                - Path=/payments/innbucks
+                - Method=POST
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    # 1 rps / 3 burst per IP: a real customer pays once per
+                    # checkout. 3 burst handles the "click submit, see spinner,
+                    # click again twice" pattern; the trailing replenishment
+                    # then refills slowly. Tighter than the bearer-keyed
+                    # write bucket below because there's no auth gate above
+                    # this route.
+                    redis-rate-limiter.replenishRate: ${PAYMENTS_INNBUCKS_RATE_LIMIT_REPLENISH_PER_SECOND:1}
+                    redis-rate-limiter.burstCapacity: ${PAYMENTS_INNBUCKS_RATE_LIMIT_BURST_CAPACITY:3}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@paymentsInnbucksIpKeyResolver}"
+
             # WRITE side — transfer + withdraw move real money via Oradian.
             # Bucket sized at ~1 req/sec / 5 burst per bearer token: a real
             # customer transfers a handful of times per day; the generous
