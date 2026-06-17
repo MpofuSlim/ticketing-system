@@ -308,6 +308,56 @@ public class TeamMemberController {
                 teamMemberService.enableTeamMember(teamMemberUuid)));
     }
 
+    @PostMapping("/{teamMemberUuid}/reset-password")
+    @PreAuthorize("hasRole('EVENT_ORGANIZER')")
+    @Operation(
+            summary = "Re-issue a team member's temporary password",
+            description = "Mints a fresh 10-character temporary password for the team member and " +
+                          "re-delivers it via the same parallel(email + WhatsApp) → SMS-fallback " +
+                          "channel pipeline used at onboarding. Use this when the original " +
+                          "onboarding notification never reached them (spam-filtered, wrong " +
+                          "number, etc.) and they can't log in. " +
+                          "Sets `must_change_password=true` so the member is forced through the " +
+                          "change-password flow on first login. The response NEVER contains the " +
+                          "password itself — it travels only via the notification channels. " +
+                          "Requires **EVENT_ORGANIZER** role; 404 if the member isn't yours."
+    )
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "Password reset and re-delivery dispatched",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Team member password reset",
+                                      "data": {
+                                        "id": 91,
+                                        "userUuid": "5fc4c9d2-7a1b-4d3e-8c7f-1a2b3c4d5e6f",
+                                        "firstName": "Tariro",
+                                        "middleName": "K",
+                                        "lastName": "Chikomo",
+                                        "email": "tariro@harare-arena.co.zw",
+                                        "phoneNumber": "+263773456789",
+                                        "roles": ["TEAM_MEMBER"],
+                                        "defaultServices": ["ticketing"],
+                                        "active": true,
+                                        "createdAt": "2026-06-17T10:15:00",
+                                        "createdByOrganizerUuid": "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e"
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404", description = "No such team member under your organizer account",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "404 NOT_FOUND", "message": "Team member not found", "data": null }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<UserResponseDTO>> resetPassword(@PathVariable UUID teamMemberUuid) {
+        return ResponseEntity.ok(ApiResult.ok("Team member password reset",
+                teamMemberService.resetTemporaryPassword(teamMemberUuid)));
+    }
+
     // ===================== event assignments =====================
 
     @GetMapping("/{teamMemberUuid}/events")

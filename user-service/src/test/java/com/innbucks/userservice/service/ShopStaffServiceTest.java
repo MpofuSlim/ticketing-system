@@ -17,10 +17,12 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.util.ReflectionTestUtils;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.EnumSet;
 import java.util.Optional;
@@ -28,6 +30,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
@@ -193,5 +196,128 @@ class ShopStaffServiceTest {
         // Best-effort: a total notification outage must NOT fail the creation.
         assertThatCode(() -> service.createShopAdmin(shopAdminDto(shopId))).doesNotThrowAnyException();
         verify(userRepository).save(any(User.class));
+    }
+
+    // ----- resetTemporaryPassword (creator-resets-subordinate hierarchy) -----
+
+    private User shopUser(UUID userUuid, UUID merchantId, UUID shopId) {
+        return User.builder()
+                .id(74L).userUuid(userUuid)
+                .email("rufaro@pizza.co.zw").firstName("Rufaro").lastName("Ncube")
+                .phoneNumber("+263772345678")
+                .roles(EnumSet.of(User.Role.SHOP_USER))
+                .loyaltyMerchantId(merchantId).loyaltyShopId(shopId)
+                .active(true).build();
+    }
+
+    private User shopAdminTarget(UUID userUuid, UUID merchantId, UUID shopId) {
+        return User.builder()
+                .id(73L).userUuid(userUuid)
+                .email("tendai@pizza.co.zw").firstName("Tendai").lastName("Moyo")
+                .phoneNumber("+263771234567")
+                .roles(EnumSet.of(User.Role.SHOP_ADMIN))
+                .loyaltyMerchantId(merchantId).loyaltyShopId(shopId)
+                .active(true).build();
+    }
+
+    @Test
+    void resetTemporaryPassword_shopAdminMayResetShopUserAtSameShop() {
+        UUID shopId = UUID.randomUUID();
+        UUID merchantId = UUID.randomUUID();
+        UUID targetUuid = UUID.randomUUID();
+        User caller = User.builder().id(1L).email("shopadmin@x.com")
+                .roles(EnumSet.of(User.Role.SHOP_ADMIN))
+                .loyaltyMerchantId(merchantId).loyaltyShopId(shopId).build();
+        authenticateAs(caller);
+        User target = shopUser(targetUuid, merchantId, shopId);
+        when(userRepository.findByUserUuid(targetUuid)).thenReturn(Optional.of(target));
+        when(passwordEncoder.encode(any())).thenReturn("NEW_HASH");
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        UserResponseDTO result = service.resetTemporaryPassword(targetUuid);
+
+        assertThat(result.getUserUuid()).isEqualTo(targetUuid);
+        assertThat(target.getPassword()).isEqualTo("NEW_HASH");
+        assertThat(target.isMustChangePassword()).isTrue();
+        verify(emailNotificationClient).sendEmail(eq("rufaro@pizza.co.zw"), any(), any(), any());
+    }
+
+    @Test
+    void resetTemporaryPassword_merchantAdminMayResetShopAdminAtSameMerchant() {
+        UUID merchantId = UUID.randomUUID();
+        UUID targetShopId = UUID.randomUUID();
+        UUID targetUuid = UUID.randomUUID();
+        User caller = User.builder().id(1L).email("merchantadmin@x.com")
+                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .loyaltyMerchantId(merchantId).build();
+        authenticateAs(caller);
+        User target = shopAdminTarget(targetUuid, merchantId, targetShopId);
+        when(userRepository.findByUserUuid(targetUuid)).thenReturn(Optional.of(target));
+        when(passwordEncoder.encode(any())).thenReturn("NEW_HASH");
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        UserResponseDTO result = service.resetTemporaryPassword(targetUuid);
+
+        assertThat(result.getUserUuid()).isEqualTo(targetUuid);
+        verify(emailNotificationClient).sendEmail(eq("tendai@pizza.co.zw"), any(), any(), any());
+    }
+
+    @Test
+    void resetTemporaryPassword_shopAdminCannotResetShopUserAtDifferentShop() {
+        UUID merchantId = UUID.randomUUID();
+        UUID callerShopId = UUID.randomUUID();
+        UUID otherShopId = UUID.randomUUID();
+        UUID targetUuid = UUID.randomUUID();
+        User caller = User.builder().id(1L).email("shopadmin@x.com")
+                .roles(EnumSet.of(User.Role.SHOP_ADMIN))
+                .loyaltyMerchantId(merchantId).loyaltyShopId(callerShopId).build();
+        authenticateAs(caller);
+        // Target is a SHOP_USER at a DIFFERENT shop within the same merchant.
+        when(userRepository.findByUserUuid(targetUuid))
+                .thenReturn(Optional.of(shopUser(targetUuid, merchantId, otherShopId)));
+
+        assertThatThrownBy(() -> service.resetTemporaryPassword(targetUuid))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.NOT_FOUND));
+        verify(passwordEncoder, never()).encode(any());
+        verify(emailNotificationClient, never()).sendEmail(any(), any(), any(), any());
+    }
+
+    @Test
+    void resetTemporaryPassword_shopAdminCannotResetPeerShopAdmin() {
+        // SHOP_ADMINs are peers; only the MERCHANT_ADMIN above them can reset.
+        UUID merchantId = UUID.randomUUID();
+        UUID shopId = UUID.randomUUID();
+        UUID peerUuid = UUID.randomUUID();
+        User caller = User.builder().id(1L).email("shopadmin@x.com")
+                .roles(EnumSet.of(User.Role.SHOP_ADMIN))
+                .loyaltyMerchantId(merchantId).loyaltyShopId(shopId).build();
+        authenticateAs(caller);
+        when(userRepository.findByUserUuid(peerUuid))
+                .thenReturn(Optional.of(shopAdminTarget(peerUuid, merchantId, shopId)));
+
+        assertThatThrownBy(() -> service.resetTemporaryPassword(peerUuid))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    @Test
+    void resetTemporaryPassword_merchantAdminCannotResetStaffAtDifferentMerchant() {
+        UUID callerMerchant = UUID.randomUUID();
+        UUID otherMerchant = UUID.randomUUID();
+        UUID targetUuid = UUID.randomUUID();
+        User caller = User.builder().id(1L).email("merchant@x.com")
+                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .loyaltyMerchantId(callerMerchant).build();
+        authenticateAs(caller);
+        when(userRepository.findByUserUuid(targetUuid))
+                .thenReturn(Optional.of(shopUser(targetUuid, otherMerchant, UUID.randomUUID())));
+
+        assertThatThrownBy(() -> service.resetTemporaryPassword(targetUuid))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.NOT_FOUND));
     }
 }
