@@ -587,12 +587,13 @@ public class BookingController {
     public ResponseEntity<ApiResult<List<CategoryBookingDTO>>> getBookingsByCategory(
             @PathVariable UUID categoryId,
             Authentication authentication) {
-        String requesterEmail = authentication.getName();
+        UUID requesterOrganizerUuid = com.innbucks.bookingservice.security.AuthenticatedCaller
+                .organizerUuid(authentication);
         boolean isAdmin = hasRole(authentication, "ROLE_SUPER_ADMIN");
-        log.debug("GET /bookings/by-category/{} requesterEmail={} isAdmin={}",
-                categoryId, requesterEmail, isAdmin);
+        log.debug("GET /bookings/by-category/{} requesterOrganizerUuid={} isAdmin={}",
+                categoryId, requesterOrganizerUuid, isAdmin);
         return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully",
-                bookingService.getBookingsByCategory(categoryId, requesterEmail, isAdmin)));
+                bookingService.getBookingsByCategory(categoryId, requesterOrganizerUuid, isAdmin)));
     }
 
     @GetMapping("/by-event/{eventId}")
@@ -661,12 +662,13 @@ public class BookingController {
     public ResponseEntity<ApiResult<List<CategoryBookingDTO>>> getBookingsByEvent(
             @PathVariable UUID eventId,
             Authentication authentication) {
-        String requesterEmail = authentication.getName();
+        UUID requesterOrganizerUuid = com.innbucks.bookingservice.security.AuthenticatedCaller
+                .organizerUuid(authentication);
         boolean isAdmin = hasRole(authentication, "ROLE_SUPER_ADMIN");
-        log.debug("GET /bookings/by-event/{} requesterEmail={} isAdmin={}",
-                eventId, requesterEmail, isAdmin);
+        log.debug("GET /bookings/by-event/{} requesterOrganizerUuid={} isAdmin={}",
+                eventId, requesterOrganizerUuid, isAdmin);
         return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully",
-                bookingService.getBookingsByEvent(eventId, requesterEmail, isAdmin)));
+                bookingService.getBookingsByEvent(eventId, requesterOrganizerUuid, isAdmin)));
     }
 
     @GetMapping("/active-counts")

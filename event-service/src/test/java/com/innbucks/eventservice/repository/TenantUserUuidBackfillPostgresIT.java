@@ -5,6 +5,7 @@ import com.innbucks.eventservice.entity.EventCategory;
 import com.innbucks.eventservice.testsupport.PostgresIntegrationTestBase;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.time.LocalDateTime;
 import java.util.UUID;
@@ -29,12 +30,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 class TenantUserUuidBackfillPostgresIT extends PostgresIntegrationTestBase {
 
     @Autowired EventRepository eventRepository;
+    @Autowired JdbcTemplate jdbcTemplate;
 
     @Test
     void backfillTenantUserUuid_runsWithoutAnAmbientTransaction() {
-        String tenantId = "backfill-it-" + UUID.randomUUID();
+        // Seed via the entity first — this writes the row but leaves the
+        // legacy `tenant_id` column as NULL (it's no longer mapped on Event).
         Event saved = eventRepository.save(Event.builder()
-                .tenantId(tenantId)
                 .title("Backfill Regression")
                 .venue("HICC")
                 .country("Zimbabwe")
@@ -48,6 +50,15 @@ class TenantUserUuidBackfillPostgresIT extends PostgresIntegrationTestBase {
                 .build());
         // New rows have no cross-service uuid until backfill (or dual-write) runs.
         assertThat(saved.getTenantUserUuid()).isNull();
+
+        // Stamp the legacy tenant_id email column directly via SQL — the
+        // backfill runner reads this column natively to resolve uuids, and
+        // the entity-side mapping is gone now that V7 dropped it. This
+        // recreates the pre-backfill condition on a real row.
+        String tenantId = "backfill-it-" + UUID.randomUUID() + "@example.test";
+        jdbcTemplate.update(
+                "UPDATE events SET tenant_id = ? WHERE event_id = ?",
+                tenantId, saved.getEventId());
 
         UUID organizerUuid = UUID.randomUUID();
         try {

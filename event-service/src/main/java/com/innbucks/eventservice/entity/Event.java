@@ -8,13 +8,16 @@ import java.time.ZoneOffset;
 import java.util.UUID;
 
 @Entity
-@Table(
-        name = "events",
-        uniqueConstraints = @UniqueConstraint(
-                name = "uk_events_natural_key",
-                columnNames = {"tenant_id", "title", "venue", "start_date_time"}
-        )
-)
+// The legacy {@code uk_events_natural_key} unique constraint on the
+// (tenant_id, title, venue, start_date_time) tuple still lives in the
+// database — the column drop and the constraint rebuild on
+// (tenant_user_uuid, ...) are deferred to the follow-up migration that
+// runs AFTER the backfill runner confirms zero rows with
+// tenant_user_uuid IS NULL. The dup-check on the new identifier is
+// enforced at the application layer
+// (existsByTenantUserUuidAndTitleAndVenueAndStartDateTimeAndDeletedFalse)
+// until then.
+@Table(name = "events")
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -25,17 +28,16 @@ public class Event {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID eventId;
 
-    @Column(name = "tenant_id", nullable = false)
-    private String tenantId;
-
     /**
      * Stable cross-service organizer reference. Matches {@code users.user_uuid}
-     * in user-service. Populated by {@link EventService#createEvent} on every
-     * new INSERT (dual-write alongside {@link #tenantId}); backfilled for
-     * pre-V6 rows by {@code TenantUserUuidBackfillRunner}. Nullable until the
-     * backfill is complete and the FE has migrated off the email-based
-     * {@code tenantId}; a future migration will flip this NOT NULL and drop
-     * the email column.
+     * in user-service. The sole identifier of the owning organizer that
+     * application code reads now that the email-as-tenant-id pattern has been
+     * removed.
+     *
+     * <p>Stays nullable on the table for one more deploy cycle — legacy rows
+     * may have a null here until {@code TenantUserUuidBackfillRunner} catches
+     * them up. Application code that reads this field MUST guard for null and
+     * fail with a clear "backfill incomplete" message rather than NPE.
      */
     @Column(name = "tenant_user_uuid")
     private UUID tenantUserUuid;

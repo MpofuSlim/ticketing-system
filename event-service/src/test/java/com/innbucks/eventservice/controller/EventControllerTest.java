@@ -6,20 +6,29 @@ import com.innbucks.eventservice.dto.LocationDTO;
 import com.innbucks.eventservice.entity.Event;
 import com.innbucks.eventservice.entity.EventCategory;
 import com.innbucks.eventservice.repository.EventRepository;
+import com.innbucks.eventservice.security.AuthDetailsKeys;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.web.context.WebApplicationContext;
 
 import java.time.LocalDateTime;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 import static org.hamcrest.Matchers.*;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.security.test.web.servlet.setup.SecurityMockMvcConfigurers.springSecurity;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
@@ -34,16 +43,48 @@ class EventControllerTest {
     @Autowired EventRepository eventRepository;
     @Autowired WebApplicationContext wac;
 
+    // Stable per-organizer UUIDs replacing the legacy "tenant-1"/"tenant-99"/
+    // "tenant-A"/"tenant-B" strings. organizerUuid is now the JWT-stamped
+    // owning-organizer identifier (previously the principal email did double
+    // duty as the tenantId).
+    private static final UUID ORGANIZER_1 = UUID.randomUUID();
+    private static final UUID ORGANIZER_99 = UUID.randomUUID();
+    private static final UUID ORGANIZER_A = UUID.randomUUID();
+    private static final UUID ORGANIZER_B = UUID.randomUUID();
+
     @BeforeEach
     void setUp() {
         mockMvc = webAppContextSetup(wac).apply(springSecurity()).build();
         eventRepository.deleteAll();
     }
 
+    /**
+     * Builds an Authentication that mimics what {@link
+     * com.innbucks.eventservice.security.JwtFilter} produces: principal name,
+     * granted authorities, plus the JWT UUID claims on the details map. Needed
+     * because {@link WithMockUser} only sets principal/authorities — controllers
+     * resolve the owning organizer's uuid via
+     * {@link com.innbucks.eventservice.security.AuthenticatedCaller#organizerUuid}
+     * which reads {@link AuthDetailsKeys#ORGANIZER_UUID} off the details map.
+     */
+    private static RequestPostProcessor jwtAuth(String principal, UUID organizerUuid, String... roles) {
+        List<SimpleGrantedAuthority> authorities = java.util.Arrays.stream(roles)
+                .map(r -> new SimpleGrantedAuthority("ROLE_" + r))
+                .toList();
+        UsernamePasswordAuthenticationToken token =
+                new UsernamePasswordAuthenticationToken(principal, null, authorities);
+        Map<String, Object> details = new LinkedHashMap<>();
+        if (organizerUuid != null) {
+            details.put(AuthDetailsKeys.ORGANIZER_UUID, organizerUuid);
+        }
+        token.setDetails(details);
+        return authentication(token);
+    }
+
     @Test
     void getAllEvents_isPublic_andReturnsLocalDateTimeInDto() throws Exception {
         Event saved = eventRepository.save(Event.builder()
-                .tenantId("tenant-1")
+                .tenantUserUuid(ORGANIZER_1)
                 .title("Test Event")
                 .description("desc")
                 .venue("Harare")
@@ -79,19 +120,22 @@ class EventControllerTest {
     }
 
     @Test
-    @WithMockUser(username = "tenant-99", roles = "EVENT_ORGANIZER")
     void createEvent_withTenantRole_createsEvent() throws Exception {
         MockMultipartFile eventPart = new MockMultipartFile(
                 "event", "event.json", MediaType.APPLICATION_JSON_VALUE,
                 objectMapper.writeValueAsBytes(sampleRequest("Concert", EventCategory.COMEDY)));
 
-        // @WithMockUser bypasses JwtFilter, so the country normally stamped from
-        // the token is injected here as the request attribute the controller reads.
+        // Auth post-processor stands in for JwtFilter: it sets the principal,
+        // EVENT_ORGANIZER role, and (crucially) the organizerUuid on the auth
+        // details map so the controller can resolve the owning tenantUserUuid.
+        // jwtCountry is the request attribute the controller reads in place of
+        // the JWT country claim under @WithMockUser-style auth.
         mockMvc.perform(multipart("/events").file(eventPart)
+                        .with(jwtAuth("tenant-99", ORGANIZER_99, "EVENT_ORGANIZER"))
                         .requestAttr("jwtCountry", "Zimbabwe"))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.code", is("201 CREATED")))
-                .andExpect(jsonPath("$.data.tenantId", is("tenant-99")))
+                .andExpect(jsonPath("$.data.tenantUserUuid", is(ORGANIZER_99.toString())))
                 .andExpect(jsonPath("$.data.title", is("Concert")))
                 .andExpect(jsonPath("$.data.country", is("Zimbabwe")))
                 .andExpect(jsonPath("$.data.category", is("COMEDY")))
@@ -102,20 +146,19 @@ class EventControllerTest {
     }
 
     @Test
-    @WithMockUser(username = "tenant-99", roles = "EVENT_ORGANIZER")
     void createEvent_withoutCountryClaim_isRejected() throws Exception {
         MockMultipartFile eventPart = new MockMultipartFile(
                 "event", "event.json", MediaType.APPLICATION_JSON_VALUE,
                 objectMapper.writeValueAsBytes(sampleRequest("No Country Concert", EventCategory.SPORT)));
 
         // No jwtCountry attribute → controller has no country to stamp → 400.
-        mockMvc.perform(multipart("/events").file(eventPart))
+        mockMvc.perform(multipart("/events").file(eventPart)
+                        .with(jwtAuth("tenant-99", ORGANIZER_99, "EVENT_ORGANIZER")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message", containsStringIgnoringCase("country")));
     }
 
     @Test
-    @WithMockUser(username = "tenant-99", roles = "EVENT_ORGANIZER")
     void createEvent_withBanner_storesBytesAndReturnsBannerUrl() throws Exception {
         MockMultipartFile eventPart = new MockMultipartFile(
                 "event", "event.json", MediaType.APPLICATION_JSON_VALUE,
@@ -130,6 +173,7 @@ class EventControllerTest {
                 "eventBanner", "banner.png", MediaType.IMAGE_PNG_VALUE, pngBytes);
 
         String body = mockMvc.perform(multipart("/events").file(eventPart).file(bannerPart)
+                        .with(jwtAuth("tenant-99", ORGANIZER_99, "EVENT_ORGANIZER"))
                         .requestAttr("jwtCountry", "Zimbabwe"))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.data.bannerUrl", containsString("/banner")))
@@ -148,10 +192,9 @@ class EventControllerTest {
     }
 
     @Test
-    @WithMockUser(username = "tenant-1", roles = "EVENT_ORGANIZER")
     void updateEvent_persistsChangesToDatabase() throws Exception {
         Event saved = eventRepository.save(Event.builder()
-                .tenantId("tenant-1")
+                .tenantUserUuid(ORGANIZER_1)
                 .title("Original Title")
                 .description("Original")
                 .venue("Old Venue")
@@ -168,6 +211,7 @@ class EventControllerTest {
                 + "\"startDateTime\":\"2031-06-15T19:00:00.000Z\",\"endDateTime\":\"2031-06-15T22:00:00.000Z\"}";
 
         mockMvc.perform(put("/events/" + saved.getEventId())
+                        .with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER"))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(body))
                 .andExpect(status().isOk())
@@ -294,7 +338,7 @@ class EventControllerTest {
 
     private static Event.EventBuilder eventBuilder() {
         return Event.builder()
-                .tenantId("tenant-1")
+                .tenantUserUuid(ORGANIZER_1)
                 .description("desc")
                 .venue("Venue")
                 .country("Zimbabwe")
@@ -369,37 +413,37 @@ class EventControllerTest {
         org.junit.jupiter.api.Assertions.assertEquals(95, reloaded.getAvailableTickets());
     }
 
-    // ---- GET /events/by-tenant (SUPER_ADMIN-only listing of a given tenant's events) ----
+    // ---- GET /events/by-organizer (SUPER_ADMIN-only listing of a given organizer's events) ----
 
     @Test
     @WithMockUser(username = "admin@innbucks.co.zw", roles = "SUPER_ADMIN")
-    void getEventsByTenant_asSuperAdmin_returnsOnlyThatTenantsEvents() throws Exception {
-        eventRepository.save(eventBuilder().tenantId("tenant-A").title("A Concert")
+    void getEventsByOrganizer_asSuperAdmin_returnsOnlyThatOrganizersEvents() throws Exception {
+        eventRepository.save(eventBuilder().tenantUserUuid(ORGANIZER_A).title("A Concert")
                 .startDateTime(LocalDateTime.now().plusDays(5))
                 .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2)).build());
-        eventRepository.save(eventBuilder().tenantId("tenant-A").title("A Marathon")
+        eventRepository.save(eventBuilder().tenantUserUuid(ORGANIZER_A).title("A Marathon")
                 .startDateTime(LocalDateTime.now().plusDays(6))
                 .endDateTime(LocalDateTime.now().plusDays(6).plusHours(2)).build());
-        eventRepository.save(eventBuilder().tenantId("tenant-B").title("B Concert")
+        eventRepository.save(eventBuilder().tenantUserUuid(ORGANIZER_B).title("B Concert")
                 .startDateTime(LocalDateTime.now().plusDays(7))
                 .endDateTime(LocalDateTime.now().plusDays(7).plusHours(2)).build());
 
-        mockMvc.perform(get("/events/by-tenant").param("tenantId", "tenant-A")
+        mockMvc.perform(get("/events/by-organizer").param("organizerUuid", ORGANIZER_A.toString())
                         .accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.code", is("200 OK")))
                 .andExpect(jsonPath("$.data.content", hasSize(2)))
-                .andExpect(jsonPath("$.data.content[*].tenantId", everyItem(is("tenant-A"))));
+                .andExpect(jsonPath("$.data.content[*].tenantUserUuid", everyItem(is(ORGANIZER_A.toString()))));
     }
 
     @Test
     @WithMockUser(username = "admin@innbucks.co.zw", roles = "SUPER_ADMIN")
-    void getEventsByTenant_unknownTenant_returnsEmptyPage() throws Exception {
-        eventRepository.save(eventBuilder().tenantId("tenant-A").title("A Concert")
+    void getEventsByOrganizer_unknownOrganizer_returnsEmptyPage() throws Exception {
+        eventRepository.save(eventBuilder().tenantUserUuid(ORGANIZER_A).title("A Concert")
                 .startDateTime(LocalDateTime.now().plusDays(5))
                 .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2)).build());
 
-        mockMvc.perform(get("/events/by-tenant").param("tenantId", "ghost-tenant")
+        mockMvc.perform(get("/events/by-organizer").param("organizerUuid", UUID.randomUUID().toString())
                         .accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.content", hasSize(0)));
@@ -407,26 +451,29 @@ class EventControllerTest {
 
     @Test
     @WithMockUser(username = "admin@innbucks.co.zw", roles = "SUPER_ADMIN")
-    void getEventsByTenant_blankTenantId_returns400() throws Exception {
-        mockMvc.perform(get("/events/by-tenant").param("tenantId", "   ")
+    void getEventsByOrganizer_malformedOrganizerUuid_returns400() throws Exception {
+        // A non-UUID value can't bind to the @RequestParam UUID — Spring's
+        // type conversion rejects it before the controller runs. The 400
+        // here proves the param is typed (UUID, not String) — protection
+        // against the legacy free-form "tenant-A" query value.
+        mockMvc.perform(get("/events/by-organizer").param("organizerUuid", "not-a-uuid")
                         .accept(MediaType.APPLICATION_JSON))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.message", containsStringIgnoringCase("tenantId")));
+                .andExpect(status().isBadRequest());
     }
 
     @Test
     @WithMockUser(username = "tenant-99", roles = "EVENT_ORGANIZER")
-    void getEventsByTenant_asEventOrganizer_isForbidden() throws Exception {
-        mockMvc.perform(get("/events/by-tenant").param("tenantId", "tenant-A")
+    void getEventsByOrganizer_asEventOrganizer_isForbidden() throws Exception {
+        mockMvc.perform(get("/events/by-organizer").param("organizerUuid", ORGANIZER_A.toString())
                         .accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isForbidden());
     }
 
     @Test
-    void getEventsByTenant_unauthenticated_isDenied() throws Exception {
-        mockMvc.perform(get("/events/by-tenant").param("tenantId", "tenant-A")
+    void getEventsByOrganizer_unauthenticated_isDenied() throws Exception {
+        mockMvc.perform(get("/events/by-organizer").param("organizerUuid", ORGANIZER_A.toString())
                         .accept(MediaType.APPLICATION_JSON))
-                .andExpect(status().is4xxClientError());
+                .andExpect(status().isUnauthorized());
     }
 
     // ---- PATCH /events/{id}/availability/release (audit #3 — restore consumed capacity) ----

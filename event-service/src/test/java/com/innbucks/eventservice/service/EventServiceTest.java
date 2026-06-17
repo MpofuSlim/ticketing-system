@@ -25,6 +25,19 @@ import static org.mockito.Mockito.*;
 
 class EventServiceTest {
 
+    // Stable per-organizer UUIDs minted once per class so ownership /
+    // cross-organizer assertions stay legible after the email-as-tenantId
+    // pattern was removed in V7.
+    private static final UUID OWNER_TENANT = UUID.randomUUID();
+    private static final UUID OTHER_TENANT = UUID.randomUUID();
+    private static final UUID TENANT_1 = UUID.randomUUID();
+    private static final UUID TENANT_7 = UUID.randomUUID();
+    private static final UUID TENANT_9 = UUID.randomUUID();
+    private static final UUID ADMIN_USER = UUID.randomUUID();
+    private static final UUID ORGANIZER_A = UUID.randomUUID();
+    private static final UUID ORGANIZER_RUMBI = UUID.randomUUID();
+    private static final UUID ORGANIZER_AB = UUID.randomUUID();
+
     @Test
     void updateEvent_rejectsWhenTenantDoesNotMatch() {
         EventRepository repo = mock(EventRepository.class);
@@ -35,7 +48,7 @@ class EventServiceTest {
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder()
                 .eventId(eventId)
-                .tenantId("owner-tenant")
+                .tenantUserUuid(OWNER_TENANT)
                 .title("Old")
                 .venue("Venue")
                 .country("Zimbabwe")
@@ -50,7 +63,7 @@ class EventServiceTest {
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> service.updateEvent("other-tenant", eventId, new UpdateEventRequestDTO()));
+                () -> service.updateEvent(OTHER_TENANT, eventId, new UpdateEventRequestDTO()));
 
         assertEquals("You are not authorized to update this event", ex.getMessage());
         verify(repo, never()).save(any());
@@ -66,7 +79,7 @@ class EventServiceTest {
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder()
                 .eventId(eventId)
-                .tenantId("tenant-1")
+                .tenantUserUuid(TENANT_1)
                 .title("Old")
                 .venue("Venue")
                 .country("Zimbabwe")
@@ -85,7 +98,7 @@ class EventServiceTest {
         UpdateEventRequestDTO req = new UpdateEventRequestDTO();
         req.setTotalCapacity(120); // diff +20
 
-        service.updateEvent("tenant-1", eventId, req);
+        service.updateEvent(TENANT_1, eventId, req);
 
         ArgumentCaptor<Event> savedCaptor = ArgumentCaptor.forClass(Event.class);
         verify(repo).save(savedCaptor.capture());
@@ -107,15 +120,15 @@ class EventServiceTest {
         req.setStartDateTime(LocalDateTime.now().plusDays(10));
         req.setEndDateTime(LocalDateTime.now().plusDays(10).plusHours(2));
         req.setTotalCapacity(200);
-        when(repo.existsByTenantIdAndTitleAndVenueAndStartDateTimeAndDeletedFalse(
+        when(repo.existsByTenantUserUuidAndTitleAndVenueAndStartDateTimeAndDeletedFalse(
                 any(), any(), any(), any())).thenReturn(false);
         when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        service.createEvent("tenant-9", "Zimbabwe", req);
+        service.createEvent(TENANT_9, "Zimbabwe", req);
 
         ArgumentCaptor<Event> saved = ArgumentCaptor.forClass(Event.class);
         verify(repo).save(saved.capture());
-        assertEquals("tenant-9", saved.getValue().getTenantId());
+        assertEquals(TENANT_9, saved.getValue().getTenantUserUuid());
         assertEquals("Zimbabwe", saved.getValue().getCountry());
         assertEquals(EventCategory.CONCERT, saved.getValue().getCategory());
         assertEquals(200, saved.getValue().getTotalCapacity());
@@ -136,7 +149,7 @@ class EventServiceTest {
         req.setTotalCapacity(100);
 
         RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> service.createEvent("tenant-1", "  ", req));
+                () -> service.createEvent(TENANT_1, "  ", req));
         assertTrue(ex.getMessage().toLowerCase().contains("country"));
         verify(repo, never()).save(any());
     }
@@ -152,11 +165,11 @@ class EventServiceTest {
         req.setCategory(EventCategory.CONCERT);
         req.setStartDateTime(when); req.setEndDateTime(when.plusHours(2)); req.setTotalCapacity(100);
 
-        when(repo.existsByTenantIdAndTitleAndVenueAndStartDateTimeAndDeletedFalse(
-                "tenant-1", "Concert", "Harare Gardens", when)).thenReturn(true);
+        when(repo.existsByTenantUserUuidAndTitleAndVenueAndStartDateTimeAndDeletedFalse(
+                TENANT_1, "Concert", "Harare Gardens", when)).thenReturn(true);
 
         RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> service.createEvent("tenant-1", "Zimbabwe", req));
+                () -> service.createEvent(TENANT_1, "Zimbabwe", req));
         assertTrue(ex.getMessage().toLowerCase().contains("already exists"));
         verify(repo, never()).save(any());
     }
@@ -169,7 +182,7 @@ class EventServiceTest {
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder()
-                .eventId(eventId).tenantId("owner").title("Old").venue("V")
+                .eventId(eventId).tenantUserUuid(OWNER_TENANT).title("Old").venue("V")
                 .country("Zimbabwe").category(EventCategory.CONCERT)
                 .startDateTime(LocalDateTime.now().plusDays(5))
                 .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2))
@@ -180,7 +193,7 @@ class EventServiceTest {
         UpdateEventRequestDTO req = new UpdateEventRequestDTO();
         req.setTitle("New Title");
 
-        service.updateEvent("admin-user", "ROLE_SUPER_ADMIN", eventId, req);
+        service.updateEvent(ADMIN_USER, "ROLE_SUPER_ADMIN", eventId, req);
 
         verify(repo).save(argThat(e -> "New Title".equals(e.getTitle())));
     }
@@ -191,7 +204,7 @@ class EventServiceTest {
         EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
-        Event existing = Event.builder().eventId(eventId).tenantId("owner-tenant")
+        Event existing = Event.builder().eventId(eventId).tenantUserUuid(OWNER_TENANT)
                 .title("T").venue("V").country("Zimbabwe").category(EventCategory.CONCERT)
                 .startDateTime(LocalDateTime.now().plusDays(5))
                 .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2))
@@ -199,7 +212,7 @@ class EventServiceTest {
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> service.deleteEvent("other-tenant", "ROLE_EVENT_ORGANIZER", eventId));
+                () -> service.deleteEvent(OTHER_TENANT, "ROLE_EVENT_ORGANIZER", eventId));
         assertEquals("You are not authorized to delete this event", ex.getMessage());
         verify(repo, never()).save(any());
     }
@@ -210,14 +223,14 @@ class EventServiceTest {
         EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
-        Event existing = Event.builder().eventId(eventId).tenantId("owner-tenant")
+        Event existing = Event.builder().eventId(eventId).tenantUserUuid(OWNER_TENANT)
                 .title("T").venue("V").country("Zimbabwe").category(EventCategory.CONCERT)
                 .startDateTime(LocalDateTime.now().plusDays(5))
                 .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2))
                 .totalCapacity(1).availableTickets(1).deleted(false).build();
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
 
-        service.deleteEvent("admin-user", "ROLE_SUPER_ADMIN", eventId);
+        service.deleteEvent(ADMIN_USER, "ROLE_SUPER_ADMIN", eventId);
 
         verify(repo).save(argThat(Event::isDeleted));
     }
@@ -242,7 +255,7 @@ class EventServiceTest {
         EventService service = new EventService(repo, mapper, seats, bookings, mock(OrganizerGateway.class), mock(BookingNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
-        Event existing = Event.builder().eventId(eventId).tenantId("a").title("T")
+        Event existing = Event.builder().eventId(eventId).tenantUserUuid(ORGANIZER_A).title("T")
                 .venue("V").country("Zimbabwe").category(EventCategory.CONCERT)
                 .startDateTime(LocalDateTime.now().plusDays(1))
                 .endDateTime(LocalDateTime.now().plusDays(1).plusHours(2))
@@ -270,7 +283,7 @@ class EventServiceTest {
         EventService service = new EventService(repo, mapper, seats, bookings, organizers, mock(BookingNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
-        Event existing = Event.builder().eventId(eventId).tenantId("rumbi@showtime.co.zw").title("T")
+        Event existing = Event.builder().eventId(eventId).tenantUserUuid(ORGANIZER_RUMBI).title("T")
                 .venue("V").country("Zimbabwe").category(EventCategory.CONCERT)
                 .startDateTime(LocalDateTime.now().plusDays(1))
                 .endDateTime(LocalDateTime.now().plusDays(1).plusHours(2))
@@ -278,8 +291,8 @@ class EventServiceTest {
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
         when(seats.fetchForEvent(eventId)).thenReturn(Collections.emptyList());
         when(bookings.activeCountsByEventIds(any())).thenReturn(Collections.emptyMap());
-        when(organizers.organizersByTenantIds(java.util.List.of("rumbi@showtime.co.zw")))
-                .thenReturn(java.util.Map.of("rumbi@showtime.co.zw",
+        when(organizers.organizersByUserUuids(java.util.List.of(ORGANIZER_RUMBI)))
+                .thenReturn(java.util.Map.of(ORGANIZER_RUMBI,
                         com.innbucks.eventservice.dto.OrganizerDTO.builder()
                                 .businessName("Showtime Events")
                                 .businessAddress("5 Leopold Takawira St, Bulawayo")
@@ -304,7 +317,7 @@ class EventServiceTest {
         EventService service = new EventService(repo, mapper, seats, bookings, organizers, mock(BookingNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
-        Event existing = Event.builder().eventId(eventId).tenantId("a@b.co").title("T")
+        Event existing = Event.builder().eventId(eventId).tenantUserUuid(ORGANIZER_AB).title("T")
                 .venue("V").country("Zimbabwe").category(EventCategory.CONCERT)
                 .startDateTime(LocalDateTime.now().plusDays(1))
                 .endDateTime(LocalDateTime.now().plusDays(1).plusHours(2))
@@ -313,12 +326,12 @@ class EventServiceTest {
         when(seats.fetchForEvent(eventId)).thenReturn(Collections.emptyList());
         when(bookings.activeCountsByEventIds(any())).thenReturn(Collections.emptyMap());
         // Gateway's circuit breaker fell back to an empty map.
-        when(organizers.organizersByTenantIds(any())).thenReturn(Collections.emptyMap());
+        when(organizers.organizersByUserUuids(any())).thenReturn(Collections.emptyMap());
 
         EventResponseDTO result = service.getEventById(eventId);
 
         assertNull(result.getOrganizer());
-        assertEquals("a@b.co", result.getTenantId());
+        assertEquals(ORGANIZER_AB, result.getTenantUserUuid());
     }
 
     @Test
@@ -329,7 +342,7 @@ class EventServiceTest {
         EventService service = new EventService(repo, mapper, gateway, mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
-        Event existing = Event.builder().eventId(eventId).tenantId("a").title("T")
+        Event existing = Event.builder().eventId(eventId).tenantUserUuid(ORGANIZER_A).title("T")
                 .venue("V").country("Zimbabwe").category(EventCategory.CONCERT)
                 .startDateTime(LocalDateTime.now().plusDays(1))
                 .endDateTime(LocalDateTime.now().plusDays(1).plusHours(2))
@@ -350,9 +363,9 @@ class EventServiceTest {
 
     // --- deactivate / reject / approve --------------------------------------
 
-    private static Event baseEvent(UUID eventId, String tenantId) {
+    private static Event baseEvent(UUID eventId, UUID tenantUserUuid) {
         return Event.builder()
-                .eventId(eventId).tenantId(tenantId).title("T").venue("V")
+                .eventId(eventId).tenantUserUuid(tenantUserUuid).title("T").venue("V")
                 .country("Zimbabwe").category(EventCategory.CONCERT)
                 .startDateTime(LocalDateTime.now().plusDays(5))
                 .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2))
@@ -365,10 +378,10 @@ class EventServiceTest {
         EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
-        when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(baseEvent(eventId, "owner-tenant")));
+        when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(baseEvent(eventId, OWNER_TENANT)));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> service.deactivateEvent("other-tenant", "ROLE_EVENT_ORGANIZER", eventId));
+                () -> service.deactivateEvent(OTHER_TENANT, "ROLE_EVENT_ORGANIZER", eventId));
         assertEquals("You are not authorized to deactivate this event", ex.getMessage());
         verify(repo, never()).save(any());
     }
@@ -379,11 +392,11 @@ class EventServiceTest {
         EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
-        Event existing = baseEvent(eventId, "tenant-1"); // active=true via @Builder.Default
+        Event existing = baseEvent(eventId, TENANT_1); // active=true via @Builder.Default
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
         when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        service.deactivateEvent("tenant-1", "ROLE_EVENT_ORGANIZER", eventId);
+        service.deactivateEvent(TENANT_1, "ROLE_EVENT_ORGANIZER", eventId);
 
         verify(repo).save(argThat(e -> !e.isActive()));
     }
@@ -394,10 +407,10 @@ class EventServiceTest {
         EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
-        when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(baseEvent(eventId, "owner-tenant")));
+        when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(baseEvent(eventId, OWNER_TENANT)));
         when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        service.deactivateEvent("admin-user", "ROLE_SUPER_ADMIN", eventId);
+        service.deactivateEvent(ADMIN_USER, "ROLE_SUPER_ADMIN", eventId);
 
         verify(repo).save(argThat(e -> !e.isActive()));
     }
@@ -408,13 +421,13 @@ class EventServiceTest {
         EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
-        Event existing = baseEvent(eventId, "tenant-1");
+        Event existing = baseEvent(eventId, TENANT_1);
         existing.setActive(false);
         existing.setRejected(true);
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> service.activateEvent("tenant-1", "ROLE_EVENT_ORGANIZER", eventId));
+                () -> service.activateEvent(TENANT_1, "ROLE_EVENT_ORGANIZER", eventId));
         assertTrue(ex.getMessage().toLowerCase().contains("rejected"));
         verify(repo, never()).save(any());
     }
@@ -425,7 +438,7 @@ class EventServiceTest {
         EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
-        Event existing = baseEvent(eventId, "tenant-7"); // active=true, rejected=false
+        Event existing = baseEvent(eventId, TENANT_7); // active=true, rejected=false
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
         when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
 
@@ -441,7 +454,7 @@ class EventServiceTest {
         EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
-        Event existing = baseEvent(eventId, "tenant-7");
+        Event existing = baseEvent(eventId, TENANT_7);
         existing.setActive(false);
         existing.setRejected(true);
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
@@ -469,7 +482,7 @@ class EventServiceTest {
 
     private Event existingEventFor(UUID eventId) {
         return Event.builder()
-                .eventId(eventId).tenantId("tenant-1").title("Jazz Night")
+                .eventId(eventId).tenantUserUuid(TENANT_1).title("Jazz Night")
                 .venue("Old Arena").country("Zimbabwe").category(EventCategory.CONCERT)
                 .startDateTime(LocalDateTime.now().plusDays(5))
                 .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2))
@@ -491,7 +504,7 @@ class EventServiceTest {
         UpdateEventRequestDTO req = new UpdateEventRequestDTO();
         req.setVenue("New Stadium");
 
-        service.updateEvent("tenant-1", eventId, req);
+        service.updateEvent(TENANT_1, eventId, req);
 
         // venue changed → notify UPDATED with the new venue and no time change.
         verify(notify).notifyEventChange(eq(eventId), eq("UPDATED"), eq("Jazz Night"),
@@ -513,7 +526,7 @@ class EventServiceTest {
         UpdateEventRequestDTO req = new UpdateEventRequestDTO();
         req.setDescription("Now with an opening act");
 
-        service.updateEvent("tenant-1", eventId, req);
+        service.updateEvent(TENANT_1, eventId, req);
 
         // No customer-affecting field changed → no attendee notification.
         verifyNoInteractions(notify);
@@ -535,7 +548,7 @@ class EventServiceTest {
         UpdateEventRequestDTO req = new UpdateEventRequestDTO();
         req.setVenue("Old Arena");
 
-        service.updateEvent("tenant-1", eventId, req);
+        service.updateEvent(TENANT_1, eventId, req);
 
         verifyNoInteractions(notify);
     }
@@ -551,7 +564,7 @@ class EventServiceTest {
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existingEventFor(eventId)));
         when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        service.deleteEvent("tenant-1", eventId);
+        service.deleteEvent(TENANT_1, eventId);
 
         verify(notify).notifyEventChange(eq(eventId), eq("CANCELLED"), eq("Jazz Night"),
                 isNull(), isNull());

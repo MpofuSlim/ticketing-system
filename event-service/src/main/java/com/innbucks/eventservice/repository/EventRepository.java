@@ -145,29 +145,14 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     // Only return event if it is not soft deleted
     Optional<Event> findByEventIdAndDeletedFalse(UUID eventId);
 
-    // Paginated list of an organizer's own (non-deleted) events. Used by
-    // GET /events/my so an EVENT_ORGANIZER only sees the events they created.
-    @Query("""
-        SELECT e FROM Event e
-        WHERE e.deleted = false
-        AND e.tenantId = :tenantId
-        AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
-        AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
-        AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
-    """)
-    Page<Event> findByTenantId(
-            @Param("tenantId") String tenantId,
-            @Param("from") LocalDateTime from,
-            @Param("to") LocalDateTime to,
-            @Param("venue") String venue,
-            Pageable pageable
-    );
-
-    // Same as findByTenantId but keyed on the stable cross-service organizer
-    // uuid. Backs the "list every event my organizer owns" flow used by
-    // booking-service's /me/events endpoint, where a TEAM_MEMBER's JWT
-    // carries the parent organizer's uuid and we resolve their scope from
-    // that without an email round-trip.
+    // Paginated list of an organizer's own (non-deleted) events. Keyed on the
+    // stable cross-service organizerUuid (was email-as-tenantId until the V7
+    // refactor dropped the entity-side mapping; the {@code tenant_id} column
+    // itself stays on the table for one more deploy cycle so the backfill
+    // runner can keep populating pre-V6 rows that still have a null
+    // tenant_user_uuid). Used by GET /events/my so an EVENT_ORGANIZER only
+    // sees the events they created, and by TEAM_MEMBERs to enumerate their
+    // parent organizer's events.
     @Query("""
         SELECT e FROM Event e
         WHERE e.deleted = false
@@ -211,58 +196,25 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
             Pageable pageable
     );
 
-    // Backfill support: returns up to {@code limit} distinct tenant emails
-    // for events whose tenant_user_uuid hasn't been populated yet. Used
-    // by the startup runner to batch-resolve emails -> uuids via user-
-    // service's internal lookup endpoint.
-    @Query(value = """
-        SELECT DISTINCT tenant_id FROM events
-        WHERE tenant_user_uuid IS NULL
-        AND tenant_id IS NOT NULL
-        LIMIT :limit
-    """, nativeQuery = true)
-    List<String> findDistinctTenantIdsMissingUuid(@Param("limit") int limit);
-
-    // Backfill support: writes the resolved uuid onto every row whose
-    // tenant_id matches AND whose tenant_user_uuid is still null. Idempotent
-    // by construction (the WHERE clause restricts to unmigrated rows).
-    //
-    // @Transactional lives HERE (on the repository method) rather than relying
-    // on the caller, because the only caller — TenantUserUuidBackfillRunner —
-    // invokes its own @Transactional helper via self-invocation, which bypasses
-    // Spring's proxy and leaves no active transaction (the @Modifying UPDATE
-    // then throws TransactionRequiredException and crashes startup). Annotating
-    // the repo method puts the transaction boundary on the repository proxy,
-    // where the external call from the runner actually crosses it. Each call is
-    // its own short transaction — correct for an idempotent per-tenant backfill.
-    @Modifying
-    @Transactional
-    @Query(value = """
-        UPDATE events
-        SET tenant_user_uuid = :uuid
-        WHERE tenant_id = :tenantId
-        AND tenant_user_uuid IS NULL
-    """, nativeQuery = true)
-    int backfillTenantUserUuid(@Param("tenantId") String tenantId, @Param("uuid") UUID uuid);
-
-    // Same as findByTenantId but additionally filters active=true, hides events
-    // whose endDateTime has passed (independent of the expiry scheduler so the
-    // read is always correct), and excludes admin-rejected events. Used so an
-    // EVENT_ORGANIZER hitting /events/active only sees their own bookable events.
+    // Same as findByTenantUserUuid but additionally filters active=true, hides
+    // events whose endDateTime has passed (independent of the expiry scheduler
+    // so the read is always correct), and excludes admin-rejected events. Used
+    // so an EVENT_ORGANIZER hitting /events/active only sees their own bookable
+    // events.
     @Query("""
         SELECT e FROM Event e
         WHERE e.deleted = false
         AND e.active = true
         AND e.rejected = false
         AND e.endDateTime > :now
-        AND e.tenantId = :tenantId
+        AND e.tenantUserUuid = :tenantUserUuid
         AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
         AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
         AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
         AND (CAST(:country AS string) IS NULL OR LOWER(e.country) = LOWER(CAST(:country AS string)))
     """)
-    Page<Event> findByTenantIdActiveOnly(
-            @Param("tenantId") String tenantId,
+    Page<Event> findByTenantUserUuidActiveOnly(
+            @Param("tenantUserUuid") UUID tenantUserUuid,
             @Param("from") LocalDateTime from,
             @Param("to") LocalDateTime to,
             @Param("venue") String venue,
@@ -271,23 +223,23 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
             Pageable pageable
     );
 
-    // Category-filtered counterpart of findByTenantIdActiveOnly. Separate method
-    // so the enum bind is always non-null (see findAllActiveOnlyByCategory).
+    // Category-filtered counterpart of findByTenantUserUuidActiveOnly. Separate
+    // method so the enum bind is always non-null (see findAllActiveOnlyByCategory).
     @Query("""
         SELECT e FROM Event e
         WHERE e.deleted = false
         AND e.active = true
         AND e.rejected = false
         AND e.endDateTime > :now
-        AND e.tenantId = :tenantId
+        AND e.tenantUserUuid = :tenantUserUuid
         AND e.category = :category
         AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
         AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
         AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
         AND (CAST(:country AS string) IS NULL OR LOWER(e.country) = LOWER(CAST(:country AS string)))
     """)
-    Page<Event> findByTenantIdActiveOnlyByCategory(
-            @Param("tenantId") String tenantId,
+    Page<Event> findByTenantUserUuidActiveOnlyByCategory(
+            @Param("tenantUserUuid") UUID tenantUserUuid,
             @Param("from") LocalDateTime from,
             @Param("to") LocalDateTime to,
             @Param("venue") String venue,
@@ -298,21 +250,21 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     );
 
     // An organizer's own inactive (active=false) events. Counterpart of
-    // findAllInactiveOnly scoped to a single tenant, used so an EVENT_ORGANIZER
-    // hitting /events/inactive only sees their own. No endDateTime/rejected
-    // filter — same rationale as findAllInactiveOnly.
+    // findAllInactiveOnly scoped to a single organizer, used so an
+    // EVENT_ORGANIZER hitting /events/inactive only sees their own. No
+    // endDateTime/rejected filter — same rationale as findAllInactiveOnly.
     @Query("""
         SELECT e FROM Event e
         WHERE e.deleted = false
         AND e.active = false
-        AND e.tenantId = :tenantId
+        AND e.tenantUserUuid = :tenantUserUuid
         AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
         AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
         AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
         AND (CAST(:country AS string) IS NULL OR LOWER(e.country) = LOWER(CAST(:country AS string)))
     """)
-    Page<Event> findByTenantIdInactiveOnly(
-            @Param("tenantId") String tenantId,
+    Page<Event> findByTenantUserUuidInactiveOnly(
+            @Param("tenantUserUuid") UUID tenantUserUuid,
             @Param("from") LocalDateTime from,
             @Param("to") LocalDateTime to,
             @Param("venue") String venue,
@@ -320,20 +272,20 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
             Pageable pageable
     );
 
-    // Category-filtered counterpart of findByTenantIdInactiveOnly.
+    // Category-filtered counterpart of findByTenantUserUuidInactiveOnly.
     @Query("""
         SELECT e FROM Event e
         WHERE e.deleted = false
         AND e.active = false
-        AND e.tenantId = :tenantId
+        AND e.tenantUserUuid = :tenantUserUuid
         AND e.category = :category
         AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
         AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
         AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
         AND (CAST(:country AS string) IS NULL OR LOWER(e.country) = LOWER(CAST(:country AS string)))
     """)
-    Page<Event> findByTenantIdInactiveOnlyByCategory(
-            @Param("tenantId") String tenantId,
+    Page<Event> findByTenantUserUuidInactiveOnlyByCategory(
+            @Param("tenantUserUuid") UUID tenantUserUuid,
             @Param("from") LocalDateTime from,
             @Param("to") LocalDateTime to,
             @Param("venue") String venue,
@@ -350,11 +302,58 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
             String country, LocalDateTime cutoff, Pageable pageable
     );
 
-    // Detects an already-created event by the same tenant with identical title,
-    // venue, and scheduled dateTime. Used as a duplicate-create guard.
-    boolean existsByTenantIdAndTitleAndVenueAndStartDateTimeAndDeletedFalse(
-            String tenantId, String title, String venue, LocalDateTime startDateTime
+    // Detects an already-created event by the same organizer with identical title,
+    // venue, and scheduled dateTime. Used as a duplicate-create guard. The legacy
+    // (tenant_id, title, venue, start_date_time) unique constraint on the table
+    // is inactive for new rows now that {@code tenant_id} is null on every
+    // INSERT (Postgres treats NULLs as distinct in unique constraints) — the
+    // follow-up migration drops the column AND that constraint together and
+    // rebuilds it on (tenant_user_uuid, ...). Until then this exists-check is
+    // the only dup guard for new rows.
+    boolean existsByTenantUserUuidAndTitleAndVenueAndStartDateTimeAndDeletedFalse(
+            UUID tenantUserUuid, String title, String venue, LocalDateTime startDateTime
     );
+
+    // Backfill support: returns up to {@code limit} distinct tenant emails for
+    // events whose tenant_user_uuid hasn't been populated yet. Used by
+    // {@link com.innbucks.eventservice.service.TenantUserUuidBackfillRunner} to
+    // batch-resolve emails -> uuids via user-service's internal lookup endpoint.
+    // Native SQL on purpose — the {@code tenant_id} column is no longer mapped
+    // on the {@link Event} entity (entity-side dropped in V7), but the column
+    // itself lives on for one more deploy cycle precisely so this backfill can
+    // run. The follow-up migration drops both the column and this method
+    // together once operator confirms zero rows with tenant_user_uuid IS NULL.
+    @Query(value = """
+        SELECT DISTINCT tenant_id FROM events
+        WHERE tenant_user_uuid IS NULL
+        AND tenant_id IS NOT NULL
+        LIMIT :limit
+    """, nativeQuery = true)
+    List<String> findDistinctTenantIdsMissingUuid(@Param("limit") int limit);
+
+    // Backfill support: writes the resolved uuid onto every row whose tenant_id
+    // matches AND whose tenant_user_uuid is still null. Idempotent by
+    // construction (the WHERE clause restricts to unmigrated rows). Native SQL
+    // for the same reason as findDistinctTenantIdsMissingUuid above.
+    //
+    // {@code @Transactional} lives HERE (on the repository method) rather than
+    // relying on the caller, because the only caller —
+    // TenantUserUuidBackfillRunner — invokes its own helper via
+    // self-invocation, which bypasses Spring's proxy and leaves no active
+    // transaction (the {@code @Modifying} UPDATE then throws
+    // TransactionRequiredException and crashes startup). Annotating the repo
+    // method puts the transaction boundary on the repository proxy, where the
+    // external call from the runner actually crosses it. Each call is its own
+    // short transaction — correct for an idempotent per-tenant backfill.
+    @Modifying
+    @Transactional
+    @Query(value = """
+        UPDATE events
+        SET tenant_user_uuid = :uuid
+        WHERE tenant_id = :tenantId
+        AND tenant_user_uuid IS NULL
+    """, nativeQuery = true)
+    int backfillTenantUserUuid(@Param("tenantId") String tenantId, @Param("uuid") UUID uuid);
 
     // Free-text search across title, description and venue. Case-insensitive
     // substring match — typing "H" matches every event with H anywhere in

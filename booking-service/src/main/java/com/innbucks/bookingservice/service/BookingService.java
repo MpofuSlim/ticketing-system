@@ -317,17 +317,17 @@ public class BookingService {
     // (best-effort). When no bookings exist we just return an empty list (no
     // data to leak).
     public List<CategoryBookingDTO> getBookingsByCategory(UUID categoryId,
-                                                          String requesterEmail,
+                                                          UUID requesterOrganizerUuid,
                                                           boolean isAdmin) {
-        log.debug("Fetching bookings by category categoryId={} requesterEmail={} isAdmin={}",
-                categoryId, requesterEmail, isAdmin);
+        log.debug("Fetching bookings by category categoryId={} requesterOrganizerUuid={} isAdmin={}",
+                categoryId, requesterOrganizerUuid, isAdmin);
         var items = bookingItemRepository.findByCategoryIdWithBooking(categoryId);
         if (items.isEmpty()) {
             return List.of();
         }
         if (!isAdmin) {
             UUID eventId = items.get(0).getBooking().getEventId();
-            requireEventOwnership(eventId, requesterEmail);
+            requireEventOwnership(eventId, requesterOrganizerUuid);
         }
         return items.stream()
                 .map(this::toCategoryBookingDTO)
@@ -381,12 +381,12 @@ public class BookingService {
     //
     // Ownership: callers other than SUPER_ADMIN must own the event.
     public List<CategoryBookingDTO> getBookingsByEvent(UUID eventId,
-                                                       String requesterEmail,
+                                                       UUID requesterOrganizerUuid,
                                                        boolean isAdmin) {
-        log.debug("Fetching bookings by event eventId={} requesterEmail={} isAdmin={}",
-                eventId, requesterEmail, isAdmin);
+        log.debug("Fetching bookings by event eventId={} requesterOrganizerUuid={} isAdmin={}",
+                eventId, requesterOrganizerUuid, isAdmin);
         if (!isAdmin) {
-            requireEventOwnership(eventId, requesterEmail);
+            requireEventOwnership(eventId, requesterOrganizerUuid);
         }
         return bookingItemRepository.findByEventIdWithBooking(eventId)
                 .stream()
@@ -396,10 +396,22 @@ public class BookingService {
 
     /**
      * Looks up the event in event-service and throws AccessDeniedException if
-     * its tenantId doesn't match the requester. SUPER_ADMIN callers bypass
-     * this check at the controller layer and never reach here.
+     * its {@code tenantUserUuid} doesn't match the requester's organizer uuid
+     * (the stable cross-service organizer identifier, NOT the email).
+     * SUPER_ADMIN callers bypass this check at the controller layer and never
+     * reach here.
+     *
+     * <p>An event whose {@code tenantUserUuid} is still null (pre-V6 row that
+     * the backfill runner hasn't caught up on) fails closed — better to make
+     * the organizer wait one backfill tick than to silently allow the first
+     * EVENT_ORGANIZER through.
      */
-    private void requireEventOwnership(UUID eventId, String requesterEmail) {
+    private void requireEventOwnership(UUID eventId, UUID requesterOrganizerUuid) {
+        if (requesterOrganizerUuid == null) {
+            log.warn("Event ownership check refused: missing organizerUuid on caller token eventId={}", eventId);
+            throw new org.springframework.security.access.AccessDeniedException(
+                    "Your session is missing organizer information. Please sign in again.");
+        }
         EventServiceClient client = eventClientProvider == null
                 ? null : eventClientProvider.getIfAvailable();
         if (client == null) {
@@ -413,10 +425,10 @@ public class BookingService {
             if (lookup == null || lookup.getData() == null) {
                 throw new org.springframework.security.access.AccessDeniedException("Event not found");
             }
-            String ownerTenantId = lookup.getData().getTenantId();
-            if (ownerTenantId == null || !ownerTenantId.equals(requesterEmail)) {
-                log.warn("Event ownership check failed eventId={} requesterEmail={} ownerTenantId={}",
-                        eventId, requesterEmail, ownerTenantId);
+            UUID ownerTenantUserUuid = lookup.getData().getTenantUserUuid();
+            if (ownerTenantUserUuid == null || !ownerTenantUserUuid.equals(requesterOrganizerUuid)) {
+                log.warn("Event ownership check failed eventId={} requesterOrganizerUuid={} ownerTenantUserUuid={}",
+                        eventId, requesterOrganizerUuid, ownerTenantUserUuid);
                 throw new org.springframework.security.access.AccessDeniedException(
                         "You do not own this event");
             }

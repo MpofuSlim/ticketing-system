@@ -85,12 +85,15 @@ public class EventService {
     }
 
     /**
-     * List the events owned by a single tenant (the authenticated organizer).
-     * SUPER_ADMIN should call {@link #getAllActiveEvents} instead — they see
-     * everything. This endpoint is the per-organizer scoped view.
+     * List the events owned by a single organizer. SUPER_ADMIN should call
+     * {@link #getAllActiveEvents} instead — they see everything. Keyed on
+     * the stable {@code tenantUserUuid} (was the organizer's email under
+     * the old tenant-id pattern); pre-V6 rows whose {@code tenant_user_uuid}
+     * hasn't been backfilled yet are invisible here until the runner
+     * catches them up.
      */
     public Page<EventResponseDTO> getMyEvents(
-            String tenantId,
+            UUID tenantUserUuid,
             LocalDateTime from,
             LocalDateTime to,
             String venue,
@@ -99,36 +102,10 @@ public class EventService {
             String sortBy
     ) {
         Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
-        log.debug("Fetching events for tenantId={} from={} to={} venue={} page={} size={} sortBy={}",
-                tenantId, from, to, venue, page, size, sortBy);
+        log.debug("Fetching events for tenantUserUuid={} from={} to={} venue={} page={} size={} sortBy={}",
+                tenantUserUuid, from, to, venue, page, size, sortBy);
         return enrichWithAvailability(
-                eventRepository.findByTenantId(tenantId, from, to, venue, pageable));
-    }
-
-    /**
-     * UUID-keyed counterpart of {@link #getMyEvents(String, LocalDateTime,
-     * LocalDateTime, String, int, int, String)}. Used by booking-service's
-     * scanner flows ({@code /me/events}) where the caller (an EVENT_ORGANIZER
-     * or one of their TEAM_MEMBERs) is identified by their organizerUuid
-     * JWT claim rather than the legacy email pointer. Only returns events
-     * whose {@code tenant_user_uuid} has been backfilled — pre-V6 rows that
-     * haven't been migrated yet show up only via the email-keyed query
-     * above. Once the backfill runner completes the two return the same set.
-     */
-    public Page<EventResponseDTO> getMyEventsByOrganizerUuid(
-            UUID organizerUuid,
-            LocalDateTime from,
-            LocalDateTime to,
-            String venue,
-            int page,
-            int size,
-            String sortBy
-    ) {
-        Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
-        log.debug("Fetching events for organizerUuid={} from={} to={} venue={} page={} size={} sortBy={}",
-                organizerUuid, from, to, venue, page, size, sortBy);
-        return enrichWithAvailability(
-                eventRepository.findByTenantUserUuid(organizerUuid, from, to, venue, pageable));
+                eventRepository.findByTenantUserUuid(tenantUserUuid, from, to, venue, pageable));
     }
 
     /**
@@ -171,7 +148,7 @@ public class EventService {
      * listing only sees their own bookable events.
      */
     public Page<EventResponseDTO> getMyActiveEvents(
-            String tenantId,
+            UUID tenantUserUuid,
             LocalDateTime from,
             LocalDateTime to,
             String venue,
@@ -182,12 +159,12 @@ public class EventService {
             String sortBy
     ) {
         Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
-        log.debug("Fetching active events for tenantId={} from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
-                tenantId, from, to, venue, country, category, page, size, sortBy);
+        log.debug("Fetching active events for tenantUserUuid={} from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
+                tenantUserUuid, from, to, venue, country, category, page, size, sortBy);
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         Page<Event> events = category == null
-                ? eventRepository.findByTenantIdActiveOnly(tenantId, from, to, venue, country, now, pageable)
-                : eventRepository.findByTenantIdActiveOnlyByCategory(tenantId, from, to, venue, country, category, now, pageable);
+                ? eventRepository.findByTenantUserUuidActiveOnly(tenantUserUuid, from, to, venue, country, now, pageable)
+                : eventRepository.findByTenantUserUuidActiveOnlyByCategory(tenantUserUuid, from, to, venue, country, category, now, pageable);
         return enrichWithAvailability(events);
     }
 
@@ -219,12 +196,12 @@ public class EventService {
     }
 
     /**
-     * Same as {@link #getInactiveOnlyEvents} but scoped to a single tenant, so
-     * an EVENT_ORGANIZER hitting {@code /events/inactive} only sees their own
-     * inactive events.
+     * Same as {@link #getInactiveOnlyEvents} but scoped to a single organizer,
+     * so an EVENT_ORGANIZER hitting {@code /events/inactive} only sees their
+     * own inactive events.
      */
     public Page<EventResponseDTO> getMyInactiveEvents(
-            String tenantId,
+            UUID tenantUserUuid,
             LocalDateTime from,
             LocalDateTime to,
             String venue,
@@ -235,11 +212,11 @@ public class EventService {
             String sortBy
     ) {
         Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
-        log.debug("Fetching inactive events for tenantId={} from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
-                tenantId, from, to, venue, country, category, page, size, sortBy);
+        log.debug("Fetching inactive events for tenantUserUuid={} from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
+                tenantUserUuid, from, to, venue, country, category, page, size, sortBy);
         Page<Event> events = category == null
-                ? eventRepository.findByTenantIdInactiveOnly(tenantId, from, to, venue, country, pageable)
-                : eventRepository.findByTenantIdInactiveOnlyByCategory(tenantId, from, to, venue, country, category, pageable);
+                ? eventRepository.findByTenantUserUuidInactiveOnly(tenantUserUuid, from, to, venue, country, pageable)
+                : eventRepository.findByTenantUserUuidInactiveOnlyByCategory(tenantUserUuid, from, to, venue, country, category, pageable);
         return enrichWithAvailability(events);
     }
 
@@ -285,7 +262,7 @@ public class EventService {
 
         Map<UUID, Long> activeCounts = bookingGateway.activeCountsByEventIds(
                 entities.getContent().stream().map(Event::getEventId).toList());
-        Map<String, OrganizerDTO> organizers = resolveOrganizers(entities.getContent());
+        Map<UUID, OrganizerDTO> organizers = resolveOrganizers(entities.getContent());
 
         List<EventResponseDTO> dtos = new ArrayList<>(entities.getNumberOfElements());
         int n = 1;
@@ -322,7 +299,7 @@ public class EventService {
                 : bookingGateway.activeCountsByEventIds(ids);
         if (activeCounts == null) activeCounts = Collections.emptyMap();
         Map<UUID, Long> finalCounts = activeCounts;
-        Map<String, OrganizerDTO> organizers = resolveOrganizers(content);
+        Map<UUID, OrganizerDTO> organizers = resolveOrganizers(content);
         return page.map(e -> {
             EventResponseDTO dto = toDtoWithAvailability(e, finalCounts);
             attachOrganizer(dto, e, organizers);
@@ -331,21 +308,24 @@ public class EventService {
     }
 
     // Batch-resolve organizer (tenant) business details from user-service for
-    // the events on this page. Returns an empty map if user-service is
-    // unreachable (the gateway's circuit breaker falls back) so listings still
-    // serve — just without organizer details.
-    private Map<String, OrganizerDTO> resolveOrganizers(Collection<Event> events) {
-        List<String> tenantIds = events.stream()
-                .map(Event::getTenantId)
-                .filter(t -> t != null && !t.isBlank())
+    // the events on this page. Keyed on the stable {@code tenantUserUuid} —
+    // events whose uuid hasn't been backfilled yet are simply skipped (their
+    // response will have a null organizer until the runner catches up).
+    // Returns an empty map if user-service is unreachable (the gateway's
+    // circuit breaker falls back) so listings still serve — just without
+    // organizer details.
+    private Map<UUID, OrganizerDTO> resolveOrganizers(Collection<Event> events) {
+        List<UUID> tenantUserUuids = events.stream()
+                .map(Event::getTenantUserUuid)
+                .filter(Objects::nonNull)
                 .toList();
-        Map<String, OrganizerDTO> organizers = organizerGateway.organizersByTenantIds(tenantIds);
+        Map<UUID, OrganizerDTO> organizers = organizerGateway.organizersByUserUuids(tenantUserUuids);
         return organizers == null ? Collections.emptyMap() : organizers;
     }
 
-    private void attachOrganizer(EventResponseDTO dto, Event event, Map<String, OrganizerDTO> organizers) {
-        if (dto != null && organizers != null && event.getTenantId() != null) {
-            dto.setOrganizer(organizers.get(event.getTenantId()));
+    private void attachOrganizer(EventResponseDTO dto, Event event, Map<UUID, OrganizerDTO> organizers) {
+        if (dto != null && organizers != null && event.getTenantUserUuid() != null) {
+            dto.setOrganizer(organizers.get(event.getTenantUserUuid()));
         }
     }
 
@@ -357,50 +337,41 @@ public class EventService {
         return counts == null ? java.util.Collections.emptyMap() : counts;
     }
 
-    public EventResponseDTO createEvent(String tenantId, String country, CreateEventRequestDTO request) {
-        return createEvent(tenantId, null, country, request, null);
-    }
-
-    public EventResponseDTO createEvent(String tenantId, UUID tenantUserUuid, String country,
-                                        CreateEventRequestDTO request) {
-        return createEvent(tenantId, tenantUserUuid, country, request, null);
-    }
-
-    public EventResponseDTO createEvent(String tenantId, String country, CreateEventRequestDTO request,
-                                        MultipartFile eventBanner) {
-        return createEvent(tenantId, null, country, request, eventBanner);
+    public EventResponseDTO createEvent(UUID tenantUserUuid, String country, CreateEventRequestDTO request) {
+        return createEvent(tenantUserUuid, country, request, null);
     }
 
     @Transactional
-    public EventResponseDTO createEvent(String tenantId, UUID tenantUserUuid, String country,
+    public EventResponseDTO createEvent(UUID tenantUserUuid, String country,
                                         CreateEventRequestDTO request, MultipartFile eventBanner) {
-        log.info("Creating event tenantId={} tenantUserUuid={} country={} title={} venue={} startDateTime={} capacity={} hasBanner={}",
-                tenantId, tenantUserUuid, country, request.getTitle(), request.getVenue(), request.getStartDateTime(),
+        log.info("Creating event tenantUserUuid={} country={} title={} venue={} startDateTime={} capacity={} hasBanner={}",
+                tenantUserUuid, country, request.getTitle(), request.getVenue(), request.getStartDateTime(),
                 request.getTotalCapacity(), eventBanner != null && !eventBanner.isEmpty());
+
+        if (tenantUserUuid == null) {
+            // Defence in depth — the controller resolves this from the JWT and
+            // the JwtFilter rejects pre-V20 tokens that lack the claim, so we
+            // should never see null here on a healthy auth path.
+            log.warn("Event create rejected, missing organizerUuid on token");
+            throw new BadRequestException("Your session is missing organizer information. Please sign in again.");
+        }
 
         // Country is stamped from the organizer's JWT, never the request body.
         // A token minted before country was captured won't carry the claim;
         // reject rather than persist an event with no country.
         if (country == null || country.isBlank()) {
-            log.warn("Event create rejected, missing country claim on token tenantId={}", tenantId);
+            log.warn("Event create rejected, missing country claim on token tenantUserUuid={}", tenantUserUuid);
             throw new BadRequestException("Your session is missing country information. Please sign in again.");
         }
 
-        if (eventRepository.existsByTenantIdAndTitleAndVenueAndStartDateTimeAndDeletedFalse(
-                tenantId, request.getTitle(), request.getVenue(), request.getStartDateTime())) {
-            log.warn("Event create rejected, duplicate tenantId={} title={} venue={} startDateTime={}",
-                    tenantId, request.getTitle(), request.getVenue(), request.getStartDateTime());
+        if (eventRepository.existsByTenantUserUuidAndTitleAndVenueAndStartDateTimeAndDeletedFalse(
+                tenantUserUuid, request.getTitle(), request.getVenue(), request.getStartDateTime())) {
+            log.warn("Event create rejected, duplicate tenantUserUuid={} title={} venue={} startDateTime={}",
+                    tenantUserUuid, request.getTitle(), request.getVenue(), request.getStartDateTime());
             throw new ConflictException("An event with the same title, venue and date already exists");
         }
 
         Event event = Event.builder()
-                .tenantId(tenantId)
-                // Dual-write: stamp both the legacy email pointer and the
-                // stable user_uuid identifier so new rows are correct from
-                // day one. tenantUserUuid is null only for code paths that
-                // haven't been migrated to extract it from the JWT yet
-                // (legacy tests via the 3-arg overload); the backfill
-                // runner picks those up on the next startup.
                 .tenantUserUuid(tenantUserUuid)
                 .title(request.getTitle())
                 .description(request.getDescription())
@@ -421,8 +392,8 @@ public class EventService {
         applyBanner(event, eventBanner);
 
         Event saved = eventRepository.save(event);
-        log.info("Event created eventId={} tenantId={} tenantUserUuid={}",
-                saved.getEventId(), tenantId, saved.getTenantUserUuid());
+        log.info("Event created eventId={} tenantUserUuid={}",
+                saved.getEventId(), saved.getTenantUserUuid());
         return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
     }
 
@@ -468,22 +439,25 @@ public class EventService {
     }
 
     @Transactional
-    public EventResponseDTO updateEvent(String tenantId, String role, UUID eventId, UpdateEventRequestDTO request) {
-        log.info("Updating event eventId={} tenantId={} role={} req.title={} req.venue={} req.startDateTime={} req.endDateTime={} req.totalCapacity={}",
-                eventId, tenantId, role,
+    public EventResponseDTO updateEvent(UUID tenantUserUuid, String role, UUID eventId, UpdateEventRequestDTO request) {
+        log.info("Updating event eventId={} tenantUserUuid={} role={} req.title={} req.venue={} req.startDateTime={} req.endDateTime={} req.totalCapacity={}",
+                eventId, tenantUserUuid, role,
                 request.getTitle(), request.getVenue(), request.getStartDateTime(), request.getEndDateTime(), request.getTotalCapacity());
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
                 .orElseThrow(() -> {
-                    log.warn("Update failed, event not found eventId={} tenantId={}", eventId, tenantId);
+                    log.warn("Update failed, event not found eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
                     return new NotFoundException("Event not found");
                 });
 
         boolean isAdmin = "ROLE_SUPER_ADMIN".equals(role);
 
-        // EVENT_ORGANIZER can update only own event;
-        if (!isAdmin && !event.getTenantId().equals(tenantId)) {
-            log.warn("Unauthorized update attempt eventId={} tenantId={} ownerTenantId={}",
-                    eventId, tenantId, event.getTenantId());
+        // EVENT_ORGANIZER can update only own event. Pre-V6 rows without a
+        // tenantUserUuid fail closed (admin must update via SUPER_ADMIN role
+        // until backfill catches them up) — safer than silently allowing the
+        // first organizer through.
+        if (!isAdmin && !java.util.Objects.equals(event.getTenantUserUuid(), tenantUserUuid)) {
+            log.warn("Unauthorized update attempt eventId={} tenantUserUuid={} ownerTenantUserUuid={}",
+                    eventId, tenantUserUuid, event.getTenantUserUuid());
             throw new ForbiddenException("You are not authorized to update this event");
         }
 
@@ -514,8 +488,8 @@ public class EventService {
         }
 
         Event saved = eventRepository.save(event);
-        log.info("Event updated eventId={} tenantId={} title={} venue={} startDateTime={} endDateTime={}",
-                eventId, tenantId, saved.getTitle(), saved.getVenue(), saved.getStartDateTime(), saved.getEndDateTime());
+        log.info("Event updated eventId={} tenantUserUuid={} title={} venue={} startDateTime={} endDateTime={}",
+                eventId, tenantUserUuid, saved.getTitle(), saved.getVenue(), saved.getStartDateTime(), saved.getEndDateTime());
 
         // Notify confirmed attendees only when the start time or venue moved —
         // best-effort, never blocks the update (the gateway swallows failures).
@@ -535,8 +509,8 @@ public class EventService {
         return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
     }
 
-    public EventResponseDTO updateEvent(String tenantId, UUID eventId, UpdateEventRequestDTO request) {
-        return updateEvent(tenantId, "ROLE_EVENT_ORGANIZER", eventId, request);
+    public EventResponseDTO updateEvent(UUID tenantUserUuid, UUID eventId, UpdateEventRequestDTO request) {
+        return updateEvent(tenantUserUuid, "ROLE_EVENT_ORGANIZER", eventId, request);
     }
 
     // Internal: called by booking-service when a booking transitions to
@@ -594,18 +568,18 @@ public class EventService {
     }
 
     @Transactional
-    public EventResponseDTO activateEvent(String tenantId, String role, UUID eventId) {
-        log.info("Activating event eventId={} tenantId={} role={}", eventId, tenantId, role);
+    public EventResponseDTO activateEvent(UUID tenantUserUuid, String role, UUID eventId) {
+        log.info("Activating event eventId={} tenantUserUuid={} role={}", eventId, tenantUserUuid, role);
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
                 .orElseThrow(() -> {
-                    log.warn("Activate failed, event not found eventId={} tenantId={}", eventId, tenantId);
+                    log.warn("Activate failed, event not found eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
                     return new NotFoundException("Event not found");
                 });
 
         boolean isAdmin = "ROLE_SUPER_ADMIN".equals(role);
-        if (!isAdmin && !event.getTenantId().equals(tenantId)) {
-            log.warn("Unauthorized activate attempt eventId={} tenantId={} ownerTenantId={}",
-                    eventId, tenantId, event.getTenantId());
+        if (!isAdmin && !java.util.Objects.equals(event.getTenantUserUuid(), tenantUserUuid)) {
+            log.warn("Unauthorized activate attempt eventId={} tenantUserUuid={} ownerTenantUserUuid={}",
+                    eventId, tenantUserUuid, event.getTenantUserUuid());
             throw new ForbiddenException("You are not authorized to activate this event");
         }
 
@@ -614,35 +588,35 @@ public class EventService {
         // This keeps the invariant active=true => rejected=false, which is what
         // lets the inactive listing reliably surface every rejected event.
         if (event.isRejected()) {
-            log.warn("Activate refused, event is admin-rejected eventId={} tenantId={}", eventId, tenantId);
+            log.warn("Activate refused, event is admin-rejected eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
             throw new ConflictException("This event has been rejected by an administrator and cannot be activated");
         }
 
         event.setActive(true);
         Event saved = eventRepository.save(event);
-        log.info("Event activated eventId={} tenantId={}", eventId, tenantId);
+        log.info("Event activated eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
         return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
     }
 
     @Transactional
-    public EventResponseDTO deactivateEvent(String tenantId, String role, UUID eventId) {
-        log.info("Deactivating event eventId={} tenantId={} role={}", eventId, tenantId, role);
+    public EventResponseDTO deactivateEvent(UUID tenantUserUuid, String role, UUID eventId) {
+        log.info("Deactivating event eventId={} tenantUserUuid={} role={}", eventId, tenantUserUuid, role);
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
                 .orElseThrow(() -> {
-                    log.warn("Deactivate failed, event not found eventId={} tenantId={}", eventId, tenantId);
+                    log.warn("Deactivate failed, event not found eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
                     return new NotFoundException("Event not found");
                 });
 
         boolean isAdmin = "ROLE_SUPER_ADMIN".equals(role);
-        if (!isAdmin && !event.getTenantId().equals(tenantId)) {
-            log.warn("Unauthorized deactivate attempt eventId={} tenantId={} ownerTenantId={}",
-                    eventId, tenantId, event.getTenantId());
+        if (!isAdmin && !java.util.Objects.equals(event.getTenantUserUuid(), tenantUserUuid)) {
+            log.warn("Unauthorized deactivate attempt eventId={} tenantUserUuid={} ownerTenantUserUuid={}",
+                    eventId, tenantUserUuid, event.getTenantUserUuid());
             throw new ForbiddenException("You are not authorized to deactivate this event");
         }
 
         event.setActive(false);
         Event saved = eventRepository.save(event);
-        log.info("Event deactivated eventId={} tenantId={}", eventId, tenantId);
+        log.info("Event deactivated eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
         return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
     }
 
@@ -664,7 +638,7 @@ public class EventService {
         event.setRejected(true);
         event.setActive(false);
         Event saved = eventRepository.save(event);
-        log.info("Event rejected eventId={} tenantId={}", eventId, saved.getTenantId());
+        log.info("Event rejected eventId={} tenantUserUuid={}", eventId, saved.getTenantUserUuid());
         return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
     }
 
@@ -684,31 +658,31 @@ public class EventService {
                 });
         event.setRejected(false);
         Event saved = eventRepository.save(event);
-        log.info("Event approved eventId={} tenantId={}", eventId, saved.getTenantId());
+        log.info("Event approved eventId={} tenantUserUuid={}", eventId, saved.getTenantUserUuid());
         return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
     }
 
     @Transactional
-    public void deleteEvent(String tenantId, String role, UUID eventId) {
-        log.info("Deleting event eventId={} tenantId={} role={}", eventId, tenantId, role);
+    public void deleteEvent(UUID tenantUserUuid, String role, UUID eventId) {
+        log.info("Deleting event eventId={} tenantUserUuid={} role={}", eventId, tenantUserUuid, role);
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
                 .orElseThrow(() -> {
-                    log.warn("Delete failed, event not found eventId={} tenantId={}", eventId, tenantId);
+                    log.warn("Delete failed, event not found eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
                     return new NotFoundException("Event not found");
                 });
 
         boolean isAdmin = "ROLE_SUPER_ADMIN".equals(role);
 
         // EVENT_ORGANIZER can delete only own event;
-        if (!isAdmin && !event.getTenantId().equals(tenantId)) {
-            log.warn("Unauthorized delete attempt eventId={} tenantId={} ownerTenantId={}",
-                    eventId, tenantId, event.getTenantId());
+        if (!isAdmin && !java.util.Objects.equals(event.getTenantUserUuid(), tenantUserUuid)) {
+            log.warn("Unauthorized delete attempt eventId={} tenantUserUuid={} ownerTenantUserUuid={}",
+                    eventId, tenantUserUuid, event.getTenantUserUuid());
             throw new ForbiddenException("You are not authorized to delete this event");
         }
 
         event.setDeleted(true);
         eventRepository.save(event);
-        log.info("Event deleted (soft) eventId={} tenantId={}", eventId, tenantId);
+        log.info("Event deleted (soft) eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
 
         // A soft-delete is a cancellation — tell confirmed attendees. Best-effort.
         bookingNotificationGateway.notifyEventChange(
@@ -718,8 +692,8 @@ public class EventService {
                 null, null);
     }
 
-    public void deleteEvent(String tenantId, UUID eventId) {
-        deleteEvent(tenantId, "ROLE_EVENT_ORGANIZER", eventId);
+    public void deleteEvent(UUID tenantUserUuid, UUID eventId) {
+        deleteEvent(tenantUserUuid, "ROLE_EVENT_ORGANIZER", eventId);
     }
 
 }
