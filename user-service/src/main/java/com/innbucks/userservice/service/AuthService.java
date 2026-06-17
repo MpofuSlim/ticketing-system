@@ -94,6 +94,21 @@ public class AuthService {
         }
     }
 
+    /**
+     * Thrown by {@link #changePassword(String, ChangePasswordRequestDTO,
+     * AuditContext)} when the request can't be processed. The {@link #message}
+     * is user-facing and safe to forward verbatim — every constructor argument
+     * comes from this class's own throw sites, never from raw upstream text.
+     * Mapped to 400 by {@link com.innbucks.userservice.exception.GlobalExceptionHandler}
+     * so the FE sees the specific reason ("Current password does not match")
+     * instead of the generic catch-all ("We couldn't process your request").
+     */
+    public static class PasswordChangeException extends RuntimeException {
+        public PasswordChangeException(String message) {
+            super(message);
+        }
+    }
+
     @Transactional
     public AuthResponseDTO register(RegisterRequestDTO request) {
         log.info("Starting system user registration email={} defaultServices={}",
@@ -327,25 +342,25 @@ public class AuthService {
     @Transactional
     public void changePassword(String token, ChangePasswordRequestDTO request, AuditContext auditContext) {
         if (token == null || token.isBlank() || !jwtUtil.isTokenValid(token)) {
-            throw new RuntimeException("Invalid or expired token");
+            throw new PasswordChangeException("Invalid or expired token");
         }
         if (tokenRevocationService.isRevoked(token)) {
-            throw new RuntimeException("Token revoked");
+            throw new PasswordChangeException("Token revoked");
         }
         String subject = jwtUtil.extractEmail(token);
         if (subject == null || subject.isBlank()) {
-            throw new RuntimeException("Token has no subject");
+            throw new PasswordChangeException("Token has no subject");
         }
         User user = (subject.contains("@")
                 ? userRepository.findByEmail(subject)
                 : userRepository.findByPhoneNumber(subject))
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new PasswordChangeException("User not found"));
 
         if (!passwordEncoder.matches(request.getCurrentPassword(), user.getPassword())) {
-            throw new RuntimeException("Current password does not match");
+            throw new PasswordChangeException("Current password does not match");
         }
         if (passwordEncoder.matches(request.getNewPassword(), user.getPassword())) {
-            throw new RuntimeException("New password must differ from current password");
+            throw new PasswordChangeException("New password must differ from current password");
         }
 
         user.setPassword(passwordEncoder.encode(request.getNewPassword()));

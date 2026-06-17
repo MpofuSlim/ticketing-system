@@ -142,6 +142,18 @@ public class GlobalExceptionHandler {
                 .body(ApiResult.error(HttpStatus.BAD_REQUEST, ex.getMessage()));
     }
 
+    // Change-password validation failures. Without this handler every distinct
+    // reason (wrong current password, same-as-old, expired token) collapsed into
+    // the generic catch-all below ("We couldn't process your request") and the
+    // user had no idea what to fix. Messages are typed constants from
+    // AuthService.changePassword — safe to passthrough.
+    @ExceptionHandler(AuthService.PasswordChangeException.class)
+    public ResponseEntity<ApiResult<Void>> handlePasswordChange(AuthService.PasswordChangeException ex) {
+        log.info("Password change rejected: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResult.error(HttpStatus.BAD_REQUEST, ex.getMessage()));
+    }
+
     // Catch-all for any RuntimeException not handled by a more specific
     // @ExceptionHandler above. Raw ex.getMessage() can carry internal text
     // (table names, stack-trace fragments, library jargon), so it goes to

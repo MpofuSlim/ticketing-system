@@ -872,4 +872,77 @@ class AuthServiceTest {
         assertEquals(0, user.getFailedLoginAttempts());
         assertNull(user.getLockedUntil());
     }
+
+    // ----- change-password — typed exception (not the generic catch-all) -----
+
+    /**
+     * Builds an AuthService whose JwtUtil + TokenRevocationService accept any
+     * token as valid and unrevoked, and resolve the subject to alice@x.co —
+     * so a changePassword call exercises the real per-validation paths
+     * (password match / same-pw check) instead of being short-circuited on
+     * token gates.
+     */
+    private AuthService changePasswordService(UserRepository userRepo,
+                                              PasswordEncoder encoder) {
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.isTokenValid(anyString())).thenReturn(true);
+        when(jwt.extractEmail(anyString())).thenReturn("alice@x.co");
+        TokenRevocationService rev = mock(TokenRevocationService.class);
+        when(rev.isRevoked(anyString())).thenReturn(false);
+        return withLockoutConfig(new AuthService(userRepo, mock(TenantProfileRepository.class),
+                mock(CustomerProfileRepository.class), encoder, jwt, rev,
+                mock(RefreshTokenService.class),
+                mock(RefreshTokenRepository.class),
+                mock(AuditService.class)));
+    }
+
+    private ChangePasswordRequestDTO changeReq(String current, String next) {
+        ChangePasswordRequestDTO r = new ChangePasswordRequestDTO();
+        r.setCurrentPassword(current);
+        r.setNewPassword(next);
+        return r;
+    }
+
+    @Test
+    void changePassword_wrongCurrentPassword_throwsTypedExceptionWithSpecificMessage() {
+        // The bug this contract pins: a wrong-current-password was throwing a
+        // bare RuntimeException that the GlobalExceptionHandler catch-all
+        // collapsed into "We couldn't process your request" — the user had no
+        // idea what to fix. Typed exception now carries the real reason
+        // through to the FE.
+        UserRepository userRepo = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        User user = User.builder()
+                .id(1L).email("alice@x.co").password("hashed-current")
+                .roles(EnumSet.of(User.Role.CUSTOMER)).active(true).build();
+        when(userRepo.findByEmail("alice@x.co")).thenReturn(Optional.of(user));
+        when(encoder.matches("wrong", "hashed-current")).thenReturn(false);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                        changePasswordService(userRepo, encoder)
+                                .changePassword("tok", changeReq("wrong", "new"),
+                                        com.innbucks.userservice.service.AuditContext.none()))
+                .isInstanceOf(AuthService.PasswordChangeException.class)
+                .hasMessage("Current password does not match");
+    }
+
+    @Test
+    void changePassword_newPasswordSameAsCurrent_throwsTypedExceptionWithSpecificMessage() {
+        // Same defence-in-depth requirement: the FE can read the specific
+        // "must differ" message and surface it instead of a generic retry hint.
+        UserRepository userRepo = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        User user = User.builder()
+                .id(1L).email("alice@x.co").password("hashed-same")
+                .roles(EnumSet.of(User.Role.CUSTOMER)).active(true).build();
+        when(userRepo.findByEmail("alice@x.co")).thenReturn(Optional.of(user));
+        when(encoder.matches("same", "hashed-same")).thenReturn(true);
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() ->
+                        changePasswordService(userRepo, encoder)
+                                .changePassword("tok", changeReq("same", "same"),
+                                        com.innbucks.userservice.service.AuditContext.none()))
+                .isInstanceOf(AuthService.PasswordChangeException.class)
+                .hasMessage("New password must differ from current password");
+    }
 }
