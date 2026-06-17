@@ -9,7 +9,6 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Map;
@@ -61,7 +60,17 @@ public class TenantUserUuidBackfillRunner implements ApplicationRunner {
             log.info("Tenant-user-uuid backfill disabled by config");
             return;
         }
-        runOnePass();
+        // Best-effort: a backfill problem must NEVER prevent event-service from
+        // starting. Swallow + log here (an uncaught throw from an
+        // ApplicationRunner fails the whole context) and let the scheduled tick
+        // retry. The transaction boundary itself lives on the repository
+        // method, so the TransactionRequiredException class of bug can't recur.
+        try {
+            runOnePass();
+        } catch (Exception e) {
+            log.error("Tenant-user-uuid backfill failed on startup; service will start anyway "
+                    + "and the scheduled tick will retry", e);
+        }
     }
 
     /**
@@ -75,7 +84,11 @@ public class TenantUserUuidBackfillRunner implements ApplicationRunner {
                initialDelayString = "${innbucks.tenant-uuid-backfill.initial-delay-ms:300000}")
     public void scheduledTick() {
         if (!enabled) return;
-        runOnePass();
+        try {
+            runOnePass();
+        } catch (Exception e) {
+            log.error("Tenant-user-uuid backfill tick failed; will retry next tick", e);
+        }
     }
 
     void runOnePass() {
@@ -106,8 +119,12 @@ public class TenantUserUuidBackfillRunner implements ApplicationRunner {
         }
     }
 
-    @Transactional
-    protected int applyResolutions(Map<String, UUID> resolved) {
+    // Not @Transactional and not self-invocation-sensitive: each
+    // eventRepository.backfillTenantUserUuid call crosses the repository proxy,
+    // where the @Transactional boundary now lives, so every UPDATE runs in its
+    // own short transaction. Per-tenant granularity is fine — the backfill is
+    // idempotent, so a partial pass just gets finished on the next tick.
+    private int applyResolutions(Map<String, UUID> resolved) {
         int updated = 0;
         for (Map.Entry<String, UUID> entry : resolved.entrySet()) {
             updated += eventRepository.backfillTenantUserUuid(entry.getKey(), entry.getValue());
