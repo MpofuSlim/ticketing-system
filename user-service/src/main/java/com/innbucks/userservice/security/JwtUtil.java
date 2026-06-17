@@ -134,20 +134,35 @@ public class JwtUtil {
         if (shopId != null) {
             builder.claim("shopId", shopId.toString());
         }
-        // Display-name claims are emitted only for CUSTOMER tokens — staff
-        // roles (MERCHANT_ADMIN, SHOP_ADMIN, etc.) don't need their personal
-        // names in every JWT and we'd rather keep their tokens slim + less
-        // PII-exposed. AuthService further gates this to tier >= 2 (tier 1
+        // Display-name claims (firstName / middleName / lastName) — emitted on:
+        //   CUSTOMER       : the original use case (the FE shows the signed-in
+        //                    customer's name on their own dashboard).
+        //   TEAM_MEMBER    : gate-staff scanning tickets. Their name shows up
+        //                    on the rejection toast ("already scanned by Tariro
+        //                    Chikomo at 19:42") rendered to other gate-staff —
+        //                    the scanner email is the wrong thing to display
+        //                    there, both for legibility and for not leaking
+        //                    staff login addresses across the gate-staff group.
+        //   EVENT_ORGANIZER: organizers can scan their own events directly
+        //                    (small-event case) and need the same name capture
+        //                    as their team. They also see their own name in
+        //                    the FE organizer header.
+        // Other staff (MERCHANT_ADMIN, SHOP_ADMIN, SHOP_USER, SUPER_ADMIN) stay
+        // omitted — their tokens don't surface a display name anywhere today,
+        // and we'd rather keep them slim + less PII-exposed by default.
+        // AuthService further gates this to tier >= 2 for customers (tier 1
         // names are placeholders like "Customer Pending"); JwtUtil enforces
         // the role check independently as a backstop.
-        boolean customerToken = roleList.contains("CUSTOMER");
-        if (customerToken && firstName != null && !firstName.isBlank()) {
+        boolean emitDisplayName = roleList.contains("CUSTOMER")
+                || roleList.contains("TEAM_MEMBER")
+                || roleList.contains("EVENT_ORGANIZER");
+        if (emitDisplayName && firstName != null && !firstName.isBlank()) {
             builder.claim("firstName", firstName);
         }
-        if (customerToken && middleName != null && !middleName.isBlank()) {
+        if (emitDisplayName && middleName != null && !middleName.isBlank()) {
             builder.claim("middleName", middleName);
         }
-        if (customerToken && lastName != null && !lastName.isBlank()) {
+        if (emitDisplayName && lastName != null && !lastName.isBlank()) {
             builder.claim("lastName", lastName);
         }
         return builder
@@ -264,7 +279,9 @@ public class JwtUtil {
         }
     }
 
-    /** Optional CUSTOMER display name claim. {@code null} for staff tokens or tier-1 customers. */
+    /** Optional display-name claim. Emitted for CUSTOMER, TEAM_MEMBER and
+     *  EVENT_ORGANIZER tokens (see {@code generateToken} doc); {@code null}
+     *  for other staff tokens or tier-1 customers with placeholder names. */
     public String extractFirstName(String token) {
         return getClaims(token).get("firstName", String.class);
     }

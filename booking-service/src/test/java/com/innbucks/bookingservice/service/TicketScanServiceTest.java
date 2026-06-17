@@ -85,14 +85,14 @@ class TicketScanServiceTest {
 
     private void authenticateAs(String email, UUID userUuid, UUID organizerUuid) {
         var auth = new UsernamePasswordAuthenticationToken(email, null);
-        auth.setDetails(new JwtAuthDetails(email, null, userUuid, organizerUuid));
+        auth.setDetails(new JwtAuthDetails(email, null, userUuid, organizerUuid, null, null));
         SecurityContextHolder.getContext().setAuthentication(auth);
     }
 
     private void authenticateAsOrganizer(String email, UUID userUuid, UUID organizerUuid) {
         var auth = new UsernamePasswordAuthenticationToken(email, null,
                 List.of(new SimpleGrantedAuthority("ROLE_EVENT_ORGANIZER")));
-        auth.setDetails(new JwtAuthDetails(email, null, userUuid, organizerUuid));
+        auth.setDetails(new JwtAuthDetails(email, null, userUuid, organizerUuid, null, null));
         SecurityContextHolder.getContext().setAuthentication(auth);
     }
 

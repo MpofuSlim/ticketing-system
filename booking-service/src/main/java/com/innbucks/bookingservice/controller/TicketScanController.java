@@ -3,6 +3,7 @@ package com.innbucks.bookingservice.controller;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.ScanTicketRequestDTO;
 import com.innbucks.bookingservice.dto.ScanTicketResponseDTO;
+import com.innbucks.bookingservice.security.JwtAuthDetails;
 import com.innbucks.bookingservice.service.TicketScanService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -151,8 +152,45 @@ public class TicketScanController {
             @Valid @RequestBody ScanTicketRequestDTO request,
             Authentication authentication
     ) {
-        String scannerDisplayName = authentication == null ? null : authentication.getName();
+        String scannerDisplayName = resolveScannerDisplayName(authentication);
         ScanTicketResponseDTO result = ticketScanService.scan(request.getTicketNumber(), scannerDisplayName);
         return ResponseEntity.ok(ApiResult.ok("Scan result", result));
+    }
+
+    /**
+     * The redeem row's denormalised display name (booking_items.redeemed_by_name)
+     * surfaces on the rejection toast a second scan sees: "already scanned by
+     * Tariro Chikomo at 19:42". Prefer the JWT's firstName/lastName claims for
+     * that — staff logins are emails like {@code tariro@harare-arena.co.zw}
+     * which read as system identifiers, not as a colleague's name, and leak
+     * staff addresses across the gate-staff group.
+     *
+     * <p>The claims are emitted on TEAM_MEMBER and EVENT_ORGANIZER tokens (the
+     * scanner roles) by user-service's JwtUtil. Older tokens minted before
+     * that change carry no name claims; fall back to the email so the column
+     * is never null. Same fallback applies to tokens for staff roles that
+     * intentionally don't ship names (defence in depth — a future caller from
+     * an unexpected role is still recorded, just by email).
+     */
+    private static String resolveScannerDisplayName(Authentication authentication) {
+        if (authentication == null) {
+            return null;
+        }
+        if (authentication.getDetails() instanceof JwtAuthDetails d) {
+            String first = d.firstName();
+            String last = d.lastName();
+            boolean hasFirst = first != null && !first.isBlank();
+            boolean hasLast = last != null && !last.isBlank();
+            if (hasFirst && hasLast) {
+                return first + " " + last;
+            }
+            if (hasFirst) {
+                return first;
+            }
+            if (hasLast) {
+                return last;
+            }
+        }
+        return authentication.getName();
     }
 }

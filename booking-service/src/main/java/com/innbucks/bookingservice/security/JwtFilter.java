@@ -105,7 +105,9 @@ public class JwtFilter extends OncePerRequestFilter {
                     email,
                     phoneNumber,
                     jwtUtil.extractUserUuid(token),
-                    jwtUtil.extractOrganizerUuid(token)));
+                    jwtUtil.extractOrganizerUuid(token),
+                    jwtUtil.extractFirstName(token),
+                    jwtUtil.extractLastName(token)));
             SecurityContextHolder.getContext().setAuthentication(auth);
             log.debug("JWT authenticated subject={} roles={} services={} tier={} path={}",
                     email, roles, services, tier, request.getRequestURI());
