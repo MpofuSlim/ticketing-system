@@ -1,0 +1,25 @@
+-- Drop an out-of-band CHECK constraint that exists on the staging user_roles
+-- table but was never committed as a migration.
+--
+-- Background: V3 created user_roles deliberately WITHOUT a CHECK on role
+-- (search the repo: no migration ever adds user_roles_role_check or
+-- chk_user_roles_role). On staging, someone ran an ALTER TABLE ... ADD
+-- CONSTRAINT user_roles_role_check CHECK (role IN ('SUPER_ADMIN', ...))
+-- by hand at some point. That hand-rolled CHECK enumerated the roles that
+-- existed at the time and didn't get updated when V20 added TEAM_MEMBER,
+-- so POST /event-organizer/team-members now fails on staging with:
+--
+--   ERROR: new row for relation "user_roles" violates check constraint
+--   "user_roles_role_check"
+--   Detail: Failing row contains (10, TEAM_MEMBER).
+--
+-- The CHECK isn't part of the project's contract — the application-side
+-- enum User.Role is — and adding role-enum-mirroring CHECKs here would
+-- mean every new role needs a migration just to insert it. Drop the orphan
+-- so the live DB matches what the migration history says should exist.
+--
+-- IF EXISTS makes this idempotent: a no-op on dev / CI / fresh restores
+-- (which never had the rogue constraint), removes it from any env that
+-- did. Safe to re-run.
+
+ALTER TABLE user_roles DROP CONSTRAINT IF EXISTS user_roles_role_check;
