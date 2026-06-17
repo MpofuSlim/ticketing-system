@@ -55,6 +55,21 @@ public class InternalTeamMemberController {
                 ScanAccessDTO.builder().allowed(allowed).build()));
     }
 
+    @GetMapping("/{teamMemberUuid}/assigned-events")
+    @Operation(summary = "(S2S) List every event_id this team member is assigned to",
+            description = "Returns a (possibly empty) list of event UUIDs. Used by event-service to " +
+                          "restrict a team member's GET /events/my response to events they may scan. " +
+                          "Empty list = the team member has no scan access (deny-by-default).")
+    public ResponseEntity<?> assignedEvents(
+            @RequestHeader(value = "X-Internal-Token", required = false) String token,
+            @PathVariable UUID teamMemberUuid) {
+        if (!authorized(token)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        java.util.List<UUID> eventIds = teamMemberService.assignedEventIdsFor(teamMemberUuid);
+        return ResponseEntity.ok(ApiResult.ok("Assigned events resolved", eventIds));
+    }
+
     private boolean authorized(String presented) {
         if (expectedToken == null || expectedToken.isBlank()) {
             log.warn("Internal API token is not configured; rejecting call");

@@ -244,16 +244,30 @@ public class TeamMemberService {
     /**
      * Scan-time authorization data for booking-service (called S2S, NOT through
      * an organizer session — so no ownership check here; the caller is trusted
-     * via X-Internal-Token). Implements the product rule: a member with no
-     * assignment rows is organizer-wide (allowed); a member with rows may scan
-     * only the events they're assigned to.
+     * via X-Internal-Token). Implements <b>deny-by-default</b>: a TEAM_MEMBER
+     * may scan ONLY the events explicitly assigned to them via {@link
+     * #assignEvent}. A member with no assignment rows can scan nothing — the
+     * organizer must assign at least one event for them to be useful at the
+     * gate.
+     *
+     * <p>EVENT_ORGANIZERs never reach this method — booking-service's
+     * {@code TicketScanService} bypasses the assignment check entirely for the
+     * organizer role.
      */
     @Transactional(readOnly = true)
     public boolean canScanEvent(UUID teamMemberUuid, UUID eventId) {
-        if (!assignmentRepository.existsByTeamMemberUserUuid(teamMemberUuid)) {
-            return true;
-        }
         return assignmentRepository.existsByTeamMemberUserUuidAndEventId(teamMemberUuid, eventId);
+    }
+
+    /**
+     * Raw list of every event_id a team member is assigned to. S2S surface
+     * used by event-service to filter a team member's {@code /events/my}
+     * response to just the events they may scan. No ownership check —
+     * trusted via X-Internal-Token.
+     */
+    @Transactional(readOnly = true)
+    public List<UUID> assignedEventIdsFor(UUID teamMemberUuid) {
+        return assignedEventIds(teamMemberUuid);
     }
 
     private List<UUID> assignedEventIds(UUID teamMemberUuid) {

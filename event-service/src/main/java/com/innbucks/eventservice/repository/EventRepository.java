@@ -184,6 +184,33 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
             Pageable pageable
     );
 
+    // Like findByTenantUserUuid but additionally restricts the result to a
+    // specific allow-list of event IDs. Backs the team-member view of
+    // GET /events/my: the team member sees only the events their organizer
+    // has explicitly assigned to them (deny-by-default). The organizer
+    // filter is kept as defence-in-depth — even if the assignment table
+    // somehow held a stale eventId from a different organizer, the
+    // tenantUserUuid clause blocks it from leaking through. Callers that
+    // have an empty eventIds list MUST short-circuit before calling this
+    // (Spring JPA forbids an empty `IN (...)` in some dialects).
+    @Query("""
+        SELECT e FROM Event e
+        WHERE e.deleted = false
+        AND e.tenantUserUuid = :tenantUserUuid
+        AND e.eventId IN :eventIds
+        AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
+        AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
+        AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
+    """)
+    Page<Event> findByTenantUserUuidAndEventIdIn(
+            @Param("tenantUserUuid") UUID tenantUserUuid,
+            @Param("eventIds") java.util.Collection<UUID> eventIds,
+            @Param("from") LocalDateTime from,
+            @Param("to") LocalDateTime to,
+            @Param("venue") String venue,
+            Pageable pageable
+    );
+
     // Backfill support: returns up to {@code limit} distinct tenant emails
     // for events whose tenant_user_uuid hasn't been populated yet. Used
     // by the startup runner to batch-resolve emails -> uuids via user-

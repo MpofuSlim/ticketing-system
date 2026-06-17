@@ -45,6 +45,7 @@ import java.util.UUID;
 public class EventController {
 
     private final EventService eventService;
+    private final com.innbucks.eventservice.client.UserUuidLookupGateway userUuidLookupGateway;
 
     /**
      * Upper bound on @RequestParam {@code size} across every listing endpoint.
@@ -242,13 +243,34 @@ public class EventController {
         // the legacy email-based query for pre-V20 tokens.
         java.util.UUID organizerUuid = com.innbucks.eventservice.security.AuthenticatedCaller
                 .organizerUuid(authentication);
-        log.info("GET /events/my tenantId={} organizerUuid={} from={} to={} venue={} page={} size={}",
-                tenantId, organizerUuid, from, to, venue, page, size);
-        Page<EventResponseDTO> result = organizerUuid != null
-                ? eventService.getMyEventsByOrganizerUuid(
-                        organizerUuid, fromDateTime, toDateTime, venue, page, size, sortBy)
-                : eventService.getMyEvents(
-                        tenantId, fromDateTime, toDateTime, venue, page, size, sortBy);
+        boolean isTeamMember = authentication.getAuthorities().stream()
+                .anyMatch(a -> "ROLE_TEAM_MEMBER".equals(a.getAuthority()));
+        log.info("GET /events/my tenantId={} organizerUuid={} teamMember={} from={} to={} venue={} page={} size={}",
+                tenantId, organizerUuid, isTeamMember, from, to, venue, page, size);
+        Page<EventResponseDTO> result;
+        if (isTeamMember && organizerUuid != null) {
+            // Deny-by-default: a TEAM_MEMBER sees ONLY the events their
+            // organizer has explicitly assigned to them (keyed on the team
+            // member's OWN userUuid; organizerUuid filters as defence-in-
+            // depth). Fetched per-request so assignment changes take effect
+            // immediately (no re-login required). On user-service outage the
+            // gateway returns an empty list, which means no events — safer
+            // than leaking the organizer-wide set.
+            java.util.UUID teamMemberUuid = com.innbucks.eventservice.security
+                    .AuthenticatedCaller.userUuid(authentication);
+            java.util.List<java.util.UUID> assigned = teamMemberUuid == null
+                    ? java.util.List.of()
+                    : userUuidLookupGateway.assignedEventIdsFor(teamMemberUuid);
+            result = eventService.getMyAssignedEvents(
+                    organizerUuid, assigned, fromDateTime, toDateTime, venue, page, size, sortBy);
+        } else if (organizerUuid != null) {
+            // EVENT_ORGANIZER (or SUPER_ADMIN-as-organizer): full organizer-wide view.
+            result = eventService.getMyEventsByOrganizerUuid(
+                    organizerUuid, fromDateTime, toDateTime, venue, page, size, sortBy);
+        } else {
+            result = eventService.getMyEvents(
+                    tenantId, fromDateTime, toDateTime, venue, page, size, sortBy);
+        }
         return ResponseEntity.ok(ApiResult.ok("Events retrieved successfully", result));
     }
 
