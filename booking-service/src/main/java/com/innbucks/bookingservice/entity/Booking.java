@@ -58,6 +58,16 @@ public class Booking {
     @Column
     private String tenantId;
 
+    // Stable cross-service identifier of the owning organizer, mirrored
+    // from events.tenant_user_uuid via EventLookupDTO at create time.
+    // Powers the team-member scan authorization: the scanner's
+    // organizerUuid JWT claim must equal this column for the ticket to
+    // redeem. Null on legacy rows / when event-service was unreachable
+    // at create — the scan path falls back to the email-based tenantId
+    // check in that case.
+    @Column(name = "tenant_user_uuid")
+    private UUID tenantUserUuid;
+
     // Filled in at /confirm when the customer redeems points. Null on
     // pending or pure-cash confirmations.
     @Column(precision = 18, scale = 4)

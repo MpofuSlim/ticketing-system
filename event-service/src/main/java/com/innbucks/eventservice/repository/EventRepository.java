@@ -10,6 +10,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -160,6 +161,51 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
             @Param("venue") String venue,
             Pageable pageable
     );
+
+    // Same as findByTenantId but keyed on the stable cross-service organizer
+    // uuid. Backs the "list every event my organizer owns" flow used by
+    // booking-service's /me/events endpoint, where a TEAM_MEMBER's JWT
+    // carries the parent organizer's uuid and we resolve their scope from
+    // that without an email round-trip.
+    @Query("""
+        SELECT e FROM Event e
+        WHERE e.deleted = false
+        AND e.tenantUserUuid = :tenantUserUuid
+        AND (CAST(:from AS timestamp) IS NULL OR e.startDateTime >= :from)
+        AND (CAST(:to AS timestamp) IS NULL OR e.startDateTime <= :to)
+        AND (CAST(:venue AS string) IS NULL OR LOWER(e.venue) LIKE LOWER(CONCAT('%', CAST(:venue AS string), '%')))
+    """)
+    Page<Event> findByTenantUserUuid(
+            @Param("tenantUserUuid") UUID tenantUserUuid,
+            @Param("from") LocalDateTime from,
+            @Param("to") LocalDateTime to,
+            @Param("venue") String venue,
+            Pageable pageable
+    );
+
+    // Backfill support: returns up to {@code limit} distinct tenant emails
+    // for events whose tenant_user_uuid hasn't been populated yet. Used
+    // by the startup runner to batch-resolve emails -> uuids via user-
+    // service's internal lookup endpoint.
+    @Query(value = """
+        SELECT DISTINCT tenant_id FROM events
+        WHERE tenant_user_uuid IS NULL
+        AND tenant_id IS NOT NULL
+        LIMIT :limit
+    """, nativeQuery = true)
+    List<String> findDistinctTenantIdsMissingUuid(@Param("limit") int limit);
+
+    // Backfill support: writes the resolved uuid onto every row whose
+    // tenant_id matches AND whose tenant_user_uuid is still null. Idempotent
+    // by construction (the WHERE clause restricts to unmigrated rows).
+    @Modifying
+    @Query(value = """
+        UPDATE events
+        SET tenant_user_uuid = :uuid
+        WHERE tenant_id = :tenantId
+        AND tenant_user_uuid IS NULL
+    """, nativeQuery = true)
+    int backfillTenantUserUuid(@Param("tenantId") String tenantId, @Param("uuid") UUID uuid);
 
     // Same as findByTenantId but additionally filters active=true, hides events
     // whose endDateTime has passed (independent of the expiry scheduler so the

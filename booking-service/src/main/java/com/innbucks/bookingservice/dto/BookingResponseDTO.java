@@ -26,6 +26,11 @@ public class BookingResponseDTO {
     // bookings created before tenant capture, or when event-service was
     // unreachable at booking time.
     private String tenantId;
+    // Stable cross-service organizer identifier — mirrors events.tenant_user_uuid.
+    // Captured at booking creation via EventLookupDTO. Prefer this over tenantId
+    // for any new client code; tenantId is the legacy email pointer kept for
+    // backwards compatibility until the FE migrates.
+    private UUID tenantUserUuid;
     // Set after a confirm that included points. Null on PENDING/cancelled
     // bookings and pure-cash confirmations.
     private BigDecimal pointsUsed;

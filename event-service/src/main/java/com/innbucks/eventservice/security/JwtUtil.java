@@ -9,6 +9,7 @@ import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.List;
+import java.util.UUID;
 
 @Component
 public class JwtUtil {
@@ -84,6 +85,36 @@ public class JwtUtil {
         try {
             String home = getClaims(token).get("homeCountry", String.class);
             return (home == null || home.isBlank()) ? null : home;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Stable cross-service identifier for the caller. Returns null on tokens
+     * minted before V20 (user-service migration that added user_uuid) — the
+     * caller must treat null as "use the legacy email-based code path".
+     */
+    public UUID extractUserUuid(String token) {
+        return extractUuidClaim(token, "userUuid");
+    }
+
+    /**
+     * Team-scoping identifier. For an EVENT_ORGANIZER this equals the
+     * caller's own user_uuid; for a TEAM_MEMBER it equals the parent
+     * organizer's user_uuid (so a team member's scan/list-my-events flows
+     * resolve to their organizer's events without a cross-service lookup).
+     * Null for non-organizer-tree roles.
+     */
+    public UUID extractOrganizerUuid(String token) {
+        return extractUuidClaim(token, "organizerUuid");
+    }
+
+    private UUID extractUuidClaim(String token, String name) {
+        try {
+            String raw = getClaims(token).get(name, String.class);
+            if (raw == null || raw.isBlank()) return null;
+            return UUID.fromString(raw);
         } catch (Exception e) {
             return null;
         }

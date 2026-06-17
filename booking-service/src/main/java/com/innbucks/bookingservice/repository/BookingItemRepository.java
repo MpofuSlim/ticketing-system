@@ -3,11 +3,14 @@ package com.innbucks.bookingservice.repository;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface BookingItemRepository extends JpaRepository<BookingItem, UUID> {
@@ -105,6 +108,43 @@ public interface BookingItemRepository extends JpaRepository<BookingItem, UUID> 
     List<CategoryActiveItemCount> countActiveItemsByCategoryIds(
             @Param("categoryIds") Collection<UUID> categoryIds,
             @Param("cancelledStatus") Booking.BookingStatus cancelledStatus
+    );
+
+    /**
+     * Resolves a ticket by its number, eagerly loading the parent booking
+     * so the scan handler can authorise (tenant_user_uuid + status) and
+     * write back redemption fields in one round trip. Returns Optional —
+     * the scan path translates absent to "TICKET_NOT_FOUND".
+     */
+    @Query("""
+        SELECT i FROM BookingItem i
+        JOIN FETCH i.booking
+        WHERE i.ticketNumber = :ticketNumber
+    """)
+    Optional<BookingItem> findByTicketNumberWithBooking(@Param("ticketNumber") String ticketNumber);
+
+    /**
+     * Atomically claims the ticket for the calling scanner. The WHERE
+     * clause makes redemption single-shot: once {@link BookingItem#getRedeemedAt()}
+     * is non-null, this UPDATE matches zero rows on every subsequent call
+     * and the scan handler returns ALREADY_REDEEMED with the original
+     * audit fields (loaded via {@link #findByTicketNumberWithBooking}).
+     * Returns the number of rows updated (0 = already redeemed, 1 = success).
+     */
+    @Modifying
+    @Query("""
+        UPDATE BookingItem i
+        SET i.redeemedAt = :redeemedAt,
+            i.redeemedByUserUuid = :redeemedByUserUuid,
+            i.redeemedByName = :redeemedByName
+        WHERE i.id = :id
+        AND i.redeemedAt IS NULL
+    """)
+    int claimRedemption(
+            @Param("id") UUID id,
+            @Param("redeemedAt") LocalDateTime redeemedAt,
+            @Param("redeemedByUserUuid") UUID redeemedByUserUuid,
+            @Param("redeemedByName") String redeemedByName
     );
 
     interface EventActiveItemCount {

@@ -22,6 +22,19 @@ public class User {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    /**
+     * Stable, unguessable cross-service identifier for this user. Distinct
+     * from {@link #id}, which is the local Postgres PK and used by every
+     * internal FK in user-service. {@code user_uuid} is what we expose over
+     * the wire — JWT claims, cross-service FKs (events.tenant_user_uuid,
+     * booking_items.redeemed_by_user_uuid), and any FE-facing identifier.
+     * Auto-generated at INSERT by the DB default ({@code gen_random_uuid()})
+     * if the application doesn't pre-populate it; backfilled for legacy rows
+     * in the V20 migration.
+     */
+    @Column(name = "user_uuid", nullable = false, unique = true, updatable = false)
+    private UUID userUuid;
+
     @Column(nullable = false)
     private String firstName;
 
@@ -142,13 +155,53 @@ public class User {
     @Column(name = "locked_until")
     private Instant lockedUntil;
 
+    /**
+     * For TEAM_MEMBER rows: the user_uuid of the EVENT_ORGANIZER that
+     * created this team member. Null for every other role. Drives the
+     * "list my team" query and the "can this scanner work this event"
+     * authorization check in booking-service (where the team member's
+     * organizerUuid JWT claim must equal the event's tenant_user_uuid).
+     *
+     * <p>FK to {@link #userUuid} with {@code ON DELETE RESTRICT} as a
+     * backstop — real soft-delete is via {@link #active}=false +
+     * {@link #tokenVersion}++, the row stays around so the audit trail
+     * (booking_items.redeemed_by_user_uuid + redeemed_by_name) never
+     * orphans.
+     */
+    @Column(name = "created_by_organizer_uuid")
+    private UUID createdByOrganizerUuid;
+
     public boolean hasRole(Role role) {
         return roles != null && roles.contains(role);
+    }
+
+    /**
+     * Assigns a fresh {@link #userUuid} when the row is first persisted, so
+     * the column is populated whether the caller built the entity through
+     * the builder, the no-args constructor, or any other path. The DB has a
+     * matching {@code DEFAULT gen_random_uuid()} (V20) as a backstop for
+     * direct-SQL inserts (test fixtures, Flyway data migrations), but the
+     * application-side assignment lets the calling code read the value back
+     * immediately without a refetch.
+     */
+    @PrePersist
+    void assignUserUuidIfMissing() {
+        if (userUuid == null) {
+            userUuid = UUID.randomUUID();
+        }
     }
 
     public enum Role {
         SUPER_ADMIN,
         EVENT_ORGANIZER,
+        // Event-organizer team member (gate-staff, scanner operator). Created
+        // by an EVENT_ORGANIZER via POST /event-organizer/team-members and
+        // stamped with the organizer's user_uuid in
+        // {@link User#createdByOrganizerUuid}. Their JWT carries the parent
+        // organizer's uuid as the {@code organizerUuid} claim so booking-
+        // service can authorize them to scan tickets for any event owned by
+        // that organizer without a per-request cross-service lookup.
+        TEAM_MEMBER,
         MERCHANT_ADMIN,
         // Shop-level staff. SHOP_ADMINs are created by a MERCHANT_ADMIN and
         // manage staff at a specific shop. SHOP_USERs are created by a

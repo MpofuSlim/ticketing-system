@@ -106,6 +106,32 @@ public class EventService {
     }
 
     /**
+     * UUID-keyed counterpart of {@link #getMyEvents(String, LocalDateTime,
+     * LocalDateTime, String, int, int, String)}. Used by booking-service's
+     * scanner flows ({@code /me/events}) where the caller (an EVENT_ORGANIZER
+     * or one of their TEAM_MEMBERs) is identified by their organizerUuid
+     * JWT claim rather than the legacy email pointer. Only returns events
+     * whose {@code tenant_user_uuid} has been backfilled — pre-V6 rows that
+     * haven't been migrated yet show up only via the email-keyed query
+     * above. Once the backfill runner completes the two return the same set.
+     */
+    public Page<EventResponseDTO> getMyEventsByOrganizerUuid(
+            UUID organizerUuid,
+            LocalDateTime from,
+            LocalDateTime to,
+            String venue,
+            int page,
+            int size,
+            String sortBy
+    ) {
+        Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
+        log.debug("Fetching events for organizerUuid={} from={} to={} venue={} page={} size={} sortBy={}",
+                organizerUuid, from, to, venue, page, size, sortBy);
+        return enrichWithAvailability(
+                eventRepository.findByTenantUserUuid(organizerUuid, from, to, venue, pageable));
+    }
+
+    /**
      * Same as {@link #getMyEvents} but additionally filters {@code active=true}.
      * Used so an EVENT_ORGANIZER hitting the public {@code /events/active}
      * listing only sees their own bookable events.
@@ -298,14 +324,25 @@ public class EventService {
     }
 
     public EventResponseDTO createEvent(String tenantId, String country, CreateEventRequestDTO request) {
-        return createEvent(tenantId, country, request, null);
+        return createEvent(tenantId, null, country, request, null);
+    }
+
+    public EventResponseDTO createEvent(String tenantId, UUID tenantUserUuid, String country,
+                                        CreateEventRequestDTO request) {
+        return createEvent(tenantId, tenantUserUuid, country, request, null);
+    }
+
+    public EventResponseDTO createEvent(String tenantId, String country, CreateEventRequestDTO request,
+                                        MultipartFile eventBanner) {
+        return createEvent(tenantId, null, country, request, eventBanner);
     }
 
     @Transactional
-    public EventResponseDTO createEvent(String tenantId, String country, CreateEventRequestDTO request, MultipartFile eventBanner) {
-        log.info("Creating event tenantId={} country={} title={} venue={} startDateTime={} capacity={} hasBanner={}",
-                tenantId, country, request.getTitle(), request.getVenue(), request.getStartDateTime(), request.getTotalCapacity(),
-                eventBanner != null && !eventBanner.isEmpty());
+    public EventResponseDTO createEvent(String tenantId, UUID tenantUserUuid, String country,
+                                        CreateEventRequestDTO request, MultipartFile eventBanner) {
+        log.info("Creating event tenantId={} tenantUserUuid={} country={} title={} venue={} startDateTime={} capacity={} hasBanner={}",
+                tenantId, tenantUserUuid, country, request.getTitle(), request.getVenue(), request.getStartDateTime(),
+                request.getTotalCapacity(), eventBanner != null && !eventBanner.isEmpty());
 
         // Country is stamped from the organizer's JWT, never the request body.
         // A token minted before country was captured won't carry the claim;
@@ -324,6 +361,13 @@ public class EventService {
 
         Event event = Event.builder()
                 .tenantId(tenantId)
+                // Dual-write: stamp both the legacy email pointer and the
+                // stable user_uuid identifier so new rows are correct from
+                // day one. tenantUserUuid is null only for code paths that
+                // haven't been migrated to extract it from the JWT yet
+                // (legacy tests via the 3-arg overload); the backfill
+                // runner picks those up on the next startup.
+                .tenantUserUuid(tenantUserUuid)
                 .title(request.getTitle())
                 .description(request.getDescription())
                 .venue(request.getVenue())
@@ -343,7 +387,8 @@ public class EventService {
         applyBanner(event, eventBanner);
 
         Event saved = eventRepository.save(event);
-        log.info("Event created eventId={} tenantId={}", saved.getEventId(), tenantId);
+        log.info("Event created eventId={} tenantId={} tenantUserUuid={}",
+                saved.getEventId(), tenantId, saved.getTenantUserUuid());
         return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
     }
 

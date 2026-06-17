@@ -20,8 +20,19 @@ public class EventResponseDTO {
     @Schema(example = "1", description = "1-based position of this event within the current /events/by-country response page. Not stored; null on other endpoints.")
     private Integer eventNo;
 
-    @Schema(description = "Owning tenant identifier (typically the JWT subject/username).")
+    @Schema(description = "Owning tenant identifier (typically the JWT subject/username). " +
+            "Legacy field — new clients should read `tenantUserUuid` instead, which is the stable " +
+            "cross-service identifier immune to the organizer editing their email. Both are " +
+            "populated on every new event; this one will be removed in a future release once the " +
+            "FE has migrated.")
     private String tenantId;
+
+    @Schema(example = "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e", nullable = true,
+            description = "Stable cross-service organizer identifier — equal to the owning " +
+                          "organizer's `user_uuid`. Null on legacy rows created before the V6 " +
+                          "backfill ran; populated on every new event. Prefer this over `tenantId` " +
+                          "for any new client code.")
+    private UUID tenantUserUuid;
 
     @Schema(description = "Owning organizer's business details (name, email, address), resolved from " +
             "user-service. Null when the organizer has no business profile or user-service is unavailable.")

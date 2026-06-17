@@ -3,6 +3,7 @@ package com.innbucks.bookingservice.entity;
 import jakarta.persistence.*;
 import lombok.*;
 import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.UUID;
 
 @Entity
@@ -54,4 +55,33 @@ public class BookingItem {
     @Column(name = "is_active", nullable = false)
     @Builder.Default
     private Boolean isActive = Boolean.TRUE;
+
+    /**
+     * When the ticket was scanned at the gate. Null means unredeemed —
+     * single-shot per booking_item, enforced atomically by an UPDATE WHERE
+     * {@code redeemed_at IS NULL}. A row whose first redeem landed is
+     * forever excluded from the WHERE clause; a second scan touches 0 rows
+     * and the service returns ALREADY_REDEEMED with the original
+     * {@link #redeemedByName} + {@link #redeemedAt} so the rejection toast
+     * still tells the gate-staff who scanned and when.
+     */
+    @Column(name = "redeemed_at")
+    private LocalDateTime redeemedAt;
+
+    /** Stable cross-service identifier of the user who scanned the ticket
+     *  (the team member's or organizer's {@code user_uuid}). Never updated
+     *  after a successful redeem — the audit trail must not change. */
+    @Column(name = "redeemed_by_user_uuid")
+    private UUID redeemedByUserUuid;
+
+    /**
+     * Display name of the user who scanned the ticket, captured at redeem
+     * time. Denormalised on purpose — if the team member is later
+     * soft-disabled or renamed, the rejection-toast on a second scan still
+     * shows the name they were known by ("already scanned by Tariro at
+     * 19:42"). That contract must survive the user-service lifecycle of
+     * the scanning row.
+     */
+    @Column(name = "redeemed_by_name")
+    private String redeemedByName;
 }

@@ -72,7 +72,8 @@ public class JwtUtil {
                                 int tier, boolean verified, String phoneNumber,
                                 UUID merchantId, UUID shopId,
                                 String firstName, String middleName, String lastName,
-                                long tokenVersion, String country) {
+                                long tokenVersion, String country,
+                                UUID userUuid, UUID organizerUuid) {
         List<String> roleList = roles == null ? List.of()
                 : roles.stream().filter(r -> r != null && !r.isBlank()).collect(Collectors.toList());
         List<String> serviceList = defaultServices == null ? List.of()
@@ -89,6 +90,26 @@ public class JwtUtil {
                 // how a new login revokes the previous device's session
                 // without a per-token denylist entry.
                 .claim("tokenVersion", tokenVersion);
+        // Stable cross-service identifier — every downstream service uses
+        // this to refer to the caller instead of the JWT subject (email),
+        // which is mutable when the user edits their profile. Emitted as
+        // string for JSON portability (jackson encodes UUIDs as quoted
+        // strings; java.util.UUID#toString is the canonical hyphenated
+        // form). Omitted for legacy callers that haven't been migrated to
+        // pass a UUID yet, but every production mint path supplies it.
+        if (userUuid != null) {
+            builder.claim("userUuid", userUuid.toString());
+        }
+        // The "team scoping" claim. For an EVENT_ORGANIZER this is their
+        // own userUuid; for a TEAM_MEMBER it's the parent organizer's
+        // userUuid (taken from User.createdByOrganizerUuid at login).
+        // Booking-service reads this to authorize ticket scans —
+        // events.tenant_user_uuid must equal the JWT's organizerUuid for
+        // the scanner to be allowed to redeem a ticket on that event.
+        // Same omit-when-null rule as above.
+        if (organizerUuid != null) {
+            builder.claim("organizerUuid", organizerUuid.toString());
+        }
         if (country != null && !country.isBlank()) {
             builder.claim("country", country);
         }
@@ -134,6 +155,21 @@ public class JwtUtil {
                 .expiration(new Date(System.currentTimeMillis() + expiration))
                 .signWith(getSigningKey(), Jwts.SIG.HS256)
                 .compact();
+    }
+
+    /**
+     * Legacy overload — same shape as the original 13-arg method, preserved
+     * for callers (mainly tests) that don't supply userUuid/organizerUuid.
+     * Production paths call the full 15-arg version above and emit both
+     * UUID claims.
+     */
+    public String generateToken(String email, Collection<String> roles, Collection<String> defaultServices,
+                                int tier, boolean verified, String phoneNumber,
+                                UUID merchantId, UUID shopId,
+                                String firstName, String middleName, String lastName,
+                                long tokenVersion, String country) {
+        return generateToken(email, roles, defaultServices, tier, verified, phoneNumber,
+                merchantId, shopId, firstName, middleName, lastName, tokenVersion, country, null, null);
     }
 
     public String generateToken(String email, Collection<String> roles, Collection<String> defaultServices,
@@ -273,6 +309,21 @@ public class JwtUtil {
 
     public UUID extractShopId(String token) {
         return extractUuidClaim(token, "shopId");
+    }
+
+    /** Stable cross-service identifier for the caller. Null on tokens minted before V20. */
+    public UUID extractUserUuid(String token) {
+        return extractUuidClaim(token, "userUuid");
+    }
+
+    /**
+     * Team-scoping identifier. Equal to {@link #extractUserUuid(String)} for
+     * an EVENT_ORGANIZER; equal to the parent organizer's user_uuid for a
+     * TEAM_MEMBER. Null on tokens minted before V20 or for roles outside
+     * the event-organizer tree (CUSTOMER, MERCHANT_ADMIN, etc.).
+     */
+    public UUID extractOrganizerUuid(String token) {
+        return extractUuidClaim(token, "organizerUuid");
     }
 
     private UUID extractUuidClaim(String token, String name) {

@@ -101,7 +101,11 @@ public class JwtFilter extends OncePerRequestFilter {
             }
 
             var auth = new UsernamePasswordAuthenticationToken(email, null, authorities);
-            auth.setDetails(new JwtAuthDetails(email, phoneNumber));
+            auth.setDetails(new JwtAuthDetails(
+                    email,
+                    phoneNumber,
+                    jwtUtil.extractUserUuid(token),
+                    jwtUtil.extractOrganizerUuid(token)));
             SecurityContextHolder.getContext().setAuthentication(auth);
             log.debug("JWT authenticated subject={} roles={} services={} tier={} path={}",
                     email, roles, services, tier, request.getRequestURI());

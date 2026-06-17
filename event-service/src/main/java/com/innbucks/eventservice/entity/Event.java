@@ -28,6 +28,18 @@ public class Event {
     @Column(name = "tenant_id", nullable = false)
     private String tenantId;
 
+    /**
+     * Stable cross-service organizer reference. Matches {@code users.user_uuid}
+     * in user-service. Populated by {@link EventService#createEvent} on every
+     * new INSERT (dual-write alongside {@link #tenantId}); backfilled for
+     * pre-V6 rows by {@code TenantUserUuidBackfillRunner}. Nullable until the
+     * backfill is complete and the FE has migrated off the email-based
+     * {@code tenantId}; a future migration will flip this NOT NULL and drop
+     * the email column.
+     */
+    @Column(name = "tenant_user_uuid")
+    private UUID tenantUserUuid;
+
     @Column(nullable = false)
     private String title;
 

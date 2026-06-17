@@ -25,3 +25,10 @@ spring:
 jwt:
   secret: test-test-test-test-test-test-test-test
   expiration: 3600000
+
+# Disable the tenant-uuid backfill runner in tests so @SpringBootTest doesn't
+# try to call user-service at startup (no S2S deps in unit / slice tests).
+# Integration tests that need the runner can override per-test.
+innbucks:
+  tenant-uuid-backfill:
+    enabled: false
