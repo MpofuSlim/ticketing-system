@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -198,7 +199,17 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     // Backfill support: writes the resolved uuid onto every row whose
     // tenant_id matches AND whose tenant_user_uuid is still null. Idempotent
     // by construction (the WHERE clause restricts to unmigrated rows).
+    //
+    // @Transactional lives HERE (on the repository method) rather than relying
+    // on the caller, because the only caller — TenantUserUuidBackfillRunner —
+    // invokes its own @Transactional helper via self-invocation, which bypasses
+    // Spring's proxy and leaves no active transaction (the @Modifying UPDATE
+    // then throws TransactionRequiredException and crashes startup). Annotating
+    // the repo method puts the transaction boundary on the repository proxy,
+    // where the external call from the runner actually crosses it. Each call is
+    // its own short transaction — correct for an idempotent per-tenant backfill.
     @Modifying
+    @Transactional
     @Query(value = """
         UPDATE events
         SET tenant_user_uuid = :uuid
