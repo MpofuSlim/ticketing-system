@@ -94,6 +94,27 @@ public class JwtUtil {
         return extractUuidClaim(token, "userUuid");
     }
 
+    /** Display-name claims (emitted on CUSTOMER, TEAM_MEMBER and
+     *  EVENT_ORGANIZER tokens by user-service). The scan boundary uses
+     *  these to render a human display name on the rejection toast;
+     *  callers fall back to the JWT subject (email) when absent. */
+    public String extractFirstName(String token) {
+        return extractStringClaim(token, "firstName");
+    }
+
+    public String extractLastName(String token) {
+        return extractStringClaim(token, "lastName");
+    }
+
+    private String extractStringClaim(String token, String name) {
+        try {
+            String raw = getClaims(token).get(name, String.class);
+            return (raw == null || raw.isBlank()) ? null : raw;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     /**
      * Team-scoping identifier. EVENT_ORGANIZER: their own user_uuid;
      * TEAM_MEMBER: the parent organizer's user_uuid. Drives the

@@ -158,6 +158,59 @@ class JwtUtilTest {
     }
 
     @Test
+    void generateToken_emitsDisplayNameClaimsForTeamMemberToken() {
+        // Pins the staff-scanner UX behaviour: a TEAM_MEMBER token MUST carry
+        // firstName + lastName so the booking-service rejection toast can show
+        // "already scanned by Tariro Chikomo" instead of leaking the staff
+        // login email (tariro@harare-arena.co.zw). A regression that drops
+        // TEAM_MEMBER from the emit-set would re-leak the email at the gate.
+        String token = jwtUtil.generateToken("tariro@harare-arena.co.zw",
+                java.util.List.of("TEAM_MEMBER"), java.util.List.of(),
+                0, true, "+263782606983",
+                null, null, "Tariro", null, "Chikomo", 1L, "Zimbabwe",
+                java.util.UUID.randomUUID(), java.util.UUID.randomUUID());
+
+        assertEquals("Tariro", jwtUtil.extractFirstName(token));
+        assertEquals("Chikomo", jwtUtil.extractLastName(token));
+    }
+
+    @Test
+    void generateToken_emitsDisplayNameClaimsForEventOrganizerToken() {
+        // Organizers scan their own gates on small events — same UX
+        // requirement as TEAM_MEMBER.
+        String token = jwtUtil.generateToken("organizer@harare-arena.co.zw",
+                java.util.List.of("EVENT_ORGANIZER"), java.util.List.of(),
+                4, true, "+263782606983",
+                null, null, "Rumbi", null, "Sibanda", 1L, "Zimbabwe",
+                java.util.UUID.randomUUID(), null);
+
+        assertEquals("Rumbi", jwtUtil.extractFirstName(token));
+        assertEquals("Sibanda", jwtUtil.extractLastName(token));
+    }
+
+    @Test
+    void generateToken_stillOmitsDisplayNameForOtherStaffRoles() {
+        // Defence in depth: the emit-set is an allow-list. Adding a new staff
+        // role should NOT silently leak names — re-pin the omission for the
+        // staff roles that intentionally stay nameless (MERCHANT_ADMIN /
+        // SHOP_ADMIN / SHOP_USER / SUPER_ADMIN don't surface a display name
+        // in any FE today and we keep their tokens slim).
+        for (String role : java.util.List.of(
+                "MERCHANT_ADMIN", "SHOP_ADMIN", "SHOP_USER", "SUPER_ADMIN")) {
+            String token = jwtUtil.generateToken("staff@x.co",
+                    java.util.List.of(role), java.util.List.of(),
+                    0, true, null,
+                    null, null, "ShouldBe", null, "Omitted", 1L, null,
+                    java.util.UUID.randomUUID(), null);
+
+            assertNull(jwtUtil.extractFirstName(token),
+                    "firstName must NOT be emitted on " + role + " tokens");
+            assertNull(jwtUtil.extractLastName(token),
+                    "lastName must NOT be emitted on " + role + " tokens");
+        }
+    }
+
+    @Test
     void extractUserUuid_returnsNullForTokensMintedByLegacyOverloads() {
         // Pre-V20 callers (tests, third-party scripts) using the shorter
         // generateToken overloads don't pass UUIDs. The extractor returns
