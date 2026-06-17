@@ -502,6 +502,16 @@ eureka:
     instance-id: ${spring.application.name}:${random.uuid}
 
 management:
+  # The api-gateway has no Spring Security on the classpath, so a public
+  # /actuator/prometheus on the main API port leaked full metrics to the
+  # internet. Split management onto its own port so the actuator endpoints
+  # are reachable ONLY via the management port (default 9090). docker-compose
+  # then publishes the management port to host loopback only (127.0.0.1) — a
+  # Prometheus scraper running on the host or on the same docker network can
+  # reach it; the public internet cannot. Mirrors the Oradian middleware
+  # pattern (management on 127.0.0.1:9090).
+  server:
+    port: ${MANAGEMENT_PORT:9090}
   endpoints:
     web:
       exposure:

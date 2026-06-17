@@ -19,11 +19,13 @@ spring:
     password: ${DB_PASSWORD}
     hikari:
       pool-name: loyalty-service-pool
-      # Sized for ~250 RPS sustained per instance: a typical write does ~10 DB
-      # round trips so 50 connections * (1000ms / 5ms-per-query) = 10k query-
-      # slots/sec gives ~5x headroom over the per-instance steady-state. Bump
-      # via DB_POOL_MAX when scaling instance count + sizing PgBouncer ahead.
-      maximum-pool-size: ${DB_POOL_MAX:50}
+      # Sized to match the rest of the fleet (20). The previous 50 was set on
+      # the assumption of a dedicated Postgres or PgBouncer in front; in the
+      # current shared-Postgres setup (default max_connections=100) loyalty
+      # alone was consuming half the slots, starving the other five services
+      # under load. Bump via DB_POOL_MAX when adding PgBouncer or splitting
+      # the loyalty DB onto its own instance.
+      maximum-pool-size: ${DB_POOL_MAX:20}
       minimum-idle: ${DB_POOL_MIN:10}
       connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:5000}
       idle-timeout: ${DB_IDLE_TIMEOUT_MS:600000}

@@ -21,18 +21,28 @@ eureka:
     # shared network.
     hostname: ${EUREKA_INSTANCE_HOSTNAME:localhost}
   client:
-    # A standalone registry neither registers with itself nor fetches a
-    # registry from a peer. Flip these (and add peer defaultZones) only when
-    # running a multi-node Eureka cluster.
-    register-with-eureka: false
-    fetch-registry: false
+    # Peer-aware by default — register with the peer registry and fetch its
+    # snapshot so a client of EITHER node sees a complete fleet. When run
+    # standalone (EUREKA_PEER_URL unset), defaultZone resolves to self and
+    # there's no peer to register with; setting register-with-eureka=true is
+    # harmless because the registry just registers itself on its own zone.
+    # Override per-node: set EUREKA_PEER_URL to the OTHER node's eureka URL.
+    register-with-eureka: ${EUREKA_REGISTER_WITH_SELF:true}
+    fetch-registry: ${EUREKA_FETCH_REGISTRY:true}
     service-url:
-      defaultZone: http://${eureka.instance.hostname}:${server.port}/eureka/
+      # When EUREKA_PEER_URL is set, defaultZone includes BOTH this node and
+      # the peer (Eureka treats a comma-separated zone as a peer-replication
+      # set). Single-node deployments pass EUREKA_PEER_URL="" and the empty
+      # tail is harmless to Eureka's parser.
+      defaultZone: http://${eureka.instance.hostname}:${server.port}/eureka/${EUREKA_PEER_URL:}
   server:
-    # Dev / small-fleet friendly: evict dead instances promptly instead of
-    # holding stale registrations. In a large prod fleet set this true so a
-    # transient network partition doesn't trigger mass de-registration.
-    enable-self-preservation: ${EUREKA_SELF_PRESERVATION:false}
+    # Self-preservation: when ON, a sudden mass-eviction is suppressed because
+    # Eureka assumes the cause is a network partition (not real instance
+    # death). Defaulted ON now that the registry runs peer-replicated — a
+    # blip between the two nodes must NOT evict the whole fleet from one
+    # node's view. Override to false only for short-lived dev runs where you
+    # want stale registrations evicted promptly.
+    enable-self-preservation: ${EUREKA_SELF_PRESERVATION:true}
 
 management:
   endpoints:
