@@ -137,4 +137,34 @@ class JwtUtilTest {
         String foreign = jwtUtil.generateToken("foreign@example.com", "CUSTOMER", 2, true, "+15551234567");
         assertNull(jwtUtil.extractHomeCountry(foreign));
     }
+
+    @Test
+    void generateToken_roundTripsUserUuidAndOrganizerUuid() {
+        // The two stable cross-service claims downstream services rely on
+        // for caller identity and team scoping. Encoded as strings on the
+        // wire (UUID#toString); extract* reads them back as java.util.UUID.
+        java.util.UUID userUuid = java.util.UUID.randomUUID();
+        java.util.UUID organizerUuid = java.util.UUID.randomUUID();
+
+        String token = jwtUtil.generateToken("organizer@example.com",
+                java.util.List.of("EVENT_ORGANIZER"),
+                java.util.List.of("ticketing"),
+                4, true, "+263771234567",
+                null, null, null, null, null, 7L, "Zimbabwe",
+                userUuid, organizerUuid);
+
+        assertEquals(userUuid, jwtUtil.extractUserUuid(token));
+        assertEquals(organizerUuid, jwtUtil.extractOrganizerUuid(token));
+    }
+
+    @Test
+    void extractUserUuid_returnsNullForTokensMintedByLegacyOverloads() {
+        // Pre-V20 callers (tests, third-party scripts) using the shorter
+        // generateToken overloads don't pass UUIDs. The extractor returns
+        // null rather than throwing so downstream code that's been
+        // migrated can branch on it cleanly.
+        String legacy = jwtUtil.generateToken("u@example.com", "CUSTOMER", 2, true);
+        assertNull(jwtUtil.extractUserUuid(legacy));
+        assertNull(jwtUtil.extractOrganizerUuid(legacy));
+    }
 }

@@ -21,6 +21,11 @@ public class UserResponseDTO {
     @Schema(example = "42")
     private Long id;
 
+    @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789",
+            description = "Stable cross-service identifier for this user. Use this — not `id` — when " +
+                          "referring to this user from other services or storing a reference to them.")
+    private UUID userUuid;
+
     @Schema(example = "Alice")
     private String firstName;
 
@@ -55,6 +60,11 @@ public class UserResponseDTO {
     @Schema(example = "11111111-aaaa-bbbb-cccc-222222222222", nullable = true,
             description = "Loyalty shop the user operates at. Populated for SHOP_ADMIN and SHOP_USER.")
     private UUID loyaltyShopId;
+
+    @Schema(example = "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e", nullable = true,
+            description = "For TEAM_MEMBER rows, the user_uuid of the EVENT_ORGANIZER that created " +
+                          "this team member. Null for every other role.")
+    private UUID createdByOrganizerUuid;
 
     @Schema(example = "true", description = "Whether this is a business account (set at registration). " +
             "Business accounts carry a tenant profile exposed via businessDetails.")
@@ -107,6 +117,7 @@ public class UserResponseDTO {
     public static UserResponseDTO from(User user, TenantProfile profile) {
         return UserResponseDTO.builder()
                 .id(user.getId())
+                .userUuid(user.getUserUuid())
                 .firstName(user.getFirstName())
                 .middleName(user.getMiddleName())
                 .lastName(user.getLastName())
@@ -120,6 +131,7 @@ public class UserResponseDTO {
                 .createdAt(user.getCreatedAt())
                 .loyaltyMerchantId(user.getLoyaltyMerchantId())
                 .loyaltyShopId(user.getLoyaltyShopId())
+                .createdByOrganizerUuid(user.getCreatedByOrganizerUuid())
                 .business(user.isBusiness())
                 .businessDetails(profile == null ? null : BusinessDetails.from(profile))
                 .build();

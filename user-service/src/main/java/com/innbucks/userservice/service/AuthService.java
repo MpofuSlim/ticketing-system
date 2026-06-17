@@ -19,6 +19,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 @Service
@@ -471,9 +472,26 @@ public class AuthService {
             country = DEFAULT_SUPER_ADMIN_COUNTRY;
         }
 
+        // Stable cross-service caller identifier + team-scoping claim.
+        // organizerUuid resolves to:
+        //   - EVENT_ORGANIZER : their own user_uuid (they're the root of their team)
+        //   - TEAM_MEMBER     : the parent organizer's user_uuid (stamped at creation)
+        //   - everyone else   : null (no team scoping applies)
+        // Booking-service uses this to authorize ticket scans without a
+        // per-request lookup back into user-service.
+        UUID organizerUuid;
+        if (user.hasRole(User.Role.EVENT_ORGANIZER)) {
+            organizerUuid = user.getUserUuid();
+        } else if (user.hasRole(User.Role.TEAM_MEMBER)) {
+            organizerUuid = user.getCreatedByOrganizerUuid();
+        } else {
+            organizerUuid = null;
+        }
+
         String newToken = jwtUtil.generateToken(subject, roleNames, new ArrayList<>(microservices),
                 tier, verified, user.getPhoneNumber(), loyaltyMerchantId, loyaltyShopId,
-                firstName, middleName, lastName, user.getTokenVersion(), country);
+                firstName, middleName, lastName, user.getTokenVersion(), country,
+                user.getUserUuid(), organizerUuid);
 
         return AuthResponseDTO.builder()
                 .token(newToken)

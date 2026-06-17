@@ -30,6 +30,17 @@ public interface UserRepository extends JpaRepository<User, Long> {
     List<User> findByLoyaltyShopId(UUID loyaltyShopId);
     List<User> findByLoyaltyMerchantId(UUID loyaltyMerchantId);
 
+    Optional<User> findByUserUuid(UUID userUuid);
+
+    /**
+     * Every team member created by a given organizer. Used by the
+     * organizer's team-management endpoints
+     * ({@code GET /event-organizer/team-members}); the FK column is
+     * populated only on rows whose role is TEAM_MEMBER, so this never
+     * returns non-team-member users.
+     */
+    List<User> findByCreatedByOrganizerUuid(UUID organizerUuid);
+
     /**
      * "System users" projection — every row except those whose roles
      * include the supplied value. Used by the SUPER_ADMIN portal to list

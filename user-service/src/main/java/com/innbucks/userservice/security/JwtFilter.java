@@ -18,7 +18,10 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 @Component
 @RequiredArgsConstructor
@@ -108,6 +111,20 @@ public class JwtFilter extends OncePerRequestFilter {
             }
 
             var auth = new UsernamePasswordAuthenticationToken(email, null, authorities);
+            // Stash the JWT's UUID claims on the authentication's details map
+            // so downstream controllers / services can read them without
+            // re-parsing the token (and without us having to swap the
+            // principal type, which would break every existing `auth.getName()`
+            // call that expects the email). Read via
+            // {@link AuthenticatedCaller#userUuid(Authentication)}.
+            UUID userUuid = jwtUtil.extractUserUuid(token);
+            UUID organizerUuid = jwtUtil.extractOrganizerUuid(token);
+            if (userUuid != null || organizerUuid != null) {
+                Map<String, Object> details = new LinkedHashMap<>();
+                if (userUuid != null) details.put(AuthDetailsKeys.USER_UUID, userUuid);
+                if (organizerUuid != null) details.put(AuthDetailsKeys.ORGANIZER_UUID, organizerUuid);
+                auth.setDetails(details);
+            }
             SecurityContextHolder.getContext().setAuthentication(auth);
         } catch (Exception e) {
             // Defensive: if claim extraction blows up for any reason (corrupt
