@@ -20,8 +20,10 @@ import static org.mockito.Mockito.*;
 
 class UserAdminServiceTest {
 
-    /** Shape of a generated temp password: three hyphen-separated 4-char groups. */
-    private static final String TEMP_PW_SHAPE = "[A-Za-z0-9]{4}-[A-Za-z0-9]{4}-[A-Za-z0-9]{4}";
+    /** Shape of a generated temp password: two hyphen-separated 5-char groups
+     *  (10 password chars + 1 hyphen for readability). Exact alphabet is
+     *  pinned in TemporaryPasswordGeneratorTest. */
+    private static final String TEMP_PW_SHAPE = "[A-Za-z0-9]{5}-[A-Za-z0-9]{5}";
 
     /** Capture the plaintext handed to encode() — it's the generated temp password. */
     private static String capturePassword(PasswordEncoder encoder) {

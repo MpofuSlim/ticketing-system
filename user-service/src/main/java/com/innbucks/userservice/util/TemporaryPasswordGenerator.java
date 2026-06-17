@@ -22,10 +22,13 @@ import java.security.SecureRandom;
  *   <li><b>Unambiguous alphabet</b> — excludes {@code 0/O/o} and {@code 1/l/I}
  *       — because the user keys the value off an SMS and we don't want
  *       "is that an oh or a zero" support tickets.</li>
- *   <li><b>Hyphen-grouped</b> ({@code XXXX-XXXX-XXXX}) for readability when
+ *   <li><b>Hyphen-grouped</b> ({@code XXXXX-XXXXX}) for readability when
  *       typing it in by hand.</li>
- *   <li>12 characters over a 56-symbol alphabet ≈ 70 bits of entropy — far
- *       beyond brute-forcing within the brief change-on-first-login window.</li>
+ *   <li>10 characters over a 56-symbol alphabet ≈ 58 bits of entropy — far
+ *       beyond brute-forcing within the brief change-on-first-login window.
+ *       Length was tightened from 12 to 10 on operator request — short enough
+ *       to be ergonomic when keyed off SMS, still well outside any practical
+ *       guess budget given account-lockout + must-change-on-first-login.</li>
  * </ul>
  *
  * <p>The bootstrap super admin is NOT created through either onboarding flow
@@ -38,13 +41,13 @@ public final class TemporaryPasswordGenerator {
     private static final char[] ALPHABET =
             "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789".toCharArray();
     private static final SecureRandom RNG = new SecureRandom();
-    private static final int GROUPS = 3;
-    private static final int GROUP_LEN = 4;
+    private static final int GROUPS = 2;
+    private static final int GROUP_LEN = 5;
 
     private TemporaryPasswordGenerator() {
     }
 
-    /** @return e.g. {@code "Kp7r-Qn4m-Tx9j"} — a fresh value on every call. */
+    /** @return e.g. {@code "Kp7rQ-n4mTx"} — a fresh 10-character value on every call. */
     public static String generate() {
         StringBuilder sb = new StringBuilder(GROUPS * GROUP_LEN + (GROUPS - 1));
         for (int g = 0; g < GROUPS; g++) {
