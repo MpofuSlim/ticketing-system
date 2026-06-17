@@ -10,6 +10,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -33,10 +34,19 @@ class EventRepositoryPostgresIT extends PostgresIntegrationTestBase {
 
     @Autowired EventRepository eventRepository;
 
+    // Stable per-organizer UUIDs minted once per test class so cross-organizer
+    // assertions stay legible. Replaces the email-shaped "t1"/"t2"/"t-rej"
+    // strings that used to seed the legacy tenantId column.
+    private static final UUID ORGANIZER_T1 = UUID.randomUUID();
+    private static final UUID ORGANIZER_T2 = UUID.randomUUID();
+    private static final UUID ORGANIZER_T_REJ = UUID.randomUUID();
+    private static final UUID ORGANIZER_T_INACT = UUID.randomUUID();
+    private static final UUID ORGANIZER_T_C = UUID.randomUUID();
+
     @Test
     void findAllActive_nullVenue_doesNotTriggerLowerBytea() {
         eventRepository.save(Event.builder()
-                .tenantId("t1")
+                .tenantUserUuid(ORGANIZER_T1)
                 .title("Open Air Concert")
                 .venue("HICC")
                 .country("Zimbabwe")
@@ -64,15 +74,15 @@ class EventRepositoryPostgresIT extends PostgresIntegrationTestBase {
     }
 
     @Test
-    void findByTenantId_nullVenue_doesNotTriggerLowerBytea() {
-        Page<Event> page = eventRepository.findByTenantId("t1", null, null, null, PageRequest.of(0, 10));
+    void findByTenantUserUuid_nullVenue_doesNotTriggerLowerBytea() {
+        Page<Event> page = eventRepository.findByTenantUserUuid(ORGANIZER_T1, null, null, null, PageRequest.of(0, 10));
         assertThat(page.getTotalElements()).isGreaterThanOrEqualTo(0);
     }
 
     @Test
-    void findByTenantIdActiveOnly_nullVenue_doesNotTriggerLowerBytea() {
-        Page<Event> page = eventRepository.findByTenantIdActiveOnly(
-                "t1", null, null, null, null,
+    void findByTenantUserUuidActiveOnly_nullVenue_doesNotTriggerLowerBytea() {
+        Page<Event> page = eventRepository.findByTenantUserUuidActiveOnly(
+                ORGANIZER_T1, null, null, null, null,
                 java.time.LocalDateTime.now(java.time.ZoneOffset.UTC),
                 PageRequest.of(0, 10));
         assertThat(page.getTotalElements()).isGreaterThanOrEqualTo(0);
@@ -81,7 +91,7 @@ class EventRepositoryPostgresIT extends PostgresIntegrationTestBase {
     @Test
     void findAllActive_nonNullVenue_stillMatchesCaseInsensitive() {
         eventRepository.save(Event.builder()
-                .tenantId("t2")
+                .tenantUserUuid(ORGANIZER_T2)
                 .title("Jazz Night")
                 .venue("Reps Theatre")
                 .country("Zimbabwe")
@@ -123,7 +133,7 @@ class EventRepositoryPostgresIT extends PostgresIntegrationTestBase {
         LocalDateTime now = LocalDateTime.now(java.time.ZoneOffset.UTC);
 
         Event past = eventRepository.save(Event.builder()
-                .tenantId("t1")
+                .tenantUserUuid(ORGANIZER_T1)
                 .title("Sunday Show (ended)")
                 .venue("HICC")
                 .country("Zimbabwe")
@@ -137,7 +147,7 @@ class EventRepositoryPostgresIT extends PostgresIntegrationTestBase {
                 .build());
 
         Event future = eventRepository.save(Event.builder()
-                .tenantId("t1")
+                .tenantUserUuid(ORGANIZER_T1)
                 .title("Upcoming Show")
                 .venue("HICC")
                 .country("Zimbabwe")
@@ -164,7 +174,7 @@ class EventRepositoryPostgresIT extends PostgresIntegrationTestBase {
         LocalDateTime now = LocalDateTime.now(java.time.ZoneOffset.UTC);
 
         Event ok = eventRepository.save(Event.builder()
-                .tenantId("t-rej").title("Clean Show").venue("HICC")
+                .tenantUserUuid(ORGANIZER_T_REJ).title("Clean Show").venue("HICC")
                 .country("Zimbabwe").category(EventCategory.CONCERT)
                 .startDateTime(now.plusDays(1)).endDateTime(now.plusDays(1).plusHours(2))
                 .totalCapacity(100).availableTickets(100)
@@ -174,7 +184,7 @@ class EventRepositoryPostgresIT extends PostgresIntegrationTestBase {
         // forces active=false on reject, the query's rejected=false filter must
         // independently keep this out of the public listing.
         Event rejected = eventRepository.save(Event.builder()
-                .tenantId("t-rej").title("Blocked Show").venue("HICC")
+                .tenantUserUuid(ORGANIZER_T_REJ).title("Blocked Show").venue("HICC")
                 .country("Zimbabwe").category(EventCategory.CONCERT)
                 .startDateTime(now.plusDays(1)).endDateTime(now.plusDays(1).plusHours(2))
                 .totalCapacity(100).availableTickets(100)
@@ -192,21 +202,21 @@ class EventRepositoryPostgresIT extends PostgresIntegrationTestBase {
         LocalDateTime now = LocalDateTime.now(java.time.ZoneOffset.UTC);
 
         Event draft = eventRepository.save(Event.builder()
-                .tenantId("t-inact").title("Draft Show").venue("Reps")
+                .tenantUserUuid(ORGANIZER_T_INACT).title("Draft Show").venue("Reps")
                 .country("Zimbabwe").category(EventCategory.CONCERT)
                 .startDateTime(now.plusDays(3)).endDateTime(now.plusDays(3).plusHours(2))
                 .totalCapacity(50).availableTickets(50)
                 .active(false).rejected(false).deleted(false).build());
 
         Event rejected = eventRepository.save(Event.builder()
-                .tenantId("t-inact").title("Rejected Show").venue("Reps")
+                .tenantUserUuid(ORGANIZER_T_INACT).title("Rejected Show").venue("Reps")
                 .country("Zimbabwe").category(EventCategory.COMEDY)
                 .startDateTime(now.plusDays(4)).endDateTime(now.plusDays(4).plusHours(2))
                 .totalCapacity(50).availableTickets(50)
                 .active(false).rejected(true).deleted(false).build());
 
         Event live = eventRepository.save(Event.builder()
-                .tenantId("t-inact").title("Live Show").venue("Reps")
+                .tenantUserUuid(ORGANIZER_T_INACT).title("Live Show").venue("Reps")
                 .country("Zimbabwe").category(EventCategory.CONCERT)
                 .startDateTime(now.plusDays(5)).endDateTime(now.plusDays(5).plusHours(2))
                 .totalCapacity(50).availableTickets(50)
@@ -224,14 +234,14 @@ class EventRepositoryPostgresIT extends PostgresIntegrationTestBase {
         LocalDateTime now = LocalDateTime.now(java.time.ZoneOffset.UTC);
 
         Event ok = eventRepository.save(Event.builder()
-                .tenantId("t-c").title("KE Clean").venue("KICC")
+                .tenantUserUuid(ORGANIZER_T_C).title("KE Clean").venue("KICC")
                 .country("Kenya").category(EventCategory.CONCERT)
                 .startDateTime(now.plusDays(2)).endDateTime(now.plusDays(2).plusHours(2))
                 .totalCapacity(100).availableTickets(100)
                 .active(true).rejected(false).deleted(false).build());
 
         Event rejected = eventRepository.save(Event.builder()
-                .tenantId("t-c").title("KE Blocked").venue("KICC")
+                .tenantUserUuid(ORGANIZER_T_C).title("KE Blocked").venue("KICC")
                 .country("Kenya").category(EventCategory.CONCERT)
                 .startDateTime(now.plusDays(2)).endDateTime(now.plusDays(2).plusHours(2))
                 .totalCapacity(100).availableTickets(100)

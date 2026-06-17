@@ -746,7 +746,8 @@ class BookingServiceTest {
                 .priceAtBooking(new BigDecimal("50.00")).build();
         when(itemRepo.findByCategoryIdWithBooking(categoryId)).thenReturn(List.of(item1, item2));
 
-        List<CategoryBookingDTO> result = service.getBookingsByCategory(categoryId, "admin@test", true);
+        // Admin path — second arg is the requester's organizerUuid, irrelevant when isAdmin=true.
+        List<CategoryBookingDTO> result = service.getBookingsByCategory(categoryId, UUID.randomUUID(), true);
 
         assertEquals(2, result.size());
         // Booking-level fields surface on every row.
@@ -767,7 +768,7 @@ class BookingServiceTest {
         UUID categoryId = UUID.randomUUID();
         when(itemRepo.findByCategoryIdWithBooking(categoryId)).thenReturn(List.of());
 
-        List<CategoryBookingDTO> result = service.getBookingsByCategory(categoryId, "admin@test", true);
+        List<CategoryBookingDTO> result = service.getBookingsByCategory(categoryId, UUID.randomUUID(), true);
 
         assertNotNull(result);
         assertTrue(result.isEmpty());

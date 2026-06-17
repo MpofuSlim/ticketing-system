@@ -101,7 +101,7 @@ public class EventController {
                                           {
                                             "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                             "eventNo": null,
-                                            "tenantId": "tenant-001",
+                                            "tenantUserUuid": "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e",
                                             "title": "Summer Concert",
                                             "description": "Open-air summer concert featuring local headliners.",
                                             "venue": "Harare Gardens",
@@ -175,10 +175,11 @@ public class EventController {
         LocalDateTime toDateTime = to == null ? null : to.atTime(LocalTime.MAX);
         Page<EventResponseDTO> result;
         if (isOrganizerOnly(authentication)) {
-            String tenantId = authentication.getName();
-            log.debug("Listing events (organizer scope) tenantId={} from={} to={} venue={} page={} size={} sortBy={}",
-                    tenantId, from, to, venue, page, size, sortBy);
-            result = eventService.getMyEvents(tenantId, fromDateTime, toDateTime, venue, page, size, sortBy);
+            UUID organizerUuid = com.innbucks.eventservice.security.AuthenticatedCaller
+                    .organizerUuid(authentication);
+            log.debug("Listing events (organizer scope) organizerUuid={} from={} to={} venue={} page={} size={} sortBy={}",
+                    organizerUuid, from, to, venue, page, size, sortBy);
+            result = eventService.getMyEvents(organizerUuid, fromDateTime, toDateTime, venue, page, size, sortBy);
         } else {
             log.debug("Listing events (public scope) from={} to={} venue={} page={} size={} sortBy={}",
                     from, to, venue, page, size, sortBy);
@@ -194,16 +195,17 @@ public class EventController {
             summary = "List the authenticated organizer's own events",
             description = """
                     Returns a paginated list of **non-deleted** events owned by the
-                    authenticated principal (matched by `tenantId == Authentication#getName()`).
-                    Includes both active=true and active=false events.
+                    authenticated principal (matched on the caller's `organizerUuid`
+                    JWT claim against each event's `tenantUserUuid`). Includes both
+                    active=true and active=false events.
 
                     Filters and sorting follow the same rules as `GET /events`.
 
                     Use this instead of `GET /events` when the caller wants to see
                     only their own events. SUPER_ADMIN can also call this — they
                     will see only events they personally created (their own
-                    Authentication#getName()), since this endpoint is scoped by
-                    the principal. To see *every* tenant's events, SUPER_ADMIN
+                    `organizerUuid`), since this endpoint is scoped by the
+                    principal. To see *every* organizer's events, SUPER_ADMIN
                     should call `GET /events`.
                     """
     )
@@ -234,21 +236,25 @@ public class EventController {
             @Parameter(description = "Sort field name (must match an entity property), ascending")
             @RequestParam(defaultValue = "startDateTime") String sortBy
     ) {
-        String tenantId = authentication.getName();
         LocalDateTime fromDateTime = from == null ? null : from.atStartOfDay();
         LocalDateTime toDateTime = to == null ? null : to.atTime(LocalTime.MAX);
-        // Prefer the stable organizerUuid claim when the JWT carries it —
-        // that's the right scope for both EVENT_ORGANIZERs (their own uuid)
-        // and TEAM_MEMBERs (their parent organizer's uuid). Fall back to
-        // the legacy email-based query for pre-V20 tokens.
-        java.util.UUID organizerUuid = com.innbucks.eventservice.security.AuthenticatedCaller
+        // Scope by the stable organizerUuid JWT claim — the right scope for
+        // both EVENT_ORGANIZERs (their own uuid) and TEAM_MEMBERs (their
+        // parent organizer's uuid). A missing claim (legacy pre-V20 token)
+        // gets an empty page — re-issuing the token via /auth/refresh fixes
+        // it, safer than the previous email fallback.
+        UUID organizerUuid = com.innbucks.eventservice.security.AuthenticatedCaller
                 .organizerUuid(authentication);
         boolean isTeamMember = authentication.getAuthorities().stream()
                 .anyMatch(a -> "ROLE_TEAM_MEMBER".equals(a.getAuthority()));
-        log.info("GET /events/my tenantId={} organizerUuid={} teamMember={} from={} to={} venue={} page={} size={}",
-                tenantId, organizerUuid, isTeamMember, from, to, venue, page, size);
+        log.info("GET /events/my organizerUuid={} teamMember={} from={} to={} venue={} page={} size={}",
+                organizerUuid, isTeamMember, from, to, venue, page, size);
+        if (organizerUuid == null) {
+            return ResponseEntity.ok(ApiResult.ok("Events retrieved successfully",
+                    Page.empty(org.springframework.data.domain.PageRequest.of(page, size))));
+        }
         Page<EventResponseDTO> result;
-        if (isTeamMember && organizerUuid != null) {
+        if (isTeamMember) {
             // Deny-by-default: a TEAM_MEMBER sees ONLY the events their
             // organizer has explicitly assigned to them (keyed on the team
             // member's OWN userUuid; organizerUuid filters as defence-in-
@@ -256,54 +262,52 @@ public class EventController {
             // immediately (no re-login required). On user-service outage the
             // gateway returns an empty list, which means no events — safer
             // than leaking the organizer-wide set.
-            java.util.UUID teamMemberUuid = com.innbucks.eventservice.security
+            UUID teamMemberUuid = com.innbucks.eventservice.security
                     .AuthenticatedCaller.userUuid(authentication);
-            java.util.List<java.util.UUID> assigned = teamMemberUuid == null
+            java.util.List<UUID> assigned = teamMemberUuid == null
                     ? java.util.List.of()
                     : userUuidLookupGateway.assignedEventIdsFor(teamMemberUuid);
             result = eventService.getMyAssignedEvents(
                     organizerUuid, assigned, fromDateTime, toDateTime, venue, page, size, sortBy);
-        } else if (organizerUuid != null) {
-            // EVENT_ORGANIZER (or SUPER_ADMIN-as-organizer): full organizer-wide view.
-            result = eventService.getMyEventsByOrganizerUuid(
-                    organizerUuid, fromDateTime, toDateTime, venue, page, size, sortBy);
         } else {
+            // EVENT_ORGANIZER (or SUPER_ADMIN-as-organizer): full organizer-wide view.
             result = eventService.getMyEvents(
-                    tenantId, fromDateTime, toDateTime, venue, page, size, sortBy);
+                    organizerUuid, fromDateTime, toDateTime, venue, page, size, sortBy);
         }
         return ResponseEntity.ok(ApiResult.ok("Events retrieved successfully", result));
     }
 
-    @GetMapping("/by-tenant")
+    @GetMapping("/by-organizer")
     @PreAuthorize("hasRole('SUPER_ADMIN')")
     @Operation(
-            summary = "List a specific tenant's events (SUPER_ADMIN only)",
+            summary = "List a specific organizer's events (SUPER_ADMIN only)",
             description = """
                     Returns a paginated list of **non-deleted** events owned by the
-                    supplied `tenantId` (the organizer's identifier), including both
-                    `active=true` and `active=false` events.
+                    supplied `organizerUuid` (the organizer's stable cross-service id —
+                    the same uuid carried in the `tenantUserUuid` field on every event),
+                    including both `active=true` and `active=false` events.
 
                     Restricted to **SUPER_ADMIN**. This is the platform-wide tool for
                     inspecting *any* organizer's events by id — unlike `GET /events/my`,
-                    which is always scoped to the caller's own `tenantId`.
+                    which is always scoped to the caller's own JWT.
 
                     Filters and sorting follow the same rules as `GET /events`:
                     - **from/to** are calendar dates (`yyyy-MM-dd`), mapped to
                       `[from start-of-day .. to end-of-day]`.
                     - **venue** matches a case-insensitive substring.
 
-                    A `tenantId` with no events (or an unknown one) returns **200** with
-                    an empty `content` array — not a 404.
+                    An `organizerUuid` with no events (or an unknown one) returns **200**
+                    with an empty `content` array — not a 404.
                     """
     )
     @ApiResponses({
             @ApiResponse(
                     responseCode = "200",
-                    description = "Paged list of the tenant's events (may be empty)",
+                    description = "Paged list of the organizer's events (may be empty)",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = EventResponseDTO.class),
-                            examples = @ExampleObject(name = "Tenant events page", value = """
+                            examples = @ExampleObject(name = "Organizer events page", value = """
                                     {
                                       "code": "200 OK",
                                       "message": "Events retrieved successfully",
@@ -312,7 +316,7 @@ public class EventController {
                                           {
                                             "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                             "eventNo": null,
-                                            "tenantId": "tenant-001",
+                                            "tenantUserUuid": "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e",
                                             "title": "Summer Concert",
                                             "description": "Open-air summer concert featuring local headliners.",
                                             "venue": "Harare Gardens",
@@ -349,14 +353,14 @@ public class EventController {
                                     """)
                     )
             ),
-            @ApiResponse(responseCode = "400", description = "Missing or blank tenantId",
-                    content = @Content(schema = @Schema(example = "{\"code\":\"400 BAD_REQUEST\",\"message\":\"tenantId is required\",\"data\":null}"))),
+            @ApiResponse(responseCode = "400", description = "Missing organizerUuid",
+                    content = @Content(schema = @Schema(example = "{\"code\":\"400 BAD_REQUEST\",\"message\":\"organizerUuid is required\",\"data\":null}"))),
             @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @ApiResponse(responseCode = "403", description = "Authenticated but lacks SUPER_ADMIN")
     })
-    public ResponseEntity<ApiResult<Page<EventResponseDTO>>> getEventsByTenant(
-            @Parameter(description = "Owning organizer id (tenantId) whose events to list", required = true)
-            @RequestParam String tenantId,
+    public ResponseEntity<ApiResult<Page<EventResponseDTO>>> getEventsByOrganizer(
+            @Parameter(description = "Owning organizer's user_uuid whose events to list", required = true)
+            @RequestParam UUID organizerUuid,
 
             @Parameter(description = "Inclusive lower bound date for events (maps to start of day)")
             @RequestParam(required = false)
@@ -378,19 +382,20 @@ public class EventController {
             @Parameter(description = "Sort field name (must match an entity property), ascending")
             @RequestParam(defaultValue = "startDateTime") String sortBy
     ) {
-        if (tenantId == null || tenantId.isBlank()) {
+        if (organizerUuid == null) {
             return ResponseEntity.badRequest()
-                    .body(ApiResult.error(HttpStatus.BAD_REQUEST, "tenantId is required"));
+                    .body(ApiResult.error(HttpStatus.BAD_REQUEST, "organizerUuid is required"));
         }
         LocalDateTime fromDateTime = from == null ? null : from.atStartOfDay();
         LocalDateTime toDateTime = to == null ? null : to.atTime(LocalTime.MAX);
-        log.info("GET /events/by-tenant tenantId={} from={} to={} venue={} page={} size={}",
-                tenantId, from, to, venue, page, size);
-        // Reuses the same tenant-scoped query as GET /events/my, but with an
-        // explicitly supplied tenantId instead of the caller's own — gated to
-        // SUPER_ADMIN so only platform admins can list another tenant's events.
+        log.info("GET /events/by-organizer organizerUuid={} from={} to={} venue={} page={} size={}",
+                organizerUuid, from, to, venue, page, size);
+        // Reuses the same organizer-scoped query as GET /events/my, but with
+        // an explicitly supplied organizerUuid instead of the caller's own —
+        // gated to SUPER_ADMIN so only platform admins can list another
+        // organizer's events.
         Page<EventResponseDTO> result = eventService.getMyEvents(
-                tenantId, fromDateTime, toDateTime, venue, page, size, sortBy);
+                organizerUuid, fromDateTime, toDateTime, venue, page, size, sortBy);
         return ResponseEntity.ok(ApiResult.ok("Events retrieved successfully", result));
     }
 
@@ -425,7 +430,7 @@ public class EventController {
                                           {
                                             "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                             "eventNo": null,
-                                            "tenantId": "tenant-001",
+                                            "tenantUserUuid": "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e",
                                             "title": "Summer Concert",
                                             "description": "Open-air summer concert featuring local headliners.",
                                             "venue": "Harare Gardens",
@@ -505,10 +510,11 @@ public class EventController {
         LocalDateTime toDateTime = to == null ? null : to.atTime(LocalTime.MAX);
         Page<EventResponseDTO> result;
         if (isOrganizerOnly(authentication)) {
-            String tenantId = authentication.getName();
-            log.debug("Listing active events (organizer scope) tenantId={} from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
-                    tenantId, from, to, venue, country, category, page, size, sortBy);
-            result = eventService.getMyActiveEvents(tenantId, fromDateTime, toDateTime, venue, country, category, page, size, sortBy);
+            UUID organizerUuid = com.innbucks.eventservice.security.AuthenticatedCaller
+                    .organizerUuid(authentication);
+            log.debug("Listing active events (organizer scope) organizerUuid={} from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
+                    organizerUuid, from, to, venue, country, category, page, size, sortBy);
+            result = eventService.getMyActiveEvents(organizerUuid, fromDateTime, toDateTime, venue, country, category, page, size, sortBy);
         } else {
             log.debug("Listing active events (public scope) from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
                     from, to, venue, country, category, page, size, sortBy);
@@ -557,7 +563,7 @@ public class EventController {
                                           {
                                             "eventId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
                                             "eventNo": null,
-                                            "tenantId": "tenant-001",
+                                            "tenantUserUuid": "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e",
                                             "title": "Winter Gala (draft)",
                                             "description": "Not yet published by the organizer.",
                                             "venue": "Rainbow Towers",
@@ -576,7 +582,7 @@ public class EventController {
                                           {
                                             "eventId": "9b2ffff0-3d0a-4b1e-8a2e-2f9b0c5d1a44",
                                             "eventNo": null,
-                                            "tenantId": "tenant-007",
+                                            "tenantUserUuid": "5fc4c9d2-7b4f-4d12-a1c3-9e2f0bda1d3e",
                                             "title": "Unverified Pop-Up",
                                             "description": "Rejected by an administrator during review.",
                                             "venue": "Unknown Hall",
@@ -647,10 +653,11 @@ public class EventController {
         LocalDateTime toDateTime = to == null ? null : to.atTime(LocalTime.MAX);
         Page<EventResponseDTO> result;
         if (isOrganizerOnly(authentication)) {
-            String tenantId = authentication.getName();
-            log.debug("Listing inactive events (organizer scope) tenantId={} from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
-                    tenantId, from, to, venue, country, category, page, size, sortBy);
-            result = eventService.getMyInactiveEvents(tenantId, fromDateTime, toDateTime, venue, country, category, page, size, sortBy);
+            UUID organizerUuid = com.innbucks.eventservice.security.AuthenticatedCaller
+                    .organizerUuid(authentication);
+            log.debug("Listing inactive events (organizer scope) organizerUuid={} from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
+                    organizerUuid, from, to, venue, country, category, page, size, sortBy);
+            result = eventService.getMyInactiveEvents(organizerUuid, fromDateTime, toDateTime, venue, country, category, page, size, sortBy);
         } else {
             log.debug("Listing inactive events (public scope) from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
                     from, to, venue, country, category, page, size, sortBy);
@@ -685,7 +692,7 @@ public class EventController {
                                       "data": {
                                         "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                         "eventNo": null,
-                                        "tenantId": "tenant-001",
+                                        "tenantUserUuid": "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e",
                                         "title": "Summer Concert",
                                         "description": "Open-air summer concert featuring local headliners.",
                                         "venue": "Harare Gardens",
@@ -758,7 +765,7 @@ public class EventController {
                                           {
                                             "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                             "eventNo": 1,
-                                            "tenantId": "tenant-001",
+                                            "tenantUserUuid": "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e",
                                             "title": "Summer Concert",
                                             "description": "Open-air summer concert featuring local headliners.",
                                             "venue": "Harare Gardens",
@@ -844,7 +851,7 @@ public class EventController {
                                           {
                                             "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                             "eventNo": null,
-                                            "tenantId": "tenant-001",
+                                            "tenantUserUuid": "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e",
                                             "title": "Summer Concert",
                                             "description": "Open-air summer concert featuring local headliners.",
                                             "venue": "Harare Gardens",
@@ -912,9 +919,9 @@ public class EventController {
             description = """
                     Creates a new event for the authenticated **EVENT_ORGANIZER** or **ADMIN**.
 
-                    The authenticated principal (`Authentication#getName()`) becomes the owning `tenantId`,
-                    and the event's `country` is taken from the caller's JWT `country` claim — it is not
-                    part of the request body.
+                    The authenticated principal's `organizerUuid` JWT claim becomes the owning
+                    `tenantUserUuid`, and the event's `country` is taken from the caller's JWT
+                    `country` claim — neither is part of the request body.
 
                     The request is `multipart/form-data` with two parts:
                     - `event` — JSON body matching `CreateEventRequest` (title, description, venue, category, location, startDateTime, endDateTime, totalCapacity).
@@ -950,7 +957,7 @@ public class EventController {
                                       "data": {
                                         "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                         "eventNo": null,
-                                        "tenantId": "tenant-001",
+                                        "tenantUserUuid": "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e",
                                         "title": "Summer Concert",
                                         "description": "Open-air summer concert featuring local headliners.",
                                         "venue": "Harare Gardens",
@@ -980,18 +987,16 @@ public class EventController {
             @RequestAttribute(name = JwtFilter.COUNTRY_ATTRIBUTE, required = false) String country,
             Authentication authentication
     ) {
-        String tenantId = authentication.getName();
         // For an EVENT_ORGANIZER, organizerUuid equals their own userUuid —
-        // the JWT mint path in user-service computes it that way. We dual-
-        // write this onto the row so every new event has the stable
-        // identifier from day one (the email-based tenantId stays too,
-        // until the FE migrates off it).
-        java.util.UUID tenantUserUuid = com.innbucks.eventservice.security.AuthenticatedCaller
+        // the JWT mint path in user-service computes it that way. This is the
+        // sole owning-organizer pointer now (the legacy email-as-tenantId
+        // column was deprecated in V7).
+        UUID tenantUserUuid = com.innbucks.eventservice.security.AuthenticatedCaller
                 .organizerUuid(authentication);
-        log.info("Creating event tenantId={} tenantUserUuid={} country={} title={} venue={} hasBanner={}",
-                tenantId, tenantUserUuid, country, request.getTitle(), request.getVenue(),
+        log.info("Creating event tenantUserUuid={} country={} title={} venue={} hasBanner={}",
+                tenantUserUuid, country, request.getTitle(), request.getVenue(),
                 eventBanner != null && !eventBanner.isEmpty());
-        EventResponseDTO created = eventService.createEvent(tenantId, tenantUserUuid, country, request, eventBanner);
+        EventResponseDTO created = eventService.createEvent(tenantUserUuid, country, request, eventBanner);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Event created successfully", created));
     }
@@ -1058,7 +1063,7 @@ public class EventController {
                                       "data": {
                                         "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                         "eventNo": null,
-                                        "tenantId": "tenant-001",
+                                        "tenantUserUuid": "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e",
                                         "title": "Summer Concert (Updated)",
                                         "description": "Open-air summer concert featuring local headliners.",
                                         "venue": "Harare Gardens",
@@ -1096,10 +1101,11 @@ public class EventController {
             @Valid @RequestBody UpdateEventRequestDTO request,
             Authentication authentication
     ) {
-        String tenantId = authentication.getName();
+        UUID tenantUserUuid = com.innbucks.eventservice.security.AuthenticatedCaller
+                .organizerUuid(authentication);
         String role = getCurrentRole(authentication);
-        log.info("Updating event eventId={} tenantId={} request={}", id, tenantId, request);
-        EventResponseDTO updated = eventService.updateEvent(tenantId, role, id, request);
+        log.info("Updating event eventId={} tenantUserUuid={} request={}", id, tenantUserUuid, request);
+        EventResponseDTO updated = eventService.updateEvent(tenantUserUuid, role, id, request);
         return ResponseEntity.ok(ApiResult.ok("Event updated successfully", updated));
     }
 
@@ -1130,7 +1136,7 @@ public class EventController {
                                       "data": {
                                         "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                         "eventNo": null,
-                                        "tenantId": "tenant-001",
+                                        "tenantUserUuid": "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e",
                                         "title": "Summer Concert",
                                         "description": "Open-air summer concert featuring local headliners.",
                                         "venue": "Harare Gardens",
@@ -1158,10 +1164,11 @@ public class EventController {
             @Parameter(description = "Event UUID") @PathVariable UUID id,
             Authentication authentication
     ) {
-        String tenantId = authentication.getName();
+        UUID tenantUserUuid = com.innbucks.eventservice.security.AuthenticatedCaller
+                .organizerUuid(authentication);
         String role = getCurrentRole(authentication);
-        log.info("Activating event eventId={} tenantId={}", id, tenantId);
-        EventResponseDTO activated = eventService.activateEvent(tenantId, role, id);
+        log.info("Activating event eventId={} tenantUserUuid={}", id, tenantUserUuid);
+        EventResponseDTO activated = eventService.activateEvent(tenantUserUuid, role, id);
         return ResponseEntity.ok(ApiResult.ok("Event activated successfully", activated));
     }
 
@@ -1200,7 +1207,7 @@ public class EventController {
                                       "data": {
                                         "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                         "eventNo": null,
-                                        "tenantId": "tenant-001",
+                                        "tenantUserUuid": "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e",
                                         "title": "Summer Concert",
                                         "description": "Open-air summer concert featuring local headliners.",
                                         "venue": "Harare Gardens",
@@ -1230,10 +1237,11 @@ public class EventController {
             @Parameter(description = "Event UUID") @PathVariable UUID id,
             Authentication authentication
     ) {
-        String tenantId = authentication.getName();
+        UUID tenantUserUuid = com.innbucks.eventservice.security.AuthenticatedCaller
+                .organizerUuid(authentication);
         String role = getCurrentRole(authentication);
-        log.info("Deactivating event eventId={} tenantId={}", id, tenantId);
-        EventResponseDTO deactivated = eventService.deactivateEvent(tenantId, role, id);
+        log.info("Deactivating event eventId={} tenantUserUuid={}", id, tenantUserUuid);
+        EventResponseDTO deactivated = eventService.deactivateEvent(tenantUserUuid, role, id);
         return ResponseEntity.ok(ApiResult.ok("Event deactivated successfully", deactivated));
     }
 
@@ -1267,7 +1275,7 @@ public class EventController {
                                       "data": {
                                         "eventId": "9b2ffff0-3d0a-4b1e-8a2e-2f9b0c5d1a44",
                                         "eventNo": null,
-                                        "tenantId": "tenant-007",
+                                        "tenantUserUuid": "5fc4c9d2-7b4f-4d12-a1c3-9e2f0bda1d3e",
                                         "title": "Unverified Pop-Up",
                                         "description": "Rejected by an administrator during review.",
                                         "venue": "Unknown Hall",
@@ -1329,7 +1337,7 @@ public class EventController {
                                       "data": {
                                         "eventId": "9b2ffff0-3d0a-4b1e-8a2e-2f9b0c5d1a44",
                                         "eventNo": null,
-                                        "tenantId": "tenant-007",
+                                        "tenantUserUuid": "5fc4c9d2-7b4f-4d12-a1c3-9e2f0bda1d3e",
                                         "title": "Unverified Pop-Up",
                                         "description": "Cleared after a second review.",
                                         "venue": "Unknown Hall",
@@ -1399,10 +1407,11 @@ public class EventController {
             @Parameter(description = "Event UUID") @PathVariable UUID id,
             Authentication authentication
     ) {
-        String tenantId = authentication.getName();
+        UUID tenantUserUuid = com.innbucks.eventservice.security.AuthenticatedCaller
+                .organizerUuid(authentication);
         String role = getCurrentRole(authentication);
-        log.info("Deleting event eventId={} tenantId={}", id, tenantId);
-        eventService.deleteEvent(tenantId, role, id);
+        log.info("Deleting event eventId={} tenantUserUuid={}", id, tenantUserUuid);
+        eventService.deleteEvent(tenantUserUuid, role, id);
         return ResponseEntity.ok(ApiResult.ok("Event deleted successfully", null));
     }
 
