@@ -59,7 +59,9 @@ class TicketScanServiceTest {
     @BeforeEach
     void setUp() {
         ReflectionTestUtils.setField(service, "internalToken", "test-internal-token");
-        ReflectionTestUtils.setField(service, "assignmentCheckFailOpen", true);
+        // Baseline mirrors the production default: fail CLOSED. The two
+        // assignment-service-down cases set this field explicitly per-test.
+        ReflectionTestUtils.setField(service, "assignmentCheckFailOpen", false);
         // Default: assignment check says "allowed" so the inherited cases that
         // authenticate as a bare team member still reach their intended status.
         // lenient() because the early-return cases (not-found, etc.) never call it.
