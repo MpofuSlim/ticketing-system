@@ -1,7 +1,6 @@
 package com.innbucks.userservice.controller;
 
 import com.innbucks.userservice.dto.ApiResult;
-import com.innbucks.userservice.dto.EmailToUserUuidDTO;
 import com.innbucks.userservice.dto.TenantLookupDTO;
 import com.innbucks.userservice.entity.TenantProfile;
 import com.innbucks.userservice.entity.User;
@@ -20,13 +19,16 @@ import java.security.MessageDigest;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
  * Service-to-service lookup consumed by event-service to attach an event's
- * owning organizer's business details (businessName / businessAddress / businessEmail) to event
- * responses. Gated by the shared {@code X-Internal-Token} header rather than a
- * user JWT — the caller is another backend, not a logged-in user.
+ * owning organizer's business details (businessName / businessAddress /
+ * businessEmail) to event responses. Keyed by {@code userUuid} — the stable
+ * cross-service organizer identifier (was email until the email-as-tenant-id
+ * pattern was removed). Gated by the shared {@code X-Internal-Token} header
+ * rather than a user JWT — the caller is another backend, not a logged-in user.
  *
  * <p>Class-level {@link Hidden} keeps this out of the public Swagger UI; the
  * gateway additionally blocks {@code /users/internal/**} at the edge via the
@@ -50,79 +52,47 @@ public class InternalTenantLookupController {
         this.expectedToken = expectedToken;
     }
 
-    @PostMapping("/tenants/lookup")
-    @Operation(summary = "(S2S) Resolve organizer business details by tenant id",
-            description = "Given a list of tenantIds (account emails), returns each one's business " +
-                          "name, email and address. Tenants with no business profile are simply " +
-                          "absent from the result. Used by event-service to enrich event responses.")
-    public ResponseEntity<?> lookup(@RequestHeader(value = "X-Internal-Token", required = false) String token,
-                                    @RequestBody LookupRequest request) {
+    @PostMapping("/tenants/lookup-by-uuid")
+    @Operation(summary = "(S2S) Resolve organizer business details by user_uuid",
+            description = "Given a list of user_uuids, returns each organizer's business name, " +
+                          "email and address. Organizers with no business profile are simply absent " +
+                          "from the result. Used by event-service to enrich event responses.")
+    public ResponseEntity<?> lookupByUuid(@RequestHeader(value = "X-Internal-Token", required = false) String token,
+                                          @RequestBody UuidLookupRequest request) {
         if (!authorized(token)) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
-        List<String> tenantIds = request == null ? null : request.tenantIds();
-        if (tenantIds == null || tenantIds.isEmpty()) {
+        List<UUID> userUuids = request == null ? null : request.userUuids();
+        if (userUuids == null || userUuids.isEmpty()) {
             return ResponseEntity.ok(ApiResult.ok("No tenants requested", Collections.emptyList()));
         }
 
-        // tenantId == account email (the JWT subject). Resolve users, then their
-        // tenant profiles in one batch each (no N+1).
-        List<User> users = userRepository.findByEmailIn(tenantIds);
+        List<User> users = userRepository.findByUserUuidIn(userUuids);
         if (users.isEmpty()) {
             return ResponseEntity.ok(ApiResult.ok("Tenants resolved", Collections.emptyList()));
         }
-        Map<Long, String> emailByUserId = users.stream()
-                .collect(Collectors.toMap(User::getId, User::getEmail));
+        // user.id is the local PK that TenantProfile FKs against; user_uuid is
+        // the cross-service identifier we key the response on.
+        Map<Long, UUID> uuidByUserId = users.stream()
+                .collect(Collectors.toMap(User::getId, User::getUserUuid));
 
-        List<TenantProfile> profiles = tenantProfileRepository.findByUserIdIn(emailByUserId.keySet());
+        List<TenantProfile> profiles = tenantProfileRepository.findByUserIdIn(uuidByUserId.keySet());
         List<TenantLookupDTO> body = profiles.stream()
                 .map(p -> TenantLookupDTO.builder()
-                        .tenantId(emailByUserId.get(p.getUser().getId()))
+                        .userUuid(uuidByUserId.get(p.getUser().getId()))
                         .businessName(p.getBusinessName())
                         .businessAddress(p.getBusinessAddress())
                         .businessEmail(p.getBusinessEmail())
                         .build())
-                .filter(dto -> dto.getTenantId() != null)
+                .filter(dto -> dto.getUserUuid() != null)
                 .collect(Collectors.toList());
 
-        log.debug("Internal tenant lookup requested={} resolved={}", tenantIds.size(), body.size());
+        log.debug("Internal tenant lookup-by-uuid requested={} resolved={}", userUuids.size(), body.size());
         return ResponseEntity.ok(ApiResult.ok("Tenants resolved", body));
     }
 
-    @PostMapping("/users/by-email")
-    @Operation(summary = "(S2S) Resolve user_uuid by account email",
-            description = "Given a list of emails, returns each one's stable user_uuid. Emails that " +
-                          "don't resolve to a user are simply absent from the result. Used by event-" +
-                          "service to backfill events.tenant_user_uuid for rows that were created " +
-                          "before the V6 migration landed (their tenant_id is still the email string).")
-    public ResponseEntity<?> resolveUuidsByEmail(
-            @RequestHeader(value = "X-Internal-Token", required = false) String token,
-            @RequestBody EmailLookupRequest request) {
-        if (!authorized(token)) {
-            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
-        }
-        List<String> emails = request == null ? null : request.emails();
-        if (emails == null || emails.isEmpty()) {
-            return ResponseEntity.ok(ApiResult.ok("No emails requested", Collections.emptyList()));
-        }
-
-        List<User> users = userRepository.findByEmailIn(emails);
-        List<EmailToUserUuidDTO> body = users.stream()
-                .filter(u -> u.getEmail() != null && u.getUserUuid() != null)
-                .map(u -> EmailToUserUuidDTO.builder()
-                        .email(u.getEmail())
-                        .userUuid(u.getUserUuid())
-                        .build())
-                .toList();
-        log.debug("Internal email->uuid lookup requested={} resolved={}", emails.size(), body.size());
-        return ResponseEntity.ok(ApiResult.ok("UUIDs resolved", body));
-    }
-
-    /** Request body: {@code {"tenantIds": ["alice@x.co", "bob@y.co"]}}. */
-    public record LookupRequest(List<String> tenantIds) {}
-
-    /** Request body: {@code {"emails": ["alice@x.co", "bob@y.co"]}}. */
-    public record EmailLookupRequest(List<String> emails) {}
+    /** Request body: {@code {"userUuids": ["8b3a9c0e-...", "5fc4c9d2-..."]}}. */
+    public record UuidLookupRequest(List<UUID> userUuids) {}
 
     private boolean authorized(String presented) {
         if (expectedToken == null || expectedToken.isBlank()) {
