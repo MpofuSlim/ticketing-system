@@ -4,6 +4,7 @@ import com.innbucks.userservice.client.EmailNotificationClient;
 import com.innbucks.userservice.client.SmsNotificationClient;
 import com.innbucks.userservice.dto.CreateTeamMemberDTO;
 import com.innbucks.userservice.dto.UserResponseDTO;
+import com.innbucks.userservice.entity.TeamMemberEventAssignment;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.repository.RefreshTokenRepository;
 import com.innbucks.userservice.repository.UserRepository;
@@ -58,6 +59,7 @@ class TeamMemberServiceTest {
 
     @Mock private UserRepository userRepository;
     @Mock private RefreshTokenRepository refreshTokenRepository;
+    @Mock private com.innbucks.userservice.repository.TeamMemberEventAssignmentRepository assignmentRepository;
     @Mock private PasswordEncoder passwordEncoder;
     @Mock private EmailNotificationClient emailNotificationClient;
     @Mock private SmsNotificationClient smsNotificationClient;
@@ -284,5 +286,101 @@ class TeamMemberServiceTest {
         // they haven't started yet.
         assertThat(member.getTokenVersion()).isEqualTo(versionBefore);
         verify(refreshTokenRepository, never()).revokeAllForUser(anyLong(), any(Instant.class));
+    }
+
+    // ----- event assignments -----
+
+    @Test
+    void assignEvent_savesNewAssignmentAndReturnsFullSet() {
+        UUID organizerUuid = UUID.randomUUID();
+        UUID memberUuid = UUID.randomUUID();
+        UUID eventId = UUID.randomUUID();
+        authenticateAs(organizer(organizerUuid));
+        when(userRepository.findByUserUuid(memberUuid))
+                .thenReturn(Optional.of(teamMember(memberUuid, organizerUuid)));
+        when(assignmentRepository.existsByTeamMemberUserUuidAndEventId(memberUuid, eventId)).thenReturn(false);
+        when(assignmentRepository.findByTeamMemberUserUuid(memberUuid))
+                .thenReturn(List.of(TeamMemberEventAssignment.builder()
+                        .teamMemberUserUuid(memberUuid).eventId(eventId)
+                        .assignedByOrganizerUuid(organizerUuid).build()));
+
+        List<UUID> result = service.assignEvent(memberUuid, eventId);
+
+        assertThat(result).containsExactly(eventId);
+        verify(assignmentRepository).save(any(TeamMemberEventAssignment.class));
+    }
+
+    @Test
+    void assignEvent_isIdempotent_doesNotSaveDuplicate() {
+        UUID organizerUuid = UUID.randomUUID();
+        UUID memberUuid = UUID.randomUUID();
+        UUID eventId = UUID.randomUUID();
+        authenticateAs(organizer(organizerUuid));
+        when(userRepository.findByUserUuid(memberUuid))
+                .thenReturn(Optional.of(teamMember(memberUuid, organizerUuid)));
+        when(assignmentRepository.existsByTeamMemberUserUuidAndEventId(memberUuid, eventId)).thenReturn(true);
+        when(assignmentRepository.findByTeamMemberUserUuid(memberUuid))
+                .thenReturn(List.of(TeamMemberEventAssignment.builder()
+                        .teamMemberUserUuid(memberUuid).eventId(eventId)
+                        .assignedByOrganizerUuid(organizerUuid).build()));
+
+        service.assignEvent(memberUuid, eventId);
+
+        verify(assignmentRepository, never()).save(any());
+    }
+
+    @Test
+    void assignEvent_rejectsMemberOwnedByDifferentOrganizer() {
+        UUID callerUuid = UUID.randomUUID();
+        UUID otherOrganizerUuid = UUID.randomUUID();
+        UUID memberUuid = UUID.randomUUID();
+        authenticateAs(organizer(callerUuid));
+        when(userRepository.findByUserUuid(memberUuid))
+                .thenReturn(Optional.of(teamMember(memberUuid, otherOrganizerUuid)));
+
+        assertThatThrownBy(() -> service.assignEvent(memberUuid, UUID.randomUUID()))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.NOT_FOUND));
+        verify(assignmentRepository, never()).save(any());
+    }
+
+    @Test
+    void unassignEvent_deletesAndReturnsRemaining() {
+        UUID organizerUuid = UUID.randomUUID();
+        UUID memberUuid = UUID.randomUUID();
+        UUID eventId = UUID.randomUUID();
+        authenticateAs(organizer(organizerUuid));
+        when(userRepository.findByUserUuid(memberUuid))
+                .thenReturn(Optional.of(teamMember(memberUuid, organizerUuid)));
+        when(assignmentRepository.deleteByTeamMemberUserUuidAndEventId(memberUuid, eventId)).thenReturn(1L);
+        when(assignmentRepository.findByTeamMemberUserUuid(memberUuid)).thenReturn(List.of());
+
+        List<UUID> result = service.unassignEvent(memberUuid, eventId);
+
+        assertThat(result).isEmpty();
+        verify(assignmentRepository).deleteByTeamMemberUserUuidAndEventId(memberUuid, eventId);
+    }
+
+    @Test
+    void canScanEvent_noAssignments_isOrganizerWide() {
+        UUID memberUuid = UUID.randomUUID();
+        when(assignmentRepository.existsByTeamMemberUserUuid(memberUuid)).thenReturn(false);
+
+        // No rows => allowed for ANY event (organizer-wide default).
+        assertThat(service.canScanEvent(memberUuid, UUID.randomUUID())).isTrue();
+    }
+
+    @Test
+    void canScanEvent_withAssignments_onlyAssignedEventAllowed() {
+        UUID memberUuid = UUID.randomUUID();
+        UUID assignedEvent = UUID.randomUUID();
+        UUID otherEvent = UUID.randomUUID();
+        when(assignmentRepository.existsByTeamMemberUserUuid(memberUuid)).thenReturn(true);
+        when(assignmentRepository.existsByTeamMemberUserUuidAndEventId(memberUuid, assignedEvent)).thenReturn(true);
+        when(assignmentRepository.existsByTeamMemberUserUuidAndEventId(memberUuid, otherEvent)).thenReturn(false);
+
+        assertThat(service.canScanEvent(memberUuid, assignedEvent)).isTrue();
+        assertThat(service.canScanEvent(memberUuid, otherEvent)).isFalse();
     }
 }

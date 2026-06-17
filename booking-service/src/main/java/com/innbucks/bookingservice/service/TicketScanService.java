@@ -1,5 +1,8 @@
 package com.innbucks.bookingservice.service;
 
+import com.innbucks.bookingservice.client.UserServiceClient;
+import com.innbucks.bookingservice.dto.ApiResult;
+import com.innbucks.bookingservice.dto.ScanAccessDTO;
 import com.innbucks.bookingservice.dto.ScanTicketResponseDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
@@ -7,6 +10,7 @@ import com.innbucks.bookingservice.repository.BookingItemRepository;
 import com.innbucks.bookingservice.security.AuthenticatedCaller;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -40,6 +44,23 @@ import java.util.UUID;
 public class TicketScanService {
 
     private final BookingItemRepository bookingItemRepository;
+    private final UserServiceClient userServiceClient;
+
+    /** Shared S2S secret for the user-service assignment-check call. */
+    @Value("${innbucks.internal-api-token:}")
+    private String internalToken;
+
+    /**
+     * What to do when user-service can't be reached to resolve a team
+     * member's per-event assignment. true (default) = fall back to the
+     * organizer-wide access already verified above, so a user-service blip
+     * keeps the gate moving; the degraded state equals the pre-restriction
+     * security posture (still confined to the member's own organizer).
+     * false = deny the scan (NOT_ASSIGNED_TO_EVENT) until user-service
+     * is back. Flip to false for deployments that prefer fail-closed.
+     */
+    @Value("${innbucks.scan.assignment-check.fail-open:true}")
+    private boolean assignmentCheckFailOpen;
 
     @Transactional
     public ScanTicketResponseDTO scan(String ticketNumber, String scannerDisplayName) {
@@ -86,6 +107,19 @@ public class TicketScanService {
                     booking.getTenantUserUuid(), booking.getTenantId());
             return ScanTicketResponseDTO.builder()
                     .status(ScanTicketResponseDTO.Status.WRONG_ORGANIZER)
+                    .ticketNumber(ticketNumber)
+                    .bookingItemId(item.getId())
+                    .build();
+        }
+
+        // Per-event restriction. Organizers are never restricted (they own
+        // every event); only TEAM_MEMBERs can be narrowed to assigned events.
+        // user-service is the assignment system of record and encodes the
+        // "no assignments = organizer-wide" rule in the allowed flag.
+        if (!isOrganizer(auth) && scannerUserUuid != null
+                && !assignmentAllowsScan(scannerUserUuid, booking.getEventId(), ticketNumber, scannerEmail)) {
+            return ScanTicketResponseDTO.builder()
+                    .status(ScanTicketResponseDTO.Status.NOT_ASSIGNED_TO_EVENT)
                     .ticketNumber(ticketNumber)
                     .bookingItemId(item.getId())
                     .build();
@@ -143,5 +177,29 @@ public class TicketScanService {
         // bookings — acceptable while the backfill catches up.
         String bookingTenantId = booking.getTenantId();
         return bookingTenantId != null && bookingTenantId.equalsIgnoreCase(scannerEmail);
+    }
+
+    private boolean isOrganizer(Authentication auth) {
+        if (auth == null) return false;
+        return auth.getAuthorities().stream()
+                .anyMatch(a -> "ROLE_EVENT_ORGANIZER".equals(a.getAuthority()));
+    }
+
+    /**
+     * Asks user-service whether this team member may scan the given event.
+     * Returns the configured {@link #assignmentCheckFailOpen} value when
+     * user-service is unreachable (Feign fallback yields null data) so the
+     * fail-open/closed policy lives in exactly one place.
+     */
+    private boolean assignmentAllowsScan(UUID scannerUserUuid, UUID eventId,
+                                         String ticketNumber, String scannerEmail) {
+        ApiResult<ScanAccessDTO> res = userServiceClient.canScanEvent(scannerUserUuid, eventId, internalToken);
+        ScanAccessDTO data = res == null ? null : res.getData();
+        if (data != null) {
+            return data.isAllowed();
+        }
+        log.warn("Assignment check unavailable, applying failOpen={} ticketNumber={} scanner={} eventId={}",
+                assignmentCheckFailOpen, ticketNumber, scannerEmail, eventId);
+        return assignmentCheckFailOpen;
     }
 }

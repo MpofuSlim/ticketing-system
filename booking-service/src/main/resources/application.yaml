@@ -179,6 +179,16 @@ innbucks:
   # cross-service calls (e.g. payment->booking confirm, booking->loyalty).
   internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
 
+  # Ticket-scan per-event assignment check. When a TEAM_MEMBER scans, booking-
+  # service asks user-service whether they're assigned to the event. If
+  # user-service is unreachable mid-scan, fail-open=true (default) falls back to
+  # the organizer-wide access already verified (keeps the gate moving; degraded
+  # state == the pre-restriction security posture). Set false to fail closed
+  # (deny the scan until user-service is back) for stricter deployments.
+  scan:
+    assignment-check:
+      fail-open: ${SCAN_ASSIGNMENT_CHECK_FAIL_OPEN:true}
+
 # External WhatsApp notification gateway used by BookingConfirmedNotificationListener
 # to deliver booking-confirm notifications. Third-party service (not in Eureka),
 # so a plain RestClient with an explicit URL. Same WHATSAPP_* env-var convention

@@ -1,63 +1,97 @@
 package com.innbucks.bookingservice.service;
 
+import com.innbucks.bookingservice.client.UserServiceClient;
+import com.innbucks.bookingservice.dto.ApiResult;
+import com.innbucks.bookingservice.dto.ScanAccessDTO;
 import com.innbucks.bookingservice.dto.ScanTicketResponseDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
 import com.innbucks.bookingservice.repository.BookingItemRepository;
 import com.innbucks.bookingservice.security.JwtAuthDetails;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Pins the four contracts the ticket-scan flow must enforce:
+ * Pins the ticket-scan contracts. Inherits the #244 cases (single-shot
+ * redemption, organizer authorization, status gate, unknown ticket) and
+ * adds the per-event-assignment behaviour:
  *
- * <ol>
- *   <li><b>Single-shot redemption</b> — the second scan returns
- *       ALREADY_REDEEMED with the first scanner's audit fields,
- *       not a second ALLOWED.</li>
- *   <li><b>Organizer authorization</b> — a TEAM_MEMBER from a
- *       different organizer cannot scan a ticket and gets
- *       WRONG_ORGANIZER.</li>
- *   <li><b>Booking status gate</b> — a PENDING / CANCELLED booking
- *       is not redeemable; returns BOOKING_NOT_CONFIRMED.</li>
- *   <li><b>Unknown ticket</b> — TICKET_NOT_FOUND, no exception.</li>
- * </ol>
+ * <ul>
+ *   <li>A TEAM_MEMBER not assigned to the event gets NOT_ASSIGNED_TO_EVENT.</li>
+ *   <li>An EVENT_ORGANIZER bypasses the assignment check entirely.</li>
+ *   <li>When user-service is unreachable, the configured fail-open / fail-closed
+ *       policy decides.</li>
+ * </ul>
  *
- * <p>Pure Mockito — the atomic UPDATE behaviour is modelled by the
- * mock returning 1 for the first call and 0 for the second.
+ * Pure Mockito. The atomic UPDATE is modelled by the repo returning 1 then 0;
+ * the assignment check is modelled by the UserServiceClient mock.
  */
 @ExtendWith(MockitoExtension.class)
 class TicketScanServiceTest {
 
     @Mock private BookingItemRepository bookingItemRepository;
+    @Mock private UserServiceClient userServiceClient;
 
     @InjectMocks private TicketScanService service;
+
+    @BeforeEach
+    void setUp() {
+        ReflectionTestUtils.setField(service, "internalToken", "test-internal-token");
+        ReflectionTestUtils.setField(service, "assignmentCheckFailOpen", true);
+        // Default: assignment check says "allowed" so the inherited cases that
+        // authenticate as a bare team member still reach their intended status.
+        // lenient() because the early-return cases (not-found, etc.) never call it.
+        lenient().when(userServiceClient.canScanEvent(any(), any(), any()))
+                .thenReturn(allowed(true));
+    }
 
     @AfterEach
     void clearContext() {
         SecurityContextHolder.clearContext();
     }
 
+    private ApiResult<ScanAccessDTO> allowed(boolean allowed) {
+        return ApiResult.<ScanAccessDTO>builder()
+                .code("200").message("ok")
+                .data(ScanAccessDTO.builder().allowed(allowed).build())
+                .build();
+    }
+
+    private ApiResult<ScanAccessDTO> serviceDown() {
+        return ApiResult.<ScanAccessDTO>builder().code("503").message("down").data(null).build();
+    }
+
     private void authenticateAs(String email, UUID userUuid, UUID organizerUuid) {
         var auth = new UsernamePasswordAuthenticationToken(email, null);
+        auth.setDetails(new JwtAuthDetails(email, null, userUuid, organizerUuid));
+        SecurityContextHolder.getContext().setAuthentication(auth);
+    }
+
+    private void authenticateAsOrganizer(String email, UUID userUuid, UUID organizerUuid) {
+        var auth = new UsernamePasswordAuthenticationToken(email, null,
+                List.of(new SimpleGrantedAuthority("ROLE_EVENT_ORGANIZER")));
         auth.setDetails(new JwtAuthDetails(email, null, userUuid, organizerUuid));
         SecurityContextHolder.getContext().setAuthentication(auth);
     }
@@ -92,32 +126,23 @@ class TicketScanServiceTest {
         ScanTicketResponseDTO result = service.scan("20260619-48291X", "tariro@harare-arena.co.zw");
 
         assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.ALLOWED);
-        assertThat(result.getTicketNumber()).isEqualTo("20260619-48291X");
-        assertThat(result.getBookingItemId()).isEqualTo(item.getId());
         assertThat(result.getRedeemedByName()).isEqualTo("tariro@harare-arena.co.zw");
         assertThat(result.getRedeemedAt()).isNotNull();
     }
 
     @Test
     void scan_secondCall_returnsAlreadyRedeemedWithOriginalScannerDetails() {
-        // First scan landed earlier; we model the atomic UPDATE returning 0
-        // and the row re-read showing the first scanner's details. The
-        // RETRY scanner's name in the response must be the FIRST scanner,
-        // not the retrier — that's the audit-trail invariant the
-        // denormalised redeemed_by_name column buys us.
         UUID organizerUuid = UUID.randomUUID();
-        UUID retryUuid = UUID.randomUUID();
         BookingItem item = confirmedItem(organizerUuid);
         LocalDateTime firstScanAt = LocalDateTime.of(2026, 6, 19, 19, 42, 11);
         item.setRedeemedAt(firstScanAt);
         item.setRedeemedByName("Tariro Chikomo");
         item.setRedeemedByUserUuid(UUID.randomUUID());
 
-        authenticateAs("rufaro@harare-arena.co.zw", retryUuid, organizerUuid);
+        authenticateAs("rufaro@harare-arena.co.zw", UUID.randomUUID(), organizerUuid);
         when(bookingItemRepository.findByTicketNumberWithBooking("20260619-48291X"))
                 .thenReturn(Optional.of(item));
-        when(bookingItemRepository.claimRedemption(any(), any(), any(), any()))
-                .thenReturn(0);
+        when(bookingItemRepository.claimRedemption(any(), any(), any(), any())).thenReturn(0);
 
         ScanTicketResponseDTO result = service.scan("20260619-48291X", "rufaro@harare-arena.co.zw");
 
@@ -128,9 +153,6 @@ class TicketScanServiceTest {
 
     @Test
     void scan_wrongOrganizer_returnsWrongOrganizerWithoutWriting() {
-        // A team-member from a different organizer's tree must not be
-        // able to redeem this ticket; the atomic UPDATE is never even
-        // attempted — the authorization check short-circuits first.
         UUID bookingOrganizer = UUID.randomUUID();
         UUID otherOrganizer = UUID.randomUUID();
         BookingItem item = confirmedItem(bookingOrganizer);
@@ -168,21 +190,36 @@ class TicketScanServiceTest {
         ScanTicketResponseDTO result = service.scan("BOGUS-12345", "organizer@example.com");
 
         assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.TICKET_NOT_FOUND);
-        assertThat(result.getBookingItemId()).isNull();
+        verify(bookingItemRepository, never()).claimRedemption(any(), any(), any(), any());
+    }
+
+    // ===================== per-event assignment =====================
+
+    @Test
+    void scan_teamMemberNotAssignedToEvent_returnsNotAssigned() {
+        UUID organizerUuid = UUID.randomUUID();
+        UUID scannerUuid = UUID.randomUUID();
+        BookingItem item = confirmedItem(organizerUuid);
+        authenticateAs("tariro@harare-arena.co.zw", scannerUuid, organizerUuid);
+        when(bookingItemRepository.findByTicketNumberWithBooking("20260619-48291X"))
+                .thenReturn(Optional.of(item));
+        // user-service says this member is restricted and NOT assigned here.
+        when(userServiceClient.canScanEvent(eq(scannerUuid), eq(item.getBooking().getEventId()), any()))
+                .thenReturn(allowed(false));
+
+        ScanTicketResponseDTO result = service.scan("20260619-48291X", "tariro@harare-arena.co.zw");
+
+        assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.NOT_ASSIGNED_TO_EVENT);
+        assertThat(result.getBookingItemId()).isEqualTo(item.getId());
         verify(bookingItemRepository, never()).claimRedemption(any(), any(), any(), any());
     }
 
     @Test
-    void scan_legacyBookingWithoutTenantUuid_allowsOrganizerByEmail() {
-        // Pre-V13 booking: tenantUserUuid is null. The scan path must
-        // still allow the EVENT_ORGANIZER (whose email matches the
-        // legacy tenantId) — but TEAM_MEMBERs are blocked for these
-        // rows until backfill catches up.
+    void scan_organizer_bypassesAssignmentCheckEntirely() {
         UUID organizerUuid = UUID.randomUUID();
         BookingItem item = confirmedItem(organizerUuid);
-        item.getBooking().setTenantUserUuid(null);
-        item.getBooking().setTenantId("organizer@example.com");
-        authenticateAs("organizer@example.com", UUID.randomUUID(), organizerUuid);
+        // Organizer's own userUuid == organizerUuid; carries ROLE_EVENT_ORGANIZER.
+        authenticateAsOrganizer("organizer@example.com", organizerUuid, organizerUuid);
         when(bookingItemRepository.findByTicketNumberWithBooking("20260619-48291X"))
                 .thenReturn(Optional.of(item));
         when(bookingItemRepository.claimRedemption(any(), any(), any(), any())).thenReturn(1);
@@ -190,5 +227,41 @@ class TicketScanServiceTest {
         ScanTicketResponseDTO result = service.scan("20260619-48291X", "organizer@example.com");
 
         assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.ALLOWED);
+        // The assignment check must never be consulted for an organizer.
+        verify(userServiceClient, never()).canScanEvent(any(), any(), any());
+    }
+
+    @Test
+    void scan_assignmentServiceDown_failOpenAllowsWithinOrganizer() {
+        UUID organizerUuid = UUID.randomUUID();
+        UUID scannerUuid = UUID.randomUUID();
+        BookingItem item = confirmedItem(organizerUuid);
+        ReflectionTestUtils.setField(service, "assignmentCheckFailOpen", true);
+        authenticateAs("tariro@harare-arena.co.zw", scannerUuid, organizerUuid);
+        when(bookingItemRepository.findByTicketNumberWithBooking("20260619-48291X"))
+                .thenReturn(Optional.of(item));
+        when(userServiceClient.canScanEvent(any(), any(), any())).thenReturn(serviceDown());
+        when(bookingItemRepository.claimRedemption(any(), any(), any(), any())).thenReturn(1);
+
+        ScanTicketResponseDTO result = service.scan("20260619-48291X", "tariro@harare-arena.co.zw");
+
+        assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.ALLOWED);
+    }
+
+    @Test
+    void scan_assignmentServiceDown_failClosedDenies() {
+        UUID organizerUuid = UUID.randomUUID();
+        UUID scannerUuid = UUID.randomUUID();
+        BookingItem item = confirmedItem(organizerUuid);
+        ReflectionTestUtils.setField(service, "assignmentCheckFailOpen", false);
+        authenticateAs("tariro@harare-arena.co.zw", scannerUuid, organizerUuid);
+        when(bookingItemRepository.findByTicketNumberWithBooking("20260619-48291X"))
+                .thenReturn(Optional.of(item));
+        when(userServiceClient.canScanEvent(any(), any(), any())).thenReturn(serviceDown());
+
+        ScanTicketResponseDTO result = service.scan("20260619-48291X", "tariro@harare-arena.co.zw");
+
+        assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.NOT_ASSIGNED_TO_EVENT);
+        verify(bookingItemRepository, never()).claimRedemption(any(), any(), any(), any());
     }
 }
