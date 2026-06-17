@@ -42,10 +42,11 @@ class GatewayRouteTableTest {
 
     private static final List<String> EXPECTED_ROUTE_IDS = List.of(
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
-            "user-auth-route", "cells-lookup-route", "user-admin-route", "user-internal-deny", "user-self-route",
+            "user-auth-route", "cells-lookup-route", "user-admin-route", "user-event-organizer-route",
+            "user-internal-deny", "user-self-route",
             "event-availability-deny", "event-service-route",
             "seat-service-seat-route", "seat-service-category-route",
-            "booking-internal-deny", "booking-service-route", "brand-assets-route",
+            "booking-internal-deny", "booking-service-route", "booking-tickets-route", "brand-assets-route",
             "payment-internal-deny", "payment-service-read-route", "payment-service-write-route",
             "loyalty-internal-deny", "loyalty-service-route",
             "user-service-proxy-route", "event-service-proxy-route",
@@ -53,21 +54,25 @@ class GatewayRouteTableTest {
             "payment-service-proxy-route", "loyalty-service-proxy-route");
 
     // Single-prefix routes whose loss or typo = a silent 404 for real clients.
-    private static final Map<String, String> SERVICE_PREFIXES = Map.of(
-            "user-auth-route", "/auth/**",
-            "user-admin-route", "/admin/**",
-            "user-self-route", "/users/**",
-            "event-service-route", "/events/**",
-            "seat-service-seat-route", "/seats/**",
-            "seat-service-category-route", "/seat-categories/**",
-            "booking-service-route", "/bookings/**",
-            "loyalty-service-route", "/loyalty/**");
+    // Map.of caps at 10 entries — switched to Map.ofEntries when we added
+    // user-event-organizer-route and booking-tickets-route.
+    private static final Map<String, String> SERVICE_PREFIXES = Map.ofEntries(
+            Map.entry("user-auth-route", "/auth/**"),
+            Map.entry("user-admin-route", "/admin/**"),
+            Map.entry("user-event-organizer-route", "/event-organizer/**"),
+            Map.entry("user-self-route", "/users/**"),
+            Map.entry("event-service-route", "/events/**"),
+            Map.entry("seat-service-seat-route", "/seats/**"),
+            Map.entry("seat-service-category-route", "/seat-categories/**"),
+            Map.entry("booking-service-route", "/bookings/**"),
+            Map.entry("booking-tickets-route", "/tickets/**"),
+            Map.entry("loyalty-service-route", "/loyalty/**"));
 
     private static final List<String> RATE_LIMITED_ROUTES = List.of(
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
-            "user-admin-route", "user-self-route", "event-service-route",
+            "user-admin-route", "user-event-organizer-route", "user-self-route", "event-service-route",
             "seat-service-seat-route", "seat-service-category-route",
-            "booking-service-route", "brand-assets-route",
+            "booking-service-route", "booking-tickets-route", "brand-assets-route",
             "payment-service-read-route", "payment-service-write-route",
             "loyalty-service-route");
 
