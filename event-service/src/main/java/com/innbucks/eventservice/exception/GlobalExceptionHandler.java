@@ -12,6 +12,7 @@ import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.MultipartException;
 import org.springframework.web.server.ResponseStatusException;
@@ -120,6 +121,23 @@ public class GlobalExceptionHandler {
                 .findFirst()
                 .orElse("Invalid request parameter");
         log.warn("ConstraintViolation: {}", msg);
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResult.error(HttpStatus.BAD_REQUEST, msg));
+    }
+
+    /**
+     * Type-conversion failure when a {@code @RequestParam} / {@code @PathVariable}
+     * value can't bind to its target Java type (e.g. {@code organizerUuid=not-a-uuid}
+     * for a {@code UUID} param). Spring throws {@link MethodArgumentTypeMismatchException}
+     * which extends RuntimeException, so without this handler it would fall to
+     * the generic 500 catch-all below. The honest answer for a malformed input
+     * is 400 with the parameter name, not 500.
+     */
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiResult<Void>> handleArgumentTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        String requiredType = ex.getRequiredType() == null ? "value" : ex.getRequiredType().getSimpleName();
+        String msg = "Parameter '" + ex.getName() + "' must be a valid " + requiredType;
+        log.warn("Parameter type mismatch param={} requiredType={} value={}", ex.getName(), requiredType, ex.getValue());
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ApiResult.error(HttpStatus.BAD_REQUEST, msg));
     }
