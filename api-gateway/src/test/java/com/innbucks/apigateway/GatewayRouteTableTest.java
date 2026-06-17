@@ -42,7 +42,8 @@ class GatewayRouteTableTest {
 
     private static final List<String> EXPECTED_ROUTE_IDS = List.of(
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
-            "user-auth-route", "cells-lookup-route", "user-admin-route", "user-event-organizer-route",
+            "user-auth-route", "cells-lookup-route", "user-admin-route",
+            "booking-event-organizer-reports-route", "user-event-organizer-route",
             "user-internal-deny", "user-self-route",
             "event-availability-deny", "event-service-route",
             "seat-service-seat-route", "seat-service-category-route",
@@ -60,6 +61,7 @@ class GatewayRouteTableTest {
             Map.entry("user-auth-route", "/auth/**"),
             Map.entry("user-admin-route", "/admin/**"),
             Map.entry("user-event-organizer-route", "/event-organizer/**"),
+            Map.entry("booking-event-organizer-reports-route", "/event-organizer/reports/**"),
             Map.entry("user-self-route", "/users/**"),
             Map.entry("event-service-route", "/events/**"),
             Map.entry("seat-service-seat-route", "/seats/**"),
@@ -70,7 +72,8 @@ class GatewayRouteTableTest {
 
     private static final List<String> RATE_LIMITED_ROUTES = List.of(
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
-            "user-admin-route", "user-event-organizer-route", "user-self-route", "event-service-route",
+            "user-admin-route", "user-event-organizer-route", "booking-event-organizer-reports-route",
+            "user-self-route", "event-service-route",
             "seat-service-seat-route", "seat-service-category-route",
             "booking-service-route", "booking-tickets-route", "brand-assets-route",
             "payment-service-read-route", "payment-service-write-route",
@@ -145,6 +148,23 @@ class GatewayRouteTableTest {
                 .as("payment-internal-deny must match before both /payments/** routes")
                 .isBetween(0, Math.min(order.indexOf("payment-service-read-route"),
                         order.indexOf("payment-service-write-route")) - 1);
+    }
+
+    @Test
+    void organizerReportsRoutePrecedesUserEventOrganizerCatchAll() {
+        // /event-organizer/reports/** is owned by booking-service, but the
+        // broader /event-organizer/** catch-all targets user-service. The
+        // more-specific reports route MUST be matched first or organizer
+        // financial reports would be (mis)routed to user-service -> 404.
+        List<String> order = orderedIds();
+        int reports = order.indexOf("booking-event-organizer-reports-route");
+        int catchAll = order.indexOf("user-event-organizer-route");
+        assertThat(reports).as("booking-event-organizer-reports-route must be defined").isGreaterThanOrEqualTo(0);
+        assertThat(reports)
+                .as("booking-event-organizer-reports-route must precede the /event-organizer/** catch-all")
+                .isLessThan(catchAll);
+        assertThat(route("booking-event-organizer-reports-route").getUri())
+                .hasToString("lb://booking-service");
     }
 
     @Test
