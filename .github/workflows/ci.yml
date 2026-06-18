@@ -4,11 +4,6 @@ on:
   pull_request:
     branches: [ "master" ]
   push:
-    # Every push to master AND every push to a feature branch (claude/* and
-    # the conventional develop/feature/release prefixes) runs CI. Without this
-    # filter only master was tested — the active development branches went
-    # completely ungated. Concurrency group below kills stale runs as soon as
-    # a new push lands, so the wider trigger doesn't burn CI minutes.
     branches:
       - "master"
       - "develop"
@@ -36,10 +31,6 @@ jobs:
           java-version: "21"
           cache: maven
 
-      # The Maven Wrapper fetches the Maven distribution from Maven Central on
-      # first use. Cache it (keyed on the pinned version) so most runs skip that
-      # download — a transient Maven Central blip during this bootstrap was
-      # failing the whole job in seconds, before any code was compiled.
       - name: Cache Maven wrapper distribution
         uses: actions/cache@v5
         with:
@@ -48,10 +39,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-maven-wrapper-
 
-      # Download Maven (if not cached) with retries, so a transient network
-      # failure fetching the distribution is retried rather than failing the
-      # build. Only the *download* is retried — `verify` below runs exactly
-      # once, so real compile/test failures still fail the job.
       - name: Bootstrap Maven wrapper (retry transient downloads)
         run: |
           for attempt in 1 2 3; do
@@ -62,12 +49,5 @@ jobs:
           echo "::error::Maven wrapper bootstrap failed after 3 attempts (transient Maven Central download issue)."
           exit 1
 
-      # `verify` runs Surefire (unit) + Failsafe (integration *IT.java) and
-      # any plugin bound to verify/post-verify (e.g. SpotBugs, JaCoCo coverage
-      # thresholds when wired). `test` only runs Surefire, so the loyalty-service
-      # Testcontainers ITs and any future *IT classes wouldn't gate merges.
-      # -Dspring-boot.run.skip avoids the spring-boot-maven-plugin run goal
-      # firing during verify; -ntp drops the noisy "downloading from central"
-      # log lines that bloat the action output.
       - name: Build + test + integration-test
         run: ./mvnw -B -ntp verify

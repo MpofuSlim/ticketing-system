@@ -1,13 +1,8 @@
 spring:
-  # datasource.url/username/password are injected by
-  # PostgresIntegrationTestBase via @DynamicPropertySource — the values here
-  # are placeholders so Boot's binding succeeds before Testcontainers starts.
   datasource:
     driver-class-name: org.postgresql.Driver
   jpa:
     hibernate:
-      # Matches production: Flyway owns the schema, Hibernate only validates.
-      # Catches drift between entities and the V*.sql migrations.
       ddl-auto: validate
     properties:
       hibernate:
@@ -18,8 +13,6 @@ spring:
     baseline-version: 0
     locations: classpath:db/migration
 
-  # The Eureka client is on the classpath now, but tests must not register
-  # with a registry; disabling discovery makes the Eureka auto-config back off.
   cloud:
     discovery:
       enabled: false
@@ -47,11 +40,6 @@ jwt:
 
 logging:
   level:
-    # Flyway logs migrations applied at INFO; Hibernate's schema validator
-    # logs each table+column lookup at DEBUG. Bumped above the WARN root so
-    # CI surfaces *which* migrations ran and *which* tables the validator
-    # missed — the difference between "Flyway never ran" and "Flyway ran
-    # but the entity expects a column the migration didn't create".
     org.flywaydb: INFO
     org.hibernate.tool.schema: DEBUG
     root: WARN

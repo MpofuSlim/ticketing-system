@@ -17,8 +17,6 @@ spring:
 
   jpa:
     hibernate:
-      # Schema is owned by Flyway migrations (src/main/resources/db/migration);
-      # Hibernate only validates the JPA model matches the actual columns at boot.
       ddl-auto: ${JPA_DDL_AUTO:validate}
     properties:
       hibernate:
@@ -29,17 +27,9 @@ spring:
     baseline-on-migrate: false
     locations: classpath:db/migration
 
-  # Kafka producer bootstrap. The rest of the producer config (acks=all,
-  # idempotence, JSON value serializer) lives in KafkaProducerConfig.java
-  # because Spring Boot's defaults aren't right for money-movement events.
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
 
-  # Redis backs the atomic daily-velocity counter in TransferLimitService.
-  # Without this flag Spring Data Redis classifies every JpaRepository<>
-  # bean as a Redis repository and warns about misconfiguration; we have
-  # no @RedisHash entities so disabling auto-config of redis repositories
-  # silences the warning and keeps boot fast.
   data:
     redis:
       host: ${REDIS_HOST:localhost}
@@ -51,46 +41,22 @@ spring:
   lifecycle:
     timeout-per-shutdown-phase: 30s
 
-# booking-service is called by POST /payments to flip the matching booking
-# from PENDING to CONFIRMED. Default targets host:8084 for local dev; docker-
-# compose overrides to http://booking-service:8084 inside the network.
 booking-service:
-  # Resolved from the Eureka registry by name (the client is @LoadBalanced).
   base-url: http://booking-service
   connect-timeout-ms: ${BOOKING_SERVICE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${BOOKING_SERVICE_READ_TIMEOUT_MS:5000}
 
-# loyalty-service is called by POST /payments/shop-checkout to run the earn
-# (cash → PURCHASE) and/or burn (points → REDEMPTION) legs of a shop payment.
-# Direct pod-to-pod (gateway blocks /loyalty/internal/**); the shared secret
-# below must match loyalty-service's innbucks.internal-api-token.
 loyalty-service:
-  # Resolved from the Eureka registry by name (the client is @LoadBalanced).
   base-url: http://loyalty-service
   connect-timeout-ms: ${LOYALTY_SERVICE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${LOYALTY_SERVICE_READ_TIMEOUT_MS:5000}
 
-# Oradian middleware is called for deposit-account lookups (ownership checks
-# on POST /payments/transfer) and to forward the actual deposit-account transfer.
-# Direct pod-to-pod; the shared secret below must match Oradian middleware's
-# innbucks.internal-api.token. It is a DIFFERENT secret from
-# innbucks.internal-api-token (loyalty-service shared secret) — keep them
-# split so rotating one doesn't break the other. Same env var name as
-# user-service uses (ORADIAN_INTERNAL_TOKEN) so a single value configures
-# every service that talks to Oradian middleware.
 oradian-middleware:
   base-url: ${ORADIAN_MIDDLEWARE_URL:http://localhost:8090}
   internal-token: ${ORADIAN_INTERNAL_TOKEN:change-me-internal-token-change-me-internal-token}
   connect-timeout-ms: ${ORADIAN_MIDDLEWARE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${ORADIAN_MIDDLEWARE_READ_TIMEOUT_MS:10000}
 
-# External WhatsApp notification gateway — sends the customer a payment
-# confirmation after a transaction commits SUCCEEDED (see
-# PaymentNotificationListener). Third-party service, not in Eureka, so a plain
-# RestClient with an explicit URL. base-url default is a dev ngrok tunnel —
-# override WHATSAPP_GATEWAY_URL per environment (ngrok URLs rotate). api-key is
-# a secret: set WHATSAPP_API_KEY (ProductionSecretsGuard rejects the change-me
-# placeholder under prod).
 whatsapp:
   base-url: ${WHATSAPP_GATEWAY_URL:https://maximum-implicitly-treefrog.ngrok-free.app}
   api-key: ${WHATSAPP_API_KEY:change-me-whatsapp-api-key}
@@ -98,38 +64,13 @@ whatsapp:
   read-timeout-ms: ${WHATSAPP_READ_TIMEOUT_MS:10000}
 
 innbucks:
-  # Multi-cell country pin. Every running JVM is anchored to a single InnBucks
-  # market — startup refuses to boot with an unknown value (see CountryMdcConfig).
-  # Default ZW because the current deployment is the Zimbabwe home market;
-  # cell #2 onwards MUST set INNBUCKS_COUNTRY explicitly per deployment.
   country: ${INNBUCKS_COUNTRY:ZW}
-  # This cell's settlement currency (ISO 4217). ZW cell = USD, KE cell = KES.
-  # Used by InnbucksPaymentService when a booking carries no currency of its
-  # own (always today — booking is single-country per cell). Set per cell in
-  # deploy/cells/cell.<iso>.env; defaults to USD for the ZW home market.
   currency: ${INNBUCKS_CURRENCY:USD}
   internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
-  # Velocity caps on POST /payments/transfer + /payments/withdraw.
-  # Per-transaction max caps a single request; per-day max caps the sum
-  # of today's PENDING + SUCCEEDED rows on the same source account plus
-  # the new amount (calendar-day semantics, server timezone). Defaults
-  # are placeholders — override per deployment / regulator. Real-world
-  # caps should vary by KYC tier, account type, and country; that's
-  # follow-up work, this is the flat-cap v1.
   transfer-limits:
     per-transaction-max: ${PER_TX_LIMIT:100000}
     per-day-max: ${PER_DAY_LIMIT:500000}
 
-# Reconciliation job (ReconciliationJob) surfaces ledger rows stuck in
-# PENDING longer than the threshold so operators can spot drift before
-# it accumulates silently. Defaults: scan every minute, flag anything
-# PENDING for > 5 minutes, max 100 rows per scan (next scan picks up
-# the rest if the page was full).
-#
-# code-poll is the 2D-code resolver: every TOKEN_ISSUED payment is queried
-# upstream on this cadence, and the booking confirms within ~one interval of
-# the customer approving the code — keep it tight (it IS the payment
-# confirmation latency the customer experiences).
 payment-service:
   reconciliation:
     scan-interval: ${RECONCILIATION_SCAN_INTERVAL:PT1M}
@@ -137,64 +78,30 @@ payment-service:
     batch-size: ${RECONCILIATION_BATCH_SIZE:100}
   code-poll:
     interval: ${CODE_POLL_INTERVAL:PT20S}
-  # Nightly settlement recon over YESTERDAY (UTC) — the morning report.
   recon:
     cron: ${RECON_CRON:0 30 2 * * *}
-  # Topic provisioning. Spring auto-creates from the NewTopic @Bean if
-  # the broker allows it; replication-factor of 1 is dev-only — bump to
-  # 3 in any environment with multiple brokers.
   kafka:
     transaction-completed:
       partitions: ${PAYMENT_TX_TOPIC_PARTITIONS:3}
       replicas: ${PAYMENT_TX_TOPIC_REPLICAS:1}
 
-# Idempotency-Key replay cache backing store.
-#   redis  — shared across pods; an Idempotency-Key replay is honored even when
-#            the retry lands on a different replica or after a restart. Set in
-#            docker-compose for staging/prod (reuses the velocity-counter Redis).
-#   memory — per-pod ConcurrentHashMap; only safe for single-instance dev/tests.
-# Defaults to memory so local dev and tests need no Redis.
 app:
   idempotency:
     store: ${IDEMPOTENCY_STORE:memory}
 
-# Verify-only JWT secret. payment-service does NOT mint tokens — user-service
-# is the issuer. This must match user-service's jwt.secret exactly; tokens
-# signed by user-service are validated here for the authenticated
-# POST /payments/transfer endpoint (the only one that decodes a bearer JWT).
 jwt:
   secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
 
-# Resilience4j wrap around the Oradian middleware client. Two failure
-# modes drove this: (a) a single TCP blip to Oradian became a customer-
-# facing 502 and a wasted FAILED ledger row, (b) a sustained Oradian
-# outage parked every customer's request on the read-timeout (~10s)
-# before failing, exhausting the request thread pool. Retry handles (a);
-# CircuitBreaker handles (b).
-#
-# Retry kicks in only on OradianMiddlewareTransientException (5xx from
-# upstream / network errors / empty body). 4xx rejections — validation,
-# insufficient funds, account suspended — are thrown as the plain
-# OradianMiddlewareException so they propagate immediately without
-# burning retry budget on a request Oradian has already definitively
-# refused.
 resilience4j:
   retry:
     instances:
       oradian-middleware:
         max-attempts: 3
         wait-duration: 500ms
-        # Exponential backoff: 500ms, 1s, 2s between attempts. Caps the
-        # total customer-facing wait at ~3.5s before we surface a 502.
         enable-exponential-backoff: true
         exponential-backoff-multiplier: 2
         retry-exceptions:
           - innbucks.paymentservice.client.OradianMiddlewareTransientException
-      # Public InnBucks Merchant API. IMPORTANT: this retry instance is
-      # applied ONLY to the read-only code-status query (and login). Code
-      # GENERATION is NEVER retried — a retry after an ambiguous failure
-      # could mint a second live code while the first is still claimable;
-      # the caller closes the row FAILED instead (generation moves no money).
       innbucks-api:
         max-attempts: 3
         wait-duration: 500ms
@@ -208,17 +115,11 @@ resilience4j:
         register-health-indicator: true
         sliding-window-type: COUNT_BASED
         sliding-window-size: 20
-        # Wait for some traffic before evaluating the rate — keeps the
-        # breaker from tripping on the first two failures after a
-        # cold start.
         minimum-number-of-calls: 5
-        failure-rate-threshold: 50          # open if ≥50% of last 20 calls fail
+        failure-rate-threshold: 50
         wait-duration-in-open-state: 30s
         permitted-number-of-calls-in-half-open-state: 3
         automatic-transition-from-open-to-half-open-enabled: true
-        # Same retry-exceptions list — only transient failures should
-        # count toward tripping the breaker. A 4xx VALIDATION storm
-        # is a customer-side problem, not an upstream-down signal.
         record-exceptions:
           - innbucks.paymentservice.client.OradianMiddlewareTransientException
       innbucks-api:
@@ -233,15 +134,6 @@ resilience4j:
         record-exceptions:
           - innbucks.paymentservice.client.InnbucksApiTransientException
 
-# Public InnBucks Merchant API — the 2D-code payment rail behind
-# POST /payments (the only collection method; the server-side wallet debit
-# was removed at the InnBucks team's direction). Auth: X-Api-Key on every
-# call + Bearer token from POST /auth/third-party (cached, refreshed on
-# expiry/401). All three credentials are secrets: env-only, never committed,
-# and must belong to a MERCHANT-type API client allowed to generate PAYMENT
-# codes. The env vars keep their BANK_API_* names from the first integration
-# round (same platform, same credentials, already in deployment runbooks).
-# Spec pinned at docs/api/innbucks-merchant-api.md (+ the original PDF).
 innbucks-api:
   base-url: ${BANK_API_URL:https://staging.innbucks.co.zw}
   api-key: ${BANK_API_KEY:}
@@ -251,23 +143,11 @@ innbucks-api:
   read-timeout-ms: ${BANK_API_READ_TIMEOUT_MS:20000}
   token-ttl: ${BANK_API_TOKEN_TTL:PT8M}
 
-# InnBucks 2D-code payment knobs.
-#   enabled — gates the authenticated /payments/innbucks endpoint (the public
-#             POST /payments is always on; it refuses cleanly when the
-#             Merchant API credentials are missing).
-#   code.ttl — how long the customer has to approve the code. MUST stay
-#             comfortably under the booking hold window so a paid code can
-#             still confirm its booking; InnBucks-side validity (~10 min per
-#             the doc's samples) is the upper bound.
 payments:
   innbucks:
     enabled: ${PAYMENTS_INNBUCKS_ENABLED:true}
     code:
       ttl: ${PAYMENTS_CODE_TTL:PT10M}
-    # Settlement reconciliation (SettlementReconciliationJob): the merchant's
-    # own InnBucks account id, used ONLY to pull the code mini-statement and
-    # match it against our ledger. Blank = reconciliation disabled (the
-    # payment flow itself never needs it).
     recon:
       account: ${PAYMENTS_INNBUCKS_MERCHANT_ACCOUNT:}
 
@@ -280,34 +160,16 @@ springdoc:
 server:
   port: 8085
   shutdown: graceful
-  # Defence-in-depth: never serialize stack traces / binding errors / spring
-  # framework messages into the /error response body. GlobalExceptionHandler
-  # handles every controller exception explicitly; these settings make sure
-  # anything that slips past it (e.g. errors thrown by a Filter before the
-  # advice runs) still doesn't leak internals to the client.
   error:
     include-stacktrace: never
     include-message: never
     include-binding-errors: never
 
-# Service discovery — register with the Eureka registry (discovery-server) and
-# resolve ticketing siblings (booking-, loyalty-service) by name. The external
-# Oradian middleware is NOT registered and keeps its explicit URL.
 eureka:
   client:
     service-url:
       defaultZone: ${EUREKA_SERVER_URL:http://localhost:8761/eureka/}
   instance:
-    # Eureka registration host. On a single host (laptop dev) the default
-    # prefer-ip-address registers a reachable IP, so local dev is unchanged.
-    # In docker-compose this service is dual-homed (default + shared networks)
-    # and so has two container IPs; registering one fixed IP leaves it
-    # unreachable from peers on the OTHER network (e.g. booking/seat/loyalty on
-    # `default` can't reach a shared-network IP). So compose sets
-    # EUREKA_PREFER_IP_ADDRESS=false + EUREKA_INSTANCE_HOSTNAME=<service-name>:
-    # we register by the compose service name and Docker's embedded DNS resolves
-    # it to the correct per-network IP for whichever caller looks it up. The
-    # unique instance-id keeps replicas from colliding in the registry.
     prefer-ip-address: ${EUREKA_PREFER_IP_ADDRESS:true}
     hostname: ${EUREKA_INSTANCE_HOSTNAME:localhost}
     instance-id: ${spring.application.name}:${random.uuid}
@@ -321,17 +183,10 @@ management:
     health:
       probes:
         enabled: true
-      # 'when-authorized' hides component breakdown from anonymous callers
-      # (probes still get UP/DOWN) while letting authenticated tooling debug.
       show-details: when-authorized
   metrics:
     tags:
       application: ${spring.application.name}
-  # Distributed tracing via OTel. Sampling defaults to 10% — flip to 1.0 for
-  # debug sessions, leave low in prod for cost. OTLP_ENDPOINT points at the
-  # OTel collector / Tempo / Jaeger; default localhost is fine for laptop
-  # docker-compose, override in k8s. Set TRACING_ENABLED=false to disable
-  # entirely (no spans recorded, no exporter calls).
   tracing:
     enabled: ${TRACING_ENABLED:false}
     sampling:
@@ -340,15 +195,6 @@ management:
     tracing:
       endpoint: ${OTLP_ENDPOINT:http://localhost:4318/v1/traces}
 
-
 logging:
-  # Log pattern carries two country tags:
-  #   country     — deployment pin (CountryMdcConfig, every request)
-  #   homeCountry — customer's JWT routing claim (JwtFilter, authenticated requests)
-  # A mismatch between the two (post step 7 edge routing) is a wrong-cell signal.
   pattern:
     level: "%5p [${spring.application.name:-},%X{country:-},%X{homeCountry:-},%X{traceId:-},%X{spanId:-},%X{correlationId:-}]"
-
-# CORS is configured exclusively on the api-gateway (per PR #182 + the per-service
-# CORS removal). Don't reintroduce a `cors:` block here without first reverting
-# the gateway's RemoveResponseHeader filter — see SecurityConfig for the rationale.

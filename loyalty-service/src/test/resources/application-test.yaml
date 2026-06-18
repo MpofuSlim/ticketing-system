@@ -1,10 +1,4 @@
 spring:
-  # All tests run against real PostgreSQL via Testcontainers (jdbc:tc: URL,
-  # ContainerDatabaseDriver) — no H2. Flyway runs the real migrations;
-  # Hibernate validates against them. Requires Docker (CI has it).
-  # (The dedicated *IT tests still use PostgresIntegrationTestBase /
-  # application-it.yaml; this brings the fast unit + controller tests onto
-  # the same real-Postgres footing.)
   datasource:
     url: jdbc:tc:postgresql:16-alpine:///loyalty_test
     driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
@@ -18,8 +12,6 @@ spring:
     enabled: true
     locations: classpath:db/migration
 
-  # The Eureka client is on the classpath now, but tests must not register
-  # with a registry; disabling discovery makes the Eureka auto-config back off.
   cloud:
     discovery:
       enabled: false

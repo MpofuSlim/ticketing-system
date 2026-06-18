@@ -1,34 +1,5 @@
 name: Dependabot auto-merge
 
-# Auto-merge patch-only Dependabot PRs. The flow:
-#   1. Dependabot opens a PR.
-#   2. This workflow inspects the PR's update-type metadata.
-#   3. If patch-only AND opened by dependabot[bot], it approves and
-#      enables GitHub's `--auto` merge.
-#   4. GitHub then waits for all required status checks (the Release
-#      workflow's build/scan, the test job, anything else gated by
-#      branch protection) before actually merging.
-#
-# Anything other than a patch — minor, major, or unknown — falls
-# through untouched and waits for human review. Same for grouped PRs
-# where the highest bump in the group is minor or major.
-#
-# Coexists fine with manual merging: auto-merge only targets
-# dependabot[bot] patch PRs. Your own PRs, minor / major Dependabot
-# PRs, anything else — all merge by hand exactly as before. You can
-# also click "Merge pull request" yourself on a Dependabot PR before
-# auto-merge fires; --auto just queues the merge, doesn't lock the PR.
-#
-# pull_request_target (not pull_request) is needed so we get write
-# permissions on the base repo. It does NOT checkout PR code, so the
-# common pull_request_target pitfall (executing untrusted code with
-# secrets) doesn't apply here.
-#
-# Prerequisite: "Allow auto-merge" must be enabled in Settings ->
-# General -> Pull Requests for the repo, otherwise GitHub rejects the
-# auto-merge API call and every run fails. Verified on by checking
-# for the "Enable auto-merge" button on an existing open PR.
-
 on:
   pull_request_target:
 
@@ -59,7 +30,4 @@ jobs:
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # --squash keeps master's history one-commit-per-PR;
-        # --auto queues the merge until required checks pass rather
-        # than merging immediately, which is what makes this safe.
         run: gh pr merge --auto --squash "$PR_URL"

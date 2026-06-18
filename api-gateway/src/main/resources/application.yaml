@@ -4,8 +4,6 @@ spring:
   lifecycle:
     timeout-per-shutdown-phase: 30s
 
-  # Redis-backed token bucket store for the gateway's RequestRateLimiter.
-  # Defaults assume the local docker-compose Redis on the same network.
   data:
     redis:
       host: ${REDIS_HOST:localhost}
@@ -16,20 +14,7 @@ spring:
     gateway:
       server:
         webflux:
-          # The /auth/** catch-all (user-auth-route, declared last in this group)
-          # intentionally skips the rate limiter so logins still work when Redis
-          # is unreachable (the Redis-backed RequestRateLimiter fails closed with
-          # 403 on connection errors). Brute-force protection for login/refresh/
-          # OTP lives in user-service (LoginRateLimiter + account lockout + OTP
-          # throttling). A few abuse-prone /auth endpoints are the exception:
-          # they get their own rate-limited routes declared BEFORE the catch-all
-          # (SCG matches the first listed route that fits). These fail closed on
-          # a Redis outage, an acceptable trade for registration/lookup paths
-          # while login stays on the limiter-free catch-all.
           routes:
-            # Customer account lookup by phone. Authenticated, but one valid
-            # token could otherwise walk the phone space to harvest who is a
-            # registered customer and their send-money details — tightest bucket.
             - id: auth-customer-lookup-route
               uri: lb://user-service
               predicates:
@@ -42,9 +27,6 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
-            # Remaining customer endpoints: tiered registration + deposit/tier
-            # reads (some proxy to the external Oradian middleware). Moderate
-            # bucket — ample for normal app use, capped against scripted abuse.
             - id: auth-customer-route
               uri: lb://user-service
               predicates:
@@ -57,9 +39,6 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
-            # System-user (organizer/merchant) registration. Unauthenticated and
-            # rare per real client; a tight per-IP bucket curbs signup spam and
-            # email/phone enumeration via the "already registered" response.
             - id: auth-register-route
               uri: lb://user-service
               predicates:
@@ -77,9 +56,6 @@ spring:
               predicates:
                 - Path=/auth/**
 
-            # Step 7 — public cell-lookup. Mobile app calls GET /cells/lookup
-            # at signup / first login to learn its home cell's base URL.
-            # No rate limiter (same as /auth/** — these are pre-login).
             - id: cells-lookup-route
               uri: lb://user-service
               predicates:
@@ -97,12 +73,6 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
-            # EVENT_ORGANIZER financial reports. Owned by booking-service (it
-            # holds the sales data), but shares the /event-organizer/** prefix
-            # with user-service's team-member endpoints — so this MORE-SPECIFIC
-            # route MUST precede the user-event-organizer-route below so SCG
-            # matches /event-organizer/reports/** to booking-service first
-            # (list order = precedence; mirrors the *-internal-deny pattern).
             - id: booking-event-organizer-reports-route
               uri: lb://booking-service
               predicates:
@@ -115,10 +85,6 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
-            # EVENT_ORGANIZER team-member management. Owned by user-service
-            # (identity lives there). Same rate-limit shape as /admin/**.
-            # Sibling /event-organizer/** prefixes can be added here as
-            # the organizer self-service surface grows.
             - id: user-event-organizer-route
               uri: lb://user-service
               predicates:
@@ -131,19 +97,11 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
-            # Self-service endpoints under /users/me/** (e.g. service requests).
-            # Block /users/internal/** at the edge. These are service-to-service
-            # endpoints (event-service -> user-service tenant lookup) gated by
-            # the shared X-Internal-Token header. Real S2S traffic goes directly
-            # between pods over the cluster network and never touches the
-            # gateway. MUST be declared before the catch-all user-self-route so
-            # SCG matches it first (mirrors loyalty-internal-deny).
             - id: user-internal-deny
               uri: forward:/__edge_deny__
               predicates:
                 - Path=/users/internal/**
 
-            # Authenticated; rate-limited like the rest of user-service.
             - id: user-self-route
               uri: lb://user-service
               predicates:
@@ -156,16 +114,6 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
-            # Block /events/{id}/availability/** at the edge. These are
-            # service-to-service write endpoints (booking-service ->
-            # event-service decrements availableTickets on a confirmed
-            # booking). They have no business being reachable from the
-            # public internet — an anonymous PATCH /events/.../availability/
-            # consume?count=99999 would drain any event's capacity and DoS
-            # legitimate customers. Real service-to-service traffic goes
-            # directly between pods over the cluster network and never
-            # touches the gateway. MUST be declared before the catch-all
-            # event-service-route so SCG matches it first.
             - id: event-availability-deny
               uri: forward:/__edge_deny__
               predicates:
@@ -206,12 +154,6 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
-            # Block /bookings/internal/** at the edge. event-service calls it
-            # service-to-service to trigger the event-change attendee fan-out;
-            # it carries the shared X-Internal-Token and has no business being
-            # reachable from the public internet. MUST precede the catch-all
-            # booking-service-route so SCG matches it first (mirrors
-            # event-availability-deny / user-internal-deny).
             - id: booking-internal-deny
               uri: forward:/__edge_deny__
               predicates:
@@ -229,9 +171,6 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
-            # Gate-side ticket redemption (POST /tickets/scan, owned by
-            # EVENT_ORGANIZER + TEAM_MEMBER scanners). Lives in
-            # booking-service alongside the booking_items it updates.
             - id: booking-tickets-route
               uri: lb://booking-service
               predicates:
@@ -244,15 +183,6 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
-            # Brand assets — public static images (e.g. the InnBucks MicroBank
-            # logo at /brand/innbucks-logo.png) served from booking-service's
-            # classpath:/static/brand/. Used by the FE in WhatsApp templates,
-            # HTML emails, embedded headers, etc. — same trust model as the
-            # public /bookings/*/tickets/*/qr endpoint (anonymous, the path IS
-            # the access control). Same rate-limit shape as the booking route
-            # so an attacker can't hammer the gateway with image fetches; the
-            # gatewayKeyResolver falls back to per-IP for unauthenticated
-            # callers, which is the right bucket for an anonymous static.
             - id: brand-assets-route
               uri: lb://booking-service
               predicates:
@@ -265,27 +195,6 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
-            # /payments/** is split into READ vs WRITE routes so each gets
-            # the right-sized bucket. Lumping them together meant every
-            # history pagination tap counted against the same tight limit
-            # as the money-moving POSTs — a customer opening the app +
-            # scrolling history would hit 429 after a handful of requests.
-            #
-            # Both routes use the same Path predicate; the Method predicate
-            # disambiguates. Order doesn't matter (predicates are mutually
-            # exclusive). OPTIONS preflight is handled by globalcors before
-            # route matching so it never touches either rate limiter.
-
-            # READ side — history list + detail. App-open + scroll-paginate
-            # easily hits 5+ GETs in a burst; the same generous 50 rps /
-            # 100 burst used by /events, /bookings, /seats etc. matches
-            # the FE's actual read-traffic profile.
-            # Block /payments/internal/** at the edge. Back-office ops
-            # endpoints (exception workbasket + settlement reconciliation)
-            # gated by X-Internal-Token inside payment-service — they have no
-            # business being reachable from the public internet. MUST precede
-            # both payment-service routes so SCG matches it first (mirrors
-            # loyalty-internal-deny / user-internal-deny).
             - id: payment-internal-deny
               uri: forward:/__edge_deny__
               predicates:
@@ -304,13 +213,6 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
-            # POST /payments/innbucks — public checkout (NO bearer token; the
-            # customer is paying without an account). The default key resolver
-            # also falls back to IP when there's no bearer, but that's an
-            # implicit chain — make it explicit + give it its own (tighter)
-            # bucket so a single abusive IP can't harvest payment codes or
-            # grief the booking pipeline. MUST precede payment-service-write-
-            # route below so SCG matches it first.
             - id: payments-innbucks-write-route
               uri: lb://payment-service
               predicates:
@@ -319,24 +221,11 @@ spring:
               filters:
                 - name: RequestRateLimiter
                   args:
-                    # 1 rps / 3 burst per IP: a real customer pays once per
-                    # checkout. 3 burst handles the "click submit, see spinner,
-                    # click again twice" pattern; the trailing replenishment
-                    # then refills slowly. Tighter than the bearer-keyed
-                    # write bucket below because there's no auth gate above
-                    # this route.
                     redis-rate-limiter.replenishRate: ${PAYMENTS_INNBUCKS_RATE_LIMIT_REPLENISH_PER_SECOND:1}
                     redis-rate-limiter.burstCapacity: ${PAYMENTS_INNBUCKS_RATE_LIMIT_BURST_CAPACITY:3}
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@paymentsInnbucksIpKeyResolver}"
 
-            # WRITE side — transfer + withdraw move real money via Oradian.
-            # Bucket sized at ~1 req/sec / 5 burst per bearer token: a real
-            # customer transfers a handful of times per day; the generous
-            # 50 rps used elsewhere left ample room for a stolen-token
-            # attacker to drain accounts before the bucket bit. The
-            # velocity service inside payment-service (per-account daily
-            # cap) is the second line of defence.
             - id: payment-service-write-route
               uri: lb://payment-service
               predicates:
@@ -350,16 +239,6 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
-            # Block /loyalty/internal/** at the edge. These are service-to-service
-            # endpoints (user-service -> loyalty-service) gated by the
-            # X-Internal-Token shared secret. They have no business being
-            # reachable from the public internet, even though the secret check
-            # would reject the call — defence in depth, and it also keeps the
-            # paths off attacker recon scans (they get a plain 404 instead of
-            # a 401 that gives away the endpoint exists). Real service-to-
-            # service traffic goes directly between pods inside the cluster
-            # network and never touches the gateway. MUST be declared before
-            # the catch-all loyalty-service-route so SCG matches it first.
             - id: loyalty-internal-deny
               uri: forward:/__edge_deny__
               predicates:
@@ -377,18 +256,6 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
-            # /{service}-service/v3/api-docs proxy routes exist SOLELY for
-            # the Swagger UI aggregator on the gateway (it loads each
-            # backend's OpenAPI spec through these paths). The predicate is
-            # deliberately scoped to /v3/api-docs/** ONLY — historically it
-            # was /**, which let an attacker bypass per-path security at the
-            # gateway (e.g. /event-service/events/<id>/availability/consume
-            # would skip event-availability-deny; /loyalty-service/loyalty/
-            # internal/** would skip loyalty-internal-deny). It also let
-            # /user-service/auth/login skip the per-route rate limiter on
-            # /auth/**. Locked down to api-docs only, none of that is
-            # possible. The RequestRateLimiter is retained as defence in
-            # depth against api-docs scraping.
             - id: user-service-proxy-route
               uri: lb://user-service
               predicates:
@@ -467,34 +334,10 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
-          # No default-filters: PR #184 deleted the per-service CORS configs
-          # so the downstream services no longer emit Access-Control-* / Vary
-          # headers at all. The post-route RemoveResponseHeader filters PR #182
-          # added were running AFTER globalcors wrote its headers, so they
-          # stripped the gateway's own CORS output too — leaving proxied
-          # responses with no CORS headers at all, which then failed in the
-          # browser as "blocked by CORS policy: No 'Access-Control-Allow-Origin'
-          # header is present". Removing the filters lets globalcors be the
-          # sole writer it was always meant to be. The OPTIONS preflight path
-          # was unaffected because globalcors short-circuits before the
-          # default-filters chain ever runs.
-          #
-          # If a future service starts emitting CORS headers again, the right
-          # fix is to remove them there — NOT to reintroduce the strip here,
-          # which by definition would also strip the gateway's own headers.
-
           globalcors:
             add-to-simple-url-handler-mapping: true
             cors-configurations:
               '[/**]':
-                # Comma-separated list of allowed origin patterns. Default
-                # is permissive ('*') so dev/Swagger/ngrok/any FE origin
-                # works out of the box. Spring Cloud Gateway treats this
-                # as an allowed-origin PATTERN, which is compatible with
-                # allowCredentials=true (unlike a plain allowed-origins
-                # wildcard). MUST be overridden in prod via
-                # CORS_ALLOWED_ORIGINS to your real client origins
-                # (e.g. https://app.example.com,https://admin.example.com).
                 allowedOriginPatterns: "${CORS_ALLOWED_ORIGINS:https://innvents.vercel.app,https://innbucks-ticketing.vercel.app,http://localhost:[*]}"
                 allowedMethods:
                   - GET
@@ -507,21 +350,9 @@ spring:
                 allowCredentials: true
                 maxAge: 3600
 
-# Number of trusted reverse proxies in front of the gateway. The per-IP
-# rate-limit key reads the client address from X-Forwarded-For at this depth
-# (default 1 = a single ingress/LB). MUST be set to 0 when the gateway is
-# directly internet-exposed with no trusted proxy, otherwise a client could
-# forge X-Forwarded-For to mint unlimited rate-limit buckets.
 gateway:
   trusted-proxy-count: ${GATEWAY_TRUSTED_PROXY_COUNT:1}
 
-# Browser security response headers — stamped by SecurityHeadersWebFilter on every
-# gateway response. X-Content-Type-Options and HSTS are unconditional. X-Frame-Options
-# can be relaxed to SAMEORIGIN if the FE ever needs to embed its own pages. CSP is
-# OPT-IN: leave `csp` blank to skip it, otherwise it ships in Report-Only mode (the
-# header `Content-Security-Policy-Report-Only`) so violations are reported without
-# breaking the FE. Flip `csp-enforce: true` once the FE team has validated the
-# policy and you want it enforcing.
 security:
   headers:
     frame-options: ${SECURITY_HEADERS_FRAME_OPTIONS:DENY}
@@ -533,10 +364,6 @@ server:
   port: ${SERVER_PORT:8080}
   shutdown: graceful
 
-# Service discovery — the gateway joins the Eureka registry (discovery-server)
-# so the lb://<service-name> route URIs below resolve to live instances.
-# EUREKA_SERVER_URL points at the registry; the default targets a local
-# standalone server for laptop dev.
 eureka:
   client:
     service-url:
@@ -546,14 +373,6 @@ eureka:
     instance-id: ${spring.application.name}:${random.uuid}
 
 management:
-  # The api-gateway has no Spring Security on the classpath, so a public
-  # /actuator/prometheus on the main API port leaked full metrics to the
-  # internet. Split management onto its own port so the actuator endpoints
-  # are reachable ONLY via the management port (default 9090). docker-compose
-  # then publishes the management port to host loopback only (127.0.0.1) — a
-  # Prometheus scraper running on the host or on the same docker network can
-  # reach it; the public internet cannot. Mirrors the Oradian middleware
-  # pattern (management on 127.0.0.1:9090).
   server:
     port: ${MANAGEMENT_PORT:9090}
   endpoints:
@@ -564,17 +383,10 @@ management:
     health:
       probes:
         enabled: true
-      # 'when-authorized' hides component breakdown from anonymous callers
-      # (probes still get UP/DOWN) while letting authenticated tooling debug.
       show-details: when-authorized
   metrics:
     tags:
       application: ${spring.application.name}
-  # Distributed tracing via OTel. Sampling defaults to 10% — flip to 1.0 for
-  # debug sessions, leave low in prod for cost. OTLP_ENDPOINT points at the
-  # OTel collector / Tempo / Jaeger; default localhost is fine for laptop
-  # docker-compose, override in k8s. Set TRACING_ENABLED=false to disable
-  # entirely (no spans recorded, no exporter calls).
   tracing:
     enabled: ${TRACING_ENABLED:false}
     sampling:
@@ -582,7 +394,6 @@ management:
   otlp:
     tracing:
       endpoint: ${OTLP_ENDPOINT:http://localhost:4318/v1/traces}
-
 
 logging:
   pattern:

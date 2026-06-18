@@ -1,12 +1,6 @@
 spring:
   application:
     name: loyalty-service
-  # Cap Spring's Pageable auto-binding: every controller param of type
-  # Pageable picks size from the ?size= query param, and Spring's default
-  # max-page-size is 2000. That's bounded but still way too high for the
-  # per-page enrichment some endpoints do (and lets ?size=2000 chew DB +
-  # gateway budget). 100 matches the @Max we put on the raw-int size
-  # params in event-service / seat-service — same DoS surface, same cap.
   data:
     web:
       pageable:
@@ -19,12 +13,6 @@ spring:
     password: ${DB_PASSWORD}
     hikari:
       pool-name: loyalty-service-pool
-      # Sized to match the rest of the fleet (20). The previous 50 was set on
-      # the assumption of a dedicated Postgres or PgBouncer in front; in the
-      # current shared-Postgres setup (default max_connections=100) loyalty
-      # alone was consuming half the slots, starving the other five services
-      # under load. Bump via DB_POOL_MAX when adding PgBouncer or splitting
-      # the loyalty DB onto its own instance.
       maximum-pool-size: ${DB_POOL_MAX:20}
       minimum-idle: ${DB_POOL_MIN:10}
       connection-timeout: ${DB_CONNECTION_TIMEOUT_MS:5000}
@@ -32,8 +20,6 @@ spring:
       max-lifetime: ${DB_MAX_LIFETIME_MS:1800000}
   jpa:
     hibernate:
-      # Schema is owned by Flyway migrations; Hibernate only validates that
-      # the JPA model matches the actual columns at boot.
       ddl-auto: ${JPA_DDL_AUTO:validate}
     show-sql: ${JPA_SHOW_SQL:false}
     properties:
@@ -48,20 +34,13 @@ spring:
   lifecycle:
     timeout-per-shutdown-phase: 30s
 
-# user-service is the system of record for customer identity. loyalty-service
-# calls GET /auth/customer/tier to validate a phone number before lazily
-# creating its local LoyaltyUser projection — see UserService#findOrEnrol.
 user-service:
-  # Resolved from the Eureka registry by name (the client is @LoadBalanced).
   base-url: http://user-service
   connect-timeout-ms: ${USER_SERVICE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${USER_SERVICE_READ_TIMEOUT_MS:5000}
 
 loyalty:
   points:
-    # Points expire this many days after each batch (lot) is earned. Default ~1
-    # month. Redemptions burn lots FIFO (soonest-to-expire first); a daily sweep
-    # releases expired remainders as breakage.
     expiry-days: ${LOYALTY_POINTS_EXPIRY_DAYS:30}
   voucher:
     secret: ${LOYALTY_VOUCHER_SECRET:change-me-voucher-secret-change-me-voucher-secret}
@@ -80,19 +59,8 @@ loyalty:
     invoice-cron: ${LOYALTY_INVOICE_CRON:0 30 1 * * *}
     points-expiry-cron: ${LOYALTY_POINTS_EXPIRY_CRON:0 15 * * * *}
 
-# Shared secret presented as the X-Internal-Token header by other backends
-# (today: user-service at login) when calling /loyalty/internal/**. Must match
-# the value configured on the caller side. Empty disables internal endpoints.
 innbucks:
-  # Multi-cell country pin. Every running JVM is anchored to a single InnBucks
-  # market — startup refuses to boot with an unknown value (see CountryMdcConfig).
-  # Default ZW because the current deployment is the Zimbabwe home market;
-  # cell #2 onwards MUST set INNBUCKS_COUNTRY explicitly per deployment.
   country: ${INNBUCKS_COUNTRY:ZW}
-  # This cell's settlement currency (ISO 4217). ZW cell = USD, KE cell = KES.
-  # Default for a merchant created without an explicit currency, and for
-  # QR tokens with no currency of their own. Set per cell in
-  # deploy/cells/cell.<iso>.env; defaults to USD for the ZW home market.
   currency: ${INNBUCKS_CURRENCY:USD}
   internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
 
@@ -106,17 +74,11 @@ server:
   port: ${SERVER_PORT:8086}
   shutdown: graceful
 
-# Service discovery — register with the Eureka registry (discovery-server) and
-# resolve sibling services by name. EUREKA_SERVER_URL points at the registry;
-# the default targets a local standalone server for laptop dev.
 eureka:
   client:
     service-url:
       defaultZone: ${EUREKA_SERVER_URL:http://localhost:8761/eureka/}
   instance:
-    # Register by IP — a container's own hostname isn't resolvable by its
-    # peers on the shared network. The unique instance-id keeps replicas
-    # from colliding in the registry.
     prefer-ip-address: true
     instance-id: ${spring.application.name}:${random.uuid}
 
@@ -133,11 +95,6 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
-  # Distributed tracing via OTel. Sampling defaults to 10% — flip to 1.0 for
-  # debug sessions, leave low in prod for cost. OTLP_ENDPOINT points at the
-  # OTel collector / Tempo / Jaeger; default localhost is fine for laptop
-  # docker-compose, override in k8s. Set TRACING_ENABLED=false to disable
-  # entirely (no spans recorded, no exporter calls).
   tracing:
     enabled: ${TRACING_ENABLED:false}
     sampling:
@@ -146,21 +103,10 @@ management:
     tracing:
       endpoint: ${OTLP_ENDPOINT:http://localhost:4318/v1/traces}
 
-
 logging:
-  # Log pattern carries two country tags:
-  #   country     — deployment pin (CountryMdcConfig, every request)
-  #   homeCountry — customer's JWT routing claim (JwtFilter, authenticated requests)
-  # A mismatch between the two (post step 7 edge routing) is a wrong-cell signal.
   pattern:
     level: "%5p [${spring.application.name:-},%X{country:-},%X{homeCountry:-},%X{traceId:-},%X{spanId:-},%X{correlationId:-}]"
 
-# CORS is configured exclusively on the api-gateway (per PR #182 + the per-service
-# CORS removal). Don't reintroduce a `cors:` block here without first reverting
-# the gateway's RemoveResponseHeader filter — see SecurityConfig for the rationale.
-
-# Match the JWT secret used by user-service (and the other microservices) so
-# loyalty-service can verify tokens minted at /auth/login.
 jwt:
   secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
   expiration: ${JWT_EXPIRATION_MS:86400000}

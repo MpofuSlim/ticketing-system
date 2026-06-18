@@ -1,42 +1,3 @@
-# Compose spec used for BOTH local dev and EC2 prod.
-#
-#   Local dev:  docker compose up --build
-#                Compose builds each service from its Dockerfile and tags
-#                the result with the `image:` value below using whatever
-#                IMAGE_TAG resolves to (defaults to `dev`). Local laptop
-#                gets `ghcr.io/.../<service>:dev` images.
-#
-#   EC2 prod:   IMAGE_TAG=sha-<commit> docker compose pull
-#               IMAGE_TAG=sha-<commit> docker compose up -d --no-build
-#                EC2 never builds — it pulls the exact image GHCR
-#                published for that commit. `:dev` and `:latest` are
-#                local-convenience tags and MUST NOT be used in prod.
-#
-# Image tags are owned by the Release workflow (.github/workflows/release.yml).
-# Rollback: ssh in and run `~/superApp/scripts/deploy.sh <previous-sha>`.
-#
-# Logging + resources (staging hardening):
-#   * SPRING_PROFILES_ACTIVE defaults to `prod,json`. `prod` activates the
-#     ProductionSecretsGuard; `json` switches logback to Logstash-encoded JSON
-#     (one object per line) so Loki/ELK/CloudWatch can ingest structured logs.
-#     Keep `json` in the list for any deployed environment — drop it only for
-#     local human-readable tailing.
-#   * Every JVM service sets JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=70.0 plus a
-#     mem_limit. The percentage is OF the mem_limit, so the two MUST be tuned
-#     together: without a limit a JVM sizes its heap to a fraction of the whole
-#     ~16GB host and the co-located services OOM-kill each other (this box runs
-#     both stacks + Postgres/Redis/Kafka with NO swap). The limits below sum to
-#     ~8GB; raise a service if you see it OOMKilled, lower them for a smaller box.
-#
-# Port exposure (staging hardening):
-#   Only the api-gateway (18080) publishes on all interfaces — it is the single
-#   public entry point. Every other published port is bound to 127.0.0.1, so the
-#   services, Postgres, Redis and Kafka are reachable only from the EC2 host
-#   itself (host-local debugging) and over the shared docker network — never from
-#   the box's public interface. Inter-service traffic uses the docker network
-#   (Eureka lb://), so loopback binding does not affect it. Put TLS + auth in
-#   front of 8080 (ingress / reverse proxy) before exposing staging publicly.
-
 name: innbucks
 
 services:
@@ -46,13 +7,6 @@ services:
     restart: unless-stopped
     mem_limit: 1024m
     mem_reservation: 512m
-    # max_connections=150 gives ~30 slots of headroom over the fleet's summed
-    # Hikari pools (6 services x 20 = 120 after the loyalty right-size) for
-    # psql/admin/healthcheck use. shared_buffers=128MB is conservative within
-    # the 1024m container budget (~12.5% of RAM, leaving room for work_mem,
-    # WAL, and per-connection backend memory at ~10MB each). Raising
-    # max_connections further requires either bumping mem_limit or fronting
-    # with PgBouncer.
     command:
       - "postgres"
       - "-c"
@@ -80,13 +34,6 @@ services:
     restart: unless-stopped
     mem_limit: 256m
     mem_reservation: 128m
-    # maxmemory + allkeys-lru: bound Redis to ~200 MB (well inside the 256 MB
-    # mem_limit so we don't OOM-kill on a memory-pressure spike) and evict the
-    # least-recently-used key when full. Without this, every distinct bearer
-    # token spawns its own rate-limiter bucket (and the gateway's velocity-counter
-    # + seat-lock keys add to the pool) — under a botnet that creates many
-    # accounts, Redis would OOM in 1-2 days and take the gateway down with it.
-    # appendonly:yes -> AOF persistence; persistence and eviction can co-exist.
     command:
       - "redis-server"
       - "--appendonly"
@@ -107,14 +54,6 @@ services:
       timeout: 3s
       retries: 20
 
-  # Kafka in single-node KRaft mode (no Zookeeper). Used by booking-service
-  # to publish domain events. Listeners: container traffic on port 9092,
-  # host machine on 29092 (for poking with kafkacat / IDE consumers).
-  #
-  # Uses the official apache/kafka image: Bitnami removed their public
-  # versioned tags from Docker Hub (Aug 2025 catalog change), so
-  # bitnami/kafka:3.7 no longer resolves. The official image uses KAFKA_*
-  # env vars (no _CFG_ infix) and stores data under /var/lib/kafka/data.
   kafka:
     image: apache/kafka:3.7.1
     container_name: innbucks-kafka
@@ -142,21 +81,6 @@ services:
       retries: 20
       start_period: 30s
 
-  # Eureka service registry. Every service registers here on boot and resolves
-  # siblings by name; the api-gateway resolves its lb:// route targets the same
-  # way. Started first (others depend_on it healthy) so first registration
-  # succeeds promptly.
-  # Eureka HA: discovery-server + discovery-server-2 run as peer-replicated
-  # nodes. Each registers with the OTHER's zone and fetches its snapshot, so
-  # if either node restarts the fleet's view from the surviving node stays
-  # complete. Both nodes share the same data model — there's no leader; the
-  # registry is eventually-consistent across peers.
-  #
-  # Single-VM caveat: peers on the same docker host don't survive a host
-  # crash (the VM going down takes both with it). The win on a single VM is
-  # "registry restart no longer evicts every instance fleet-wide" — useful
-  # for safe redeploys. For real HA, run the second node on a second VM by
-  # overriding EUREKA_INSTANCE_HOSTNAME / EUREKA_PEER_URL via env.
   discovery-server:
     build:
       context: .
@@ -168,28 +92,12 @@ services:
     mem_reservation: 320m
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
-      # Multi-cell country pin (ISO 3166-1 alpha-2). Read at boot by every
-      # reactor service's CountryMdcConfig and validated against the
-      # InnBucks markets allowlist; ignored by infra services (discovery,
-      # gateway). Sourced from deploy/cells/cell.<iso>.env via cell.sh —
-      # required so a missing cell file fails fast rather than silently
-      # boots in the wrong country.
       INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
-      # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
-      # external OTel collector (none is bundled in this stack) to export spans.
       TRACING_ENABLED: ${TRACING_ENABLED:-false}
       OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
-      # Self-zone hostname so the registry advertises itself on the shared
-      # network as discovery-server (not its container id).
       EUREKA_INSTANCE_HOSTNAME: discovery-server
-      # Peer URL: this node points at discovery-server-2 as its replication
-      # partner. The leading comma is required so the value is appended as a
-      # second zone entry on application.yaml's defaultZone string.
       EUREKA_PEER_URL: ",http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server-2:8761/eureka/"
-      # Registry Basic-auth credential (enforced under the prod profile). Clients
-      # embed it in their eureka defaultZone URL, so use a URL-safe value
-      # (openssl rand -hex 24) — '@' / ':' / '/' would break URL parsing.
       EUREKA_USERNAME: ${EUREKA_USERNAME:-eureka}
       EUREKA_PASSWORD: ${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}
     ports:
@@ -201,9 +109,6 @@ services:
       retries: 10
       start_period: 30s
 
-  # Eureka peer — second registry node. Identical config except for its
-  # hostname (advertises as discovery-server-2 on the shared docker network)
-  # and the peer URL (points back at discovery-server).
   discovery-server-2:
     build:
       context: .
@@ -224,7 +129,6 @@ services:
       EUREKA_USERNAME: ${EUREKA_USERNAME:-eureka}
       EUREKA_PASSWORD: ${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}
     ports:
-      # Different host port to avoid clashing with the first node's :18761.
       - "127.0.0.1:18762:8761"
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8761/actuator/health"]
@@ -240,7 +144,6 @@ services:
     image: ghcr.io/${GHCR_OWNER:-mpofuslim}/user-service:${IMAGE_TAG:-dev}
     container_name: innbucks-user-service
     restart: unless-stopped
-    # internal (DB/Redis/Eureka/siblings) + shared (only to reach oradian-middleware:8090).
     networks: ["default", "shared"]
     mem_limit: 768m
     mem_reservation: 512m
@@ -250,36 +153,13 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      # Activates ProductionSecretsGuard which refuses to boot if any
-      # sensitive secret still holds its `change-me-*` placeholder.
-      # Override per-environment in .env to relax (e.g. `dev` for local).
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
-      # Multi-cell country pin (ISO 3166-1 alpha-2). Read at boot by every
-      # reactor service's CountryMdcConfig and validated against the
-      # InnBucks markets allowlist; ignored by infra services (discovery,
-      # gateway). Sourced from deploy/cells/cell.<iso>.env via cell.sh —
-      # required so a missing cell file fails fast rather than silently
-      # boots in the wrong country.
       INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
-      # Step 7 — cell registry (ISO 3166-1 alpha-2 -> public base URL), JSON.
-      # ONLY user-service reads it: it holds the CellRegistry bean + the public
-      # /cells/lookup endpoint, and emits homeBaseUrl in 409 wrong_cell. Other
-      # services' JwtFilters reject wrong-cell JWTs by country alone (no URL),
-      # so they don't need it. Quoted so YAML doesn't read the braces as a flow
-      # mapping. Empty default ({}) is legal — single-cell still gets a 409 with
-      # the home country, just no redirect URL.
       INNBUCKS_CELLS_REGISTRY: "${INNBUCKS_CELLS_REGISTRY:-{}}"
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
-      # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
-      # external OTel collector (none is bundled in this stack) to export spans.
       TRACING_ENABLED: ${TRACING_ENABLED:-false}
       OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
-      # Both Eureka peers are listed comma-separated so the Eureka client fails
-      # over to the surviving node if one peer is restarting or unreachable.
       EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/,http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD}@discovery-server-2:8761/eureka/
-      # Dual-homed (default + shared) -> register by service name, not a single
-      # fixed IP, so Docker DNS resolves it per-network for every caller. See
-      # the eureka.instance comment in user-service application.yaml.
       EUREKA_PREFER_IP_ADDRESS: "false"
       EUREKA_INSTANCE_HOSTNAME: user-service
       DB_URL: jdbc:postgresql://postgres:5432/user_service
@@ -294,35 +174,13 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       JWT_EXPIRATION_MS: 86400000
-      # First-run super-admin bootstrap. Leave UNSET to skip seeding — under the
-      # prod profile the service refuses to create a known-credential admin
-      # (the old hardcoded default was a backdoor). Set a strong, unique value
-      # to bootstrap the first admin; it is forced to change password on first login.
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
-      # Per-cell core-banking provider behind CoreBankingPort. Default
-      # `oradian` = current behaviour; the ZW cell env flips this to `veengu`
-      # once that adapter lands (phase 2 of the provider split). KE stays
-      # `oradian` permanently.
       INNBUCKS_CORE_BANKING: ${INNBUCKS_CORE_BANKING:-oradian}
-      # Oradian middleware lives in the sibling stack on the shared
-      # innbucks-shared docker network — reachable by service name.
       ORADIAN_BASE_URL: http://oradian-middleware:8090
-      # X-Internal-Token sent to the middleware on every S2S call.
-      # MUST equal the middleware's INTERNAL_API_TOKEN env var, otherwise
-      # the middleware rejects with 401 invalid_internal_token.
       ORADIAN_INTERNAL_TOKEN: ${ORADIAN_INTERNAL_TOKEN:?set ORADIAN_INTERNAL_TOKEN in .env (must match middleware INTERNAL_API_TOKEN)}
-      # Shared secret between ticketing's own services (loyalty webhooks).
-      # Separate concern from ORADIAN_INTERNAL_TOKEN; can be a different value.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
-      # InnBucks core gateway adapter (SMS via messenger-interface, payments via
-      # veengu-integration). Host-resident jar on port 8088 — Docker containers
-      # reach it via the EC2 private IP. Override INNBUCKS_GATEWAY_URL in .env
-      # if the host IP differs (e.g. 172.17.0.1 on Docker-Desktop setups).
       INNBUCKS_GATEWAY_URL: ${INNBUCKS_GATEWAY_URL:-http://10.0.155.69:8088}
-      # External WhatsApp notification gateway (OTP + approval delivery).
-      # Override the URL per environment (the application.yaml default is a dev
-      # ngrok tunnel that rotates); the api key is a required secret.
       WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-https://maximum-implicitly-treefrog.ngrok-free.app}
       WHATSAPP_API_KEY: ${WHATSAPP_API_KEY:?set WHATSAPP_API_KEY in .env}
     ports:
@@ -350,16 +208,8 @@ services:
         condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
-      # Multi-cell country pin (ISO 3166-1 alpha-2). Read at boot by every
-      # reactor service's CountryMdcConfig and validated against the
-      # InnBucks markets allowlist; ignored by infra services (discovery,
-      # gateway). Sourced from deploy/cells/cell.<iso>.env via cell.sh —
-      # required so a missing cell file fails fast rather than silently
-      # boots in the wrong country.
       INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
-      # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
-      # external OTel collector (none is bundled in this stack) to export spans.
       TRACING_ENABLED: ${TRACING_ENABLED:-false}
       OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
       DB_URL: jdbc:postgresql://postgres:5432/event_service
@@ -370,11 +220,7 @@ services:
       JPA_DDL_AUTO: validate
       FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
-      # Required from booking-service on PATCH /events/{id}/availability/consume.
-      # Must match INTERNAL_API_TOKEN on the booking-service side.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
-      # Both Eureka peers are listed comma-separated so the Eureka client fails
-      # over to the surviving node if one peer is restarting or unreachable.
       EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/,http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD}@discovery-server-2:8761/eureka/
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
     ports:
@@ -404,20 +250,10 @@ services:
         condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
-      # Multi-cell country pin (ISO 3166-1 alpha-2). Read at boot by every
-      # reactor service's CountryMdcConfig and validated against the
-      # InnBucks markets allowlist; ignored by infra services (discovery,
-      # gateway). Sourced from deploy/cells/cell.<iso>.env via cell.sh —
-      # required so a missing cell file fails fast rather than silently
-      # boots in the wrong country.
       INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
-      # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
-      # external OTel collector (none is bundled in this stack) to export spans.
       TRACING_ENABLED: ${TRACING_ENABLED:-false}
       OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
-      # Both Eureka peers are listed comma-separated so the Eureka client fails
-      # over to the surviving node if one peer is restarting or unreachable.
       EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/,http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD}@discovery-server-2:8761/eureka/
       DB_URL: jdbc:postgresql://postgres:5432/seat_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
@@ -460,16 +296,8 @@ services:
         condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
-      # Multi-cell country pin (ISO 3166-1 alpha-2). Read at boot by every
-      # reactor service's CountryMdcConfig and validated against the
-      # InnBucks markets allowlist; ignored by infra services (discovery,
-      # gateway). Sourced from deploy/cells/cell.<iso>.env via cell.sh —
-      # required so a missing cell file fails fast rather than silently
-      # boots in the wrong country.
       INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
-      # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
-      # external OTel collector (none is bundled in this stack) to export spans.
       TRACING_ENABLED: ${TRACING_ENABLED:-false}
       OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
       DB_URL: jdbc:postgresql://postgres:5432/booking_service
@@ -485,21 +313,11 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}
       IDEMPOTENCY_STORE: redis
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      # Both Eureka peers are listed comma-separated so the Eureka client fails
-      # over to the surviving node if one peer is restarting or unreachable.
       EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/,http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD}@discovery-server-2:8761/eureka/
-      # Presented to event-service on the internal availability/consume call.
-      # Must match INTERNAL_API_TOKEN on the event-service side.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
-      # WhatsApp + InnBucks-core gateways used by BookingConfirmedNotificationListener
-      # to deliver booking-confirm notifications (WhatsApp primary, SMS fallback).
-      # Same env vars user-service and payment-service already consume.
       WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-https://maximum-implicitly-treefrog.ngrok-free.app}
       WHATSAPP_API_KEY: ${WHATSAPP_API_KEY:?set WHATSAPP_API_KEY in .env}
       INNBUCKS_GATEWAY_URL: ${INNBUCKS_GATEWAY_URL:-http://10.0.155.69:8088}
-      # Public gateway origin where the hosted ticket QR + view page are
-      # reachable — used to build absolute links/images in the confirmation
-      # email + WhatsApp. MUST be your public api-gateway URL in prod.
       TICKETS_PUBLIC_BASE_URL: ${TICKETS_PUBLIC_BASE_URL:-http://localhost:8080}
     ports:
       - "127.0.0.1:8084:8084"
@@ -510,23 +328,6 @@ services:
       retries: 10
       start_period: 45s
 
-  # payment-service: real money movement.
-  #
-  #   - POST /payments (ticket purchase): REAL InnBucks wallet debit via the
-  #     public Bank API (BANK_API_* below), with the hardened payment ledger
-  #     (IN_DOUBT + inquiry-based reconciliation). Same FE contract as the
-  #     old stub — the FE never changed.
-  #   - Wallet transfers / withdrawals via Oradian middleware
-  #     (TransfersController + OradianMiddlewareClient with Retry +
-  #     CircuitBreaker, PENDING/SUCCEEDED/FAILED ledger in transactions
-  #     table, Redis idempotency-key replay cache, Kafka event publication,
-  #     ReconciliationJob safety net).
-  #   - Shop loyalty checkout — real points debit/credit via loyalty-service.
-  #
-  # NOT optional: this service is part of the default stack. (Used to live
-  # behind a "payments" docker compose profile when it was a pure dummy;
-  # the profile was removed so `docker compose up -d` brings it up with
-  # the rest of the fleet.)
   payment-service:
     build:
       context: .
@@ -534,7 +335,6 @@ services:
     image: ghcr.io/${GHCR_OWNER:-mpofuslim}/payment-service:${IMAGE_TAG:-dev}
     container_name: innbucks-payment-service
     restart: unless-stopped
-    # internal (DB/Redis/Eureka/siblings) + shared (only to reach oradian-middleware:8090).
     networks: ["default", "shared"]
     mem_limit: 768m
     mem_reservation: 512m
@@ -549,76 +349,34 @@ services:
         condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
-      # Multi-cell country pin (ISO 3166-1 alpha-2). Read at boot by every
-      # reactor service's CountryMdcConfig and validated against the
-      # InnBucks markets allowlist; ignored by infra services (discovery,
-      # gateway). Sourced from deploy/cells/cell.<iso>.env via cell.sh —
-      # required so a missing cell file fails fast rather than silently
-      # boots in the wrong country.
       INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
       INNBUCKS_CURRENCY: ${INNBUCKS_CURRENCY:-USD}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
-      # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
-      # external OTel collector (none is bundled in this stack) to export spans.
       TRACING_ENABLED: ${TRACING_ENABLED:-false}
       OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
       DB_URL: jdbc:postgresql://postgres:5432/payment_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
       DB_DRIVER: org.postgresql.Driver
-      # Flyway owns the schema; Hibernate must NOT mutate it at boot.
-      # Every other service in this stack uses `validate`; payment-service
-      # was the odd one out — letting it silently drift the staging DB.
       JPA_DDL_AUTO: validate
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
-      # Redis backs the velocity counter (TransferLimitService) AND the
-      # cross-pod Idempotency-Key replay cache (IDEMPOTENCY_STORE=redis).
-      # Without it the counter fails closed — rejecting every transfer — and
-      # idempotency would be per-pod, so a retry landing on another replica
-      # could execute a second real transfer.
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}
       IDEMPOTENCY_STORE: redis
-      # Both Eureka peers are listed comma-separated so the Eureka client fails
-      # over to the surviving node if one peer is restarting or unreachable.
       EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/,http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD}@discovery-server-2:8761/eureka/
-      # Dual-homed (default + shared) -> register by service name, not a single
-      # fixed IP, so Docker DNS resolves it per-network for every caller. See
-      # the eureka.instance comment in payment-service application.yaml.
       EUREKA_PREFER_IP_ADDRESS: "false"
       EUREKA_INSTANCE_HOSTNAME: payment-service
-      # Oradian middleware lives in the sibling stack on the shared
-      # innbucks-shared docker network — reachable by service name.
-      # payment-service uses ORADIAN_MIDDLEWARE_URL (different env var
-      # name from user-service's ORADIAN_BASE_URL).
       ORADIAN_MIDDLEWARE_URL: http://oradian-middleware:8090
-      # X-Internal-Token sent to the middleware. MUST equal the
-      # middleware's INTERNAL_API_TOKEN env var.
       ORADIAN_INTERNAL_TOKEN: ${ORADIAN_INTERNAL_TOKEN:?set ORADIAN_INTERNAL_TOKEN in .env (must match middleware INTERNAL_API_TOKEN)}
-      # Shared secret between ticketing's own services (loyalty webhooks).
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
-      # External WhatsApp notification gateway (payment-code delivery +
-      # payment confirmations). Override the URL per environment (the
-      # application.yaml default is a dev ngrok tunnel that rotates); the api
-      # key is a required secret.
       WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-https://maximum-implicitly-treefrog.ngrok-free.app}
       WHATSAPP_API_KEY: ${WHATSAPP_API_KEY:?set WHATSAPP_API_KEY in .env}
-      # Public InnBucks Merchant API — ticket payments (POST /payments) issue
-      # a 2D PAYMENT code the customer approves in their own InnBucks app;
-      # no server-side debit, no out-of-band code delivery (the FE renders
-      # the code + QR from the response). All three credentials are secrets
-      # from .env and must belong to a MERCHANT-type API client allowed to
-      # generate PAYMENT codes. (Env names kept from the bank-api round —
-      # same platform creds.)
       BANK_API_URL: ${BANK_API_URL:-https://staging.innbucks.co.zw}
       BANK_API_KEY: ${BANK_API_KEY:?set BANK_API_KEY in .env}
       BANK_API_USERNAME: ${BANK_API_USERNAME:?set BANK_API_USERNAME in .env}
       BANK_API_PASSWORD: ${BANK_API_PASSWORD:?set BANK_API_PASSWORD in .env}
       PAYMENTS_INNBUCKS_ENABLED: ${PAYMENTS_INNBUCKS_ENABLED:-true}
-      # OPTIONAL: the merchant's own InnBucks account id — enables the
-      # nightly settlement reconciliation (ledger vs InnBucks mini
-      # statement). Payments work without it; the recon job just skips.
       PAYMENTS_INNBUCKS_MERCHANT_ACCOUNT: ${PAYMENTS_INNBUCKS_MERCHANT_ACCOUNT:-}
     ports:
       - "127.0.0.1:8085:8085"
@@ -645,21 +403,11 @@ services:
         condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
-      # Multi-cell country pin (ISO 3166-1 alpha-2). Read at boot by every
-      # reactor service's CountryMdcConfig and validated against the
-      # InnBucks markets allowlist; ignored by infra services (discovery,
-      # gateway). Sourced from deploy/cells/cell.<iso>.env via cell.sh —
-      # required so a missing cell file fails fast rather than silently
-      # boots in the wrong country.
       INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
       INNBUCKS_CURRENCY: ${INNBUCKS_CURRENCY:-USD}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
-      # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
-      # external OTel collector (none is bundled in this stack) to export spans.
       TRACING_ENABLED: ${TRACING_ENABLED:-false}
       OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
-      # Both Eureka peers are listed comma-separated so the Eureka client fails
-      # over to the surviving node if one peer is restarting or unreachable.
       EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/,http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD}@discovery-server-2:8761/eureka/
       DB_URL: jdbc:postgresql://postgres:5432/loyalty_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
@@ -669,13 +417,7 @@ services:
       JPA_DDL_AUTO: validate
       FLYWAY_ENABLED: "true"
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
-      # Inbound shared secret validated on /loyalty/internal/** webhooks
-      # (caller is ticketing's other services). Must equal the
-      # INTERNAL_API_TOKEN the callers send.
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
-      # Loyalty voucher/QR signing secrets. The prod profile's
-      # ProductionSecretsGuard refuses to boot while these hold their
-      # change-me placeholder defaults, so they must be supplied here.
       LOYALTY_VOUCHER_SECRET: ${LOYALTY_VOUCHER_SECRET:?set LOYALTY_VOUCHER_SECRET in .env (see .env.example)}
       LOYALTY_QR_SECRET: ${LOYALTY_QR_SECRET:?set LOYALTY_QR_SECRET in .env (see .env.example)}
     ports:
@@ -694,16 +436,9 @@ services:
     image: ghcr.io/${GHCR_OWNER:-mpofuslim}/api-gateway:${IMAGE_TAG:-dev}
     container_name: innbucks-api-gateway
     restart: unless-stopped
-    # Also join `shared`: user-service / payment-service are dual-homed and
-    # advertise their shared-network IP to Eureka, so the gateway must be on
-    # `shared` to route to them (otherwise /auth/** etc. time out connecting).
     networks: ["default", "shared"]
     mem_limit: 768m
     mem_reservation: 512m
-    # The gateway only needs the registry + its rate-limit store to boot; it
-    # resolves backends dynamically via Eureka (lb://) and returns 503 for any
-    # not-yet-registered service. Depending on every backend's health let a
-    # single unhealthy backend (e.g. loyalty) block the whole entry point.
     depends_on:
       discovery-server:
         condition: service_healthy
@@ -711,40 +446,21 @@ services:
         condition: service_healthy
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
-      # Multi-cell country pin (ISO 3166-1 alpha-2). Read at boot by every
-      # reactor service's CountryMdcConfig and validated against the
-      # InnBucks markets allowlist; ignored by infra services (discovery,
-      # gateway). Sourced from deploy/cells/cell.<iso>.env via cell.sh —
-      # required so a missing cell file fails fast rather than silently
-      # boots in the wrong country.
       INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
-      # Tracing: OFF by default. Set TRACING_ENABLED=true + OTLP_ENDPOINT to an
-      # external OTel collector (none is bundled in this stack) to export spans.
       TRACING_ENABLED: ${TRACING_ENABLED:-false}
       OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
-      # Both Eureka peers are listed comma-separated so the Eureka client fails
-      # over to the surviving node if one peer is restarting or unreachable.
       EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/,http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD}@discovery-server-2:8761/eureka/
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
-      # Redis backs the gateway's RequestRateLimiter token bucket store.
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}
       RATE_LIMIT_REPLENISH_PER_SECOND: ${RATE_LIMIT_REPLENISH_PER_SECOND:-50}
       RATE_LIMIT_BURST_CAPACITY: ${RATE_LIMIT_BURST_CAPACITY:-100}
     ports:
-      # Public API. The only entry point exposed on all interfaces; everything
-      # else (including the management port below) is host-loopback only.
       - "18080:8080"
-      # Management/actuator endpoints (health/info/prometheus). Published ONLY
-      # to host loopback so a host-resident Prometheus can scrape while the
-      # internet cannot — the gateway has no Spring Security and used to leak
-      # /actuator/prometheus when these endpoints shared the 8080 port.
       - "127.0.0.1:19090:9090"
     healthcheck:
-      # Health now lives on the dedicated management port (9090). Wget the same
-      # container-internal path the actuator binds to.
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/actuator/health"]
       interval: 10s
       timeout: 3s
@@ -756,24 +472,10 @@ volumes:
   redis_data:
   kafka_data:
 
-# Shared with the OradianMiddleware stack (deployed separately on the
-# same EC2). Both stacks join this network so user-service /
-# payment-service can reach the middleware as `http://oradian-middleware:8090`
-# instead of dialing localhost (which inside a container points at the
-# container itself). The deploy workflow creates this network on the
-# EC2 if missing — idempotent.
 networks:
-  # Ticketing-internal network — NOT shared with the OradianMiddleware stack.
-  # Postgres / Redis / Kafka / Eureka and every service live here. It is a normal
-  # bridge (egress allowed, so services can still reach the external WhatsApp
-  # gateway), but the OradianMiddleware stack — and anything else on
-  # innbucks-shared — can no longer reach the data / registry tier (audit CR-2/H1/H2).
   default:
     name: innbucks-internal
     driver: bridge
-  # Cross-stack bridge. ONLY user-service + payment-service join this, so they
-  # can reach the Oradian middleware (oradian-middleware:8090). The middleware
-  # joins it from its own stack; the deploy workflow creates it if missing.
   shared:
     name: innbucks-shared
     external: true

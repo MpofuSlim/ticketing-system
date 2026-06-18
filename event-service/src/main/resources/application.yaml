@@ -2,9 +2,6 @@ spring:
   application:
     name: event-service
 
-  # Tests run on real PostgreSQL via Testcontainers (jdbc:tc: URL in
-  # src/test/resources/application-test.yaml + @ActiveProfiles("test"));
-  # the main runtime is PostgreSQL too. No H2 anywhere.
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/event_service}
     driver-class-name: ${DB_DRIVER:org.postgresql.Driver}
@@ -20,8 +17,6 @@ spring:
 
   jpa:
     hibernate:
-      # Schema is owned by Flyway migrations; Hibernate only validates that
-      # the JPA model matches the actual columns at boot.
       ddl-auto: ${JPA_DDL_AUTO:validate}
     show-sql: ${JPA_SHOW_SQL:false}
     properties:
@@ -36,9 +31,6 @@ spring:
   lifecycle:
     timeout-per-shutdown-phase: 30s
 
-  # POST /events accepts a multipart payload (JSON `event` part + optional
-  # `eventBanner` image part). Modern phone photos routinely exceed 5MB, so
-  # the cap is set to match the 10MB enforced in EventService.MAX_BANNER_BYTES.
   servlet:
     multipart:
       max-file-size: 10MB
@@ -50,20 +42,7 @@ jwt:
   expiration: ${JWT_EXPIRATION_MS:86400000}
 
 innbucks:
-  # Multi-cell country pin. Every running JVM is anchored to a single InnBucks
-  # market — startup refuses to boot with an unknown value (see CountryMdcConfig).
-  # Default ZW because the current deployment is the Zimbabwe home market;
-  # cell #2 onwards MUST set INNBUCKS_COUNTRY explicitly per deployment.
   country: ${INNBUCKS_COUNTRY:ZW}
-  # Shared secret booking-service presents on the internal PATCH
-  # /events/{id}/availability/consume call. Same env var as everywhere
-  # else in the ticketing stack; ProductionSecretsGuard refuses the
-  # `change-me-*` placeholder when SPRING_PROFILES_ACTIVE=prod.
-  # NOTE: this placeholder default MUST be byte-identical across every
-  # service (user/event/seat/booking/payment/loyalty). It's the only thing
-  # that lets S2S calls authenticate in a dev/staging run with no
-  # INTERNAL_API_TOKEN env var set. A divergent default = silent 401 on
-  # cross-service calls (e.g. event->user organizer lookup).
   internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
 
 server:
@@ -76,27 +55,15 @@ springdoc:
   api-docs:
     path: /v3/api-docs
 
-# Resolved from the Eureka registry by service name via the @LoadBalanced
-# RestTemplate (see HttpClientConfig). No host:port is configured here any
-# more. (The booking default was previously a wrong localhost:8082 —
-# event-service's own port — which discovery now sidesteps entirely.)
 seat-service:
   base-url: http://seat-service
 
 booking-service:
   base-url: http://booking-service
 
-# user-service is resolved by name via Eureka/LoadBalancer. event-service calls
-# its service-to-service tenant-lookup (POST /users/internal/tenants/lookup) to
-# attach organizer business details to event responses.
 user-service:
   base-url: http://user-service
 
-# Circuit breaker + retry around outbound calls.
-#  - seatCategories: SeatCategoryGateway (fallback = empty category list).
-#  - bookingActiveCounts: BookingGateway, used to compute availableTickets on
-#    every event response. Fallback = empty map, so events fall back to the
-#    stored availableTickets value rather than blocking the response.
 resilience4j:
   circuitbreaker:
     instances:
@@ -135,17 +102,11 @@ resilience4j:
           - org.springframework.web.client.ResourceAccessException
           - java.io.IOException
 
-# Service discovery — register with the Eureka registry (discovery-server) and
-# resolve sibling services by name. EUREKA_SERVER_URL points at the registry;
-# the default targets a local standalone server for laptop dev.
 eureka:
   client:
     service-url:
       defaultZone: ${EUREKA_SERVER_URL:http://localhost:8761/eureka/}
   instance:
-    # Register by IP — a container's own hostname isn't resolvable by its
-    # peers on the shared network. The unique instance-id keeps replicas
-    # from colliding in the registry.
     prefer-ip-address: true
     instance-id: ${spring.application.name}:${random.uuid}
 
@@ -158,17 +119,10 @@ management:
     health:
       probes:
         enabled: true
-      # 'when-authorized' hides component breakdown from anonymous callers
-      # (probes still get UP/DOWN) while letting authenticated tooling debug.
       show-details: when-authorized
   metrics:
     tags:
       application: ${spring.application.name}
-  # Distributed tracing via OTel. Sampling defaults to 10% — flip to 1.0 for
-  # debug sessions, leave low in prod for cost. OTLP_ENDPOINT points at the
-  # OTel collector / Tempo / Jaeger; default localhost is fine for laptop
-  # docker-compose, override in k8s. Set TRACING_ENABLED=false to disable
-  # entirely (no spans recorded, no exporter calls).
   tracing:
     enabled: ${TRACING_ENABLED:false}
     sampling:
@@ -177,15 +131,6 @@ management:
     tracing:
       endpoint: ${OTLP_ENDPOINT:http://localhost:4318/v1/traces}
 
-
-# CORS is configured exclusively on the api-gateway (per PR #182 + the per-service
-# CORS removal). Don't reintroduce a `cors:` block here without first reverting
-# the gateway's RemoveResponseHeader filter — see SecurityConfig for the rationale.
-
 logging:
-  # Log pattern carries two country tags:
-  #   country     — deployment pin (CountryMdcConfig, every request)
-  #   homeCountry — customer's JWT routing claim (JwtFilter, authenticated requests)
-  # A mismatch between the two (post step 7 edge routing) is a wrong-cell signal.
   pattern:
     level: "%5p [${spring.application.name:-},%X{country:-},%X{homeCountry:-},%X{traceId:-},%X{spanId:-},%X{correlationId:-}]"
