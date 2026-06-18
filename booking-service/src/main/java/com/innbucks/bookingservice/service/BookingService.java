@@ -9,6 +9,7 @@ import com.innbucks.bookingservice.event.BookingDomainEvent;
 import com.innbucks.bookingservice.exception.BadRequestException;
 import com.innbucks.bookingservice.exception.BookingConflictException;
 import com.innbucks.bookingservice.exception.DependencyUnavailableException;
+import com.innbucks.bookingservice.exception.LoyaltyServiceUnavailableException;
 import com.innbucks.bookingservice.exception.NotFoundException;
 import com.innbucks.bookingservice.exception.TierRequirementException;
 import com.innbucks.bookingservice.util.MsisdnMasking;
@@ -77,6 +78,11 @@ public class BookingService {
     // INTERNAL_API_TOKEN on the event-service end of the wire.
     @org.springframework.beans.factory.annotation.Value("${innbucks.internal-api-token:}")
     private String eventInternalToken;
+
+    // Same shared fleet secret, presented to loyalty-service's S2S ticketing
+    // endpoints (organizer = merchant). Separate field so the call sites read clearly.
+    @org.springframework.beans.factory.annotation.Value("${innbucks.internal-api-token:}")
+    private String loyaltyInternalToken;
 
     public BookingService(BookingRepository bookingRepository,
                           BookingItemRepository bookingItemRepository,
@@ -824,17 +830,28 @@ public class BookingService {
             log.debug("Loyalty client unavailable; skipping loyalty for bookingId={}", booking.getId());
             return;
         }
-        if (booking.getTenantId() == null) {
-            if (pointsToUse.signum() > 0) {
-                throw new BadRequestException("Loyalty points can't be used on this booking.");
-            }
-            log.debug("No tenantId on booking; skipping loyalty earn for bookingId={}", booking.getId());
+        UUID organizerUuid = booking.getTenantUserUuid();
+        String phone = booking.getPhoneNumber();
+        boolean wantsRedeem = pointsToUse.signum() > 0;
+
+        // Identity + attribution are required for any loyalty op. Missing organizer
+        // (event-service was down at create) or phone (guest / no JWT claim):
+        // redeem fails clearly so the customer isn't silently charged full cash,
+        // while earn just skips — never fail a paid booking only to credit points.
+        if (organizerUuid == null) {
+            if (wantsRedeem) throw new BadRequestException("Loyalty points can't be used on this booking.");
+            log.debug("No organizer on booking; skipping loyalty earn for bookingId={}", booking.getId());
+            return;
+        }
+        if (phone == null || phone.isBlank()) {
+            if (wantsRedeem) throw new BadRequestException("A phone number is required to pay with points.");
+            log.debug("No phone on booking; skipping loyalty earn for bookingId={}", booking.getId());
             return;
         }
 
-        LoyaltyRuleResponse rule = fetchRule(loyalty, booking.getTenantId());
+        LoyaltyRuleResponse rule = fetchRule(loyalty, organizerUuid);
         if (rule == null) {
-            if (pointsToUse.signum() > 0) {
+            if (wantsRedeem) {
                 throw new DependencyUnavailableException("Loyalty rule unavailable; cannot redeem points right now");
             }
             log.debug("Loyalty rule unavailable; skipping earn for bookingId={}", booking.getId());
@@ -854,53 +871,45 @@ public class BookingService {
         }
 
         String reference = booking.getId().toString();
-        if (pointsToUse.signum() > 0) {
-            loyalty.redeem(LoyaltyRedeemRequest.builder()
-                    .customerId(booking.getUserEmail())
-                    .tenantId(booking.getTenantId())
-                    .points(pointsToUse)
-                    .reference(reference)
-                    .build());
+        if (wantsRedeem) {
+            try {
+                loyalty.redeem(LoyaltyRedeemRequest.builder()
+                        .organizerUuid(organizerUuid)
+                        .phoneNumber(phone)
+                        .points(pointsToUse)
+                        .reference(reference)
+                        .build(), loyaltyInternalToken);
+            } catch (LoyaltyServiceUnavailableException ex) {
+                // Loyalty down / circuit open — surface a clean, retryable 503
+                // (redeem is idempotent on the booking reference) instead of the
+                // raw 500 an unhandled RuntimeException would produce.
+                throw new DependencyUnavailableException(ex.getMessage());
+            }
         }
-        // Earn ONLY on the cash portion, per the program rule. Pure-points
-        // confirmations don't accumulate.
+        // Earn ONLY on the cash portion. Best-effort: a failure is queued to
+        // loyalty_earn_retry (inside this confirm transaction, so a rolled-back
+        // confirm leaves no stray row) and drained later — we never fail a paid
+        // booking just because we couldn't credit points.
         if (cashAmount.signum() > 0) {
             try {
                 loyalty.earn(LoyaltyEarnRequest.builder()
-                        .customerId(booking.getUserEmail())
-                        .tenantId(booking.getTenantId())
+                        .organizerUuid(organizerUuid)
+                        .phoneNumber(phone)
                         .cashAmount(cashAmount)
                         .reference(reference)
-                        .build());
+                        .build(), loyaltyInternalToken);
             } catch (Exception ex) {
-                // Earning is best-effort — we never fail a paid booking
-                // because we couldn't credit points. But losing the side-
-                // effect silently meant the customer paid and never got
-                // their points (only a log line, which nobody monitored).
-                //
-                // Now we persist a loyalty_earn_retry row inside the
-                // confirm transaction so a rolled-back confirm doesn't
-                // leave a stray retry. LoyaltyEarnRetryJob drains it on
-                // the next tick with exponential backoff; max-attempts
-                // exhaustion flips the row to `giving_up` and trips a
-                // Prometheus alert via the gauge it publishes.
                 loyaltyEarnRetryService.enqueue(
-                        booking.getId(),
-                        booking.getUserEmail(),
-                        booking.getTenantId(),
-                        cashAmount,
-                        reference,
-                        ex);
+                        booking.getId(), organizerUuid, phone, cashAmount, reference, ex);
             }
         }
     }
 
-    private LoyaltyRuleResponse fetchRule(LoyaltyServiceClient loyalty, String tenantId) {
+    private LoyaltyRuleResponse fetchRule(LoyaltyServiceClient loyalty, UUID organizerUuid) {
         try {
-            ApiResult<LoyaltyRuleResponse> envelope = loyalty.getRule(tenantId);
-            return envelope == null ? null : envelope.getData();
+            return loyalty.getRule(organizerUuid, loyaltyInternalToken);
         } catch (Exception ex) {
-            log.warn("Failed to fetch loyalty rule tenantId={} reason={}", tenantId, ex.getMessage());
+            log.warn("Failed to fetch loyalty rule organizerUuid={} reason={}", organizerUuid, ex.getMessage());
             return null;
         }
     }

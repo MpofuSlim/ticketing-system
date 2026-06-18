@@ -48,10 +48,18 @@ public class LoyaltyEarnRetry {
     @Column(name = "booking_id", nullable = false)
     private UUID bookingId;
 
-    @Column(name = "customer_email", nullable = false)
+    // Identity + attribution for the ticketing earn call. customerEmail/tenantId
+    // are legacy (nullable now) — superseded by these for new rows.
+    @Column(name = "organizer_uuid")
+    private UUID organizerUuid;
+
+    @Column(name = "phone_number", length = 32)
+    private String phoneNumber;
+
+    @Column(name = "customer_email")
     private String customerEmail;
 
-    @Column(name = "tenant_id", nullable = false)
+    @Column(name = "tenant_id")
     private String tenantId;
 
     @Column(name = "cash_amount", nullable = false, precision = 10, scale = 2)
