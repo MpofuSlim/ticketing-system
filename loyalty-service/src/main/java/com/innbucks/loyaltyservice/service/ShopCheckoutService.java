@@ -119,7 +119,8 @@ public class ShopCheckoutService {
         if (hasPoints) {
             Dtos.RedemptionRequest burn = new Dtos.RedemptionRequest(
                     merchantId, user.getId(), pointsAmount,
-                    reference == null ? "shop-checkout" : reference);
+                    reference == null ? "shop-checkout" : reference,
+                    null);
             RedemptionService.RedemptionResult burnResp =
                     redemptionService.redeemPoints(tenantId, merchantId, burn);
             balance = burnResp.balance();
