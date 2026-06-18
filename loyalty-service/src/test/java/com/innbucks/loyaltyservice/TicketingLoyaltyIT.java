@@ -96,6 +96,19 @@ class TicketingLoyaltyIT extends PostgresIntegrationTestBase {
     }
 
     @Test
+    void earn_and_redeem_with_the_same_booking_reference_do_not_collide() {
+        // Production split payment: booking sends the same bookingId to BOTH legs
+        // against one organizer merchant. uq_txn_merchant_reference spans PURCHASE
+        // and REDEMPTION, so the bridge must keep their references distinct.
+        ticketing.earn(organizerUuid, phone, new BigDecimal("100"), "bk-split");
+        userService.promoteByPhone(phone);
+        TicketingLoyaltyService.RedeemResult r =
+                ticketing.redeem(organizerUuid, phone, new BigDecimal("30"), "bk-split");
+        assertThat(r.balanceAfter()).isEqualByComparingTo("70");
+        assertThat(walletService.totalBalance(phone)).isEqualByComparingTo("70");
+    }
+
+    @Test
     void redeem_for_an_unregistered_phone_fails_clearly() {
         // A phone that earned but never registered is PENDING -> not spendable.
         ticketing.earn(organizerUuid, phone, new BigDecimal("50"), "bk-pending-earn");

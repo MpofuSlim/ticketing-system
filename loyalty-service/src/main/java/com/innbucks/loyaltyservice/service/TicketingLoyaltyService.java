@@ -90,28 +90,28 @@ public class TicketingLoyaltyService {
             throw LoyaltyException.badRequest("BAD_AMOUNT", "cashAmount must be greater than zero");
         }
         Merchant m = resolveMerchant(organizerUuid);
-        Dtos.TransactionRequest req = new Dtos.TransactionRequest(
-                m.getId(), null, phoneNumber, TransactionType.PURCHASE,
-                cashAmount, m.getCurrency(), reference);
-        try {
-            Dtos.TransactionResponse resp = transactionService.post(TICKETING_TENANT_ID, m.getId(), req);
-            return new EarnResult(resp.id(), m.getId(),
-                    resp.pointsDelta() == null ? BigDecimal.ZERO : resp.pointsDelta(),
-                    resp.balanceAfter(), false);
-        } catch (LoyaltyException e) {
-            // post() throws DUPLICATE_REFERENCE on replay (it does not replay-return
-            // like redeem); map it to a success so booking's earn-retry job marks
-            // the row succeeded instead of retrying a 409 to giving_up.
-            if (reference != null && "DUPLICATE_REFERENCE".equals(e.getCode())) {
-                LoyaltyTransaction prior = transactions
-                        .findFirstByMerchantIdAndReference(m.getId(), reference)
-                        .orElseThrow(() -> e);
-                return new EarnResult(prior.getId(), m.getId(),
-                        prior.getPointsDelta() == null ? BigDecimal.ZERO : prior.getPointsDelta(),
+        String ref = earnRef(reference);
+        // Idempotency pre-check: a prior earn for this booking replays here so we
+        // never call post() on a replay — post()'s DUPLICATE_REFERENCE throw marks
+        // the shared transaction rollback-only and fails the commit. This also
+        // makes the replay return a success, so booking's earn-retry job drains to
+        // succeeded instead of looping to giving_up.
+        if (ref != null) {
+            var prior = transactions.findFirstByMerchantIdAndReference(m.getId(), ref);
+            if (prior.isPresent()) {
+                LoyaltyTransaction t = prior.get();
+                return new EarnResult(t.getId(), m.getId(),
+                        t.getPointsDelta() == null ? BigDecimal.ZERO : t.getPointsDelta(),
                         walletService.mainWallet(phoneNumber).getBalance(), true);
             }
-            throw e;
         }
+        Dtos.TransactionRequest req = new Dtos.TransactionRequest(
+                m.getId(), null, phoneNumber, TransactionType.PURCHASE,
+                cashAmount, m.getCurrency(), ref);
+        Dtos.TransactionResponse resp = transactionService.post(TICKETING_TENANT_ID, m.getId(), req);
+        return new EarnResult(resp.id(), m.getId(),
+                resp.pointsDelta() == null ? BigDecimal.ZERO : resp.pointsDelta(),
+                resp.balanceAfter(), false);
     }
 
     @Transactional
@@ -124,9 +124,20 @@ public class TicketingLoyaltyService {
         Merchant m = resolveMerchant(organizerUuid);
         LoyaltyUser user = users.findOrCreatePending(TICKETING_TENANT_ID, phoneNumber, m.getId());
         Dtos.RedemptionRequest req = new Dtos.RedemptionRequest(
-                m.getId(), user.getId(), points, "ticket-redeem", reference);
+                m.getId(), user.getId(), points, "ticket-redeem", redeemRef(reference));
         RedemptionService.RedemptionResult r = redemptionService.redeemPoints(TICKETING_TENANT_ID, m.getId(), req);
         return new RedeemResult(r.transactionId(), m.getId(), r.balance());
+    }
+
+    // Earn and redeem for one booking share the merchant, and uq_txn_merchant_reference
+    // spans both PURCHASE and REDEMPTION, so they must use distinct references or the
+    // second leg of a split payment collides.
+    private static String earnRef(String reference) {
+        return reference == null ? null : reference + ":earn";
+    }
+
+    private static String redeemRef(String reference) {
+        return reference == null ? null : reference + ":redeem";
     }
 
     private Merchant resolveMerchant(UUID organizerUuid) {
