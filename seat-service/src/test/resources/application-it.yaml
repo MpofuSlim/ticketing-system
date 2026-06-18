@@ -1,6 +1,3 @@
-# Integration-test profile — Testcontainers Postgres + InMemory seat lock.
-# Redis autoconfig excluded so the IT doesn't dial localhost:6379 during
-# boot; InMemorySeatLockStore is picked because app.lock.store != "redis".
 spring:
   datasource:
     driver-class-name: org.postgresql.Driver
@@ -35,11 +32,6 @@ jwt:
 
 logging:
   level:
-    # Flyway logs migrations applied at INFO; Hibernate's schema validator
-    # logs each table+column lookup at DEBUG. Bumped above the WARN root so
-    # CI surfaces *which* migrations ran and *which* tables the validator
-    # missed — the difference between "Flyway never ran" and "Flyway ran
-    # but the entity expects a column the migration didn't create".
     org.flywaydb: INFO
     org.hibernate.tool.schema: DEBUG
     root: WARN

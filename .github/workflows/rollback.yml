@@ -1,25 +1,5 @@
 name: Rollback
 
-# One-click rollback. Pin the stack to ANY previously-built image SHA in GHCR
-# without needing SSH into the EC2. Same path the release workflow's deploy
-# job uses (rsync compose + scripts → ssh → docker compose pull/up --wait),
-# but the IMAGE_TAG is the operator-supplied SHA instead of github.sha.
-#
-# WHY THIS EXISTS:
-#   Until this workflow existed, rollback was "ssh in and run scripts/deploy.sh
-#   sha-XYZ manually" — fine in a pinch but no audit trail, no concurrency
-#   guard against an in-flight release, and depended on every operator having
-#   the EC2 SSH key. Going through Actions gives us a logged run, the same
-#   `ec2-deploy` concurrency group as release.yml (no overlap with a deploy
-#   that's currently rolling forward), and the GHCR + EC2 secrets live ONLY
-#   in repo secrets, not on individual laptops.
-#
-# WHEN TO USE THIS vs RE-DEPLOYING MASTER:
-#   - If master is broken and you want to pin to the previously-good SHA
-#     right now → use this workflow (faster than reverting + waiting for CI).
-#   - If you can wait for CI on a `git revert` PR → prefer the revert path
-#     because it leaves master and the deployed stack in sync.
-
 on:
   workflow_dispatch:
     inputs:
@@ -37,9 +17,6 @@ permissions:
   packages: read
 
 concurrency:
-  # SAME group as release.yml's deploy job. A rollback while a release is
-  # mid-flight (or vice-versa) would have the two pulling competing image
-  # tags into the same compose stack — serialise.
   group: ec2-deploy
   cancel-in-progress: false
 
@@ -63,11 +40,6 @@ jobs:
           echo "Rolling back to sha-${{ inputs.target_sha }}"
 
       - name: Checkout (for docker-compose.yml + scripts/)
-        # Important: checkout the SAME commit we're rolling back TO so the
-        # compose file + scripts shipped to the EC2 match the image set
-        # being pulled. Rolling back code but leaving today's compose layout
-        # in place is how you get "the image works but the env var it needs
-        # was added two releases ago" foot-guns.
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.target_sha }}

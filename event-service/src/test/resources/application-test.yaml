@@ -1,16 +1,9 @@
 spring:
-  # All tests run against a real PostgreSQL via Testcontainers — no H2.
-  # The jdbc:tc: URL makes Testcontainers' ContainerDatabaseDriver spin up
-  # a postgres:16-alpine container on first connect and tear it down at JVM
-  # exit; no @DynamicPropertySource or base class needed. Requires Docker
-  # (CI has it; local dev needs it running — tests fail fast without it).
   datasource:
     url: jdbc:tc:postgresql:16-alpine:///event_service_test
     driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
   jpa:
     hibernate:
-      # Match production: Flyway owns the schema, Hibernate only validates.
-      # Catches entity/migration drift that H2's create-drop used to mask.
       ddl-auto: validate
     properties:
       hibernate:
@@ -26,9 +19,6 @@ jwt:
   secret: test-test-test-test-test-test-test-test
   expiration: 3600000
 
-# Disable the tenant-uuid backfill runner in tests so @SpringBootTest doesn't
-# try to call user-service at startup (no S2S deps in unit / slice tests).
-# Integration tests that need the runner can override per-test.
 innbucks:
   tenant-uuid-backfill:
     enabled: false

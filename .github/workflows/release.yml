@@ -1,19 +1,5 @@
 name: Release
 
-# One workflow, two jobs:
-#   build  — multi-service Docker matrix: build, Trivy-scan, push to GHCR.
-#            Runs on master, PRs (scan-only, no push, no deploy), tag releases,
-#            and manual dispatch.
-#   deploy — pulls the just-published images on the EC2 and brings the stack
-#            up. Needs the build job. Skipped for PRs.
-#
-# Image identity: every image is tagged with `:sha-<long-commit>` (40-char).
-# That's what the deploy step pulls — never `:latest`, so a half-finished
-# build can't accidentally roll forward and a `git revert` can't roll
-# backward to an older image with the same tag. `:latest` is published only
-# from master, for convenience (`docker pull ghcr.io/.../user-service` from
-# a laptop), and is NEVER what production runs.
-
 on:
   push:
     branches: [master]
@@ -32,7 +18,6 @@ on:
   workflow_dispatch:
 
 concurrency:
-  # Builds for the same ref serialise; a new push cancels the old build.
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
@@ -79,20 +64,11 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          # metadata-action lowercases the owner automatically (GHCR
-          # requires lowercase paths even though GitHub usernames can be
-          # mixed-case).
           images: ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}
           tags: |
-            # Production-deploy tag: every image gets one. github.sha is
-            # 40 chars; this is exactly what the deploy job pulls.
             type=sha,format=long
-            # Convenience tag for laptop pulls — master only.
             type=raw,value=latest,enable={{is_default_branch}}
-            # Version-release tag.
             type=ref,event=tag
-            # PR scanning aid (e.g. pr-123) — not pushed because of the
-            # push-only-when-not-PR guard below.
             type=ref,event=pr
 
       - name: Build and push
@@ -113,12 +89,6 @@ jobs:
             | sudo sh -s -- -b /usr/local/bin
 
       - name: Scan image with Trivy
-        # --ignore-unfixed is intentionally NOT set. A CRITICAL/HIGH CVE
-        # without a published patch is still a CVE — we want to know
-        # about it and consciously decide. Per-vuln waivers live in
-        # `.trivyignore` at the repo root, where each entry MUST carry
-        # a tracking comment (owner + reason + expiry/review date).
-        # A noisy scan is healthier than a silent one.
         run: |
           IMAGE=$(echo "${{ steps.meta.outputs.tags }}" | head -n 1)
           trivy image \
@@ -131,19 +101,12 @@ jobs:
 
   deploy:
     name: Deploy to EC2
-    # Wait for every service's image to land in GHCR before we pull on the
-    # EC2. fail-fast: false in the matrix means we could otherwise pull a
-    # half-built set.
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Don't deploy on PR builds, and don't deploy on tag pushes (tags are
-    # build-only — they advertise a versioned image for future promotion).
     if: github.event_name == 'push' && github.ref == 'refs/heads/master'
         || github.event_name == 'workflow_dispatch'
     concurrency:
-      # Two deploys overlapping would `docker pull` and `compose up` against
-      # the same EC2 at once. Serialise.
       group: ec2-deploy
       cancel-in-progress: false
 
@@ -160,11 +123,6 @@ jobs:
           ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
 
       - name: Sync compose + scripts to EC2
-        # We no longer sync the full source tree — the EC2 doesn't build
-        # anything. It only needs docker-compose.yml (the orchestration
-        # spec) and the deploy/rollback script. --delete cleans up any
-        # files removed since the last deploy. .env is excluded so the
-        # server's production secrets are never touched.
         run: |
           rsync -avz --delete \
             --exclude='.env' \
@@ -174,9 +132,6 @@ jobs:
             ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/home/${{ secrets.EC2_USER }}/superApp/
 
       - name: Pull pinned images + bring the stack up
-        # GHCR is private by default — log in with the workflow's
-        # GITHUB_TOKEN (read:packages scope is implicit). Token is masked
-        # in workflow logs by Actions.
         run: |
           ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
             ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
@@ -202,11 +157,6 @@ jobs:
             docker compose --profile payments pull
 
             echo "Restarting stack ..."
-            # --no-build ensures the EC2 NEVER builds; if a pull failed it
-            # will fail here rather than silently fall back to a local
-            # build. --wait blocks until every service is healthy, so the
-            # workflow only goes green when the stack is actually serving
-            # traffic.
             docker compose --profile payments up -d --no-build --remove-orphans --wait
 
             docker logout ghcr.io

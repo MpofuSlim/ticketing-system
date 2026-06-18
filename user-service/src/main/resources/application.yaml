@@ -15,8 +15,6 @@ spring:
       max-lifetime: ${DB_MAX_LIFETIME_MS:1800000}
   jpa:
     hibernate:
-      # Schema is owned by Flyway migrations; Hibernate only validates that
-      # the JPA model matches the actual columns at boot.
       ddl-auto: ${JPA_DDL_AUTO:validate}
     show-sql: ${JPA_SHOW_SQL:false}
     properties:
@@ -27,15 +25,9 @@ spring:
     enabled: ${FLYWAY_ENABLED:true}
     baseline-on-migrate: false
     locations: classpath:db/migration
-    # Migration placeholders. V18 needs the deployment's INNBUCKS_COUNTRY as
-    # a fallback when backfilling home_country for users whose MSISDN prefix
-    # isn't in the InnBucks markets table (rare; foreign numbers registered
-    # before the cell model existed).
     placeholders:
       innbucks_country: ${INNBUCKS_COUNTRY:ZW}
 
-  # Redis backs the auth-endpoint rate limiters. Same instance the
-  # payment-service velocity counters use — different key prefix.
   data:
     redis:
       host: ${REDIS_HOST:localhost}
@@ -49,53 +41,25 @@ spring:
 
 jwt:
   secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
-  # Access-token TTL is 15 min. Short on purpose: the single-active-session
-  # gate (users.token_version) gives immediate revocation inside user-service,
-  # but downstream services (payment-service, booking-service, etc.) validate
-  # the JWT signature only — they don't know about token_version. A 15 min
-  # ceiling caps the window where a superseded session can still hit those
-  # services to ~15 min. The FE refreshes silently via /auth/refresh against
-  # the 7-day refresh token, so the customer never sees this expiry.
   expiration: ${JWT_EXPIRATION_MS:900000}
-  # Refresh tokens are long-lived, claim-light JWTs (subject + type=refresh only).
-  # Default 7 days; clients exchange them at /auth/refresh for a fresh access token.
   refresh-expiration: ${JWT_REFRESH_EXPIRATION_MS:604800000}
 
-# Cross-service lookup used at login: when a MERCHANT_ADMIN has no loyaltyMerchantId
-# on their TenantProfile, AuthService calls loyalty-service to resolve it from the
-# user's email (Merchant.admin_email), caches the result, and emits the merchantId
-# JWT claim. The shared secret must match loyalty-service's innbucks.internal-api-token.
 loyalty-service:
-  # Resolved from the Eureka registry by name (the client is @LoadBalanced).
   base-url: http://loyalty-service
   connect-timeout-ms: ${LOYALTY_SERVICE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${LOYALTY_SERVICE_READ_TIMEOUT_MS:3000}
 
-# Oradian middleware (S2S customer create). After a tier-2 registration the
-# user-service mirrors the customer into Oradian via POST /internal/customers.
-# `internal-token` must match Oradian middleware's `innbucks.internal-api.token`.
 oradian:
   base-url: ${ORADIAN_BASE_URL:http://localhost:8090}
   internal-token: ${ORADIAN_INTERNAL_TOKEN:change-me-internal-token-change-me-internal-token}
   connect-timeout-ms: ${ORADIAN_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${ORADIAN_READ_TIMEOUT_MS:10000}
 
-# InnBucks core gateway adapter — host-resident service that routes SMS via
-# messenger-interface and payments via veengu-integration. Not in the ticketing
-# Eureka, so it uses a plain RestClient with an explicit URL (same pattern as
-# the oradian block above). Override INNBUCKS_GATEWAY_URL per environment
-# (Docker containers on the same host can reach it via the host IP).
 innbucks-gateway:
   base-url: ${INNBUCKS_GATEWAY_URL:http://localhost:8088}
   connect-timeout-ms: ${INNBUCKS_GATEWAY_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${INNBUCKS_GATEWAY_READ_TIMEOUT_MS:10000}
 
-# External WhatsApp notification gateway used to deliver OTPs and system-user
-# approval (first-time password) messages. It is a third-party service (not in
-# the Eureka registry), so a plain RestClient with an explicit URL. The
-# base-url default is a dev ngrok tunnel — override WHATSAPP_GATEWAY_URL per
-# environment (ngrok URLs rotate). api-key is a secret: set WHATSAPP_API_KEY
-# (ProductionSecretsGuard rejects the change-me placeholder under prod).
 whatsapp:
   base-url: ${WHATSAPP_GATEWAY_URL:https://maximum-implicitly-treefrog.ngrok-free.app}
   api-key: ${WHATSAPP_API_KEY:change-me-whatsapp-api-key}
@@ -103,40 +67,12 @@ whatsapp:
   read-timeout-ms: ${WHATSAPP_READ_TIMEOUT_MS:10000}
 
 innbucks:
-  # Multi-cell country pin. Every running JVM is anchored to a single InnBucks
-  # market — startup refuses to boot with an unknown value (see CountryMdcConfig).
-  # Default ZW because the current deployment is the Zimbabwe home market;
-  # cell #2 onwards MUST set INNBUCKS_COUNTRY explicitly per deployment.
   country: ${INNBUCKS_COUNTRY:ZW}
   internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
-  # Step 7 — per-cell edge routing. JSON map of {ISO 3166-1 alpha-2 → public
-  # base URL}. Used by /cells/lookup (mobile app discovers its home cell)
-  # and by the MSISDN/JWT affinity checks (wrong-cell requests get a
-  # 409 wrong_cell with homeBaseUrl pointing here). Empty default is legal
-  # — wrong-cell still returns the home COUNTRY, just without a URL. Update
-  # every cell's env when a new market goes live; see deploy/cells/cell.example.env.
   cells:
     registry: ${INNBUCKS_CELLS_REGISTRY:{}}
-  # Per-cell core-banking provider behind CoreBankingPort. `oradian` is the
-  # committed default (current behaviour everywhere); the ZW cell flips to
-  # `veengu` once that adapter lands (phase 2 of the provider split).
-  # Validated at startup by CoreBankingProviderConfig — an unknown value
-  # refuses to boot rather than half-wire the context.
   core-banking:
     provider: ${INNBUCKS_CORE_BANKING:oradian}
-  # Rate limits on the public auth endpoints. The gateway exempts
-  # /auth/** from its token-keyed limiter on purpose (no token exists
-  # at login time), so the floor against credential-stuffing /
-  # token-guessing has to live in user-service.
-  #
-  # Two dimensions per endpoint:
-  # - per-identifier: caps attempts against a single account (slows
-  #   targeted brute-force).
-  # - per-ip: caps attempts from a single client (slows a botnet host
-  #   that sprays many accounts).
-  # An exceeded limit returns HTTP 429 with retry-after-seconds in the
-  # body. Counters are sliding-window-ish fixed buckets in Redis with
-  # the configured TTL; reset naturally at TTL expiry.
   auth-rate-limit:
     login:
       per-identifier-max: ${AUTH_LOGIN_PER_IDENTIFIER_MAX:5}
@@ -147,13 +83,6 @@ innbucks:
       per-ip-max: ${AUTH_REFRESH_PER_IP_MAX:60}
       window-seconds: ${AUTH_REFRESH_WINDOW_SECONDS:60}
 
-  # Per-account brute-force lockout. After max-attempts consecutive
-  # wrong passwords, the account is locked for duration-minutes —
-  # subsequent /auth/login attempts return 423 LOCKED with the
-  # lockedUntil timestamp in the body so the FE can render a
-  # countdown. A successful login resets the counter; an expired
-  # lockout auto-resets on the next attempt. Persistent (DB-backed)
-  # so it survives Redis outages and IP rotation.
   account-lockout:
     max-attempts: ${ACCOUNT_LOCKOUT_MAX_ATTEMPTS:7}
     duration-minutes: ${ACCOUNT_LOCKOUT_DURATION_MINUTES:30}
@@ -168,24 +97,11 @@ server:
   port: 8081
   shutdown: graceful
 
-# Service discovery — register with the Eureka registry (discovery-server) and
-# resolve sibling services by name. EUREKA_SERVER_URL points at the registry;
-# the default targets a local standalone server for laptop dev.
 eureka:
   client:
     service-url:
       defaultZone: ${EUREKA_SERVER_URL:http://localhost:8761/eureka/}
   instance:
-    # Eureka registration host. On a single host (laptop dev) the default
-    # prefer-ip-address registers a reachable IP, so local dev is unchanged.
-    # In docker-compose this service is dual-homed (default + shared networks)
-    # and so has two container IPs; registering one fixed IP leaves it
-    # unreachable from peers on the OTHER network (e.g. booking/seat/loyalty on
-    # `default` can't reach a shared-network IP). So compose sets
-    # EUREKA_PREFER_IP_ADDRESS=false + EUREKA_INSTANCE_HOSTNAME=<service-name>:
-    # we register by the compose service name and Docker's embedded DNS resolves
-    # it to the correct per-network IP for whichever caller looks it up. The
-    # unique instance-id keeps replicas from colliding in the registry.
     prefer-ip-address: ${EUREKA_PREFER_IP_ADDRESS:true}
     hostname: ${EUREKA_INSTANCE_HOSTNAME:localhost}
     instance-id: ${spring.application.name}:${random.uuid}
@@ -199,17 +115,10 @@ management:
     health:
       probes:
         enabled: true
-      # 'when-authorized' hides component breakdown from anonymous callers
-      # (probes still get UP/DOWN) while letting authenticated tooling debug.
       show-details: when-authorized
   metrics:
     tags:
       application: ${spring.application.name}
-  # Distributed tracing via OTel. Sampling defaults to 10% — flip to 1.0 for
-  # debug sessions, leave low in prod for cost. OTLP_ENDPOINT points at the
-  # OTel collector / Tempo / Jaeger; default localhost is fine for laptop
-  # docker-compose, override in k8s. Set TRACING_ENABLED=false to disable
-  # entirely (no spans recorded, no exporter calls).
   tracing:
     enabled: ${TRACING_ENABLED:false}
     sampling:
@@ -218,14 +127,6 @@ management:
     tracing:
       endpoint: ${OTLP_ENDPOINT:http://localhost:4318/v1/traces}
 
-
 logging:
-  # Log pattern carries two country tags:
-  #   country     — deployment pin (CountryMdcConfig, every request)
-  #   homeCountry — customer's JWT routing claim (JwtFilter, authenticated requests)
-  # A mismatch between the two (post step 7 edge routing) is a wrong-cell signal.
   pattern:
     level: "%5p [${spring.application.name:-},%X{country:-},%X{homeCountry:-},%X{traceId:-},%X{spanId:-},%X{correlationId:-}]"
-# CORS is configured exclusively on the api-gateway (per PR #182 + the per-service
-# CORS removal). Don't reintroduce a `cors:` block here without first reverting
-# the gateway's RemoveResponseHeader filter — see SecurityConfig for the rationale.

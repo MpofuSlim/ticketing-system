@@ -1,7 +1,4 @@
 spring:
-  # All tests run against real PostgreSQL via Testcontainers (jdbc:tc: URL,
-  # ContainerDatabaseDriver) — no H2. Flyway runs the real migrations;
-  # Hibernate validates against them. Requires Docker (CI has it).
   datasource:
     url: jdbc:tc:postgresql:16-alpine:///seat_service_test
     driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver

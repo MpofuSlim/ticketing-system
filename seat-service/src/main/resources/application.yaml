@@ -17,8 +17,6 @@ spring:
 
   jpa:
     hibernate:
-      # Schema is owned by Flyway migrations; Hibernate only validates that
-      # the JPA model matches the actual columns at boot.
       ddl-auto: ${JPA_DDL_AUTO:validate}
     show-sql: ${JPA_SHOW_SQL:false}
     properties:
@@ -35,10 +33,6 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
-      # Redis is used for distributed seat-locks only; we don't have any
-      # @RedisHash-annotated entities. Without this flag Spring Data Redis
-      # tries to classify every Repository<> bean (SeatRepository, etc.) as
-      # a potential Redis repository and logs a noisy INFO warning on each.
       repositories:
         enabled: false
 
@@ -47,38 +41,19 @@ spring:
 
 app:
   lock:
-    # Default redis: seat locks are distributed state, and the in-memory
-    # alternative silently breaks on the first horizontal scale (each pod
-    # holds its own ConcurrentHashMap, so two customers can grab the same
-    # seat). Set LOCK_STORE=memory for bare-jar local runs without a Redis;
-    # the `test` and `it` profiles already pin store: memory (and `it`
-    # excludes Spring Data Redis autoconfig), so no test needs a Redis.
     store: ${LOCK_STORE:redis}
-  # SeatLockReaper sweeps LOCKED seats whose lock_expires_at has elapsed and
-  # returns them to inventory. Without this, any seat whose Redis TTL expires
-  # before the user confirmed/released is permanently stuck.
   seat-lock-reaper:
     enabled: ${SEAT_LOCK_REAPER_ENABLED:true}
     interval-ms: ${SEAT_LOCK_REAPER_INTERVAL_MS:60000}
     initial-delay-ms: ${SEAT_LOCK_REAPER_INITIAL_DELAY_MS:30000}
     batch-size: ${SEAT_LOCK_REAPER_BATCH_SIZE:200}
 
-# booking-service is queried by the analytics endpoint
-# (GET /seat-categories/{id}/analytics) to enrich the response with who-bought-
-# what data. Configured as an explicit URL because we don't run service
-# discovery. Failures are tolerated — analytics still returns category + seat
-# stats, with bookingServiceReachable=false in the payload.
 booking-service:
-  # Resolved from the Eureka registry by name (the client is @LoadBalanced).
   base-url: http://booking-service
   connect-timeout-ms: ${BOOKING_SERVICE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${BOOKING_SERVICE_READ_TIMEOUT_MS:5000}
 
-# user-service is queried by the @MinTier interceptor so the registration tier
-# always matches the system of record (instead of trusting the JWT's possibly
-# stale tier claim).
 user-service:
-  # Resolved from the Eureka registry by name (the client is @LoadBalanced).
   base-url: http://user-service
   connect-timeout-ms: ${USER_SERVICE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${USER_SERVICE_READ_TIMEOUT_MS:5000}
@@ -97,17 +72,11 @@ springdoc:
   api-docs:
     path: /v3/api-docs
 
-# Service discovery — register with the Eureka registry (discovery-server) and
-# resolve sibling services by name. EUREKA_SERVER_URL points at the registry;
-# the default targets a local standalone server for laptop dev.
 eureka:
   client:
     service-url:
       defaultZone: ${EUREKA_SERVER_URL:http://localhost:8761/eureka/}
   instance:
-    # Register by IP — a container's own hostname isn't resolvable by its
-    # peers on the shared network. The unique instance-id keeps replicas
-    # from colliding in the registry.
     prefer-ip-address: true
     instance-id: ${spring.application.name}:${random.uuid}
 
@@ -120,17 +89,10 @@ management:
     health:
       probes:
         enabled: true
-      # 'when-authorized' hides component breakdown from anonymous callers
-      # (probes still get UP/DOWN) while letting authenticated tooling debug.
       show-details: when-authorized
   metrics:
     tags:
       application: ${spring.application.name}
-  # Distributed tracing via OTel. Sampling defaults to 10% — flip to 1.0 for
-  # debug sessions, leave low in prod for cost. OTLP_ENDPOINT points at the
-  # OTel collector / Tempo / Jaeger; default localhost is fine for laptop
-  # docker-compose, override in k8s. Set TRACING_ENABLED=false to disable
-  # entirely (no spans recorded, no exporter calls).
   tracing:
     enabled: ${TRACING_ENABLED:false}
     sampling:
@@ -139,21 +101,9 @@ management:
     tracing:
       endpoint: ${OTLP_ENDPOINT:http://localhost:4318/v1/traces}
 
-
-# Multi-cell country pin. Every running JVM is anchored to a single InnBucks
-# market — startup refuses to boot with an unknown value (see CountryMdcConfig).
-# Default ZW because the current deployment is the Zimbabwe home market;
-# cell #2 onwards MUST set INNBUCKS_COUNTRY explicitly per deployment.
 innbucks:
   country: ${INNBUCKS_COUNTRY:ZW}
 
 logging:
-  # Log pattern carries two country tags:
-  #   country     — deployment pin (CountryMdcConfig, every request)
-  #   homeCountry — customer's JWT routing claim (JwtFilter, authenticated requests)
-  # A mismatch between the two (post step 7 edge routing) is a wrong-cell signal.
   pattern:
     level: "%5p [${spring.application.name:-},%X{country:-},%X{homeCountry:-},%X{traceId:-},%X{spanId:-},%X{correlationId:-}]"
-# CORS is configured exclusively on the api-gateway (per PR #182 + the per-service
-# CORS removal). Don't reintroduce a `cors:` block here without first reverting
-# the gateway's RemoveResponseHeader filter — see SecurityConfig for the rationale.

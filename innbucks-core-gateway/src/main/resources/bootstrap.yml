@@ -1,6 +1,3 @@
-# core pulls in spring-cloud-starter-bootstrap and a Spring Cloud Config client.
-# The adapter doesn't use a config-server, so disable it here — bootstrap.yml is
-# read in the bootstrap phase, before the config client would try to connect.
 spring:
   cloud:
     config:
