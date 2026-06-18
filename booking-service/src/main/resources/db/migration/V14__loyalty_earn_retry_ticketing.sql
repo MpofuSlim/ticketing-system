@@ -1,4 +1,4 @@
--- V8: ticketing loyalty integration — retry rows carry organizer_uuid + phone.
+-- V14: ticketing loyalty integration — retry rows carry organizer_uuid + phone.
 --
 -- The earn call now targets loyalty-service's S2S ticketing endpoint keyed by
 -- organizer (= merchant) + phone, so the retry row needs those fields. The old
