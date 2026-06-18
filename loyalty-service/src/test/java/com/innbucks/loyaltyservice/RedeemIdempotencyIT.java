@@ -74,12 +74,18 @@ class RedeemIdempotencyIT extends PostgresIntegrationTestBase {
     private UUID tenantId;
     private UUID merchantId;
     private UUID userId;
+    private String phone;
 
     @BeforeEach
     void setUp() {
         when(userServiceClient.getCustomerTier(anyString()))
                 .thenAnswer(inv -> Optional.of(
                         new CustomerTierResponseDTO(inv.getArgument(0), 1, 2)));
+
+        // Unique phone per test method. Wallets are global per phone now, so a
+        // shared phone would accumulate balance across @BeforeEach runs (these
+        // real-DB ITs don't roll back between methods).
+        phone = "+26377" + (System.nanoTime() % 1_000_000_000L);
 
         Tenant t = new Tenant();
         t.setCode("redeem-idem-" + System.nanoTime());
@@ -97,14 +103,14 @@ class RedeemIdempotencyIT extends PostgresIntegrationTestBase {
                 new Dtos.RuleRequest(null, TransactionType.PURCHASE,
                         BigDecimal.ONE, BigDecimal.ONE, null, null, null, null));
 
-        LoyaltyUser u = userService.findOrEnrol(tenantId, "+263770044556", merchantId);
+        LoyaltyUser u = userService.findOrEnrol(tenantId, phone, merchantId);
         userId = u.getId();
 
         // Seed 1000 points so there's plenty to (attempt to) redeem.
         transactionService.post(tenantId, merchantId,
                 new Dtos.TransactionRequest(null, userId, null, TransactionType.PURCHASE,
                         new BigDecimal("1000"), "USD", "SEED-EARN-" + System.nanoTime()));
-        assertThat(walletService.mainWallet(userId).getBalance()).isEqualByComparingTo("1000");
+        assertThat(walletService.mainWallet(phone).getBalance()).isEqualByComparingTo("1000");
     }
 
     @Test
@@ -122,7 +128,7 @@ class RedeemIdempotencyIT extends PostgresIntegrationTestBase {
         assertThat(retry.transactionId())
                 .as("replay returns the original redemption's id")
                 .isEqualTo(first.transactionId());
-        assertThat(walletService.mainWallet(userId).getBalance())
+        assertThat(walletService.mainWallet(phone).getBalance())
                 .as("wallet debited exactly once across the retry")
                 .isEqualByComparingTo("900");
         assertThat(redemptionRowsFor(reference))
@@ -179,7 +185,7 @@ class RedeemIdempotencyIT extends PostgresIntegrationTestBase {
                 .isGreaterThanOrEqualTo(1);
 
         // The money invariant: the wallet was debited by EXACTLY one redemption.
-        assertThat(walletService.mainWallet(userId).getBalance())
+        assertThat(walletService.mainWallet(phone).getBalance())
                 .as("wallet debited exactly once under concurrent same-reference redeems")
                 .isEqualByComparingTo("900");
         assertThat(redemptionRowsFor(reference))

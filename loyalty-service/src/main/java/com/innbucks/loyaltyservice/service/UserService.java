@@ -84,12 +84,17 @@ public class UserService {
         u.setStatus(status);
         users.save(u);
 
-        Wallet main = new Wallet();
-        main.setTenantId(tenantId);
-        main.setUserId(u.getId());
-        main.setLabel("Main");
-        main.setType(Wallet.Type.MAIN);
-        wallets.save(main);
+        // Ensure the customer's single GLOBAL MAIN wallet exists. Keyed by phone,
+        // so a second LoyaltyUser for the same phone (different tenant) reuses the
+        // one wallet rather than creating a per-tenant silo. Idempotent; the
+        // uk_wallet_main partial unique index is the integrity backstop.
+        if (wallets.findFirstByPhoneNumberAndType(phoneNumber, Wallet.Type.MAIN).isEmpty()) {
+            Wallet main = new Wallet();
+            main.setPhoneNumber(phoneNumber);
+            main.setLabel("Main");
+            main.setType(Wallet.Type.MAIN);
+            wallets.save(main);
+        }
 
         return u;
     }

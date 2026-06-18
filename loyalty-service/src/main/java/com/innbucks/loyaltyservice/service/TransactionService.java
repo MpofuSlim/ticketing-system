@@ -8,7 +8,6 @@ import com.innbucks.loyaltyservice.entity.TransactionType;
 import com.innbucks.loyaltyservice.entity.Wallet;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.LoyaltyTransactionRepository;
-import com.innbucks.loyaltyservice.repository.WalletRepository;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -24,7 +23,6 @@ import java.util.UUID;
 public class TransactionService {
 
     private final LoyaltyTransactionRepository transactions;
-    private final WalletRepository wallets;
     private final UserService users;
     private final MerchantService merchants;
     private final WalletService walletService;
@@ -32,14 +30,12 @@ public class TransactionService {
     private final com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics;
 
     public TransactionService(LoyaltyTransactionRepository transactions,
-                              WalletRepository wallets,
                               UserService users,
                               MerchantService merchants,
                               WalletService walletService,
                               RulesEngine rulesEngine,
                               com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics) {
         this.transactions = transactions;
-        this.wallets = wallets;
         this.users = users;
         this.merchants = merchants;
         this.walletService = walletService;
@@ -107,22 +103,17 @@ public class TransactionService {
 
         BigDecimal balance = BigDecimal.ZERO;
         if (eval.points().signum() > 0) {
-            Wallet wallet = pickWallet(u.getId(), eval.pocket());
+            // All points land in the customer's single global MAIN wallet (no
+            // pocket routing), so every earned point is fungible and spendable
+            // on anything in the app.
+            Wallet wallet = walletService.mainWallet(u.getPhoneNumber());
             balance = walletService.apply(wallet.getId(), eval.points(), t.getId(),
-                    "earn:" + req.type().name());
+                    "earn:" + req.type().name(), tenantId);
         }
 
         metrics.incTransactionPosted(t.getType().name());
         metrics.addPointsEarned(eval.points());
         return toResponse(t, balance);
-    }
-
-    private Wallet pickWallet(UUID userId, String pocket) {
-        if (pocket == null) return walletService.mainWallet(userId);
-        return wallets.findByUserId(userId).stream()
-                .filter(w -> pocket.equals(w.getPocket()))
-                .findFirst()
-                .orElseGet(() -> walletService.mainWallet(userId));
     }
 
     public Dtos.TransactionResponse reverse(UUID tenantId, UUID txnId, String reason) {
@@ -165,9 +156,12 @@ public class TransactionService {
 
         BigDecimal balance = BigDecimal.ZERO;
         if (rev.getPointsDelta().signum() != 0) {
-            Wallet w = walletService.mainWallet(orig.getUserId());
+            // The compensating credit/debit lands on the customer's GLOBAL wallet
+            // (resolved by the original owner's phone).
+            String phone = users.require(tenantId, orig.getUserId()).getPhoneNumber();
+            Wallet w = walletService.mainWallet(phone);
             balance = walletService.apply(w.getId(), rev.getPointsDelta(), rev.getId(),
-                    "reverse:" + (reason == null ? "n/a" : reason));
+                    "reverse:" + (reason == null ? "n/a" : reason), tenantId);
         }
 
         metrics.incTransactionPosted("REVERSAL");
@@ -190,9 +184,9 @@ public class TransactionService {
         t.setReference(reason);
         transactions.save(t);
 
-        Wallet w = walletService.mainWallet(u.getId());
+        Wallet w = walletService.mainWallet(u.getPhoneNumber());
         BigDecimal balance = walletService.apply(w.getId(), points, t.getId(),
-                "adjust:" + (reason == null ? "n/a" : reason));
+                "adjust:" + (reason == null ? "n/a" : reason), tenantId);
         metrics.incTransactionPosted("ADJUSTMENT");
         return toResponse(t, balance);
     }

@@ -141,8 +141,8 @@ class LoyaltyServiceIntegrationTest {
                         new Dtos.TransferRequest(alice.getId(), bob.getId(), null,
                                 new BigDecimal("20"), "gift")));
 
-        assertThat(walletService.totalBalance(alice.getId())).isEqualByComparingTo("30");
-        assertThat(walletService.totalBalance(bob.getId())).isEqualByComparingTo("20");
+        assertThat(walletService.totalBalance(alice.getPhoneNumber())).isEqualByComparingTo("30");
+        assertThat(walletService.totalBalance(bob.getPhoneNumber())).isEqualByComparingTo("20");
     }
 
     @Test

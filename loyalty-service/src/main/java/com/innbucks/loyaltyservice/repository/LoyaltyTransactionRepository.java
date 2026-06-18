@@ -105,6 +105,20 @@ public interface LoyaltyTransactionRepository extends JpaRepository<LoyaltyTrans
                                        @Param("from") Instant from,
                                        @Param("to") Instant to);
 
+    /**
+     * Net points originated by a tenant (issued minus redeemed), all-time, from
+     * the ledger. Wallets are global per customer now, so per-tenant outstanding
+     * can no longer come from wallet balances — it's derived here from the
+     * tenant's transaction attribution, which is preserved on every row.
+     */
+    @Query("""
+        SELECT COALESCE(SUM(t.pointsDelta), 0)
+        FROM LoyaltyTransaction t
+        WHERE t.tenantId = :tenantId
+          AND t.status = com.innbucks.loyaltyservice.entity.LoyaltyTransaction.Status.POSTED
+        """)
+    BigDecimal sumNetPointsByTenant(@Param("tenantId") UUID tenantId);
+
     long countByMerchantIdAndCreatedAtBetween(UUID merchantId, Instant from, Instant to);
 
     long countByUserIdAndCreatedAtBetween(UUID userId, Instant from, Instant to);
