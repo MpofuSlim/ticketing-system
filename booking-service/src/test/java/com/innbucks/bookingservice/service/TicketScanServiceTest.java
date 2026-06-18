@@ -7,14 +7,16 @@ import com.innbucks.bookingservice.dto.ScanTicketResponseDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
 import com.innbucks.bookingservice.repository.BookingItemRepository;
+import com.innbucks.bookingservice.repository.ScanAttemptRepository;
 import com.innbucks.bookingservice.security.JwtAuthDetails;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -53,11 +55,17 @@ class TicketScanServiceTest {
 
     @Mock private BookingItemRepository bookingItemRepository;
     @Mock private UserServiceClient userServiceClient;
+    @Mock private ScanAttemptRepository scanAttemptRepository;
+    @Mock private ObjectProvider<MeterRegistry> meterRegistryProvider;
 
-    @InjectMocks private TicketScanService service;
+    private TicketScanService service;
 
     @BeforeEach
     void setUp() {
+        // Constructor injection so the new audit / meter dependencies land on
+        // real fields rather than null-via-@InjectMocks fallback.
+        service = new TicketScanService(bookingItemRepository, userServiceClient,
+                scanAttemptRepository, meterRegistryProvider, "ZW");
         ReflectionTestUtils.setField(service, "internalToken", "test-internal-token");
         // Baseline mirrors the production default: fail CLOSED. The two
         // assignment-service-down cases set this field explicitly per-test.
