@@ -107,7 +107,7 @@ class ConcurrentReversalIT extends PostgresIntegrationTestBase {
         RedemptionService.RedemptionResult redeem = redemptionService.redeemPoints(tenantId, merchantId,
                 new Dtos.RedemptionRequest(null, userId, new BigDecimal("100"), "seed-redeem", null));
         final UUID redemptionTxnId = redeem.transactionId();
-        assertThat(walletService.mainWallet(userId).getBalance()).isEqualByComparingTo("200");
+        assertThat(walletService.mainWallet("+263770011223").getBalance()).isEqualByComparingTo("200");
 
         ExecutorService pool = Executors.newFixedThreadPool(CONCURRENCY);
         CountDownLatch start = new CountDownLatch(1);
@@ -155,7 +155,7 @@ class ConcurrentReversalIT extends PostgresIntegrationTestBase {
 
         // The wallet is credited by the single reversal exactly once: 200 + 100.
         // A double reversal would have produced 300+ (points created from nothing).
-        assertThat(walletService.mainWallet(userId).getBalance())
+        assertThat(walletService.mainWallet("+263770011223").getBalance())
                 .as("wallet credited by exactly one reversal")
                 .isEqualByComparingTo("300");
 

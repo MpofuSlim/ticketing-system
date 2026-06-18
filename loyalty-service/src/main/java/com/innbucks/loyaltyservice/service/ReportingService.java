@@ -13,7 +13,6 @@ import com.innbucks.loyaltyservice.repository.LoyaltyUserRepository;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
 import com.innbucks.loyaltyservice.repository.TenantRepository;
 import com.innbucks.loyaltyservice.repository.VoucherRepository;
-import com.innbucks.loyaltyservice.repository.WalletRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -44,7 +43,6 @@ public class ReportingService {
     private final InvoiceRepository invoices;
     private final FraudAttemptRepository fraud;
     private final CampaignRepository campaigns;
-    private final WalletRepository wallets;
 
     public ReportingService(TenantRepository tenants, MerchantRepository merchants,
                             LoyaltyUserRepository users,
@@ -52,8 +50,7 @@ public class ReportingService {
                             VoucherRepository vouchers,
                             InvoiceRepository invoices,
                             FraudAttemptRepository fraud,
-                            CampaignRepository campaigns,
-                            WalletRepository wallets) {
+                            CampaignRepository campaigns) {
         this.tenants = tenants;
         this.merchants = merchants;
         this.users = users;
@@ -62,7 +59,6 @@ public class ReportingService {
         this.invoices = invoices;
         this.fraud = fraud;
         this.campaigns = campaigns;
-        this.wallets = wallets;
     }
 
     public Dtos.OperatorDashboard operator() {
@@ -110,7 +106,10 @@ public class ReportingService {
                 + vouchers.countByTenantIdAndStatus(tenantId, Voucher.Status.VIEWED)
                 + vouchers.countByTenantIdAndStatus(tenantId, Voucher.Status.PARTIALLY_USED);
         long expired = vouchers.countByTenantIdAndStatus(tenantId, Voucher.Status.EXPIRED);
-        BigDecimal totalBalance = wallets.sumBalanceByTenant(tenantId);
+        // Points are GLOBAL per customer now (wallets aren't tenant-scoped), so a
+        // tenant's outstanding points come from the ledger — net points it
+        // originated (issued minus redeemed) — not from wallet balances.
+        BigDecimal totalBalance = transactions.sumNetPointsByTenant(tenantId);
         if (totalBalance == null) totalBalance = BigDecimal.ZERO;
         long pending = invoices.findByTenantIdAndStatus(tenantId, Invoice.Status.PENDING).size();
         return new Dtos.TenantDashboard(tenantId, merchantCount, activeCampaigns,

@@ -100,7 +100,7 @@ class PhoneKeyedWalletTest {
         // A PENDING LoyaltyUser exists with the credited balance.
         LoyaltyUser created = users.findByTenantIdAndPhoneNumber(t.getId(), phone).orElseThrow();
         assertThat(created.getStatus()).isEqualTo(LoyaltyUser.Status.PENDING);
-        assertThat(walletService.totalBalance(created.getId())).isEqualByComparingTo("100");
+        assertThat(walletService.totalBalance(created.getPhoneNumber())).isEqualByComparingTo("100");
 
         // 2) Admin issues a voucher to the same phone — the same PENDING user
         // is reused (no duplicate row).
@@ -188,7 +188,7 @@ class PhoneKeyedWalletTest {
                 transferService.transfer(t.getId(),
                         new Dtos.TransferRequest(alice.getId(), bob.getId(), null,
                                 new BigDecimal("10"), "legit")));
-        assertThat(walletService.totalBalance(bob.getId())).isEqualByComparingTo("10");
+        assertThat(walletService.totalBalance(bob.getPhoneNumber())).isEqualByComparingTo("10");
     }
 
     private void withSecurityContext(String phoneNumber, String role, Runnable body) {

@@ -104,17 +104,15 @@ public class MeController {
                     "/me endpoints require a JWT with a phoneNumber claim");
         }
         List<LoyaltyUser> projections = users.findByPhoneNumber(phone);
-        BigDecimal totalPoints = BigDecimal.ZERO;
+        // Points are GLOBAL per customer now: one wallet (MAIN + any pockets)
+        // keyed by phone, so the total is a direct read — no per-tenant collapse.
+        BigDecimal totalPoints = wallets.findByPhoneNumber(phone).stream()
+                .map(w -> w.getBalance() == null ? BigDecimal.ZERO : w.getBalance())
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
         long totalVouchers = 0L;
         if (!projections.isEmpty()) {
-            // Two aggregate queries instead of 2N round trips, then collapse
-            // the per-user rows into a single platform-wide total. For a
-            // customer with projections in N tenants the call cost is the
-            // same as for a single tenant.
+            // Vouchers are still per LoyaltyUser projection; sum across tenants.
             List<UUID> userIds = projections.stream().map(LoyaltyUser::getId).toList();
-            for (Object[] row : wallets.sumBalanceGroupedByUserId(userIds)) {
-                totalPoints = totalPoints.add((BigDecimal) row[1]);
-            }
             for (Object[] row : vouchers.countActiveGroupedByUserId(userIds)) {
                 totalVouchers += (Long) row[1];
             }

@@ -68,7 +68,7 @@ public class RedemptionService {
                 if (prior.getType() == TransactionType.REDEMPTION) {
                     // Same logical redemption already happened — replay it, no second debit.
                     return new RedemptionResult(prior.getId(),
-                            walletService.mainWallet(u.getId()).getBalance());
+                            walletService.mainWallet(u.getPhoneNumber()).getBalance());
                 }
                 // Reference is already owned by a different transaction type
                 // (e.g. a PURCHASE) — refuse rather than silently mis-attribute.
@@ -100,9 +100,9 @@ public class RedemptionService {
             transactions.save(t);
         }
 
-        Wallet w = walletService.mainWallet(u.getId());
+        Wallet w = walletService.mainWallet(u.getPhoneNumber());
         BigDecimal balance = walletService.apply(w.getId(), req.points().negate(), t.getId(),
-                "redeem:" + (t.getReference() == null ? "n/a" : t.getReference()));
+                "redeem:" + (t.getReference() == null ? "n/a" : t.getReference()), tenantId);
         metrics.addPointsRedeemed(req.points());
         return new RedemptionResult(t.getId(), balance);
     }

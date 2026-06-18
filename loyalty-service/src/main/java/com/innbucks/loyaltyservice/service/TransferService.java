@@ -66,8 +66,13 @@ public class TransferService {
                     .orElseThrow(() -> LoyaltyException.badRequest("NO_MERCHANT_CONTEXT",
                             "tenant has no merchant configured"));
 
-        Wallet from = walletService.mainWallet(sender.getId());
-        Wallet to = walletService.mainWallet(recipient.getId());
+        Wallet from = walletService.mainWallet(sender.getPhoneNumber());
+        Wallet to = walletService.mainWallet(recipient.getPhoneNumber());
+        // Wallets are global per phone, so two LoyaltyUser projections for the
+        // same customer resolve to one wallet — block that as a self-transfer.
+        if (from.getId().equals(to.getId())) {
+            throw LoyaltyException.badRequest("SELF_TRANSFER", "You can't transfer points to yourself.");
+        }
 
         LoyaltyTransaction debit = new LoyaltyTransaction();
         debit.setTenantId(tenantId);
@@ -90,13 +95,13 @@ public class TransferService {
         // Lock wallets in canonical UUID order to avoid deadlocks when two
         // transfers between the same pair race in opposite directions.
         if (from.getId().compareTo(to.getId()) < 0) {
-            walletService.apply(from.getId(), req.points().negate(), debit.getId(), "transfer-out");
-            walletService.apply(to.getId(), req.points(), credit.getId(), "transfer-in");
+            walletService.apply(from.getId(), req.points().negate(), debit.getId(), "transfer-out", tenantId);
+            walletService.apply(to.getId(), req.points(), credit.getId(), "transfer-in", tenantId);
         } else {
-            walletService.apply(to.getId(), req.points(), credit.getId(), "transfer-in");
-            walletService.apply(from.getId(), req.points().negate(), debit.getId(), "transfer-out");
+            walletService.apply(to.getId(), req.points(), credit.getId(), "transfer-in", tenantId);
+            walletService.apply(from.getId(), req.points().negate(), debit.getId(), "transfer-out", tenantId);
         }
-        return walletService.totalBalance(sender.getId());
+        return walletService.totalBalance(sender.getPhoneNumber());
     }
 
 }

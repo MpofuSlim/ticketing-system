@@ -23,10 +23,20 @@ public class Wallet {
     @GeneratedValue
     private UUID id;
 
-    @Column(name = "user_id", nullable = false)
+    // Global customer key. A wallet belongs to the CUSTOMER (identified by the
+    // platform-stable phone number), not to a per-tenant LoyaltyUser projection.
+    // One MAIN wallet per phone across the whole super-app, so points earned at
+    // any tenant are spendable at any tenant ("one balance").
+    @Column(name = "phone_number", nullable = false, length = 32)
+    private String phoneNumber;
+
+    // Legacy / informational only. Before the global-wallet change a wallet was
+    // owned per (tenant, LoyaltyUser); these columns are retained nullable for
+    // back-compat and audit (first owner) but are NOT the resolution key.
+    @Column(name = "user_id")
     private UUID userId;
 
-    @Column(name = "tenant_id", nullable = false)
+    @Column(name = "tenant_id")
     private UUID tenantId;
 
     @Column(nullable = false, length = 80)

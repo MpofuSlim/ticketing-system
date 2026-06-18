@@ -7,28 +7,21 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
-import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
 public interface WalletRepository extends JpaRepository<Wallet, UUID> {
 
-    List<Wallet> findByUserId(UUID userId);
+    // ---- Global (per-customer, phone-keyed) resolution — the current model ----
 
-    Optional<Wallet> findFirstByUserIdAndType(UUID userId, Wallet.Type type);
+    /** The customer's single wallet of a given type (one MAIN per phone). */
+    Optional<Wallet> findFirstByPhoneNumberAndType(String phoneNumber, Wallet.Type type);
+
+    /** Every wallet (MAIN + pockets) for a customer. */
+    List<Wallet> findByPhoneNumber(String phoneNumber);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT w FROM Wallet w WHERE w.id = :id")
     Optional<Wallet> lockById(@Param("id") UUID id);
-
-    @Query("SELECT COALESCE(SUM(w.balance), 0) FROM Wallet w WHERE w.tenantId = :tenantId")
-    BigDecimal sumBalanceByTenant(@Param("tenantId") UUID tenantId);
-
-    // One-query balance aggregation across multiple users. Used by
-    // /loyalty/users/me/wallet to avoid N round trips when a customer has
-    // LoyaltyUser projections in many tenants.
-    @Query("SELECT w.userId, COALESCE(SUM(w.balance), 0) FROM Wallet w " +
-            "WHERE w.userId IN :userIds GROUP BY w.userId")
-    List<Object[]> sumBalanceGroupedByUserId(@Param("userIds") List<UUID> userIds);
 }

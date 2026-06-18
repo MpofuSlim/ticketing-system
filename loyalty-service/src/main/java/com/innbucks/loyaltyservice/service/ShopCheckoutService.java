@@ -102,7 +102,7 @@ public class ShopCheckoutService {
 
         BigDecimal pointsEarned = BigDecimal.ZERO;
         UUID purchaseTxnId = null;
-        BigDecimal balance = walletBalanceOrZero(user.getId());
+        BigDecimal balance = walletBalanceOrZero(phoneNumber);
 
         if (hasCash) {
             Dtos.TransactionRequest earn = new Dtos.TransactionRequest(
@@ -137,8 +137,8 @@ public class ShopCheckoutService {
                 purchaseTxnId, redemptionTxnId);
     }
 
-    private BigDecimal walletBalanceOrZero(UUID userId) {
-        return wallets.findByUserId(userId).stream()
+    private BigDecimal walletBalanceOrZero(String phoneNumber) {
+        return wallets.findByPhoneNumber(phoneNumber).stream()
                 .filter(w -> w.getType() == com.innbucks.loyaltyservice.entity.Wallet.Type.MAIN)
                 .map(w -> w.getBalance() == null ? BigDecimal.ZERO : w.getBalance())
                 .findFirst()

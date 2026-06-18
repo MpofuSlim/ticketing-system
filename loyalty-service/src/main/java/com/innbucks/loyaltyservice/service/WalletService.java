@@ -6,14 +6,24 @@ import com.innbucks.loyaltyservice.entity.Wallet;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.PointsLedgerRepository;
 import com.innbucks.loyaltyservice.repository.WalletRepository;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.UUID;
 
+/**
+ * Wallets are GLOBAL per customer (keyed by the platform-stable phone number),
+ * not per tenant: a customer has one MAIN wallet across the whole super-app, so
+ * points earned at any tenant are spendable at any tenant. The per-tenant
+ * {@code LoyaltyUser} projection still carries role/status/merchant attribution
+ * and the per-merchant ledger, but the spendable balance lives in the one
+ * wallet resolved here by phone.
+ */
 @Service
 @Transactional
 public class WalletService {
@@ -27,14 +37,13 @@ public class WalletService {
     }
 
     @Transactional(readOnly = true)
-    public List<Dtos.WalletResponse> listForUser(UUID userId) {
-        return wallets.findByUserId(userId).stream().map(WalletService::toResponse).toList();
+    public List<Dtos.WalletResponse> listForPhone(String phoneNumber) {
+        return wallets.findByPhoneNumber(phoneNumber).stream().map(WalletService::toResponse).toList();
     }
 
-    public Dtos.WalletResponse createSubWallet(UUID tenantId, UUID userId, Dtos.SubWalletRequest req) {
+    public Dtos.WalletResponse createSubWallet(String phoneNumber, Dtos.SubWalletRequest req) {
         Wallet w = new Wallet();
-        w.setTenantId(tenantId);
-        w.setUserId(userId);
+        w.setPhoneNumber(phoneNumber);
         w.setLabel(req.label());
         w.setPocket(req.pocket());
         if (req.type() != null) {
@@ -51,22 +60,41 @@ public class WalletService {
         return toResponse(w);
     }
 
-    public Wallet mainWallet(UUID userId) {
-        return wallets.findFirstByUserIdAndType(userId, Wallet.Type.MAIN)
-                .orElseThrow(() -> LoyaltyException.notFound("main wallet"));
+    /**
+     * The customer's single global MAIN wallet, created on first use. Race-safe:
+     * a concurrent first-use that loses the unique-index race re-reads the
+     * winner's row instead of creating a duplicate.
+     */
+    public Wallet mainWallet(String phoneNumber) {
+        return wallets.findFirstByPhoneNumberAndType(phoneNumber, Wallet.Type.MAIN)
+                .orElseGet(() -> createMainWallet(phoneNumber));
+    }
+
+    private Wallet createMainWallet(String phoneNumber) {
+        Wallet w = new Wallet();
+        w.setPhoneNumber(phoneNumber);
+        w.setLabel("Main");
+        w.setType(Wallet.Type.MAIN);
+        try {
+            return wallets.saveAndFlush(w);
+        } catch (DataIntegrityViolationException race) {
+            // Another thread created the customer's MAIN wallet first (uk_wallet_main).
+            return wallets.findFirstByPhoneNumberAndType(phoneNumber, Wallet.Type.MAIN)
+                    .orElseThrow(() -> race);
+        }
     }
 
     /**
-     * Apply a delta atomically to a wallet using a row-level pessimistic lock.
-     * Records a ledger entry. Caller must ensure the wallet belongs to the
-     * expected tenant. Negative balances are rejected at the DB level via the
-     * check constraint; we surface a domain error first when known.
+     * Apply a delta atomically to a wallet using a row-level pessimistic lock and
+     * record a ledger entry. {@code ledgerTenantId} is the tenant where the
+     * activity originated (the global wallet itself is tenant-less), preserving
+     * per-tenant attribution on the audit ledger.
      */
-    public BigDecimal apply(UUID walletId, BigDecimal delta, UUID transactionId, String reason) {
+    public BigDecimal apply(UUID walletId, BigDecimal delta, UUID transactionId, String reason, UUID ledgerTenantId) {
         Wallet w = wallets.lockById(walletId)
                 .orElseThrow(() -> LoyaltyException.notFound("wallet"));
         if (delta.signum() < 0 && w.getLockedUntil() != null
-                && LocalDate.now().isBefore(w.getLockedUntil())) {
+                && LocalDate.now(ZoneOffset.UTC).isBefore(w.getLockedUntil())) {
             throw LoyaltyException.badRequest("WALLET_LOCKED", "wallet is locked until " + w.getLockedUntil());
         }
         BigDecimal newBalance = w.getBalance().add(delta);
@@ -76,7 +104,7 @@ public class WalletService {
         w.setBalance(newBalance);
 
         PointsLedger entry = new PointsLedger();
-        entry.setTenantId(w.getTenantId());
+        entry.setTenantId(ledgerTenantId);
         entry.setWalletId(walletId);
         entry.setTransactionId(transactionId);
         entry.setDelta(delta);
@@ -87,8 +115,8 @@ public class WalletService {
     }
 
     @Transactional(readOnly = true)
-    public BigDecimal totalBalance(UUID userId) {
-        return wallets.findByUserId(userId).stream()
+    public BigDecimal totalBalance(String phoneNumber) {
+        return wallets.findByPhoneNumber(phoneNumber).stream()
                 .map(Wallet::getBalance).reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
