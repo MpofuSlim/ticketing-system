@@ -176,15 +176,17 @@ public class BookingService {
         // releases the held tickets back to the category counter.
         LocalDateTime expiresAt = LocalDateTime.now(ZoneOffset.UTC).plusMinutes(holdTtlMinutes);
 
-        // Resolve the owning tenant once so loyalty earn/redeem can be
-        // attributed at confirm without another event-service round trip.
-        // Also captures the stable cross-service organizer uuid that
-        // backs the team-member scan-authorization check. Best-effort —
-        // a null EventLookupDTO leaves both fields null and the scan
-        // path falls back to the email-based tenantId comparison.
-        EventLookupDTO eventLookup = userEmail == null
-                ? null
-                : lookupEvent(request.getEventId());
+        // Capture the owning organizer's stable cross-service uuid so the
+        // ticket scan path can authorize the redeemer (events.tenant_user_uuid
+        // must equal the scanner's JWT organizerUuid). Best-effort: if
+        // event-service is unreachable lookupEvent returns null and the
+        // booking is created without it — a scan of such a ticket later
+        // refuses with WRONG_ORGANIZER, since the dead email-based tenantId
+        // fallback no longer compiles (event-service dropped that field).
+        // Runs for guests too (previously guarded on userEmail != null,
+        // which left every guest ticket unscannable at the gate and
+        // invisible in organizer revenue reports).
+        EventLookupDTO eventLookup = lookupEvent(request.getEventId());
         String tenantId = eventLookup == null ? null : eventLookup.getTenantId();
         UUID tenantUserUuid = eventLookup == null ? null : eventLookup.getTenantUserUuid();
 

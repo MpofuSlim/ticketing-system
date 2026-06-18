@@ -795,19 +795,29 @@ class BookingServiceTest {
     }
 
     @Test
-    void createBooking_guestPath_skipsTenantLookup() {
-        // Regression guard for the createBooking hot-path optimization:
-        // a booking with userEmail=null (guest checkout) MUST NOT call
-        // event-service for the tenant lookup. The tenantId is only read
-        // at /confirm time to attribute loyalty, and a guest has no
-        // customer account to credit — so the round trip is pure dead
-        // weight. Under load it was a major contributor to per-booking
-        // latency because event-service enriches /events/{id} with
-        // seat-categories synchronously.
+    void createBooking_guestPath_capturesTenantUserUuidFromEventService() {
+        // Replaces the old "guest MUST NOT call event-service" optimization
+        // guard — that optimization was the bug. Without tenantUserUuid on
+        // the row, a guest's CONFIRMED ticket fails the gate scan
+        // (WRONG_ORGANIZER, because TicketScanService matches the scanner's
+        // organizerUuid JWT claim against booking.tenantUserUuid), and the
+        // booking is invisible in every organizer report (those scope by
+        // tenantUserUuid). Guest checkout is a wired, intended path, so the
+        // event-service lookup must run for it too — same as logged-in.
         BookingRepository bookingRepo = mock(BookingRepository.class);
         BookingItemRepository itemRepo = mock(BookingItemRepository.class);
         RequestFixture fx = request(new BigDecimal("20.00"));
+
+        UUID organizerUuid = UUID.randomUUID();
         EventServiceClient eventClient = mock(EventServiceClient.class);
+        com.innbucks.bookingservice.dto.EventLookupDTO eventLookup =
+                com.innbucks.bookingservice.dto.EventLookupDTO.builder()
+                        .eventId(fx.eventId)
+                        .tenantUserUuid(organizerUuid)
+                        .build();
+        when(eventClient.getEvent(fx.eventId))
+                .thenReturn(ApiResult.ok("ok", eventLookup));
+
         @SuppressWarnings("unchecked")
         org.springframework.beans.factory.ObjectProvider<EventServiceClient> provider =
                 mock(org.springframework.beans.factory.ObjectProvider.class);
@@ -821,7 +831,53 @@ class BookingServiceTest {
         // Guest path: userEmail = null.
         service.createBooking(null, 2, "+263770000001", fx.request);
 
-        verify(eventClient, never()).getEvent(any());
+        // The lookup MUST run on the guest path.
+        verify(eventClient).getEvent(fx.eventId);
+        // And the captured organizer uuid MUST land on the saved booking,
+        // so a later scan/ report can resolve to the organizer.
+        // createBooking saves the booking more than once (PENDING insert,
+        // post-items update); atLeastOnce matches the rest of this suite.
+        ArgumentCaptor<Booking> saved = ArgumentCaptor.forClass(Booking.class);
+        verify(bookingRepo, atLeastOnce()).save(saved.capture());
+        assertEquals(organizerUuid, saved.getValue().getTenantUserUuid(),
+                "guest booking must carry tenantUserUuid for scan + report scoping");
+        assertNull(saved.getValue().getUserEmail(),
+                "guest path still leaves userEmail null — the lookup is the only change");
+    }
+
+    @Test
+    void createBooking_guestPath_eventServiceDown_proceedsWithNullTenantUserUuid() {
+        // Failure-isolation contract — event-service being down does NOT
+        // break a guest booking: lookupEvent swallows the failure and
+        // returns null, the booking is created with tenantUserUuid=null
+        // (legacy / unscannable, same fate a logged-in user's booking
+        // gets under the same outage). Pinned because adding event-service
+        // to the guest hot path made this surface area visible.
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        RequestFixture fx = request(new BigDecimal("20.00"));
+
+        EventServiceClient eventClient = mock(EventServiceClient.class);
+        when(eventClient.getEvent(any())).thenThrow(new RuntimeException("event-service down"));
+
+        @SuppressWarnings("unchecked")
+        org.springframework.beans.factory.ObjectProvider<EventServiceClient> provider =
+                mock(org.springframework.beans.factory.ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(eventClient);
+
+        BookingService service = new BookingService(bookingRepo, itemRepo,
+                successfulInventory(), stubClient(fx), mock(ApplicationEventPublisher.class),
+                new QrCodeGenerator(), null, provider, null,
+                mock(PlatformTransactionManager.class));
+
+        service.createBooking(null, 2, "+263770000001", fx.request);
+
+        // createBooking saves the booking more than once (PENDING insert,
+        // post-items update); atLeastOnce matches the rest of this suite.
+        ArgumentCaptor<Booking> saved = ArgumentCaptor.forClass(Booking.class);
+        verify(bookingRepo, atLeastOnce()).save(saved.capture());
+        assertNull(saved.getValue().getTenantUserUuid(),
+                "event-service outage leaves tenantUserUuid null — booking still succeeds");
     }
 
     // ---- reverseConfirmedBooking (audit #3 — saga compensation) ----
