@@ -33,6 +33,7 @@ class TransactionControllerSecurityTest extends ControllerSecurityTestBase {
 
     @MockitoBean TransactionService transactionService;
     @MockitoBean TransferService transferService;
+    @MockitoBean com.innbucks.loyaltyservice.service.RedemptionService redemptionService;
     @Autowired LoyaltyUserRepository loyaltyUsers;
 
     // Bodies satisfy @Valid so requests reach the @PreAuthorize gate.
@@ -198,6 +199,85 @@ class TransactionControllerSecurityTest extends ControllerSecurityTestBase {
                         .header("Authorization", bearer(aliceToken))
                         .header("X-Tenant-Id", tenant.toString()))
                 .andExpect(status().isOk());
+    }
+
+    // --- SHOP_USER — till-operations role ---
+    // Per the role design, SHOP_USER does the daily till ops (earn, raw points
+    // redeem) but NOT the admin/supervisor ops (reverse, adjust). These tests
+    // pin both halves of that boundary.
+
+    @Test
+    void shop_user_can_post_transaction() throws Exception {
+        // SHOP_USER posts an earn — the till operator's bread-and-butter call.
+        UUID tenant = newTenant("txn-shopuser-earn");
+        joinTenant(tenant, "till-user@test.local");
+        UUID merchant = UUID.randomUUID();
+        UUID shop = UUID.randomUUID();
+
+        when(transactionService.post(any(UUID.class), any(UUID.class),
+                any(com.innbucks.loyaltyservice.dto.Dtos.TransactionRequest.class)))
+                .thenReturn(new com.innbucks.loyaltyservice.dto.Dtos.TransactionResponse(
+                        UUID.randomUUID(),
+                        com.innbucks.loyaltyservice.entity.TransactionType.PURCHASE,
+                        new java.math.BigDecimal("100.00"),
+                        new java.math.BigDecimal("100.0000"),
+                        new java.math.BigDecimal("5100.0000"),
+                        null, null, null, "SHOP-test", java.time.Instant.now()));
+
+        String token = TestJwtFactory.shopUser("till-user@test.local", merchant, shop, jwtSecret);
+        mockMvc.perform(post("/loyalty/transactions")
+                        .header("Authorization", bearer(token))
+                        .header("X-Tenant-Id", tenant.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_TXN_BODY))
+                .andExpect(status().isCreated());
+    }
+
+    @Test
+    void shop_user_can_post_redeem() throws Exception {
+        // SHOP_USER burns points at the till — the raw redeem path (§4.4 in
+        // the POS guide).
+        UUID tenant = newTenant("txn-shopuser-redeem");
+        joinTenant(tenant, "till-user@test.local");
+        UUID merchant = UUID.randomUUID();
+        UUID shop = UUID.randomUUID();
+
+        when(redemptionService.redeemPoints(any(UUID.class), any(UUID.class),
+                any(com.innbucks.loyaltyservice.dto.Dtos.RedemptionRequest.class)))
+                .thenReturn(new com.innbucks.loyaltyservice.service.RedemptionService.RedemptionResult(
+                        UUID.randomUUID(), new java.math.BigDecimal("4500.0000")));
+
+        String token = TestJwtFactory.shopUser("till-user@test.local", merchant, shop, jwtSecret);
+        mockMvc.perform(post("/loyalty/redeem")
+                        .header("Authorization", bearer(token))
+                        .header("X-Tenant-Id", tenant.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_REDEMPTION_BODY))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void shop_user_cannot_reverse_transaction() throws Exception {
+        // SHOP_USER is deliberately NOT allowed to reverse — refund / void is a
+        // supervisor (SHOP_ADMIN+) call. Keeps junior staff from undoing money.
+        String token = TestJwtFactory.shopUser(
+                "till-user@test.local", UUID.randomUUID(), UUID.randomUUID(), jwtSecret);
+        mockMvc.perform(post("/loyalty/transactions/{id}/reverse", UUID.randomUUID())
+                        .header("Authorization", bearer(token)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void shop_user_cannot_adjust_points() throws Exception {
+        // SHOP_USER cannot post a goodwill credit — manual ledger adjustment is
+        // a back-office / admin operation, never a till operation.
+        String token = TestJwtFactory.shopUser(
+                "till-user@test.local", UUID.randomUUID(), UUID.randomUUID(), jwtSecret);
+        mockMvc.perform(post("/loyalty/transactions/adjust")
+                        .header("Authorization", bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(EMPTY))
+                .andExpect(status().isForbidden());
     }
 
     @Test
