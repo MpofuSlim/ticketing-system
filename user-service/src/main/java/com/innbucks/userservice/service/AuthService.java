@@ -190,14 +190,6 @@ public class AuthService {
     // AccountLockedException doesn't actually need to suppress rollback
     // (it throws without any writes) but is listed for clarity in case
     // we add side-effects later.
-    // noRollbackFor: the wrong-password branch persists the
-    // failed_login_attempts increment (and possibly the locked_until
-    // stamp) and THEN throws InvalidCredentialsException so the caller
-    // sees a 400. Without this, Spring's default rollback would undo
-    // the save and the lockout counter would never accumulate.
-    // AccountLockedException doesn't actually need to suppress rollback
-    // (it throws without any writes) but is listed for clarity in case
-    // we add side-effects later.
     @Transactional(noRollbackFor = {
             InvalidCredentialsException.class,
             AccountLockedException.class

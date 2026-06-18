@@ -87,8 +87,6 @@ public class PaymentOpsController {
         this.expectedInternalToken = expectedInternalToken;
     }
 
-    // ------------------------------------------------------------ exceptions
-
     public enum AgeBucket { UNDER_24H, H24_TO_72H, OVER_72H }
 
     /** One workbasket item — everything an operator needs to start digging. */
@@ -210,8 +208,6 @@ public class PaymentOpsController {
                 items.isEmpty() ? "Workbasket is empty" : items.size() + " exception(s) in the workbasket",
                 queue));
     }
-
-    // ------------------------------------------------------------ recon runs
 
     @GetMapping("/recon-runs")
     @SecurityRequirements({})
@@ -349,8 +345,6 @@ public class PaymentOpsController {
         return ResponseEntity.ok(ApiResult.ok(
                 "Reconciliation " + run.getStatus() + " for " + day, run));
     }
-
-    // ---------------------------------------------------------------- helpers
 
     private ExceptionItem item(Payment p, Instant now, String why) {
         long ageMinutes = Duration.between(p.getCreatedAt(), now).toMinutes();

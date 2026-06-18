@@ -24,8 +24,6 @@ class CellAffinityCheckerTest {
         return checker;
     }
 
-    // --- requireDomesticMsisdn ----------------------------------------------
-
     @Test
     void requireDomesticMsisdn_domesticZw_passes() {
         zwChecker("{}").requireDomesticMsisdn("+263772123456");
@@ -74,8 +72,6 @@ class CellAffinityCheckerTest {
         zwChecker("{}").requireDomesticMsisdn("   ");
     }
 
-    // --- requireDomesticIfMsisdn (login identifier) -------------------------
-
     @Test
     void requireDomesticIfMsisdn_emailIdentifier_isNoOp() {
         // We cannot route by email — let the request through; the JWT
@@ -93,8 +89,6 @@ class CellAffinityCheckerTest {
         // Domestic phone — passes.
         checker.requireDomesticIfMsisdn("+263772123456");
     }
-
-    // --- requireDomesticCountry (JWT homeCountry claim) ---------------------
 
     @Test
     void requireDomesticCountry_matchingClaim_passes() {

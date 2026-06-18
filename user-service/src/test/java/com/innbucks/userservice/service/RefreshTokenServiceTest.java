@@ -145,8 +145,6 @@ class RefreshTokenServiceTest {
         assertTrue(ex.getMessage().contains("not recognised"));
     }
 
-    // ----- Device binding -----
-
     @Test
     void issueNewFamily_storesSha256HashOfDeviceId_notTheRawValue() {
         // The DB column is 64 chars (hex SHA-256). The raw device id must

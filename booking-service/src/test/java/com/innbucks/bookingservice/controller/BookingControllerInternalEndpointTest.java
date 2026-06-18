@@ -77,8 +77,6 @@ class BookingControllerInternalEndpointTest {
         verifyNoInteractions(notifications);
     }
 
-    // --- GET /bookings/internal/{id} : the S2S read payment-service uses ---
-
     @Test
     void internalGet_validToken_returnsBooking_ownershipBypassed() {
         UUID id = UUID.randomUUID();
@@ -115,8 +113,6 @@ class BookingControllerInternalEndpointTest {
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
         verifyNoInteractions(bookingService);
     }
-
-    // --- PATCH /bookings/internal/{id}/extend-hold : pre-mint hold extension ---
 
     @Test
     void extendHold_validToken_delegatesWithTheRequestedDeadline() {

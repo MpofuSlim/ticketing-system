@@ -44,7 +44,6 @@ class AdminUserControllerTest {
     @Test
     @WithMockUser(roles = "SUPER_ADMIN")
     void testListUsersReturnsDefaultServicesAsBundle() throws Exception {
-        // Create a test user with ticketing and loyalty bundles
         User testUser = User.builder()
                 .firstName("Test")
                 .lastName("User")
@@ -75,7 +74,6 @@ class AdminUserControllerTest {
     @Test
     @WithMockUser(roles = "SUPER_ADMIN")
     void testListUsersWithActiveFilterReturnsCorrectBundles() throws Exception {
-        // Create an inactive user with ticketing bundle only
         User inactiveUser = User.builder()
                 .firstName("Inactive")
                 .lastName("User")
@@ -166,7 +164,6 @@ class AdminUserControllerTest {
     @Test
     @WithMockUser(roles = "SUPER_ADMIN")
     void testUpdateActiveStatusReturnsDefaultServicesAsBundle() throws Exception {
-        // Create a test user with loyalty bundle
         User loyaltyUser = User.builder()
                 .firstName("Loyalty")
                 .lastName("Organizer")
@@ -190,8 +187,6 @@ class AdminUserControllerTest {
         assertThat(responseBody).contains("\"defaultServices\":[\"loyalty\"]");
         assertThat(responseBody).doesNotContain("\"payments\"");
     }
-
-    // ---- GET /admin/users/merchants (SUPER_ADMIN-only MERCHANT_ADMIN + EVENT_ORGANIZER listing) ----
 
     @Test
     @WithMockUser(roles = "SUPER_ADMIN")

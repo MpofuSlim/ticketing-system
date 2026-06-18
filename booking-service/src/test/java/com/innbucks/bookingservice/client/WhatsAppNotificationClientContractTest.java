@@ -161,8 +161,6 @@ class WhatsAppNotificationClientContractTest {
         wireMock.verify(0, postRequestedFor(urlEqualTo("/api/messages/custom-notification")));
     }
 
-    // ---- POST /api/messages/event-qr-code (scannable e-ticket) ----
-
     @Test
     @DisplayName("e-ticket happy path: 200 → returns normally; pins the to/eventName/qrCodePath wire shape + header")
     void sendEventQrCode_happyPath_postsExpectedPayloadAndHeader() {

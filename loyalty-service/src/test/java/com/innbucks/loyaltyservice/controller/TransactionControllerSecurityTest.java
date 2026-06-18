@@ -48,10 +48,6 @@ class TransactionControllerSecurityTest extends ControllerSecurityTestBase {
             """;
     private static final String EMPTY = "{}";
 
-    // ------------------------------------------------------------------
-    // 401: no token
-    // ------------------------------------------------------------------
-
     @Test
     void post_transaction_without_token_returns_401() throws Exception {
         mockMvc.perform(post("/loyalty/transactions")
@@ -76,10 +72,6 @@ class TransactionControllerSecurityTest extends ControllerSecurityTestBase {
                 .andExpect(status().isUnauthorized());
     }
 
-    // ------------------------------------------------------------------
-    // 401: present-but-invalid token (covers JwtFilter fix)
-    // ------------------------------------------------------------------
-
     @Test
     void post_transaction_with_malformed_token_returns_401() throws Exception {
         mockMvc.perform(post("/loyalty/transactions")
@@ -88,10 +80,6 @@ class TransactionControllerSecurityTest extends ControllerSecurityTestBase {
                         .content(VALID_TXN_BODY))
                 .andExpect(status().isUnauthorized());
     }
-
-    // ------------------------------------------------------------------
-    // 403: wrong role on admin-only endpoints
-    // ------------------------------------------------------------------
 
     @Test
     void customer_cannot_post_transaction() throws Exception {
@@ -121,10 +109,6 @@ class TransactionControllerSecurityTest extends ControllerSecurityTestBase {
                 .andExpect(status().isForbidden());
     }
 
-    // ------------------------------------------------------------------
-    // 400: missing X-Tenant-Id on a tenant-scoped endpoint
-    // ------------------------------------------------------------------
-
     @Test
     void admin_without_tenant_header_returns_400() throws Exception {
         String admin = jwt("admin@test.local", "MERCHANT_ADMIN");
@@ -134,10 +118,6 @@ class TransactionControllerSecurityTest extends ControllerSecurityTestBase {
                         .content(VALID_TXN_BODY))
                 .andExpect(status().isBadRequest());
     }
-
-    // ------------------------------------------------------------------
-    // 403: cross-tenant — admin not a member of the tenant they target
-    // ------------------------------------------------------------------
 
     @Test
     void admin_who_is_not_member_of_tenant_returns_403() throws Exception {
@@ -153,14 +133,11 @@ class TransactionControllerSecurityTest extends ControllerSecurityTestBase {
                 .andExpect(status().isForbidden());
     }
 
-    // ------------------------------------------------------------------
     // GET /users/{id}/transactions — IDOR / cross-customer leak guards.
     // Verifies the gates added when closing the audit's HIGH finding:
     //   1. tenant header required
     //   2. target user must belong to that tenant
     //   3. caller must own the target unless they're an admin role
-    // ------------------------------------------------------------------
-
     @Test
     void recent_without_tenant_header_returns_400() throws Exception {
         String customerToken = TestJwtFactory.builder("alice@test.local")

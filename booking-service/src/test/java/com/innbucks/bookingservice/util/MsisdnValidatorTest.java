@@ -14,8 +14,6 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class MsisdnValidatorTest {
 
-    // ---- the bug that started this -----------------------------------------
-
     @Test
     void zimbabweNumberMissingADigit_isRejected() {
         // 11 digits; a valid ZW mobile is 12 (+263 + 9). This is the exact
@@ -29,8 +27,6 @@ class MsisdnValidatorTest {
         assertThat(MsisdnValidator.normalizeToE164("+263782606983", "ZW"))
                 .contains("+263782606983");
     }
-
-    // ---- canonicalisation: no '+', spaces, local form ----------------------
 
     @Test
     void localFormWithoutPlus_usesDefaultRegion_andGainsE164Plus() {
@@ -52,16 +48,12 @@ class MsisdnValidatorTest {
                 .contains("+263782606983");
     }
 
-    // ---- foreign (cross-cell) numbers validate by their own country code ----
-
     @Test
     void foreignNumberWithPlus_validatesByItsOwnCountryCode_notDefaultRegion() {
         // A Kenyan number presented to a ZW cell: the +254 wins over default ZW.
         assertThat(MsisdnValidator.normalizeToE164("+254712345678", "ZW"))
                 .contains("+254712345678");
     }
-
-    // ---- junk / empty -------------------------------------------------------
 
     @Test
     void blankOrNull_isRejected() {

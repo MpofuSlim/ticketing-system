@@ -128,7 +128,6 @@ class BookingNotificationGatewayTest {
 
             @Override
             public void configureDefault(Function defaultConfiguration) {
-                // no-op
             }
         };
     }

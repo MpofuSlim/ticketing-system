@@ -12,8 +12,6 @@ class MerchantFeeCalculatorTest {
     private static final BigDecimal ZERO = BigDecimal.ZERO;
     private static final BigDecimal FACE = new BigDecimal("20.00");
 
-    // --- FIXED ----------------------------------------------------------
-
     @Test
     void fixed_returnsFlatAmount_regardlessOfFaceValue() {
         BigDecimal fee = MerchantFeeCalculator.compute(
@@ -27,8 +25,6 @@ class MerchantFeeCalculatorTest {
                 Merchant.FeeType.FIXED, new BigDecimal("0.50"), ZERO, ZERO);
         assertThat(fee).isEqualByComparingTo("0.50");
     }
-
-    // --- PERCENTAGE -----------------------------------------------------
 
     @Test
     void percentage_scalesWithFaceValue() {
@@ -56,8 +52,6 @@ class MerchantFeeCalculatorTest {
         assertThat(fee).isEqualByComparingTo("0.20");
     }
 
-    // --- FIXED_PLUS_PERCENTAGE ------------------------------------------
-
     @Test
     void fixedPlusPercentage_sumsBothLegs() {
         // $0.30 + 1.5% of $20 = $0.30 + $0.30 = $0.60
@@ -74,8 +68,6 @@ class MerchantFeeCalculatorTest {
                 new BigDecimal("0.30"), ZERO, FACE);
         assertThat(fee).isEqualByComparingTo("0.30");
     }
-
-    // --- Edge cases -----------------------------------------------------
 
     @Test
     void nullType_returnsZero() {

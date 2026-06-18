@@ -367,8 +367,6 @@ class TransfersControllerTest {
         verify(oradian, never()).submitDepositTransfer(any(), any(), any());
     }
 
-    // ----- /payments/withdraw -----
-
     private static WithdrawalRequest withdrawalRequest(String accountId) {
         // transactionDate / transactionBranchID / overrideLimitCheck are
         // server-stamped — clients don't supply them, so leave null on input.
@@ -551,8 +549,6 @@ class TransfersControllerTest {
         verify(oradian).submitWithdrawal(forwarded.capture(), any(), any());
         assertEquals("", forwarded.getValue().getNotes());
     }
-
-    // ----- ledger interactions -----
 
     @Test
     void deposit_writesPendingThenMarksSucceeded_onHappyPath() {
@@ -787,8 +783,6 @@ class TransfersControllerTest {
                 "controller must forward the FE Idempotency-Key to the Oradian transfer call");
     }
 
-    // ----- KYC tier + account status gates -----
-
     @Test
     void transfer_returns403_whenTierIsBelow2() {
         JwtUtil jwt = mock(JwtUtil.class);
@@ -873,8 +867,6 @@ class TransfersControllerTest {
         verifyNoInteractions(oradian);
     }
 
-    // ----- Velocity / daily caps -----
-
     @Test
     void transfer_propagatesLimitServiceRejection_andDoesNotTouchLedgerOrOradian() {
         JwtUtil jwt = mock(JwtUtil.class);
@@ -950,8 +942,6 @@ class TransfersControllerTest {
         assertTrue(resp.getBody().getMessage().contains("Closed"));
         verify(oradian, never()).submitWithdrawal(any(), any(), any());
     }
-
-    // ----- GET /payments/transactions (history endpoint) -----
 
     private static Transaction ledgerRow(TransactionType type, TransactionStatus status, String amount) {
         return Transaction.builder()
@@ -1101,8 +1091,6 @@ class TransfersControllerTest {
         assertEquals(HttpStatus.UNAUTHORIZED, resp.getStatusCode());
         verifyNoInteractions(repo);
     }
-
-    // ----- GET /payments/transactions/{id} (detail endpoint) -----
 
     @Test
     void getTransaction_returnsRowOwnedByCaller() {

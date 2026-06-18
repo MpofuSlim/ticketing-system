@@ -58,8 +58,6 @@ public abstract class ControllerSecurityTestBase {
                 new CustomerTierResponseDTO("+263770000000", 1, 2)));
     }
 
-    // ----- tenant + membership helpers -----
-
     /** Creates a tenant with a unique code and returns its id. */
     protected UUID newTenant(String code) {
         Tenant t = new Tenant();
@@ -75,8 +73,6 @@ public abstract class ControllerSecurityTestBase {
         m.setEmail(email);
         tenantMemberRepository.save(m);
     }
-
-    // ----- JWT helpers -----
 
     /** Mints a JWT signed with the test jwt.secret. */
     protected String jwt(String email, String role) {

@@ -96,7 +96,7 @@ class EventServiceTest {
         when(mapper.toDTO(any(Event.class))).thenReturn(null);
 
         UpdateEventRequestDTO req = new UpdateEventRequestDTO();
-        req.setTotalCapacity(120); // diff +20
+        req.setTotalCapacity(120);
 
         service.updateEvent(TENANT_1, eventId, req);
 
@@ -105,7 +105,7 @@ class EventServiceTest {
 
         Event saved = savedCaptor.getValue();
         assertEquals(120, saved.getTotalCapacity());
-        assertEquals(80, saved.getAvailableTickets()); // 60 + 20
+        assertEquals(80, saved.getAvailableTickets());
     }
 
     @Test
@@ -361,8 +361,6 @@ class EventServiceTest {
         assertTrue(result.getSeatCategories().isEmpty());
     }
 
-    // --- deactivate / reject / approve --------------------------------------
-
     private static Event baseEvent(UUID eventId, UUID tenantUserUuid) {
         return Event.builder()
                 .eventId(eventId).tenantUserUuid(tenantUserUuid).title("T").venue("V")
@@ -477,8 +475,6 @@ class EventServiceTest {
         assertEquals("Event not found", ex.getMessage());
         verify(repo, never()).save(any());
     }
-
-    // ---- event-change attendee notifications (booking-service fan-out trigger) ----
 
     private Event existingEventFor(UUID eventId) {
         return Event.builder()

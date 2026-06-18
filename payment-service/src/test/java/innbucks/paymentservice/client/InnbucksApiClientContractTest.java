@@ -450,8 +450,6 @@ class InnbucksApiClientContractTest {
                 .isInstanceOf(InnbucksApiTransientException.class);
     }
 
-    // ---- mini statement (settlement reconciliation) -------------------------
-
     /** The doc's sample mini-statement (entry array is named "code"). */
     private static final String MINI_STATEMENT_OK = """
             {

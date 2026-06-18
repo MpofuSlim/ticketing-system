@@ -38,8 +38,6 @@ class LoginRateLimiterTest {
                 redis);
     }
 
-    // ---- login: per-identifier cap ----
-
     @Test
     void checkLogin_allows_whenCountStaysUnderCap() {
         when(ops.increment(anyString())).thenReturn(1L, 2L, 3L);
@@ -147,8 +145,6 @@ class LoginRateLimiterTest {
         assertDoesNotThrow(() -> limiter.checkLogin("alice@example.com", "1.2.3.4"));
     }
 
-    // ---- refresh ----
-
     @Test
     void checkRefresh_usesHigherCap_thanLogin() {
         // perIdentifierMax for refresh is 10. Hitting 8 should still
@@ -198,8 +194,6 @@ class LoginRateLimiterTest {
         assertTrue(ex.getMessage().toLowerCase().contains("address"));
         verify(ops, never()).increment(contains(":id:"));
     }
-
-    // ---- constructor validation ----
 
     @Test
     void constructor_rejectsNonPositiveLimit() {

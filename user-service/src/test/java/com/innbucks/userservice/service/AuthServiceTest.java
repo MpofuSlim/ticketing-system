@@ -561,8 +561,6 @@ class AuthServiceTest {
         assertEquals(8L, versionCaptor.getValue());
     }
 
-    // ----- Failed-login lockout -----
-
     private User aliceWithAttempts(int attempts, java.time.Instant lockedUntil) {
         return User.builder()
                 .id(101L)
@@ -872,8 +870,6 @@ class AuthServiceTest {
         assertEquals(0, user.getFailedLoginAttempts());
         assertNull(user.getLockedUntil());
     }
-
-    // ----- change-password — typed exception (not the generic catch-all) -----
 
     /**
      * Builds an AuthService whose JwtUtil + TokenRevocationService accept any

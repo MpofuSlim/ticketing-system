@@ -27,11 +27,9 @@ public class Seat {
     @JoinColumn(name = "category_id", nullable = false)
     private SeatCategory category;
 
-    // e.g. "A", "B", "C" (section)
     @Column(name = "row_label", nullable = false)
     private String sectionLabel;
 
-    // e.g. 1, 2, 3
     @Column(nullable = false)
     private Integer seatNumber;
 

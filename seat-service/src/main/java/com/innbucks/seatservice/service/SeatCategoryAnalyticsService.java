@@ -202,7 +202,6 @@ public class SeatCategoryAnalyticsService {
                 .orElse(null);
         BigDecimal potential = potentialRevenue(category);
 
-        // Sort + page slice.
         List<CategoryBookingDTO> sorted = items.stream()
                 .sorted(Comparator.comparing(CategoryBookingDTO::getBookedAt,
                         Comparator.nullsLast(Comparator.reverseOrder())))

@@ -45,8 +45,6 @@ class TransferLimitServiceTest {
         return new TransferLimitService(PER_TX, PER_DAY, redis);
     }
 
-    // ---------- enforce: per-transaction cap ----------
-
     @Test
     void enforce_throws_whenAmountExceedsPerTransactionCap() {
         // Single-shot guard runs BEFORE Redis. A typo turning "100" into
@@ -58,8 +56,6 @@ class TransferLimitServiceTest {
         assertTrue(ex.getMessage().contains("Per-transaction limit"));
         verifyNoInteractions(redis);
     }
-
-    // ---------- enforce: atomic INCRBY ----------
 
     @Test
     void enforce_atomicallyIncrementsRedisCounter_keyedByAccountAndDate() {
@@ -122,8 +118,6 @@ class TransferLimitServiceTest {
                 () -> newService().enforce(ACCOUNT, new BigDecimal("0.0001")));
     }
 
-    // ---------- enforce: fail-closed on Redis unreachable ----------
-
     @Test
     void enforce_failsClosed_whenRedisIsUnreachable() {
         // Banking-grade default: if we can't verify the cap, reject. Better
@@ -149,8 +143,6 @@ class TransferLimitServiceTest {
                 () -> newService().enforce(ACCOUNT, new BigDecimal("100")));
         assertTrue(ex.getMessage().contains("temporarily unavailable"));
     }
-
-    // ---------- releaseBudget ----------
 
     @Test
     void releaseBudget_decrementsTheCounter_byTheAmount() {
@@ -188,8 +180,6 @@ class TransferLimitServiceTest {
         newService().releaseBudget(ACCOUNT, new BigDecimal("1"), null);
         verifyNoInteractions(ops);
     }
-
-    // ---------- constructor ----------
 
     @Test
     void constructor_refusesNonPositiveLimits() {

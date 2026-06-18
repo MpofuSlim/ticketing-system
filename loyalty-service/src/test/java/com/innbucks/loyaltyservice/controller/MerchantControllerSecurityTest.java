@@ -26,10 +26,6 @@ class MerchantControllerSecurityTest extends ControllerSecurityTestBase {
             {"name":"Test Merchant","billingCycle":"MONTHLY"}
             """;
 
-    // ------------------------------------------------------------------
-    // 401: no token
-    // ------------------------------------------------------------------
-
     @Test
     void post_merchant_without_token_returns_401() throws Exception {
         mockMvc.perform(post("/loyalty/merchants")
@@ -44,20 +40,12 @@ class MerchantControllerSecurityTest extends ControllerSecurityTestBase {
                 .andExpect(status().isUnauthorized());
     }
 
-    // ------------------------------------------------------------------
-    // 401: malformed token
-    // ------------------------------------------------------------------
-
     @Test
     void get_merchants_with_malformed_token_returns_401() throws Exception {
         mockMvc.perform(get("/loyalty/merchants")
                         .header("Authorization", "Bearer garbage"))
                 .andExpect(status().isUnauthorized());
     }
-
-    // ------------------------------------------------------------------
-    // 403: wrong role
-    // ------------------------------------------------------------------
 
     @Test
     void customer_cannot_create_merchant() throws Exception {
@@ -94,10 +82,6 @@ class MerchantControllerSecurityTest extends ControllerSecurityTestBase {
                 .andExpect(status().isForbidden());
     }
 
-    // ------------------------------------------------------------------
-    // 400: missing X-Tenant-Id
-    // ------------------------------------------------------------------
-
     @Test
     void admin_without_tenant_header_returns_400() throws Exception {
         String admin = jwt("admin@test.local", "MERCHANT_ADMIN");
@@ -105,10 +89,6 @@ class MerchantControllerSecurityTest extends ControllerSecurityTestBase {
                         .header("Authorization", bearer(admin)))
                 .andExpect(status().isBadRequest());
     }
-
-    // ------------------------------------------------------------------
-    // 403: cross-tenant
-    // ------------------------------------------------------------------
 
     @Test
     void admin_who_is_not_member_of_tenant_returns_403() throws Exception {

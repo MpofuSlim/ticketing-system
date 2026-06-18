@@ -109,8 +109,6 @@ public class InnbucksApiClient {
                 && notBlank(properties.getUsername()) && notBlank(properties.getPassword());
     }
 
-    // ------------------------------------------------------------- generate
-
     /**
      * Issue a PAYMENT-type InnBucks code for {@code amountCents}. Single
      * attempt (circuit breaker only — see class javadoc). A non-zero
@@ -182,8 +180,6 @@ public class InnbucksApiClient {
         }
     }
 
-    // ---------------------------------------------------------------- query
-
     /**
      * Code status via {@code POST /api/code/inquiry}, keyed by the
      * {@code code} the customer pays (NOT the authNumber — the inquiry
@@ -236,8 +232,6 @@ public class InnbucksApiClient {
         }));
     }
 
-    // ------------------------------------------------------------ statement
-
     /**
      * The merchant's code mini-statement — InnBucks' OWN record of recent
      * code transactions, used by settlement reconciliation as the
@@ -272,8 +266,6 @@ public class InnbucksApiClient {
             }
         }));
     }
-
-    // ------------------------------------------------------------------ auth
 
     /** Run an authed call; on 401, force one token refresh and replay once. */
     private <T> T withAuthRetryOn401(java.util.function.Function<String, T> call) {
@@ -345,8 +337,6 @@ public class InnbucksApiClient {
         return Instant.now().plus(properties.getTokenTtl());
     }
 
-    // ------------------------------------------------------------- resilience
-
     private <T> T executeIdempotent(Supplier<T> supplier) {
         Supplier<T> withCb = CircuitBreaker.decorateSupplier(circuitBreaker, supplier);
         Supplier<T> decorated = Retry.decorateSupplier(retry, withCb);
@@ -364,8 +354,6 @@ public class InnbucksApiClient {
                     "InnBucks API is not configured — set BANK_API_URL/BANK_API_KEY/BANK_API_USERNAME/BANK_API_PASSWORD", 503);
         }
     }
-
-    // ---------------------------------------------------------- classification
 
     private CodeGenerationResult classifyGeneration(String raw) {
         Map<String, Object> parsed = parseJson(raw);

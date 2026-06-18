@@ -131,12 +131,6 @@ public class OradianMiddlewareClient {
         return execute(() -> doGetDepositsForMsisdn(msisdn));
     }
 
-    // ------------------------------------------------------------------
-    //  Inner call implementations — same wire logic as before, but every
-    //  thrown exception is correctly typed (transient vs permanent) so
-    //  the Retry instance can act on its retry-exceptions config.
-    // ------------------------------------------------------------------
-
     private DepositTransferResponse doSubmitDepositTransfer(
             DepositTransferRequest request, String idempotencyKey, String ownerMsisdn) {
         try {

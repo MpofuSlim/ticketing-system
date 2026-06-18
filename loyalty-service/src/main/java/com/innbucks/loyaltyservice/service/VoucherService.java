@@ -283,7 +283,6 @@ public class VoucherService {
             }
         }
 
-        // ensure merchant belongs to the tenant
         merchants.requireMerchant(tenantId, merchantId);
 
         v.setUsesRemaining(v.getUsesRemaining() - 1);

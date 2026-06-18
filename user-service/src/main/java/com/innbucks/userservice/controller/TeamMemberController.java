@@ -358,8 +358,6 @@ public class TeamMemberController {
                 teamMemberService.resetTemporaryPassword(teamMemberUuid)));
     }
 
-    // ===================== event assignments =====================
-
     @GetMapping("/{teamMemberUuid}/events")
     @PreAuthorize("hasRole('EVENT_ORGANIZER')")
     @Operation(

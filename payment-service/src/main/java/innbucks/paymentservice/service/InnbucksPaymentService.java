@@ -292,7 +292,6 @@ public class InnbucksPaymentService {
         return value == null ? null : value.toString();
     }
 
-    /** Thrown by the service for validation failures the controller maps to 4xx. */
     /** Outcome of a customer-triggered instant status check on an open code. */
     public enum InstantCheckOutcome { PAID, EXPIRED, PENDING }
 

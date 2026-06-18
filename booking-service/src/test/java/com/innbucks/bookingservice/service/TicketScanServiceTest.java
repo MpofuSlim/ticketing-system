@@ -195,8 +195,6 @@ class TicketScanServiceTest {
         verify(bookingItemRepository, never()).claimRedemption(any(), any(), any(), any());
     }
 
-    // ===================== per-event assignment =====================
-
     @Test
     void scan_teamMemberNotAssignedToEvent_returnsNotAssigned() {
         UUID organizerUuid = UUID.randomUUID();

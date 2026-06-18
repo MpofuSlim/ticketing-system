@@ -701,8 +701,6 @@ public class BookingService {
                 booking.getEventId(), count, data.getAvailableTickets());
     }
 
-    // Backward-compatible overload: confirm with no points/cash split. Used
-    // by callers (tests, payment-service) that don't yet know about loyalty.
     /**
      * Extend a PENDING booking's seat hold to AT LEAST {@code holdUntil} —
      * called S2S by payment-service the moment it is about to mint an InnBucks
@@ -960,8 +958,6 @@ public class BookingService {
             return null;
         }
     }
-
-    // ==================== HELPERS ====================
 
     private int maxSeatsForTier(int tier) {
         return switch (tier) {
