@@ -25,6 +25,11 @@ public class Merchant {
     @Column(name = "tenant_id", nullable = false)
     private UUID tenantId;
 
+    // Set only on auto-provisioned ticketing merchants: the event organizer
+    // (user_uuid) this merchant represents. Unique when set (uk_merchant_organizer).
+    @Column(name = "organizer_uuid")
+    private UUID organizerUuid;
+
     @Column(nullable = false, length = 200)
     private String name;
 
