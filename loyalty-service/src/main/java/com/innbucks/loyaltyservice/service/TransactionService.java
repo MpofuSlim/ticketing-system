@@ -126,7 +126,11 @@ public class TransactionService {
     }
 
     public Dtos.TransactionResponse reverse(UUID tenantId, UUID txnId, String reason) {
-        LoyaltyTransaction orig = transactions.findById(txnId)
+        // PESSIMISTIC_WRITE lock on the original so two concurrent reversals
+        // serialize: the loser blocks here, then re-reads status=REVERSED below
+        // and is rejected — instead of both inserting a compensating credit and
+        // crediting the wallet twice (points created out of nothing).
+        LoyaltyTransaction orig = transactions.lockById(txnId)
                 .orElseThrow(() -> LoyaltyException.notFound("transaction"));
         if (!orig.getTenantId().equals(tenantId)) {
             throw LoyaltyException.forbidden("CROSS_TENANT", "wrong tenant");
@@ -149,7 +153,15 @@ public class TransactionService {
         rev.setPointsDelta(orig.getPointsDelta().negate());
         rev.setReversesId(orig.getId());
         rev.setReference(orig.getReference() == null ? null : "REV-" + orig.getReference());
-        transactions.save(rev);
+        // saveAndFlush so the uq_txn_reverses_id unique index (V20) surfaces a
+        // second reversal as a clean ALREADY_REVERSED here — and crucially
+        // BEFORE we credit the wallet below — rather than as a 500 at commit.
+        // Belt-and-suspenders with the row lock above.
+        try {
+            transactions.saveAndFlush(rev);
+        } catch (DataIntegrityViolationException dup) {
+            throw LoyaltyException.conflict("ALREADY_REVERSED", "This transaction has already been reversed.");
+        }
 
         BigDecimal balance = BigDecimal.ZERO;
         if (rev.getPointsDelta().signum() != 0) {
