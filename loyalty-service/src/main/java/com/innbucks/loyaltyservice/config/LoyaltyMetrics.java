@@ -33,6 +33,8 @@ public class LoyaltyMetrics {
     private final Counter pointsEarned;
     private final Counter pointsRedeemed;
     private final Counter pointsExpired;
+    private final Counter reconciliationDrift;
+    private final Counter reconciliationRepaired;
     private final Timer redemptionLatency;
 
     public LoyaltyMetrics(MeterRegistry registry) {
@@ -64,6 +66,19 @@ public class LoyaltyMetrics {
         this.pointsExpired = Counter.builder("loyalty.points.expired")
                 .description("Sum of points released by expiry (breakage)")
                 .baseUnit("points")
+                .register(registry);
+        // Integrity signal: wallets whose cached balance drifted from the
+        // ledger (the source of truth). The invariant is zero drift, so ANY
+        // increase is page-worthy — alert on increase(loyalty_reconciliation_drift_total[2d]) > 0.
+        // If auto-fix is off, the same stuck wallet re-counts each daily run,
+        // which is the intended "persistent unrepaired drift" escalation.
+        this.reconciliationDrift = Counter.builder("loyalty.reconciliation.drift")
+                .description("Wallets found with balance != sum(ledger delta) by the daily reconciliation job")
+                .baseUnit("wallets")
+                .register(registry);
+        this.reconciliationRepaired = Counter.builder("loyalty.reconciliation.repaired")
+                .description("Drifting wallets whose balance was rebuilt from the ledger (auto-fix enabled)")
+                .baseUnit("wallets")
                 .register(registry);
         // Percentile histogram lets dashboards graph p50/p95/p99 for the
         // single most performance-sensitive call in the service.
@@ -130,6 +145,16 @@ public class LoyaltyMetrics {
 
     public void addPointsExpired(BigDecimal amount) {
         if (amount != null && amount.signum() > 0) pointsExpired.increment(amount.doubleValue());
+    }
+
+    /** Records that {@code count} wallets were found drifting in a reconciliation run. */
+    public void incReconciliationDrift(long count) {
+        if (count > 0) reconciliationDrift.increment(count);
+    }
+
+    /** Records that {@code count} drifting wallets were rebuilt from the ledger. */
+    public void incReconciliationRepaired(long count) {
+        if (count > 0) reconciliationRepaired.increment(count);
     }
 
     /**
