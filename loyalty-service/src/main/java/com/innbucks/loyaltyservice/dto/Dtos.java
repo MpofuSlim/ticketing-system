@@ -246,7 +246,13 @@ public class Dtos {
             @Schema(example = "500.0000", description = "Points to redeem.")
             @Positive BigDecimal points,
             @Schema(example = "Counter redemption by cashier", nullable = true)
-            String reason
+            String reason,
+            @Schema(example = "a3b9c1d2-1234-5678-9abc-def012345678", nullable = true,
+                    description = "Idempotency key — a stable, caller-supplied reference for this logical " +
+                                  "redemption (e.g. the booking id). A repeat redeem with the same " +
+                                  "(merchant, reference) replays the original instead of debiting the wallet " +
+                                  "again, so a retry can't double-spend. Omit for one-off redemptions.")
+            String reference
     ) {}
 
     // merchantId from JWT (SHOP_ADMIN) or request body (MERCHANT_ADMIN); null means tenant-wide template.

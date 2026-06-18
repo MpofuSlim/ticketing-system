@@ -7,6 +7,7 @@ import com.innbucks.loyaltyservice.entity.TransactionType;
 import com.innbucks.loyaltyservice.entity.Wallet;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.LoyaltyTransactionRepository;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -54,18 +55,54 @@ public class RedemptionService {
         users.requireSpendable(u);
         var m = merchants.requireMerchant(tenantId, merchantId);
 
+        // Idempotency: when the caller supplies a stable reference (e.g. the
+        // booking id), a repeat redeem must NOT debit the wallet a second time.
+        // A retry (network blip, double-tap) replays the original redemption.
+        // The uq_txn_merchant_reference partial unique index (V16, which covers
+        // REDEMPTION rows) is the race backstop behind this pre-check.
+        String reference = req.reference();
+        if (reference != null) {
+            var existing = transactions.findFirstByMerchantIdAndReference(m.getId(), reference);
+            if (existing.isPresent()) {
+                LoyaltyTransaction prior = existing.get();
+                if (prior.getType() == TransactionType.REDEMPTION) {
+                    // Same logical redemption already happened — replay it, no second debit.
+                    return new RedemptionResult(prior.getId(),
+                            walletService.mainWallet(u.getId()).getBalance());
+                }
+                // Reference is already owned by a different transaction type
+                // (e.g. a PURCHASE) — refuse rather than silently mis-attribute.
+                throw LoyaltyException.conflict("DUPLICATE_REFERENCE",
+                        "This reference is already used by a non-redemption transaction.");
+            }
+        }
+
         LoyaltyTransaction t = new LoyaltyTransaction();
         t.setTenantId(tenantId);
         t.setMerchantId(m.getId());
         t.setUserId(u.getId());
         t.setType(TransactionType.REDEMPTION);
         t.setPointsDelta(req.points().negate());
-        t.setReference(req.reason());
-        transactions.save(t);
+        // Store the idempotency reference when provided; otherwise fall back to
+        // the free-text reason (unchanged behaviour for callers without a key).
+        t.setReference(reference != null ? reference : req.reason());
+
+        if (reference != null) {
+            // saveAndFlush BEFORE the wallet debit so a concurrent duplicate
+            // trips the unique index here (→ 409) rather than after points moved.
+            try {
+                transactions.saveAndFlush(t);
+            } catch (DataIntegrityViolationException dup) {
+                throw LoyaltyException.conflict("DUPLICATE_REFERENCE",
+                        "A redemption with this reference is already being processed.");
+            }
+        } else {
+            transactions.save(t);
+        }
 
         Wallet w = walletService.mainWallet(u.getId());
         BigDecimal balance = walletService.apply(w.getId(), req.points().negate(), t.getId(),
-                "redeem:" + (req.reason() == null ? "n/a" : req.reason()));
+                "redeem:" + (t.getReference() == null ? "n/a" : t.getReference()));
         metrics.addPointsRedeemed(req.points());
         return new RedemptionResult(t.getId(), balance);
     }
