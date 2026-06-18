@@ -58,6 +58,11 @@ user-service:
   read-timeout-ms: ${USER_SERVICE_READ_TIMEOUT_MS:5000}
 
 loyalty:
+  points:
+    # Points expire this many days after each batch (lot) is earned. Default ~1
+    # month. Redemptions burn lots FIFO (soonest-to-expire first); a daily sweep
+    # releases expired remainders as breakage.
+    expiry-days: ${LOYALTY_POINTS_EXPIRY_DAYS:30}
   voucher:
     secret: ${LOYALTY_VOUCHER_SECRET:change-me-voucher-secret-change-me-voucher-secret}
     default-validity-days: ${LOYALTY_VOUCHER_DEFAULT_VALIDITY_DAYS:365}
@@ -73,6 +78,7 @@ loyalty:
   scheduler:
     expiry-cron: ${LOYALTY_EXPIRY_CRON:0 5 * * * *}
     invoice-cron: ${LOYALTY_INVOICE_CRON:0 30 1 * * *}
+    points-expiry-cron: ${LOYALTY_POINTS_EXPIRY_CRON:0 15 * * * *}
 
 # Shared secret presented as the X-Internal-Token header by other backends
 # (today: user-service at login) when calling /loyalty/internal/**. Must match

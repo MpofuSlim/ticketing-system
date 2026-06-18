@@ -32,6 +32,7 @@ public class LoyaltyMetrics {
     private final Counter pendingPromoted;
     private final Counter pointsEarned;
     private final Counter pointsRedeemed;
+    private final Counter pointsExpired;
     private final Timer redemptionLatency;
 
     public LoyaltyMetrics(MeterRegistry registry) {
@@ -56,6 +57,12 @@ public class LoyaltyMetrics {
                 .register(registry);
         this.pointsRedeemed = Counter.builder("loyalty.points.redeemed")
                 .description("Sum of points debited from customer wallets (REDEMPTION)")
+                .baseUnit("points")
+                .register(registry);
+        // Breakage: points released by expiry. A material financial figure
+        // (expired points = released liability) and a churn signal.
+        this.pointsExpired = Counter.builder("loyalty.points.expired")
+                .description("Sum of points released by expiry (breakage)")
                 .baseUnit("points")
                 .register(registry);
         // Percentile histogram lets dashboards graph p50/p95/p99 for the
@@ -119,6 +126,10 @@ public class LoyaltyMetrics {
 
     public void addPointsRedeemed(BigDecimal amount) {
         if (amount != null && amount.signum() > 0) pointsRedeemed.increment(amount.doubleValue());
+    }
+
+    public void addPointsExpired(BigDecimal amount) {
+        if (amount != null && amount.signum() > 0) pointsExpired.increment(amount.doubleValue());
     }
 
     /**
