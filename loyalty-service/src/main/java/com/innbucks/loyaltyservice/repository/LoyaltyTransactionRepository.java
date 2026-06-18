@@ -2,9 +2,11 @@ package com.innbucks.loyaltyservice.repository;
 
 import com.innbucks.loyaltyservice.entity.LoyaltyTransaction;
 import com.innbucks.loyaltyservice.entity.TransactionType;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -17,6 +19,17 @@ import java.util.UUID;
 public interface LoyaltyTransactionRepository extends JpaRepository<LoyaltyTransaction, UUID> {
 
     Optional<LoyaltyTransaction> findFirstByMerchantIdAndReference(UUID merchantId, String reference);
+
+    /**
+     * Pessimistic-write lock on a single transaction row. Used by
+     * {@code TransactionService.reverse} so two concurrent reversals of the same
+     * original serialize: the first holds the lock, flips status to REVERSED and
+     * commits; the second blocks, then re-reads status=REVERSED and is rejected
+     * with ALREADY_REVERSED instead of inserting a second compensating credit.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT t FROM LoyaltyTransaction t WHERE t.id = :id")
+    Optional<LoyaltyTransaction> lockById(@Param("id") UUID id);
 
     List<LoyaltyTransaction> findTop50ByUserIdOrderByCreatedAtDesc(UUID userId);
 
