@@ -42,6 +42,12 @@ user-service:
 loyalty:
   points:
     expiry-days: ${LOYALTY_POINTS_EXPIRY_DAYS:30}
+    # Points per currency unit when redeeming. Platform-wide (points are global).
+    redeem-rate: ${LOYALTY_POINTS_REDEEM_RATE:100}
+  ticketing:
+    # Default points per currency unit awarded on ticket purchases, applied when
+    # auto-provisioning an organizer's merchant. Overridable via the rule API.
+    default-earn-rate: ${LOYALTY_TICKETING_DEFAULT_EARN_RATE:1}
   reconciliation:
     # Daily integrity check: wallet.balance must equal sum(points_ledger.delta).
     # auto-fix=false is detection-only (ERROR log + loyalty.reconciliation.drift

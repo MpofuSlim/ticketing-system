@@ -7,6 +7,7 @@ import com.innbucks.loyaltyservice.util.MsisdnMasking;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
 import com.innbucks.loyaltyservice.repository.ShopRepository;
 import com.innbucks.loyaltyservice.service.ShopCheckoutService;
+import com.innbucks.loyaltyservice.service.TicketingLoyaltyService;
 import com.innbucks.loyaltyservice.service.UserService;
 import io.swagger.v3.oas.annotations.Hidden;
 import io.swagger.v3.oas.annotations.Operation;
@@ -48,17 +49,20 @@ public class InternalMerchantLookupController {
     private final ShopRepository shops;
     private final UserService userService;
     private final ShopCheckoutService shopCheckoutService;
+    private final TicketingLoyaltyService ticketingLoyaltyService;
     private final String expectedToken;
 
     public InternalMerchantLookupController(MerchantRepository merchants,
                                             ShopRepository shops,
                                             UserService userService,
                                             ShopCheckoutService shopCheckoutService,
+                                            TicketingLoyaltyService ticketingLoyaltyService,
                                             @Value("${innbucks.internal-api-token:}") String expectedToken) {
         this.merchants = merchants;
         this.shops = shops;
         this.userService = userService;
         this.shopCheckoutService = shopCheckoutService;
+        this.ticketingLoyaltyService = ticketingLoyaltyService;
         this.expectedToken = expectedToken;
     }
 
@@ -179,6 +183,98 @@ public class InternalMerchantLookupController {
                     .body(Map.of("code", e.getCode(), "message", e.getMessage()));
         } catch (IllegalArgumentException e) {
             return ResponseEntity.badRequest().body(Map.of("code", "BAD_INPUT", "message", e.getMessage()));
+        }
+    }
+
+    @GetMapping("/ticketing/rule")
+    @Operation(summary = "(S2S) Ticketing earn/redeem rates for an event organizer")
+    public ResponseEntity<?> ticketingRule(@RequestHeader(value = "X-Internal-Token", required = false) String token,
+                                           @RequestParam(value = "organizerUuid", required = false) String organizerUuid) {
+        if (!authorized(token)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        try {
+            TicketingLoyaltyService.TicketingRule r = ticketingLoyaltyService.rule(asUuid(organizerUuid, "organizerUuid"));
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("tenantId", r.tenantId());
+            body.put("merchantId", r.merchantId());
+            body.put("earnRate", r.earnRate());
+            body.put("redeemRate", r.redeemRate());
+            body.put("currency", r.currency());
+            body.put("active", true);
+            return ResponseEntity.ok(body);
+        } catch (LoyaltyException e) {
+            return ResponseEntity.status(e.getStatus()).body(Map.of("code", e.getCode(), "message", e.getMessage()));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("code", "BAD_INPUT", "message", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/ticketing/earn")
+    @Operation(summary = "(S2S) Earn points on a ticket purchase (idempotent on reference)")
+    public ResponseEntity<?> ticketingEarn(@RequestHeader(value = "X-Internal-Token", required = false) String token,
+                                           @RequestBody Map<String, Object> body) {
+        if (!authorized(token)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        try {
+            TicketingLoyaltyService.EarnResult r = ticketingLoyaltyService.earn(
+                    asUuid(str(body, "organizerUuid"), "organizerUuid"),
+                    str(body, "phoneNumber"),
+                    asBigDecimal(body.get("cashAmount")),
+                    str(body, "reference"));
+            Map<String, Object> resp = new LinkedHashMap<>();
+            resp.put("transactionId", r.transactionId());
+            resp.put("merchantId", r.merchantId());
+            resp.put("pointsEarned", r.pointsEarned());
+            resp.put("balanceAfter", r.balanceAfter());
+            resp.put("replayed", r.replayed());
+            return ResponseEntity.ok(resp);
+        } catch (LoyaltyException e) {
+            return ResponseEntity.status(e.getStatus()).body(Map.of("code", e.getCode(), "message", e.getMessage()));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("code", "BAD_INPUT", "message", e.getMessage()));
+        }
+    }
+
+    @PostMapping("/ticketing/redeem")
+    @Operation(summary = "(S2S) Redeem points toward a ticket purchase (idempotent on reference)")
+    public ResponseEntity<?> ticketingRedeem(@RequestHeader(value = "X-Internal-Token", required = false) String token,
+                                             @RequestBody Map<String, Object> body) {
+        if (!authorized(token)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        try {
+            TicketingLoyaltyService.RedeemResult r = ticketingLoyaltyService.redeem(
+                    asUuid(str(body, "organizerUuid"), "organizerUuid"),
+                    str(body, "phoneNumber"),
+                    asBigDecimal(body.get("points")),
+                    str(body, "reference"));
+            Map<String, Object> resp = new LinkedHashMap<>();
+            resp.put("transactionId", r.transactionId());
+            resp.put("merchantId", r.merchantId());
+            resp.put("balanceAfter", r.balanceAfter());
+            return ResponseEntity.ok(resp);
+        } catch (LoyaltyException e) {
+            return ResponseEntity.status(e.getStatus()).body(Map.of("code", e.getCode(), "message", e.getMessage()));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("code", "BAD_INPUT", "message", e.getMessage()));
+        }
+    }
+
+    private static String str(Map<String, Object> body, String key) {
+        Object v = body == null ? null : body.get(key);
+        return v == null ? null : v.toString();
+    }
+
+    private static UUID asUuid(String v, String field) {
+        if (v == null || v.isBlank()) {
+            throw new IllegalArgumentException(field + " is required");
+        }
+        try {
+            return UUID.fromString(v.trim());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException(field + " is not a valid UUID");
         }
     }
 

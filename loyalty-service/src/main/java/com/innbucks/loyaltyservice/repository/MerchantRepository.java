@@ -26,4 +26,8 @@ public interface MerchantRepository extends JpaRepository<Merchant, UUID> {
     // MERCHANT_ADMIN's merchantId from their email at login. If a user happens
     // to admin more than one merchant, the earliest-created wins.
     Optional<Merchant> findFirstByAdminEmailOrderByCreatedAtAsc(String adminEmail);
+
+    // The ticketing bridge maps an event organizer (user_uuid) to one merchant.
+    // Unique when set (uk_merchant_organizer), so at most one row matches.
+    Optional<Merchant> findByOrganizerUuid(UUID organizerUuid);
 }
