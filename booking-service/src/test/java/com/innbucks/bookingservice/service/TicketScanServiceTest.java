@@ -133,6 +133,44 @@ class TicketScanServiceTest {
     }
 
     @Test
+    void scan_guestBooking_allowed_whenTenantUserUuidMatchesScannerOrganizer() {
+        // Pins the guest-checkout fix: a guest's CONFIRMED booking carries
+        // tenantUserUuid (now captured from event-service even when userEmail
+        // is null) but NO tenantId (event-service removed that field in V7).
+        // scannerOwnsEvent must authorize the redeem on the uuid alone — the
+        // dead email/tenantId fallback would otherwise short-circuit to false
+        // and the gate would refuse the ticket with WRONG_ORGANIZER. Without
+        // this test, CI didn't see the live guest-ticket shape because every
+        // other fixture sets BOTH fields.
+        UUID organizerUuid = UUID.randomUUID();
+        UUID scannerUuid = UUID.randomUUID();
+        Booking guestBooking = Booking.builder()
+                .id(UUID.randomUUID())
+                .eventId(UUID.randomUUID())
+                .status(Booking.BookingStatus.CONFIRMED)
+                .tenantUserUuid(organizerUuid)
+                .userEmail(null)
+                .tenantId(null)
+                .build();
+        BookingItem item = BookingItem.builder()
+                .id(UUID.randomUUID())
+                .booking(guestBooking)
+                .ticketNumber("20260619-48291X")
+                .build();
+
+        authenticateAs("tariro@harare-arena.co.zw", scannerUuid, organizerUuid);
+        when(bookingItemRepository.findByTicketNumberWithBooking("20260619-48291X"))
+                .thenReturn(Optional.of(item));
+        when(bookingItemRepository.claimRedemption(eq(item.getId()),
+                any(LocalDateTime.class), eq(scannerUuid), eq("tariro@harare-arena.co.zw")))
+                .thenReturn(1);
+
+        ScanTicketResponseDTO result = service.scan("20260619-48291X", "tariro@harare-arena.co.zw");
+
+        assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.ALLOWED);
+    }
+
+    @Test
     void scan_secondCall_returnsAlreadyRedeemedWithOriginalScannerDetails() {
         UUID organizerUuid = UUID.randomUUID();
         BookingItem item = confirmedItem(organizerUuid);
