@@ -105,7 +105,7 @@ class ConcurrentReversalIT extends PostgresIntegrationTestBase {
         // Redeem 100 -> a REDEMPTION row (delta -100), balance now 200. This is
         // the transaction we'll hammer with concurrent reversals.
         RedemptionService.RedemptionResult redeem = redemptionService.redeemPoints(tenantId, merchantId,
-                new Dtos.RedemptionRequest(null, userId, new BigDecimal("100"), "seed-redeem"));
+                new Dtos.RedemptionRequest(null, userId, new BigDecimal("100"), "seed-redeem", null));
         final UUID redemptionTxnId = redeem.transactionId();
         assertThat(walletService.mainWallet(userId).getBalance()).isEqualByComparingTo("200");
 
