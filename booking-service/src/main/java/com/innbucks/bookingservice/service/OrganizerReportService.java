@@ -59,8 +59,6 @@ public class OrganizerReportService {
         this.currency = (currency == null || currency.isBlank()) ? "USD" : currency;
     }
 
-    // ---- public report methods -------------------------------------------
-
     @Transactional(readOnly = true)
     public RevenueSummaryDTO revenueSummary(UUID organizerUuid, UUID eventId, LocalDate from, LocalDate to) {
         Range r = resolveRange(from, to);
@@ -201,8 +199,6 @@ public class OrganizerReportService {
         }
         return sb.toString();
     }
-
-    // ---- helpers ----------------------------------------------------------
 
     /** Validate + default the [from, to] window into a half-open instant range. */
     private Range resolveRange(LocalDate from, LocalDate to) {

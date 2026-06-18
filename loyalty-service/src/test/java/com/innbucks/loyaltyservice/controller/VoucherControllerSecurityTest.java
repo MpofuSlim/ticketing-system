@@ -27,10 +27,6 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
 
     private static final String EMPTY_JSON = "{}";
 
-    // ------------------------------------------------------------------
-    // 401: no Authorization header on a protected endpoint
-    // ------------------------------------------------------------------
-
     @Test
     void post_template_without_token_returns_401() throws Exception {
         mockMvc.perform(post("/loyalty/vouchers/templates")
@@ -83,10 +79,6 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
                 .andExpect(status().isOk());
     }
 
-    // ------------------------------------------------------------------
-    // 401: present-but-invalid token (covers the JwtFilter fix landed earlier)
-    // ------------------------------------------------------------------
-
     @Test
     void post_template_with_malformed_token_returns_401() throws Exception {
         mockMvc.perform(post("/loyalty/vouchers/templates")
@@ -106,10 +98,6 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
                         .content(EMPTY_JSON))
                 .andExpect(status().isUnauthorized());
     }
-
-    // ------------------------------------------------------------------
-    // 403: valid token but the wrong role for the endpoint
-    // ------------------------------------------------------------------
 
     // Bodies below pass @Valid so the request reaches the @PreAuthorize gate
     // (which is what we're actually asserting). The mocked services would
@@ -171,10 +159,6 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
                 .andExpect(status().isForbidden());
     }
 
-    // ------------------------------------------------------------------
-    // 400: right role but missing X-Tenant-Id on a tenant-scoped endpoint
-    // ------------------------------------------------------------------
-
     @Test
     void admin_without_tenant_header_returns_400() throws Exception {
         String admin = jwt("admin@test.local", "MERCHANT_ADMIN");
@@ -183,10 +167,7 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
                 .andExpect(status().isBadRequest());
     }
 
-    // ------------------------------------------------------------------
     // 403: cross-tenant — admin valid + tenant exists, but they're not a member
-    // ------------------------------------------------------------------
-
     @Test
     void admin_who_is_not_a_member_of_tenant_returns_403() throws Exception {
         UUID otherTenant = newTenant("voucher-cross");

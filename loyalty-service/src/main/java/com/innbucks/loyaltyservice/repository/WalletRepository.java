@@ -14,8 +14,6 @@ import java.util.UUID;
 
 public interface WalletRepository extends JpaRepository<Wallet, UUID> {
 
-    // ---- Global (per-customer, phone-keyed) resolution — the current model ----
-
     /** The customer's single wallet of a given type (one MAIN per phone). */
     Optional<Wallet> findFirstByPhoneNumberAndType(String phoneNumber, Wallet.Type type);
 

@@ -246,8 +246,6 @@ class OtpServiceTest {
         verify(otpRepo, never()).save(any());
     }
 
-    // -------- country-aware channel routing (ZW deployment, default) --------
-
     @Test
     void sendOtp_foreignMsisdn_routesDirectlyToWhatsApp_skippingSmsGateway() {
         // The current SMS gateway is single-country: on the ZW deployment it

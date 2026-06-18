@@ -79,8 +79,6 @@ class UserUuidLookupGatewayContractTest {
         return new RestTemplate(factory);
     }
 
-    // ============ assignedEventIdsFor — the team-member access control ============
-
     @Test
     @DisplayName("assigned-events 200: parses the data array of event UUIDs and sends X-Internal-Token on a GET")
     void assignedEvents_happyPath_parsesAndSendsToken() {
@@ -147,8 +145,6 @@ class UserUuidLookupGatewayContractTest {
 
         assertTrue(dead.assignedEventIdsFor(UUID.randomUUID()).isEmpty());
     }
-
-    // ============ resolveUuidsByEmail — best-effort backfill resolver ============
 
     @Test
     @DisplayName("by-email 200: parses email->uuid rows and POSTs the emails with X-Internal-Token + JSON body")

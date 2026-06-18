@@ -114,8 +114,6 @@ class MerchantServiceTest {
         verifyNoInteractions(repo);
     }
 
-    // --- Fee-model validation on create -----------------------------------
-
     private static MerchantService newService(MerchantRepository repo) {
         return new MerchantService(repo, mock(UserServiceClient.class));
     }
@@ -207,8 +205,6 @@ class MerchantServiceTest {
         assertThat(resp.feeIssued().fixed()).isEqualByComparingTo("0");
         assertThat(resp.feeIssued().percentage()).isEqualByComparingTo("0");
     }
-
-    // --- per-cell currency default (ZW=USD, KE=KES) ---------------------------
 
     @Test
     void create_nullCurrency_defaultsToCellCurrency_notHardcodedUsd() {

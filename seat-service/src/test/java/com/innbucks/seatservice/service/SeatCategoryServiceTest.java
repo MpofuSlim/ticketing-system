@@ -199,8 +199,6 @@ class SeatCategoryServiceTest {
         verify(catRepo).save(category);
     }
 
-    // ---- Live availableSeats on the FE-facing list endpoint ------------------
-
     @Test
     void getCategoriesByEvent_setsLiveAvailableSeats_fromBookingServiceCount() {
         SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);

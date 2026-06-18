@@ -41,7 +41,6 @@ public class SeatCategoryService {
     private final BookingServiceClient bookingServiceClient;
     private final ObjectProvider<EventServiceClient> eventClientProvider;
 
-    // Agent creates a category for an event and auto-generates all seats
     @Transactional
     public CreateCategoryResponseDTO createCategory(CreateCategoryRequestDTO request) {
         return createCategory(request, null, true, null);
@@ -160,7 +159,6 @@ public class SeatCategoryService {
                 .build();
     }
 
-    // Get all categories for an event
     public List<CreateCategoryResponseDTO> getCategoriesByEvent(UUID eventId) {
         log.debug("Fetching seat categories eventId={}", eventId);
         List<SeatCategory> categories = categoryRepository.findByEventIdAndDeletedFalse(eventId);
@@ -207,7 +205,6 @@ public class SeatCategoryService {
                 .collect(Collectors.toList());
     }
 
-    // Soft delete a category
     @Transactional
     public void deleteCategory(UUID categoryId) {
         deleteCategory(categoryId, null, true, null);

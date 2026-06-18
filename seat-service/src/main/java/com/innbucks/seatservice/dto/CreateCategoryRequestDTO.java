@@ -35,7 +35,6 @@ public class CreateCategoryRequestDTO {
     @DecimalMin(value = "0.00", message = "Price cannot be negative")
     private BigDecimal price;
 
-    // sections = [{section:"A", seatCount:25}, {section:"B", seatCount:25}]
     @Schema(description = "One entry per physical section. Total seats = sum of all seatCount values. "
             + "At most 100 sections per request; sum of seatCount is further capped at 500,000 server-side.")
     @NotEmpty(message = "At least one section is required")

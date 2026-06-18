@@ -413,8 +413,6 @@ class EventControllerTest {
         org.junit.jupiter.api.Assertions.assertEquals(95, reloaded.getAvailableTickets());
     }
 
-    // ---- GET /events/by-organizer (SUPER_ADMIN-only listing of a given organizer's events) ----
-
     @Test
     @WithMockUser(username = "admin@innbucks.co.zw", roles = "SUPER_ADMIN")
     void getEventsByOrganizer_asSuperAdmin_returnsOnlyThatOrganizersEvents() throws Exception {
@@ -475,8 +473,6 @@ class EventControllerTest {
                         .accept(MediaType.APPLICATION_JSON))
                 .andExpect(status().isUnauthorized());
     }
-
-    // ---- PATCH /events/{id}/availability/release (audit #3 — restore consumed capacity) ----
 
     @Test
     void releaseAvailability_withoutInternalToken_returns401_andDoesNotMutate() throws Exception {

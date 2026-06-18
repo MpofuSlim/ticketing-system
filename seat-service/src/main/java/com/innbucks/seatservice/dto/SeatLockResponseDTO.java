@@ -15,5 +15,5 @@ public class SeatLockResponseDTO {
     private String categoryName;
     private String status;
     private String message;
-    private long expiresInSeconds; // how long the lock lasts
+    private long expiresInSeconds;
 }

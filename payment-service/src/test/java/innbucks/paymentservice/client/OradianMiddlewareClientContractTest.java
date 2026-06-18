@@ -107,8 +107,6 @@ class OradianMiddlewareClientContractTest {
                 .build();
     }
 
-    // -------- POST /internal/transfers/deposit --------
-
     @Test
     @DisplayName("deposit transfer happy path: 200 → response parsed, all headers + body asserted")
     void submitDepositTransfer_happyPath_pinsRequestAndResponseShape() {
@@ -230,8 +228,6 @@ class OradianMiddlewareClientContractTest {
                 });
     }
 
-    // -------- POST /internal/transfers/withdraw --------
-
     @Test
     @DisplayName("withdrawal happy path: 200 → response parsed, all required fields + commandID present")
     void submitWithdrawal_happyPath_pinsResponseShape() {
@@ -277,8 +273,6 @@ class OradianMiddlewareClientContractTest {
                 .withRequestBody(matchingJsonPath("$.accountID", equalTo("A000015")))
                 .withRequestBody(matchingJsonPath("$.paymentMethodName", equalTo("Cash"))));
     }
-
-    // -------- GET /internal/customers/{msisdn}/deposits --------
 
     @Test
     @DisplayName("deposits lookup: 200 with array → list parsed, string-typed fields preserved verbatim")
@@ -351,8 +345,6 @@ class OradianMiddlewareClientContractTest {
                 .isNotInstanceOf(OradianMiddlewareTransientException.class)
                 .satisfies(ex -> assertThat(((OradianMiddlewareException) ex).getStatusCode()).isEqualTo(404));
     }
-
-    // -------- TCP-level: connection refused --------
 
     @Test
     @DisplayName("connection refused (Oradian down): transient 502 so Retry/CB react correctly")

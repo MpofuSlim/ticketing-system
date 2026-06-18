@@ -219,8 +219,6 @@ class InnbucksPaymentServiceTest {
                 () -> InnbucksPaymentService.toCents(new BigDecimal("50.005")));
     }
 
-    // ---------------- hold extension (the paid-but-no-ticket gap) ----------------
-
     @Test
     void holdExtensionRefused_409_paymentRefusedBeforeAnyLedgerWriteOrMint() {
         doThrow(new BookingServiceClient.BookingConfirmationException("Seat hold expired", 409))
@@ -261,8 +259,6 @@ class InnbucksPaymentServiceTest {
         assertFalse(until.getValue().isBefore(before.plus(Duration.ofMinutes(13)).minusSeconds(5)),
                 "hold must outlive the code by the safety margin");
     }
-
-    // ---------------- instant check on replay ("I've paid") ----------------
 
     private Payment openCodeRow() {
         Payment p = Payment.builder()

@@ -134,8 +134,6 @@ class TransactionServiceTest {
         verify(repo, never()).save(any());
     }
 
-    // ----- TransactionCompletedEvent emission -----
-
     @Test
     void markSucceeded_publishesTransactionCompletedEvent_withSucceededStatus() {
         TransactionRepository repo = mock(TransactionRepository.class);

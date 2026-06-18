@@ -198,8 +198,6 @@ class PaymentRecordServiceTest {
         verifyNoInteractions(events);
     }
 
-    // ---- 2D-code flow transitions ------------------------------------------
-
     @Test
     void markTokenIssued_fromPending_recordsCodeHandlesAndDeadline() {
         PaymentRepository repo = mock(PaymentRepository.class);

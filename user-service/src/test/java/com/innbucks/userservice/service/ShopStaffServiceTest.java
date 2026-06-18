@@ -198,8 +198,6 @@ class ShopStaffServiceTest {
         verify(userRepository).save(any(User.class));
     }
 
-    // ----- resetTemporaryPassword (creator-resets-subordinate hierarchy) -----
-
     private User shopUser(UUID userUuid, UUID merchantId, UUID shopId) {
         return User.builder()
                 .id(74L).userUuid(userUuid)

@@ -212,8 +212,6 @@ class UserAdminServiceTest {
                         .setActive(99L, true));
     }
 
-    // ---- resetTemporaryPassword ----
-
     @Test
     void resetTemporaryPassword_rotatesFlagsChangeAndNotifies() {
         UserRepository userRepo = mock(UserRepository.class);
@@ -279,8 +277,6 @@ class UserAdminServiceTest {
                         .resetTemporaryPassword(99L, "admin@innbucks.co.zw", AuditContext.none()));
     }
 
-    // ---- SUPER_ADMIN protection on setActive (cannot be disabled or re-activated) ----
-
     @Test
     void setActive_refusesSuperAdminTarget_403() {
         UserRepository userRepo = mock(UserRepository.class);
@@ -324,8 +320,6 @@ class UserAdminServiceTest {
                         .setActive(1L, /* active */ true, "admin@innbucks.co.zw", AuditContext.none()));
         verify(userRepo, never()).save(any());
     }
-
-    // ---- audit_events recording for SUPER_ADMIN user activation/deactivation ----
 
     @Test
     void firstActivation_recordsUSER_APPROVED_withAdminAsActor() {

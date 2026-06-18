@@ -194,8 +194,6 @@ class ReconciliationJobTest {
         verify(repo, never()).deleteById(any());
     }
 
-    // ---- ticket-payment ledger sweeps --------------------------------------
-
     @Test
     void scanPayments_stalePending_isClosedFailed_inDoubtObserveOnly() {
         PaymentRepository payments = mock(PaymentRepository.class);
@@ -265,8 +263,6 @@ class ReconciliationJobTest {
         assertEquals(1.0, unconfirmedRetryCount(metrics, "resolved"));
         assertEquals(1.0, unconfirmedRetryCount(metrics, "still_failing"));
     }
-
-    // ---- 2D-code status poll ------------------------------------------------
 
     private static CodeStatusResult status(CodeStatusResult.Status s) {
         return new CodeStatusResult(s, s.name(), null);

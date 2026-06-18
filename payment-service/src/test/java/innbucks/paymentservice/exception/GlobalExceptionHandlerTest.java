@@ -106,8 +106,6 @@ class GlobalExceptionHandlerTest {
         assertTrue(!resp.getBody().getMessage().contains("NullPointerException"));
     }
 
-    // ---- audit #9 — typed-exception handlers for downstream-client failures ----
-
     @Test
     void loyaltyCheckoutException_preservesUpstream4xxStatus() {
         // A 422 "insufficient points" from loyalty-service must surface as 422

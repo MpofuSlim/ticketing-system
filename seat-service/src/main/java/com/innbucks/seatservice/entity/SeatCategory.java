@@ -20,17 +20,14 @@ public class SeatCategory {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    // Which event this category belongs to
     @Column(nullable = false)
     private UUID eventId;
 
-    // e.g. "VIP", "General", "Backstage"
     @Column(nullable = false)
     private String name;
 
     private String description;
 
-    // Price specific to this category
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal price;
 
@@ -40,7 +37,6 @@ public class SeatCategory {
     @Column(nullable = false)
     private Integer availableSeats;
 
-    // Soft delete
     @Column(nullable = false)
     private boolean deleted = false;
 

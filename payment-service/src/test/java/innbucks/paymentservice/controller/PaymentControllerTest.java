@@ -573,8 +573,6 @@ class PaymentControllerTest {
         assertTrue(resp.getBody().getMessage().toLowerCase().contains("booking-service"));
     }
 
-    // ---------------- instant check on replay ("I've paid") ----------------
-
     @Test
     void replayOpenCode_instantCheckPaid_returnsSuccessReceiptImmediately() {
         Fixture f = fixture();

@@ -19,10 +19,6 @@ class InternalMerchantLookupControllerSecurityTest extends ControllerSecurityTes
 
     @Value("${innbucks.internal-api-token}") String internalToken;
 
-    // ------------------------------------------------------------------
-    // 401: header missing or wrong
-    // ------------------------------------------------------------------
-
     @Test
     void by_admin_without_internal_token_returns_401() throws Exception {
         mockMvc.perform(get("/loyalty/internal/merchants/by-admin")
@@ -51,11 +47,8 @@ class InternalMerchantLookupControllerSecurityTest extends ControllerSecurityTes
                 .andExpect(status().isUnauthorized());
     }
 
-    // ------------------------------------------------------------------
     // 404: correct token but the resource doesn't exist — proves the
     // header gate accepted the right token and we got through to lookup.
-    // ------------------------------------------------------------------
-
     @Test
     void get_shop_with_correct_token_and_unknown_id_returns_404() throws Exception {
         mockMvc.perform(get("/loyalty/internal/shops/{id}", UUID.randomUUID())
@@ -79,11 +72,8 @@ class InternalMerchantLookupControllerSecurityTest extends ControllerSecurityTes
                 .andExpect(status().isBadRequest());
     }
 
-    // ------------------------------------------------------------------
     // A JWT is irrelevant here — internal endpoints ignore Authorization
     // entirely. This test guards against accidentally adding @PreAuthorize.
-    // ------------------------------------------------------------------
-
     @Test
     void jwt_is_ignored_on_internal_endpoints() throws Exception {
         String adminJwt = jwt("admin@test.local", "MERCHANT_ADMIN");
@@ -91,10 +81,6 @@ class InternalMerchantLookupControllerSecurityTest extends ControllerSecurityTes
                         .header("Authorization", bearer(adminJwt)))
                 .andExpect(status().isUnauthorized());
     }
-
-    // ------------------------------------------------------------------
-    // Promote endpoint: same shared-secret gate as the lookup endpoints.
-    // ------------------------------------------------------------------
 
     @Test
     void promote_without_internal_token_returns_401() throws Exception {
@@ -125,10 +111,6 @@ class InternalMerchantLookupControllerSecurityTest extends ControllerSecurityTes
                         .content("{\"phoneNumber\":\"+263777777777\"}"))
                 .andExpect(status().isOk());
     }
-
-    // ------------------------------------------------------------------
-    // shop-checkout: same shared-secret gate; unknown shop returns 404.
-    // ------------------------------------------------------------------
 
     @Test
     void shop_checkout_without_internal_token_returns_401() throws Exception {

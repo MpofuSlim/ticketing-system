@@ -36,8 +36,6 @@ class GlobalExceptionHandlerTest {
         assertNull(body.getData());
     }
 
-    // ---- typed-exception status-code mapping (matches booking-service #149) ----
-
     @Test
     void handleNotFound_returns404WithMessage() {
         ResponseEntity<ApiResult<Void>> resp = handler.handleNotFound(new NotFoundException("Event not found"));

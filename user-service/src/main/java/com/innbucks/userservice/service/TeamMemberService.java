@@ -194,8 +194,6 @@ public class TeamMemberService {
         return UserResponseDTO.from(member);
     }
 
-    // ===================== event assignments =====================
-
     /**
      * Assigns the team member to an event (idempotent). The first assignment
      * for a member flips them from organizer-wide scanning to "assigned events

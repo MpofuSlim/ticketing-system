@@ -26,7 +26,6 @@ public class MpesaIntegration {
             throw LoyaltyException.badRequest("INTEGRATION_DISABLED",
                     "M-Pesa / airtime conversion is not enabled");
         }
-        // Placeholder for the real integration.
         return Map.of(
                 "userId", userId.toString(),
                 "points", points.toPlainString(),

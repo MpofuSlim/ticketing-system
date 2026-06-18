@@ -123,8 +123,6 @@ class TeamMemberServiceTest {
         return dto;
     }
 
-    // ----- create -----
-
     @Test
     void create_stampsOrganizerUuidAndTeamMemberRole() {
         UUID organizerUuid = UUID.randomUUID();
@@ -181,8 +179,6 @@ class TeamMemberServiceTest {
                         .isEqualTo(HttpStatus.FORBIDDEN));
     }
 
-    // ----- list / get -----
-
     @Test
     void list_returnsOnlyMembersOwnedByCaller() {
         UUID organizerUuid = UUID.randomUUID();
@@ -231,8 +227,6 @@ class TeamMemberServiceTest {
                 .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
                         .isEqualTo(HttpStatus.NOT_FOUND));
     }
-
-    // ----- disable / enable -----
 
     @Test
     void disable_flipsActiveBumpsTokenVersionAndRevokesRefreshFamilies() {
@@ -291,8 +285,6 @@ class TeamMemberServiceTest {
         assertThat(member.getTokenVersion()).isEqualTo(versionBefore);
         verify(refreshTokenRepository, never()).revokeAllForUser(anyLong(), any(Instant.class));
     }
-
-    // ----- event assignments -----
 
     @Test
     void assignEvent_savesNewAssignmentAndReturnsFullSet() {
@@ -418,8 +410,6 @@ class TeamMemberServiceTest {
         assertThat(service.assignedEventIdsFor(memberUuid)).isEmpty();
     }
 
-    // ----- credential delivery (parallel email + WhatsApp, SMS fallback) -----
-
     /** Shared minimal happy-path setup for the create flow — every delivery
      *  test below needs the same repo / encoder stubs. */
     private void primeCreateHappyPath() {
@@ -507,8 +497,6 @@ class TeamMemberServiceTest {
 
         verify(userRepository).save(any(User.class));
     }
-
-    // ----- password reset (organizer-initiated re-issue) -----
 
     @Test
     void resetTemporaryPassword_rotatesPasswordAndFlagsForceChange() {
