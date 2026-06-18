@@ -52,7 +52,7 @@ CREATE TABLE scan_attempts (
     scanner_display_name     TEXT,
     scanner_organizer_uuid   UUID,
     correlation_id           TEXT,
-    client_ip                INET,
+    client_ip                TEXT,
     user_agent               TEXT,
     device_id                TEXT,
     latency_ms               INTEGER,
