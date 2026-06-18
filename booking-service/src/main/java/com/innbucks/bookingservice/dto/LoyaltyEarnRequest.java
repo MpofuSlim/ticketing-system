@@ -6,14 +6,15 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
+import java.util.UUID;
 
 @Data
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
 public class LoyaltyEarnRequest {
-    private String customerId;
-    private String tenantId;
+    private UUID organizerUuid;
+    private String phoneNumber;
     private BigDecimal cashAmount;
     private String reference;
 }
