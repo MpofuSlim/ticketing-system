@@ -161,6 +161,29 @@ public class WalletService {
         releaseExpiredLots(w, Instant.now());
     }
 
+    /**
+     * Reconciliation repair: reset a wallet's cached balance to the sum of its
+     * ledger deltas — the append-only financial source of truth. Driven by the
+     * daily {@link com.innbucks.loyaltyservice.scheduler.BalanceReconciliationJob}
+     * when (and only when) auto-fix is enabled; otherwise drift is detect-only.
+     *
+     * <p>Deliberately writes NO ledger entry: the ledger already records every
+     * real movement, so the fix is to make the <em>cache</em> agree with the
+     * ledger, not to append a new "truth" matching a broken cache. Runs under
+     * the wallet's row lock in its own transaction. Returns the rebuilt balance.
+     */
+    public BigDecimal rebuildBalanceFromLedger(UUID walletId) {
+        Wallet w = wallets.lockById(walletId)
+                .orElseThrow(() -> LoyaltyException.notFound("wallet"));
+        BigDecimal ledgerSum = ledger.sumDeltaByWalletId(walletId);
+        BigDecimal previous = w.getBalance();
+        if (previous.compareTo(ledgerSum) == 0) return ledgerSum; // raced back to consistency
+        w.setBalance(ledgerSum);
+        log.warn("Reconciliation rebuilt wallet {} balance {} -> {} (sum of ledger deltas)",
+                walletId, previous, ledgerSum);
+        return ledgerSum;
+    }
+
     /** Caller must hold the wallet's row lock. */
     private void releaseExpiredLots(Wallet w, Instant now) {
         List<PointLot> due = lots.findDueForExpiry(w.getId(), now);

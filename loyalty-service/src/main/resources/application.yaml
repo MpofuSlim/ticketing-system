@@ -42,6 +42,12 @@ user-service:
 loyalty:
   points:
     expiry-days: ${LOYALTY_POINTS_EXPIRY_DAYS:30}
+  reconciliation:
+    # Daily integrity check: wallet.balance must equal sum(points_ledger.delta).
+    # auto-fix=false is detection-only (ERROR log + loyalty.reconciliation.drift
+    # metric); flip to true to let the job rebuild a drifting balance from the
+    # ledger (the source of truth). Keep it off until you trust the ledger side.
+    auto-fix: ${LOYALTY_RECONCILIATION_AUTO_FIX:false}
   voucher:
     secret: ${LOYALTY_VOUCHER_SECRET:change-me-voucher-secret-change-me-voucher-secret}
     default-validity-days: ${LOYALTY_VOUCHER_DEFAULT_VALIDITY_DAYS:365}
@@ -58,6 +64,7 @@ loyalty:
     expiry-cron: ${LOYALTY_EXPIRY_CRON:0 5 * * * *}
     invoice-cron: ${LOYALTY_INVOICE_CRON:0 30 1 * * *}
     points-expiry-cron: ${LOYALTY_POINTS_EXPIRY_CRON:0 15 * * * *}
+    reconciliation-cron: ${LOYALTY_RECONCILIATION_CRON:0 45 2 * * *}
 
 innbucks:
   country: ${INNBUCKS_COUNTRY:ZW}
