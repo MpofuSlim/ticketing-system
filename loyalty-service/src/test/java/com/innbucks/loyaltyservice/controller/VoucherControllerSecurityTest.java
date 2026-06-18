@@ -167,6 +167,97 @@ class VoucherControllerSecurityTest extends ControllerSecurityTestBase {
                 .andExpect(status().isBadRequest());
     }
 
+    // --- SHOP_USER — till-operations role ---
+    // SHOP_USER does the daily voucher ops at the till (list / redeem / mark-viewed)
+    // but cannot create templates, issue vouchers, or revoke. These pin both sides.
+
+    private static final String VALID_REDEEM_BODY = """
+            {"code":"VCH-AB12-CD34-EF56"}
+            """;
+
+    @Test
+    void shop_user_can_redeem_voucher() throws Exception {
+        org.mockito.Mockito.when(voucherService.redeem(
+                org.mockito.ArgumentMatchers.any(UUID.class),
+                org.mockito.ArgumentMatchers.any(UUID.class),
+                org.mockito.ArgumentMatchers.any(com.innbucks.loyaltyservice.dto.Dtos.RedeemVoucherRequest.class)))
+                .thenReturn(new com.innbucks.loyaltyservice.dto.Dtos.RedemptionResponse(
+                        UUID.randomUUID(), UUID.randomUUID(), "REDEEMED",
+                        0, new java.math.BigDecimal("5.00"), "AMOUNT",
+                        java.time.Instant.now()));
+
+        UUID tenant = newTenant("vch-shopuser-redeem");
+        joinTenant(tenant, "till-user@test.local");
+        String token = com.innbucks.loyaltyservice.testsupport.TestJwtFactory.shopUser(
+                "till-user@test.local", UUID.randomUUID(), UUID.randomUUID(), jwtSecret);
+        mockMvc.perform(post("/loyalty/vouchers/redeem")
+                        .header("Authorization", bearer(token))
+                        .header("X-Tenant-Id", tenant.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_REDEEM_BODY))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void shop_user_can_list_active_vouchers_by_phone() throws Exception {
+        org.mockito.Mockito.when(voucherService.activeForPhone(
+                org.mockito.ArgumentMatchers.anyString(),
+                org.mockito.ArgumentMatchers.any(org.springframework.data.domain.Pageable.class)))
+                .thenReturn(new org.springframework.data.domain.PageImpl<>(
+                        java.util.List.of(), org.springframework.data.domain.Pageable.unpaged(), 0));
+
+        String token = com.innbucks.loyaltyservice.testsupport.TestJwtFactory.shopUser(
+                "till-user@test.local", UUID.randomUUID(), UUID.randomUUID(), jwtSecret);
+        // No X-Tenant-Id needed — the by-phone endpoint relies on the in-controller
+        // phone-owner guard, not on TenantContext.
+        mockMvc.perform(get("/loyalty/vouchers/users/by-phone/{phone}/active", "+263770000900")
+                        .header("Authorization", bearer(token)))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void shop_user_can_mark_voucher_viewed() throws Exception {
+        UUID tenant = newTenant("vch-shopuser-viewed");
+        joinTenant(tenant, "till-user@test.local");
+        String token = com.innbucks.loyaltyservice.testsupport.TestJwtFactory.shopUser(
+                "till-user@test.local", UUID.randomUUID(), UUID.randomUUID(), jwtSecret);
+        mockMvc.perform(post("/loyalty/vouchers/codes/{code}/viewed", "VCH-AB12-CD34-EF56")
+                        .header("Authorization", bearer(token))
+                        .header("X-Tenant-Id", tenant.toString()))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void shop_user_cannot_create_voucher_template() throws Exception {
+        String token = com.innbucks.loyaltyservice.testsupport.TestJwtFactory.shopUser(
+                "till-user@test.local", UUID.randomUUID(), UUID.randomUUID(), jwtSecret);
+        mockMvc.perform(post("/loyalty/vouchers/templates")
+                        .header("Authorization", bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_TEMPLATE_BODY))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void shop_user_cannot_issue_voucher() throws Exception {
+        String token = com.innbucks.loyaltyservice.testsupport.TestJwtFactory.shopUser(
+                "till-user@test.local", UUID.randomUUID(), UUID.randomUUID(), jwtSecret);
+        mockMvc.perform(post("/loyalty/vouchers/issue")
+                        .header("Authorization", bearer(token))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_ISSUE_BODY))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void shop_user_cannot_revoke_voucher() throws Exception {
+        String token = com.innbucks.loyaltyservice.testsupport.TestJwtFactory.shopUser(
+                "till-user@test.local", UUID.randomUUID(), UUID.randomUUID(), jwtSecret);
+        mockMvc.perform(post("/loyalty/vouchers/{id}/revoke", UUID.randomUUID())
+                        .header("Authorization", bearer(token)))
+                .andExpect(status().isForbidden());
+    }
+
     // 403: cross-tenant — admin valid + tenant exists, but they're not a member
     @Test
     void admin_who_is_not_a_member_of_tenant_returns_403() throws Exception {

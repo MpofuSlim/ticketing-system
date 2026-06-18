@@ -150,7 +150,7 @@ public class QrController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('CUSTOMER','SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.TransactionResponse>> consume(@Valid @RequestBody Dtos.QrConsumeRequest req) {
         Dtos.TransactionResponse data = qrService.consume(tenantContext.requireTenantId(), req);
         return ResponseEntity.ok(ApiResult.ok("QR token consumed successfully", data));

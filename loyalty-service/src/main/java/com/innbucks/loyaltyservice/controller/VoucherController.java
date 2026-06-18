@@ -444,7 +444,7 @@ public class VoucherController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('CUSTOMER','SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.RedemptionResponse>> redeem(@Valid @RequestBody Dtos.RedeemVoucherRequest req) {
         Dtos.RedemptionResponse data = voucherService.redeem(tenantContext.requireTenantId(),
                 CallerDetails.resolveMerchantId(req.merchantId()), req);
@@ -546,7 +546,7 @@ public class VoucherController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('CUSTOMER','SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Void>> markViewed(@PathVariable String code) {
         voucherService.markViewed(code);
         return ResponseEntity.ok(ApiResult.ok("Voucher view recorded", null));
@@ -615,7 +615,7 @@ public class VoucherController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('CUSTOMER','SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<PageResponse<Dtos.VoucherResponse>>> activeForPhone(@PathVariable String phoneNumber,
                                                                                        @ParameterObject Pageable pageable) {
         // CUSTOMER may only ask for their own phone (matches the wallet-owner
@@ -640,7 +640,8 @@ public class VoucherController {
                 String role = ga.getAuthority();
                 if ("ROLE_SUPER_ADMIN".equals(role)
                         || "ROLE_MERCHANT_ADMIN".equals(role)
-                        || "ROLE_SHOP_ADMIN".equals(role)) {
+                        || "ROLE_SHOP_ADMIN".equals(role)
+                        || "ROLE_SHOP_USER".equals(role)) {
                     return;
                 }
             }

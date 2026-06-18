@@ -116,7 +116,7 @@ public class TransactionController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.TransactionResponse>> post(@Valid @RequestBody Dtos.TransactionRequest req) {
         Dtos.TransactionResponse data = transactions.post(tenantContext.requireTenantId(),
                 CallerDetails.resolveMerchantId(req.merchantId()), req);
@@ -558,7 +558,7 @@ public class TransactionController {
                     )
             )
     })
-    @PreAuthorize("hasAnyRole('CUSTOMER','MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('CUSTOMER','SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Map<String, Object>>> redeem(@Valid @RequestBody Dtos.RedemptionRequest req) {
         var result = redemptionService.redeemPoints(tenantContext.requireTenantId(),
                 CallerDetails.resolveMerchantId(req.merchantId()), req);
