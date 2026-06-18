@@ -1,9 +1,11 @@
 package com.innbucks.bookingservice.loyalty;
 
 import com.innbucks.bookingservice.client.LoyaltyServiceClient;
+import com.innbucks.bookingservice.dto.LoyaltyEarnRequest;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -13,21 +15,10 @@ import java.time.ZoneOffset;
 import java.util.UUID;
 
 /**
- * Persists failed {@code loyalty.earn} attempts to {@code loyalty_earn_retry}
- * so {@link LoyaltyEarnRetryJob} can retry them later. Used from
- * {@link com.innbucks.bookingservice.service.BookingService#applyLoyalty}
- * — every place that used to {@code catch (Exception ex) { log.warn(...) }}
- * now calls {@link #enqueue} so the side-effect isn't lost.
- *
- * <p>Why a separate service from the job? Two reasons:
- * <ol>
- *   <li>The enqueue runs inside the booking-confirm transaction; the
- *       drainer runs inside its own per-row transaction. Keeping them in
- *       different beans makes the propagation boundary explicit.</li>
- *   <li>The job depends on a live LoyaltyServiceClient (to call
- *       loyalty.earn on each retry). Forcing every booking-confirm to
- *       pull in that dependency would tangle wiring.</li>
- * </ol>
+ * Persists failed {@code loyalty.earn} attempts to {@code loyalty_earn_retry} so
+ * {@link LoyaltyEarnRetryJob} can retry them. The enqueue runs inside the
+ * booking-confirm transaction (a rolled-back confirm leaves no stray row); the
+ * drainer runs in its own per-row transaction.
  */
 @Slf4j
 @Service
@@ -35,33 +26,29 @@ public class LoyaltyEarnRetryService {
 
     private final LoyaltyEarnRetryRepository repository;
     private final Counter queuedCounter;
+    private final String internalToken;
 
     public LoyaltyEarnRetryService(LoyaltyEarnRetryRepository repository,
-                                   MeterRegistry meterRegistry) {
+                                   MeterRegistry meterRegistry,
+                                   @Value("${innbucks.internal-api-token:}") String internalToken) {
         this.repository = repository;
-        // Increments per enqueue — a sudden spike means loyalty-service
-        // is degraded; pair with the queue-depth gauge LoyaltyEarnRetryJob
-        // publishes for the operator dashboard.
+        this.internalToken = internalToken;
         this.queuedCounter = Counter.builder("booking.loyalty_earn_retry.queued")
                 .description("Failed loyalty.earn attempts queued for retry")
                 .register(meterRegistry);
     }
 
-    /**
-     * Caller is responsible for the parent transaction (confirmBooking).
-     * The new row is INSERTed in that transaction so a rolled-back confirm
-     * doesn't leave a stray retry row.
-     */
+    /** Caller owns the parent transaction (confirmBooking). */
     public void enqueue(UUID bookingId,
-                        String customerEmail,
-                        String tenantId,
+                        UUID organizerUuid,
+                        String phoneNumber,
                         BigDecimal cashAmount,
                         String reference,
                         Throwable cause) {
         LoyaltyEarnRetry row = LoyaltyEarnRetry.builder()
                 .bookingId(bookingId)
-                .customerEmail(customerEmail)
-                .tenantId(tenantId)
+                .organizerUuid(organizerUuid)
+                .phoneNumber(phoneNumber)
                 .cashAmount(cashAmount)
                 .reference(reference)
                 .lastError(truncate(cause))
@@ -78,12 +65,12 @@ public class LoyaltyEarnRetryService {
     public void attempt(LoyaltyEarnRetry row, LoyaltyServiceClient loyalty, int maxAttempts) {
         row.setAttempts(row.getAttempts() + 1);
         try {
-            loyalty.earn(com.innbucks.bookingservice.dto.LoyaltyEarnRequest.builder()
-                    .customerId(row.getCustomerEmail())
-                    .tenantId(row.getTenantId())
+            loyalty.earn(LoyaltyEarnRequest.builder()
+                    .organizerUuid(row.getOrganizerUuid())
+                    .phoneNumber(row.getPhoneNumber())
                     .cashAmount(row.getCashAmount())
                     .reference(row.getReference())
-                    .build());
+                    .build(), internalToken);
             row.setStatus(LoyaltyEarnRetry.Status.succeeded);
             row.setLastError(null);
             repository.save(row);

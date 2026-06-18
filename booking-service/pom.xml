@@ -226,6 +226,15 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- Jackson codec for building the Feign LoyaltyServiceClient standalone
+             (no Spring context) in its WireMock contract test. Version managed by
+             the spring-cloud / openfeign BOM. -->
+        <dependency>
+            <groupId>io.github.openfeign</groupId>
+            <artifactId>feign-jackson</artifactId>
+            <scope>test</scope>
+        </dependency>
+
     </dependencies>
 
     <build>
