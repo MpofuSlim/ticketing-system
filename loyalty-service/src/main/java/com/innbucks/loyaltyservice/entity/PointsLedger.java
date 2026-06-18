@@ -23,7 +23,10 @@ public class PointsLedger {
     @GeneratedValue
     private UUID id;
 
-    @Column(name = "tenant_id", nullable = false)
+    // Attribution: the tenant where the balance change originated. Nullable
+    // because expiry/breakage entries belong to no single tenant (the wallet is
+    // global). Normal earn/redeem/transfer entries still carry it.
+    @Column(name = "tenant_id")
     private UUID tenantId;
 
     @Column(name = "wallet_id", nullable = false)
