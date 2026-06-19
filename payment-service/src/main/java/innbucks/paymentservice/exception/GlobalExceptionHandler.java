@@ -4,6 +4,7 @@ import innbucks.paymentservice.client.BookingServiceClient;
 import innbucks.paymentservice.client.LoyaltyServiceClient;
 import innbucks.paymentservice.client.OradianMiddlewareException;
 import innbucks.paymentservice.dto.ApiResult;
+import innbucks.paymentservice.service.InnbucksPaymentService.InvalidPaymentRequestException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -157,6 +158,31 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(status).body(ApiResult.<Void>builder()
                 .code(status.value() + " " + status.name())
                 .message(reason)
+                .data(null)
+                .build());
+    }
+
+    /**
+     * Domain rejections from {@link innbucks.paymentservice.service.InnbucksPaymentService}'s
+     * payment-code flow. Carries a curated user-facing message AND a deliberate
+     * HTTP status code per throw site ("Your booking has expired — please create
+     * a new booking and try again" / 409, "InnBucks is temporarily unavailable;
+     * please try again shortly" / 503, "A payment for this booking is already
+     * in progress or completed" / 409, etc.). Without this handler the
+     * exception fell through to the {@code Exception.class} catch-all and the
+     * customer saw a generic "internal error" — leaving them no idea whether
+     * to retry, refresh, or contact support. Honour the embedded status +
+     * message so the message reaches the client untouched.
+     */
+    @ExceptionHandler(InvalidPaymentRequestException.class)
+    public ResponseEntity<ApiResult<Void>> handle(InvalidPaymentRequestException ex) {
+        HttpStatus status = HttpStatus.resolve(ex.getStatusCode());
+        if (status == null) status = HttpStatus.BAD_REQUEST;
+        log.warn("InnBucks payment request rejected status={} message={}",
+                status.value(), ex.getMessage());
+        return ResponseEntity.status(status).body(ApiResult.<Void>builder()
+                .code(status.value() + " " + status.name())
+                .message(ex.getMessage() == null ? status.getReasonPhrase() : ex.getMessage())
                 .data(null)
                 .build());
     }
