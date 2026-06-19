@@ -26,7 +26,3 @@ logging:
     org.hibernate.tool.schema: DEBUG
     root: WARN
     com.innbucks.eventservice: INFO
-
-innbucks:
-  tenant-uuid-backfill:
-    enabled: false

@@ -1,0 +1,14 @@
+-- Drop the legacy email-based bookings.tenant_id column.
+--
+-- It was the organizer's email, captured from event-service's now-removed
+-- tenantId field. Every live path migrated to tenant_user_uuid (the stable
+-- organizer UUID): loyalty attribution keys off it, and the ticket-scan
+-- ownership check is UUID-only as of this release (the email fallback is
+-- gone). Operator confirmed zero CONFIRMED bookings with a null
+-- tenant_user_uuid before this ran, so the column carries no value any code
+-- still reads.
+--
+-- CASCADE so any index/constraint that referenced the column is dropped with
+-- it (the column was added nullable with no constraints, but CASCADE keeps
+-- the drop name-agnostic and safe).
+ALTER TABLE bookings DROP COLUMN IF EXISTS tenant_id CASCADE;

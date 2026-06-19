@@ -8,15 +8,11 @@ import java.time.ZoneOffset;
 import java.util.UUID;
 
 @Entity
-// The legacy {@code uk_events_natural_key} unique constraint on the
-// (tenant_id, title, venue, start_date_time) tuple still lives in the
-// database — the column drop and the constraint rebuild on
-// (tenant_user_uuid, ...) are deferred to the follow-up migration that
-// runs AFTER the backfill runner confirms zero rows with
-// tenant_user_uuid IS NULL. The dup-check on the new identifier is
-// enforced at the application layer
-// (existsByTenantUserUuidAndTitleAndVenueAndStartDateTimeAndDeletedFalse)
-// until then.
+// The legacy email-based tenant_id column and its (tenant_id, title, venue,
+// start_date_time) unique constraint were dropped in V8 once the backfill of
+// tenant_user_uuid completed. The duplicate-create guard now lives at the
+// application layer
+// (existsByTenantUserUuidAndTitleAndVenueAndStartDateTimeAndDeletedFalse).
 @Table(name = "events")
 @Data
 @NoArgsConstructor
@@ -30,14 +26,10 @@ public class Event {
 
     /**
      * Stable cross-service organizer reference. Matches {@code users.user_uuid}
-     * in user-service. The sole identifier of the owning organizer that
-     * application code reads now that the email-as-tenant-id pattern has been
-     * removed.
-     *
-     * <p>Stays nullable on the table for one more deploy cycle — legacy rows
-     * may have a null here until {@code TenantUserUuidBackfillRunner} catches
-     * them up. Application code that reads this field MUST guard for null and
-     * fail with a clear "backfill incomplete" message rather than NPE.
+     * in user-service. The sole identifier of the owning organizer now that the
+     * email-as-tenant-id pattern has been removed (column tenant_id dropped in
+     * V8). Set from the creating organizer's JWT on every INSERT; the backfill
+     * has populated it on all legacy rows.
      */
     @Column(name = "tenant_user_uuid")
     private UUID tenantUserUuid;

@@ -1,6 +1,5 @@
 package com.innbucks.eventservice.client;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
@@ -13,7 +12,6 @@ import org.springframework.web.client.RestTemplate;
 import java.net.ServerSocket;
 import java.time.Duration;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
@@ -23,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Contract test for {@link UserUuidLookupGateway}, per the CLAUDE.md
- * cross-service-client mandate. Pins the wire shape of BOTH internal calls
+ * cross-service-client mandate. Pins the wire shape of the internal call
  * event-service makes to user-service:
  *
  * <ul>
@@ -34,8 +32,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *       user-service is down. The {@code *_failsClosed} cases below break the
  *       build if a refactor ever turns that into fail-open or reshapes the
  *       response envelope.</li>
- *   <li>{@code POST /users/internal/users/by-email} — the best-effort
- *       email&rarr;uuid resolver used by the backfill runner.</li>
  * </ul>
  *
  * <p>Pure JUnit + WireMock, no Spring context (per the convention). The
@@ -56,7 +52,6 @@ class UserUuidLookupGatewayContractTest {
         wireMock.start();
         gateway = new UserUuidLookupGateway(
                 restTemplate(),
-                new ObjectMapper(),
                 "http://localhost:" + wireMock.port(),
                 "test-token");
     }
@@ -141,56 +136,8 @@ class UserUuidLookupGatewayContractTest {
             closedPort = s.getLocalPort();
         } // socket closed -> the OS refuses any connect to this port
         UserUuidLookupGateway dead = new UserUuidLookupGateway(
-                restTemplate(), new ObjectMapper(), "http://localhost:" + closedPort, "test-token");
+                restTemplate(), "http://localhost:" + closedPort, "test-token");
 
         assertTrue(dead.assignedEventIdsFor(UUID.randomUUID()).isEmpty());
-    }
-
-    @Test
-    @DisplayName("by-email 200: parses email->uuid rows and POSTs the emails with X-Internal-Token + JSON body")
-    void resolveByEmail_happyPath_parsesAndVerifiesOutboundContract() {
-        UUID u = UUID.randomUUID();
-        wireMock.stubFor(post(urlEqualTo("/users/internal/users/by-email"))
-                .willReturn(aResponse().withStatus(200)
-                        .withHeader("Content-Type", "application/json")
-                        .withBody("{\"data\":[{\"email\":\"organizer@example.com\",\"userUuid\":\""
-                                + u + "\"}]}")));
-
-        Map<String, UUID> out = gateway.resolveUuidsByEmail(List.of("organizer@example.com"));
-
-        assertEquals(u, out.get("organizer@example.com"));
-        wireMock.verify(postRequestedFor(urlEqualTo("/users/internal/users/by-email"))
-                .withHeader("X-Internal-Token", equalTo("test-token"))
-                .withHeader("Content-Type", containing("application/json"))
-                .withRequestBody(matchingJsonPath("$.emails[0]", equalTo("organizer@example.com"))));
-    }
-
-    @Test
-    @DisplayName("by-email guard rail: blank/empty input makes NO HTTP call")
-    void resolveByEmail_blankInput_noNetworkCall() {
-        assertTrue(gateway.resolveUuidsByEmail(List.of()).isEmpty());
-        assertTrue(gateway.resolveUuidsByEmail(List.of("   ")).isEmpty());
-
-        wireMock.verify(0, postRequestedFor(urlEqualTo("/users/internal/users/by-email")));
-    }
-
-    @Test
-    @DisplayName("by-email 5xx → empty map (best-effort; the backfill retries on the next startup)")
-    void resolveByEmail_serverError_returnsEmpty() {
-        wireMock.stubFor(post(urlEqualTo("/users/internal/users/by-email"))
-                .willReturn(aResponse().withStatus(500)));
-
-        assertTrue(gateway.resolveUuidsByEmail(List.of("a@b.co")).isEmpty());
-    }
-
-    @Test
-    @DisplayName("by-email skips a row whose userUuid is malformed")
-    void resolveByEmail_malformedUuid_isSkipped() {
-        wireMock.stubFor(post(urlEqualTo("/users/internal/users/by-email"))
-                .willReturn(aResponse().withStatus(200)
-                        .withHeader("Content-Type", "application/json")
-                        .withBody("{\"data\":[{\"email\":\"bad@x.co\",\"userUuid\":\"nope\"}]}")));
-
-        assertTrue(gateway.resolveUuidsByEmail(List.of("bad@x.co")).isEmpty());
     }
 }

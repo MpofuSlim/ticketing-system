@@ -178,23 +178,20 @@ public class BookingService {
 
         // Capture the owning organizer's stable cross-service uuid so the
         // ticket scan path can authorize the redeemer (events.tenant_user_uuid
-        // must equal the scanner's JWT organizerUuid). Best-effort: if
-        // event-service is unreachable lookupEvent returns null and the
-        // booking is created without it — a scan of such a ticket later
-        // refuses with WRONG_ORGANIZER, since the dead email-based tenantId
-        // fallback no longer compiles (event-service dropped that field).
-        // Runs for guests too (previously guarded on userEmail != null,
-        // which left every guest ticket unscannable at the gate and
-        // invisible in organizer revenue reports).
+        // must equal the scanner's JWT organizerUuid) and loyalty earn/redeem
+        // can attribute to the right merchant. Best-effort: if event-service is
+        // unreachable lookupEvent returns null and the booking is created
+        // without it — a scan of such a ticket later refuses with
+        // WRONG_ORGANIZER. Runs for guests too (previously guarded on
+        // userEmail != null, which left every guest ticket unscannable at the
+        // gate and invisible in organizer revenue reports).
         EventLookupDTO eventLookup = lookupEvent(request.getEventId());
-        String tenantId = eventLookup == null ? null : eventLookup.getTenantId();
         UUID tenantUserUuid = eventLookup == null ? null : eventLookup.getTenantUserUuid();
 
         Booking booking = Booking.builder()
                 .userEmail(userEmail)
                 .phoneNumber(phoneNumber)
                 .eventId(request.getEventId())
-                .tenantId(tenantId)
                 .tenantUserUuid(tenantUserUuid)
                 .confirmationNumber(confirmationNumber)
                 .status(Booking.BookingStatus.PENDING)
@@ -550,7 +547,7 @@ public class BookingService {
 
     /**
      * PII-free projection for the public {@code GET /bookings/public/{id}}
-     * lookup. Drops userEmail / phoneNumber / tenantId / pointsUsed /
+     * lookup. Drops userEmail / phoneNumber / tenantUserUuid / pointsUsed /
      * cashAmount / updatedAt vs {@link #toDTO}; keeps the tickets (+ QR) so a
      * magic-link view can still render the e-tickets.
      */
@@ -823,7 +820,7 @@ public class BookingService {
     // (if everything checks out) calls redeem then earn on loyalty-service.
     // No-op when:
     //   - the loyalty client isn't wired (unit tests),
-    //   - the booking has no tenantId (event-service was down at create),
+    //   - the booking has no tenantUserUuid (event-service was down at create),
     //   - both pointsToUse and cashAmount cover the full total via cash only
     //     AND the rule isn't reachable.
     private void applyLoyalty(Booking booking, BigDecimal pointsToUse, BigDecimal cashAmount) {
@@ -950,8 +947,8 @@ public class BookingService {
 
     /**
      * Best-effort event lookup. Returns the {@link EventLookupDTO} verbatim
-     * so callers can read every field we care about (tenantId for loyalty
-     * attribution, tenantUserUuid for scan authorization) without a second
+     * so callers can read every field we care about (tenantUserUuid for both
+     * loyalty attribution and scan authorization) without a second
      * cross-service call. Returns null on any failure — every consumer
      * treats null as "feature degrades gracefully" rather than blocking
      * booking creation.
@@ -1045,7 +1042,6 @@ public class BookingService {
                 .userEmail(booking.getUserEmail())
                 .phoneNumber(booking.getPhoneNumber())
                 .eventId(booking.getEventId())
-                .tenantId(booking.getTenantId())
                 .tenantUserUuid(booking.getTenantUserUuid())
                 .confirmationNumber(booking.getConfirmationNumber())
                 .status(booking.getStatus())

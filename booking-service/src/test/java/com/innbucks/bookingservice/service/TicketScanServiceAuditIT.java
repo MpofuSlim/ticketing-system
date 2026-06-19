@@ -159,7 +159,6 @@ class TicketScanServiceAuditIT extends PostgresIntegrationTestBase {
                     .confirmationNumber("INN-IT-" + UUID.randomUUID())
                     .status(status)
                     .totalAmount(new BigDecimal("100.00"))
-                    .tenantId("organizer@example.com")
                     .tenantUserUuid(organizerUuid)
                     .build();
             bookingRepository.save(booking);

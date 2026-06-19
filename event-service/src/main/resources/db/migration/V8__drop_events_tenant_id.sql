@@ -1,0 +1,18 @@
+-- Drop the legacy email-based events.tenant_id column.
+--
+-- tenant_id held the organizer's email and was the pre-V6 ownership key.
+-- Every read path moved to tenant_user_uuid (the stable organizer UUID) in
+-- V6/V7, and the TenantUserUuidBackfillRunner has since populated
+-- tenant_user_uuid on every legacy row. Operator confirmed zero non-deleted
+-- events with a null tenant_user_uuid before this ran, so nothing reads
+-- tenant_id any more (the backfill runner and its native queries are removed
+-- in the same release).
+--
+-- CASCADE drops the dependents created on this column without naming them:
+--   * the inline UNIQUE (tenant_id, title, venue, date_time) natural-key
+--     constraint from V1 — it was already inert for new rows (tenant_id is
+--     NULL on every INSERT since V7, and Postgres treats NULLs as distinct).
+--     The duplicate-create guard now lives at the application layer
+--     (existsByTenantUserUuidAndTitleAndVenueAndStartDateTimeAndDeletedFalse).
+--   * the idx_events_tenant_id index from V2.
+ALTER TABLE events DROP COLUMN IF EXISTS tenant_id CASCADE;
