@@ -2,8 +2,6 @@ package com.innbucks.loyaltyservice.service;
 
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.LoyaltyUser;
-import com.innbucks.loyaltyservice.exception.LoyaltyException;
-import com.innbucks.loyaltyservice.repository.LoyaltyUserRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -16,20 +14,24 @@ public class SuperAppService {
     private final WalletService walletService;
     private final VoucherService voucherService;
     private final TransactionService transactionService;
-    private final LoyaltyUserRepository users;
+    private final UserService userService;
 
     public SuperAppService(WalletService walletService, VoucherService voucherService,
-                           TransactionService transactionService, LoyaltyUserRepository users) {
+                           TransactionService transactionService, UserService userService) {
         this.walletService = walletService;
         this.voucherService = voucherService;
         this.transactionService = transactionService;
-        this.users = users;
+        this.userService = userService;
     }
 
-    public Dtos.UserDashboard dashboard(UUID userId) {
+    public Dtos.UserDashboard dashboard(UUID tenantId, UUID userId) {
+        // Tenant-scope the lookup. require() throws CROSS_TENANT (403) when the
+        // LoyaltyUser belongs to a different tenant than the caller's X-Tenant-Id,
+        // so a MERCHANT_ADMIN / SHOP_ADMIN can't read another tenant's dashboard by
+        // enumerating UUIDs (SUPER_ADMIN still passes whatever tenant header it
+        // likes). Mirrors the gate on GET /loyalty/users/{id}/transactions.
+        LoyaltyUser u = userService.require(tenantId, userId);
         // Balance is global per customer (phone); resolve it from the projection.
-        LoyaltyUser u = users.findById(userId)
-                .orElseThrow(() -> LoyaltyException.notFound("user"));
         return new Dtos.UserDashboard(userId,
                 walletService.totalBalance(u.getPhoneNumber()),
                 walletService.listForPhone(u.getPhoneNumber()),
