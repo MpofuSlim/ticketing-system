@@ -78,5 +78,19 @@ public enum AuditEventType {
      * user (every delivery channel failed). Never fired for a SUPER_ADMIN
      * target (that credential is owned by the bootstrap env seed).
      */
-    USER_TEMP_PASSWORD_RESET
+    USER_TEMP_PASSWORD_RESET,
+
+    /**
+     * X-Internal-Token validation failed on a /users/internal/** endpoint.
+     * Fires from every Internal*Controller after MessageDigest.isEqual rejects
+     * (or the presented header is missing / the server-side token is unset).
+     * The {@code failure_reason} narrows it: {@code token_missing},
+     * {@code token_mismatch}, {@code token_not_configured}. {@code metadata}
+     * carries the {@code path} and {@code presentedTokenLength} — NEVER the
+     * token itself.
+     *
+     * <p>The internal-token surface is the platform's S2S trust boundary;
+     * silent 401s here hide both prod misconfiguration AND active probing.
+     */
+    AUTH_INTERNAL_TOKEN_FAILURE
 }

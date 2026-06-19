@@ -5,14 +5,12 @@ import com.innbucks.userservice.dto.ScanAccessDTO;
 import com.innbucks.userservice.service.TeamMemberService;
 import io.swagger.v3.oas.annotations.Hidden;
 import io.swagger.v3.oas.annotations.Operation;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.UUID;
 
 /**
@@ -33,12 +31,12 @@ import java.util.UUID;
 public class InternalTeamMemberController {
 
     private final TeamMemberService teamMemberService;
-    private final String expectedToken;
+    private final InternalTokenAuthorizer tokenAuthorizer;
 
     public InternalTeamMemberController(TeamMemberService teamMemberService,
-                                        @Value("${innbucks.internal-api-token:}") String expectedToken) {
+                                        InternalTokenAuthorizer tokenAuthorizer) {
         this.teamMemberService = teamMemberService;
-        this.expectedToken = expectedToken;
+        this.tokenAuthorizer = tokenAuthorizer;
     }
 
     @GetMapping("/{teamMemberUuid}/can-scan/{eventId}")
@@ -46,8 +44,9 @@ public class InternalTeamMemberController {
     public ResponseEntity<?> canScan(
             @RequestHeader(value = "X-Internal-Token", required = false) String token,
             @PathVariable UUID teamMemberUuid,
-            @PathVariable UUID eventId) {
-        if (!authorized(token)) {
+            @PathVariable UUID eventId,
+            HttpServletRequest request) {
+        if (!tokenAuthorizer.authorized(token, request)) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
         boolean allowed = teamMemberService.canScanEvent(teamMemberUuid, eventId);
@@ -62,24 +61,12 @@ public class InternalTeamMemberController {
                           "Empty list = the team member has no scan access (deny-by-default).")
     public ResponseEntity<?> assignedEvents(
             @RequestHeader(value = "X-Internal-Token", required = false) String token,
-            @PathVariable UUID teamMemberUuid) {
-        if (!authorized(token)) {
+            @PathVariable UUID teamMemberUuid,
+            HttpServletRequest request) {
+        if (!tokenAuthorizer.authorized(token, request)) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
         java.util.List<UUID> eventIds = teamMemberService.assignedEventIdsFor(teamMemberUuid);
         return ResponseEntity.ok(ApiResult.ok("Assigned events resolved", eventIds));
-    }
-
-    private boolean authorized(String presented) {
-        if (expectedToken == null || expectedToken.isBlank()) {
-            log.warn("Internal API token is not configured; rejecting call");
-            return false;
-        }
-        if (presented == null) {
-            return false;
-        }
-        return MessageDigest.isEqual(
-                expectedToken.getBytes(StandardCharsets.UTF_8),
-                presented.getBytes(StandardCharsets.UTF_8));
     }
 }

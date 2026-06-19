@@ -9,13 +9,10 @@ import com.innbucks.userservice.repository.UserRepository;
 import io.swagger.v3.oas.annotations.Hidden;
 import io.swagger.v3.oas.annotations.Operation;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -42,14 +39,14 @@ public class InternalTenantLookupController {
 
     private final UserRepository userRepository;
     private final TenantProfileRepository tenantProfileRepository;
-    private final String expectedToken;
+    private final InternalTokenAuthorizer tokenAuthorizer;
 
     public InternalTenantLookupController(UserRepository userRepository,
                                           TenantProfileRepository tenantProfileRepository,
-                                          @Value("${innbucks.internal-api-token:}") String expectedToken) {
+                                          InternalTokenAuthorizer tokenAuthorizer) {
         this.userRepository = userRepository;
         this.tenantProfileRepository = tenantProfileRepository;
-        this.expectedToken = expectedToken;
+        this.tokenAuthorizer = tokenAuthorizer;
     }
 
     @PostMapping("/tenants/lookup-by-uuid")
@@ -58,8 +55,9 @@ public class InternalTenantLookupController {
                           "email and address. Organizers with no business profile are simply absent " +
                           "from the result. Used by event-service to enrich event responses.")
     public ResponseEntity<?> lookupByUuid(@RequestHeader(value = "X-Internal-Token", required = false) String token,
-                                          @RequestBody UuidLookupRequest request) {
-        if (!authorized(token)) {
+                                          @RequestBody UuidLookupRequest request,
+                                          jakarta.servlet.http.HttpServletRequest httpRequest) {
+        if (!tokenAuthorizer.authorized(token, httpRequest)) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
         List<UUID> userUuids = request == null ? null : request.userUuids();
@@ -93,19 +91,4 @@ public class InternalTenantLookupController {
 
     /** Request body: {@code {"userUuids": ["8b3a9c0e-...", "5fc4c9d2-..."]}}. */
     public record UuidLookupRequest(List<UUID> userUuids) {}
-
-    private boolean authorized(String presented) {
-        if (expectedToken == null || expectedToken.isBlank()) {
-            // No token configured: refuse all internal calls rather than fail-open.
-            log.warn("Internal API token is not configured; rejecting call");
-            return false;
-        }
-        if (presented == null) {
-            return false;
-        }
-        // Constant-time compare to avoid leaking the secret via a timing oracle.
-        return MessageDigest.isEqual(
-                expectedToken.getBytes(StandardCharsets.UTF_8),
-                presented.getBytes(StandardCharsets.UTF_8));
-    }
 }
