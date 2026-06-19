@@ -42,11 +42,12 @@ public class SeatCategoryAnalyticsService {
 
     @Transactional(readOnly = true)
     public EventAnalyticsDTO getEventAnalytics(UUID eventId,
+                                               UUID callerOrganizerUuid,
                                                String requesterEmail,
                                                boolean isAdmin,
                                                int page, int size, String authHeader) {
         if (!isAdmin) {
-            requireEventOwnership(eventId, requesterEmail, authHeader);
+            requireEventOwnership(eventId, callerOrganizerUuid, requesterEmail, authHeader);
         }
         log.debug("Building event analytics eventId={} page={} size={}", eventId, page, size);
 
@@ -89,10 +90,18 @@ public class SeatCategoryAnalyticsService {
 
     /**
      * Defense-in-depth ownership check — analytics expose customer emails and
-     * revenue, so a non-admin caller must own the event in event-service. Same
-     * pattern as {@link SeatCategoryService#requireEventOwnership}.
+     * revenue, so a non-admin caller must own the event in event-service.
+     * Matches the caller's {@code organizerUuid} JWT claim against the
+     * event's {@code tenantUserUuid} — the email-as-tenantId comparison
+     * worked until event-service V7 (PR #259) dropped the email column.
      */
-    private void requireEventOwnership(UUID eventId, String requesterEmail, String authHeader) {
+    private void requireEventOwnership(UUID eventId, UUID callerOrganizerUuid,
+                                       String requesterEmail, String authHeader) {
+        if (callerOrganizerUuid == null) {
+            log.warn("Analytics ownership rejected — caller has no organizerUuid claim eventId={} requesterEmail={}",
+                    eventId, requesterEmail);
+            throw new AccessDeniedException("You do not own this event");
+        }
         EventServiceClient client = eventClientProvider == null
                 ? null : eventClientProvider.getIfAvailable();
         if (client == null) {
@@ -104,10 +113,10 @@ public class SeatCategoryAnalyticsService {
             log.warn("Analytics ownership lookup empty eventId={}", eventId);
             throw new AccessDeniedException("Cannot verify event ownership");
         }
-        String ownerTenantId = lookup.get().getTenantId();
-        if (ownerTenantId == null || !ownerTenantId.equals(requesterEmail)) {
-            log.warn("Analytics ownership check failed eventId={} requesterEmail={} ownerTenantId={}",
-                    eventId, requesterEmail, ownerTenantId);
+        UUID ownerUuid = lookup.get().getTenantUserUuid();
+        if (ownerUuid == null || !ownerUuid.equals(callerOrganizerUuid)) {
+            log.warn("Analytics ownership check failed eventId={} requesterEmail={} callerOrganizerUuid={} ownerUuid={}",
+                    eventId, requesterEmail, callerOrganizerUuid, ownerUuid);
             throw new AccessDeniedException("You do not own this event");
         }
     }

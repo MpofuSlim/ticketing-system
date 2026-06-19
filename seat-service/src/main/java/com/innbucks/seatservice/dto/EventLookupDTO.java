@@ -10,9 +10,14 @@ import java.util.UUID;
 
 /**
  * Minimal mirror of event-service's EventResponseDTO. seat-service only needs
- * tenantId for category ownership checks; the rest of the event payload is
- * ignored — {@link JsonIgnoreProperties} keeps Jackson from blowing up if
- * event-service grows new fields.
+ * the owning organizer's stable user_uuid for ownership checks; the rest of
+ * the event payload is ignored — {@link JsonIgnoreProperties} keeps Jackson
+ * from blowing up if event-service grows new fields.
+ *
+ * The legacy email-based `tenantId` was removed in event-service V7
+ * (PR #259) — the surviving owner pointer is `tenantUserUuid`, which
+ * matches {@code users.user_uuid} in user-service and the
+ * {@code organizerUuid} JWT claim.
  */
 @Data
 @Builder
@@ -22,5 +27,5 @@ import java.util.UUID;
 public class EventLookupDTO {
 
     private UUID eventId;
-    private String tenantId;
+    private UUID tenantUserUuid;
 }

@@ -5,6 +5,7 @@ import com.innbucks.seatservice.dto.CategoryCapacityDTO;
 import com.innbucks.seatservice.dto.CreateCategoryRequestDTO;
 import com.innbucks.seatservice.dto.CreateCategoryResponseDTO;
 import com.innbucks.seatservice.dto.EventAnalyticsDTO;
+import com.innbucks.seatservice.security.JwtAuthDetails;
 import com.innbucks.seatservice.service.SeatCategoryAnalyticsService;
 import com.innbucks.seatservice.service.SeatCategoryService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -202,12 +203,13 @@ public class SeatCategoryController {
             HttpServletRequest httpRequest
     ) {
         String requesterEmail = authentication.getName();
+        UUID callerOrganizerUuid = organizerUuid(authentication);
         boolean isAdmin = hasRole(authentication, "ROLE_SUPER_ADMIN");
         String authHeader = httpRequest.getHeader("Authorization");
         log.info("POST /seat-categories eventId={} name={} requesterEmail={} isAdmin={}",
                 request.getEventId(), request.getName(), requesterEmail, isAdmin);
         CreateCategoryResponseDTO created = categoryService.createCategory(
-                request, requesterEmail, isAdmin, authHeader);
+                request, callerOrganizerUuid, requesterEmail, isAdmin, authHeader);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Seat category created successfully", created));
     }
@@ -366,14 +368,13 @@ public class SeatCategoryController {
             HttpServletRequest httpRequest
     ) {
         String requesterEmail = authentication.getName();
+        UUID callerOrganizerUuid = organizerUuid(authentication);
         boolean isAdmin = hasRole(authentication, "ROLE_SUPER_ADMIN");
         log.info("GET /seat-categories/analytics eventId={} requesterEmail={} isAdmin={} page={} size={}",
                 eventId, requesterEmail, isAdmin, page, size);
-        // Forward the inbound Authorization header so booking-service's
-        // matching role check sees the same caller.
         String authHeader = httpRequest.getHeader(HttpHeaders.AUTHORIZATION);
         EventAnalyticsDTO analytics = analyticsService.getEventAnalytics(
-                eventId, requesterEmail, isAdmin, page, size, authHeader);
+                eventId, callerOrganizerUuid, requesterEmail, isAdmin, page, size, authHeader);
         return ResponseEntity.ok(ApiResult.ok("Event analytics retrieved successfully", analytics));
     }
 
@@ -404,10 +405,11 @@ public class SeatCategoryController {
             Authentication authentication,
             HttpServletRequest httpRequest) {
         String requesterEmail = authentication.getName();
+        UUID callerOrganizerUuid = organizerUuid(authentication);
         boolean isAdmin = hasRole(authentication, "ROLE_SUPER_ADMIN");
         String authHeader = httpRequest.getHeader("Authorization");
         log.info("DELETE /seat-categories/{} requesterEmail={} isAdmin={}", id, requesterEmail, isAdmin);
-        categoryService.deleteCategory(id, requesterEmail, isAdmin, authHeader);
+        categoryService.deleteCategory(id, callerOrganizerUuid, requesterEmail, isAdmin, authHeader);
         return ResponseEntity.ok(ApiResult.ok("Seat category deleted successfully", null));
     }
 
@@ -415,5 +417,12 @@ public class SeatCategoryController {
         if (authentication == null) return false;
         return authentication.getAuthorities().stream()
                 .anyMatch(a -> role.equals(a.getAuthority()));
+    }
+
+    private static UUID organizerUuid(Authentication authentication) {
+        if (authentication == null) return null;
+        return authentication.getDetails() instanceof JwtAuthDetails details
+                ? details.organizerUuid()
+                : null;
     }
 }
