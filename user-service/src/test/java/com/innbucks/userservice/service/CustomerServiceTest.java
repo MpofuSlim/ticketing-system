@@ -44,7 +44,8 @@ class CustomerServiceTest {
                 mock(PendingRegistrationRepository.class),
                 mock(PasswordEncoder.class),
                 mock(OtpService.class),
-                coreBanking
+                coreBanking,
+                new com.innbucks.userservice.security.NationalIdHasher("test-secret")
         );
     }
 
@@ -193,6 +194,43 @@ class CustomerServiceTest {
         assertEquals("oradian-ext-1", profile.getCoreBankingProfileId());
         assertEquals("oradian-ext-1", profile.getOradianExternalId());
         assertEquals(1001L, profile.getOradianClientId());
+    }
+
+    @Test
+    void registerTier2_storesHashedNationalId_butSendsRawToCoreBanking() {
+        // PII at rest: the stored national_id must be HMAC'd, never the raw
+        // "12345678". But core-banking (Oradian) needs the REAL id for KYC, and
+        // it gets it straight off the request — proving the hash is storage-only
+        // and doesn't corrupt the provider linkage.
+        UserRepository userRepo = mock(UserRepository.class);
+        CustomerProfileRepository profileRepo = mock(CustomerProfileRepository.class);
+        CoreBankingPort coreBanking = mock(CoreBankingPort.class);
+        when(coreBanking.provider()).thenReturn("ORADIAN");
+        when(coreBanking.createCustomer(any(CoreBankingCreateCustomerCommand.class), anyString()))
+                .thenReturn(fakeCoreBankingResult());
+        CustomerService service = newService(userRepo, profileRepo, coreBanking);
+
+        User user = customerUser(42L, "+263770000001");
+        CustomerProfile profile = CustomerProfile.builder()
+                .user(user)
+                .registrationTier(1)
+                .build();
+        when(userRepo.findByPhoneNumber("+263770000001")).thenReturn(Optional.of(user));
+        when(profileRepo.findByUserId(42L)).thenReturn(Optional.of(profile));
+
+        service.registerTier2(tier2Request("+263770000001"));
+
+        // Stored copy is hashed.
+        assertTrue(profile.getNationalId().startsWith("hmac:"),
+                "national_id must be HMAC'd at rest, was: " + profile.getNationalId());
+        assertNotEquals("12345678", profile.getNationalId());
+
+        // Core-banking still receives the raw value.
+        ArgumentCaptor<CoreBankingCreateCustomerCommand> cmd =
+                ArgumentCaptor.forClass(CoreBankingCreateCustomerCommand.class);
+        verify(coreBanking).createCustomer(cmd.capture(), anyString());
+        assertEquals("12345678", cmd.getValue().nationalId(),
+                "core-banking must get the real national ID, not the hash");
     }
 
     @Test

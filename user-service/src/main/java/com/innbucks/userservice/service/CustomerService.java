@@ -45,6 +45,10 @@ public class CustomerService {
     // Zimbabwe once its adapter lands). Selected at deploy time via
     // innbucks.core-banking.provider — see CoreBankingPort.
     private final CoreBankingPort coreBanking;
+    // Hashes the national ID before it lands in the DB (PII at rest). The raw
+    // value still goes to core-banking straight off the request — only the
+    // stored copy is HMAC'd.
+    private final com.innbucks.userservice.security.NationalIdHasher nationalIdHasher;
 
     /** Deployment country fallback for MSISDNs whose dialling prefix isn't an
      *  InnBucks-market entry (rare; foreign numbers). Set via INNBUCKS_COUNTRY
@@ -103,7 +107,10 @@ public class CustomerService {
         String fullName = composeFullName(request.getFirstName(),
                 request.getMiddleName(), request.getLastName());
         profile.setFullName(fullName);
-        profile.setNationalId(request.getNationalId());
+        // HMAC the national ID before it touches the DB — it's PII and nothing
+        // reads the stored value back (the core-banking create below uses the
+        // raw value straight off the request). hash() is idempotent + null-safe.
+        profile.setNationalId(nationalIdHasher.hash(request.getNationalId()));
         profile.setDateOfBirth(request.getDateOfBirth());
         profile.setGender(request.getGender());
 

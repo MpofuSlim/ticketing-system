@@ -20,17 +20,19 @@ import java.util.List;
 @Slf4j
 public class ProductionSecretsGuard {
 
-    // user-service holds three secrets that ALL default to change-me-* in
+    // user-service holds secrets that ALL default to change-me-* in
     // application.yaml and ALL must be overridden in prod:
-    //   - jwt.secret                   (env JWT_SECRET)             -> HS256 signs every issued access + refresh token
-    //   - innbucks.internal-api-token  (env INTERNAL_API_TOKEN)     -> talks to loyalty-service S2S endpoints
-    //   - oradian.internal-token       (env ORADIAN_INTERNAL_TOKEN) -> talks to Oradian middleware S2S endpoints
-    //   - whatsapp.api-key             (env WHATSAPP_API_KEY)        -> x-api-key for the WhatsApp notification gateway
+    //   - jwt.secret                   (env JWT_SECRET)              -> HS256 signs every issued access + refresh token
+    //   - innbucks.internal-api-token  (env INTERNAL_API_TOKEN)      -> talks to loyalty-service S2S endpoints
+    //   - oradian.internal-token       (env ORADIAN_INTERNAL_TOKEN)  -> talks to Oradian middleware S2S endpoints
+    //   - whatsapp.api-key             (env WHATSAPP_API_KEY)         -> x-api-key for the WhatsApp notification gateway
+    //   - national-id.hmac-secret      (env NATIONAL_ID_HMAC_SECRET)  -> keyed hash protecting national IDs at rest
     private static final List<String> SECRETS_TO_CHECK = List.of(
             "jwt.secret",
             "innbucks.internal-api-token",
             "oradian.internal-token",
-            "whatsapp.api-key"
+            "whatsapp.api-key",
+            "national-id.hmac-secret"
     );
 
     private static final String PLACEHOLDER_MARKER = "change-me";
@@ -55,7 +57,8 @@ public class ProductionSecretsGuard {
                     "Refusing to start under 'prod' profile: the following secrets " +
                     "still have placeholder defaults containing '" + PLACEHOLDER_MARKER +
                     "': " + offenders + ". Override them via env vars (JWT_SECRET, " +
-                    "INTERNAL_API_TOKEN, ORADIAN_INTERNAL_TOKEN, WHATSAPP_API_KEY) before booting in production."
+                    "INTERNAL_API_TOKEN, ORADIAN_INTERNAL_TOKEN, WHATSAPP_API_KEY, " +
+                    "NATIONAL_ID_HMAC_SECRET) before booting in production."
             );
         }
         log.info("Production secrets check passed ({} keys verified)", SECRETS_TO_CHECK.size());
