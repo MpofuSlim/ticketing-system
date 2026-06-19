@@ -427,3 +427,11 @@ springdoc:
         url: /payment-service/v3/api-docs
       - name: loyalty-service
         url: /loyalty-service/v3/api-docs
+
+# HTTP Basic credentials guarding the Swagger UI above (see
+# SwaggerSecurityConfig). Leave the password blank to keep Swagger open
+# (a warning is logged on startup); set SWAGGER_PASSWORD to require a login.
+swagger:
+  auth:
+    username: ${SWAGGER_USER:admin}
+    password: ${SWAGGER_PASSWORD:}
