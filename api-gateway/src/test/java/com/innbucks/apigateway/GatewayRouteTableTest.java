@@ -26,8 +26,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  *     buckets (the write verbs get the tight money-path limit);
  *   - the /auth/** catch-all deliberately carries NO rate limiter so logins
  *     survive a Redis outage, while the abuse-prone /auth sub-routes (customer
- *     lookup/registration) and every other authenticated route keep one — and
- *     those sub-routes must be matched BEFORE the catch-all;
+ *     lookup/registration, and OTP request/verify — the SMS-cost surface) and
+ *     every other authenticated route keep one — and those sub-routes must be
+ *     matched BEFORE the catch-all;
  *   - the api-docs proxies are scoped to /v3/api-docs ONLY — a historical /**
  *     here let callers tunnel past edge-deny and the limiter.
  * A missing/renamed route is the "added an endpoint, forgot the gateway route
@@ -42,7 +43,7 @@ class GatewayRouteTableTest {
 
     private static final List<String> EXPECTED_ROUTE_IDS = List.of(
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
-            "user-auth-route", "cells-lookup-route", "user-admin-route",
+            "auth-otp-route", "user-auth-route", "cells-lookup-route", "user-admin-route",
             "booking-event-organizer-reports-route", "user-event-organizer-route",
             "user-internal-deny", "user-self-route",
             "event-availability-deny", "event-service-route",
@@ -75,6 +76,7 @@ class GatewayRouteTableTest {
 
     private static final List<String> RATE_LIMITED_ROUTES = List.of(
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
+            "auth-otp-route",
             "user-admin-route", "user-event-organizer-route", "booking-event-organizer-reports-route",
             "user-self-route", "event-service-route",
             "seat-service-seat-route", "seat-service-category-route",
@@ -221,7 +223,7 @@ class GatewayRouteTableTest {
     void authSensitiveSubRoutesPrecedeTheAuthCatchAll() {
         List<String> order = orderedIds();
         int catchAll = order.indexOf("user-auth-route");
-        List.of("auth-customer-lookup-route", "auth-customer-route", "auth-register-route")
+        List.of("auth-customer-lookup-route", "auth-customer-route", "auth-register-route", "auth-otp-route")
                 .forEach(id -> assertThat(order.indexOf(id))
                         .as("%s must match before the /auth/** catch-all", id)
                         .isBetween(0, catchAll - 1));
@@ -240,6 +242,8 @@ class GatewayRouteTableTest {
                 .containsExactly("/auth/customer/**");
         assertThat(predicateArgs("auth-register-route", "Path"))
                 .containsExactly("/auth/register");
+        assertThat(predicateArgs("auth-otp-route", "Path"))
+                .containsExactly("/auth/otp/**");
     }
 
     @Test

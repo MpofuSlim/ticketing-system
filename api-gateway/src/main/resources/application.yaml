@@ -51,6 +51,28 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
+            # OTP request/verify trigger real SMS sends, so they are the one
+            # money-cost surface on the otherwise-limiter-free /auth/** family.
+            # OtpService already caps a SINGLE msisdn at 3 / 10 min, but an
+            # attacker rotating msisdns from one IP bypasses that per-msisdn cap
+            # and burns the SMS budget — this per-IP gateway bucket closes the
+            # amplification hole. Pre-auth (no bearer), so gatewayKeyResolver
+            # keys by client IP here. MUST precede the /auth/** catch-all below.
+            # (Login deliberately stays on the limiter-free catch-all so a Redis
+            # outage can't lock everyone out; brute force is covered by the
+            # per-account login lockout, not by this limiter.)
+            - id: auth-otp-route
+              uri: lb://user-service
+              predicates:
+                - Path=/auth/otp/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${AUTH_OTP_RATE_LIMIT_REPLENISH_PER_SECOND:1}
+                    redis-rate-limiter.burstCapacity: ${AUTH_OTP_RATE_LIMIT_BURST_CAPACITY:3}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
+
             - id: user-auth-route
               uri: lb://user-service
               predicates:
