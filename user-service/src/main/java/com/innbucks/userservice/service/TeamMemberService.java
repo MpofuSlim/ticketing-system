@@ -17,6 +17,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -103,6 +104,14 @@ public class TeamMemberService {
 
     @Transactional(readOnly = true)
     public List<UserResponseDTO> listMyTeam() {
+        if (isCallerSuperAdmin()) {
+            // SUPER_ADMIN sees every TEAM_MEMBER across all organizers — they
+            // run support / oversight, not a single tenant. Returns an empty
+            // list (never 403) when no team members exist anywhere.
+            return userRepository.findByAnyRole(List.of(User.Role.TEAM_MEMBER)).stream()
+                    .map(UserResponseDTO::from)
+                    .toList();
+        }
         User caller = requireOrganizerCaller();
         return userRepository.findByCreatedByOrganizerUuid(caller.getUserUuid()).stream()
                 .map(UserResponseDTO::from)
@@ -111,8 +120,7 @@ public class TeamMemberService {
 
     @Transactional(readOnly = true)
     public UserResponseDTO getMyTeamMember(UUID teamMemberUuid) {
-        User caller = requireOrganizerCaller();
-        User member = loadMemberOwnedByCaller(teamMemberUuid, caller.getUserUuid());
+        User member = loadMemberForCaller(teamMemberUuid);
         return UserResponseDTO.from(member);
     }
 
@@ -124,8 +132,7 @@ public class TeamMemberService {
      */
     @Transactional
     public UserResponseDTO disableTeamMember(UUID teamMemberUuid) {
-        User caller = requireOrganizerCaller();
-        User member = loadMemberOwnedByCaller(teamMemberUuid, caller.getUserUuid());
+        User member = loadMemberForCaller(teamMemberUuid);
         if (!member.isActive()) {
             // Already disabled — return current state, nothing to do.
             return UserResponseDTO.from(member);
@@ -139,22 +146,21 @@ public class TeamMemberService {
         // Revoke every still-live refresh token so they can't /auth/refresh
         // back into a fresh access token.
         int revokedFamilies = refreshTokenRepository.revokeAllForUser(member.getId(), Instant.now());
-        log.info("Disabled TEAM_MEMBER userUuid={} organizerUuid={} by={} revokedRefreshFamilies={}",
-                member.getUserUuid(), caller.getUserUuid(), caller.getEmail(), revokedFamilies);
+        log.info("Disabled TEAM_MEMBER userUuid={} by={} revokedRefreshFamilies={}",
+                member.getUserUuid(), callerLogTag(), revokedFamilies);
         return UserResponseDTO.from(member);
     }
 
     @Transactional
     public UserResponseDTO enableTeamMember(UUID teamMemberUuid) {
-        User caller = requireOrganizerCaller();
-        User member = loadMemberOwnedByCaller(teamMemberUuid, caller.getUserUuid());
+        User member = loadMemberForCaller(teamMemberUuid);
         if (member.isActive()) {
             return UserResponseDTO.from(member);
         }
         member.setActive(true);
         userRepository.save(member);
-        log.info("Re-enabled TEAM_MEMBER userUuid={} organizerUuid={} by={}",
-                member.getUserUuid(), caller.getUserUuid(), caller.getEmail());
+        log.info("Re-enabled TEAM_MEMBER userUuid={} by={}",
+                member.getUserUuid(), callerLogTag());
         return UserResponseDTO.from(member);
     }
 
@@ -180,15 +186,14 @@ public class TeamMemberService {
      */
     @Transactional
     public UserResponseDTO resetTemporaryPassword(UUID teamMemberUuid) {
-        User caller = requireOrganizerCaller();
-        User member = loadMemberOwnedByCaller(teamMemberUuid, caller.getUserUuid());
+        User member = loadMemberForCaller(teamMemberUuid);
 
         String tempPassword = TemporaryPasswordGenerator.generate();
         member.setPassword(passwordEncoder.encode(tempPassword));
         member.setMustChangePassword(true);
         userRepository.save(member);
-        log.info("Reset TEAM_MEMBER temp password userUuid={} organizerUuid={} by={}",
-                member.getUserUuid(), caller.getUserUuid(), caller.getEmail());
+        log.info("Reset TEAM_MEMBER temp password userUuid={} by={}",
+                member.getUserUuid(), callerLogTag());
 
         notifyPasswordReset(member, tempPassword);
         return UserResponseDTO.from(member);
@@ -202,16 +207,19 @@ public class TeamMemberService {
      */
     @Transactional
     public List<UUID> assignEvent(UUID teamMemberUuid, UUID eventId) {
-        User caller = requireOrganizerCaller();
-        loadMemberOwnedByCaller(teamMemberUuid, caller.getUserUuid());
+        User member = loadMemberForCaller(teamMemberUuid);
+        // Even when SUPER_ADMIN assigns, the assignment row's "assigned by"
+        // column reflects the team member's owning organizer — that's the
+        // entity who actually owns the relationship, not the admin who acted.
+        UUID assignedBy = member.getCreatedByOrganizerUuid();
         if (!assignmentRepository.existsByTeamMemberUserUuidAndEventId(teamMemberUuid, eventId)) {
             assignmentRepository.save(TeamMemberEventAssignment.builder()
                     .teamMemberUserUuid(teamMemberUuid)
                     .eventId(eventId)
-                    .assignedByOrganizerUuid(caller.getUserUuid())
+                    .assignedByOrganizerUuid(assignedBy)
                     .build());
-            log.info("Assigned TEAM_MEMBER userUuid={} to eventId={} by organizerUuid={}",
-                    teamMemberUuid, eventId, caller.getUserUuid());
+            log.info("Assigned TEAM_MEMBER userUuid={} to eventId={} by={} ownerOrganizerUuid={}",
+                    teamMemberUuid, eventId, callerLogTag(), assignedBy);
         }
         return assignedEventIds(teamMemberUuid);
     }
@@ -222,20 +230,18 @@ public class TeamMemberService {
      */
     @Transactional
     public List<UUID> unassignEvent(UUID teamMemberUuid, UUID eventId) {
-        User caller = requireOrganizerCaller();
-        loadMemberOwnedByCaller(teamMemberUuid, caller.getUserUuid());
+        loadMemberForCaller(teamMemberUuid);
         long removed = assignmentRepository.deleteByTeamMemberUserUuidAndEventId(teamMemberUuid, eventId);
         if (removed > 0) {
-            log.info("Unassigned TEAM_MEMBER userUuid={} from eventId={} by organizerUuid={}",
-                    teamMemberUuid, eventId, caller.getUserUuid());
+            log.info("Unassigned TEAM_MEMBER userUuid={} from eventId={} by={}",
+                    teamMemberUuid, eventId, callerLogTag());
         }
         return assignedEventIds(teamMemberUuid);
     }
 
     @Transactional(readOnly = true)
     public List<UUID> listAssignedEvents(UUID teamMemberUuid) {
-        User caller = requireOrganizerCaller();
-        loadMemberOwnedByCaller(teamMemberUuid, caller.getUserUuid());
+        loadMemberForCaller(teamMemberUuid);
         return assignedEventIds(teamMemberUuid);
     }
 
@@ -284,6 +290,51 @@ public class TeamMemberService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Team member not found");
         }
         return member;
+    }
+
+    /**
+     * Caller-aware loader for read + lifecycle endpoints. SUPER_ADMIN skips
+     * the per-organizer ownership check entirely (oversight role — they need
+     * to see / act on every team member). EVENT_ORGANIZERs still get 404 for
+     * members they don't own, so we never disclose another organizer's staff.
+     */
+    private User loadMemberForCaller(UUID teamMemberUuid) {
+        if (isCallerSuperAdmin()) {
+            User member = userRepository.findByUserUuid(teamMemberUuid)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Team member not found"));
+            if (!member.hasRole(User.Role.TEAM_MEMBER)) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Team member not found");
+            }
+            return member;
+        }
+        User caller = requireOrganizerCaller();
+        return loadMemberOwnedByCaller(teamMemberUuid, caller.getUserUuid());
+    }
+
+    /** True iff the current request is from a user with {@code ROLE_SUPER_ADMIN}. */
+    private boolean isCallerSuperAdmin() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || auth.getAuthorities() == null) {
+            return false;
+        }
+        for (GrantedAuthority a : auth.getAuthorities()) {
+            if ("ROLE_SUPER_ADMIN".equals(a.getAuthority())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Human-readable identifier for the caller in log lines — admin email when
+     * the caller is SUPER_ADMIN, organizer email otherwise. Used so the audit
+     * trail tells the operator who actually triggered a team-member change,
+     * not just the team member's owning organizer.
+     */
+    private String callerLogTag() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || auth.getName() == null) return "unknown";
+        return isCallerSuperAdmin() ? "admin:" + auth.getName() : auth.getName();
     }
 
     private User requireOrganizerCaller() {
