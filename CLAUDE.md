@@ -2,6 +2,13 @@
 
 Project-wide instructions for Claude when working in this repo.
 
+> [!IMPORTANT]
+> **Branch naming: always `feature/<short-kebab-description>`, cut from `master`.**
+> NEVER commit or push feature work on the session's auto-assigned
+> `claude/<random-words>` branch (e.g. `claude/happy-archimedes-4zz7fc`) — that
+> name is a harness default, not our convention, and must never appear on a PR.
+> Create the `feature/*` branch first. Full rules under [Branching](#branching).
+
 ## API gateway routing
 
 **Whenever you add a new HTTP endpoint to any backend service, you MUST also
@@ -157,6 +164,16 @@ gains a `Z`), so it needs FE coordination. Until then, the UTC
 convention above keeps the dormant bug dormant.
 
 ## Branching
+
+> [!IMPORTANT]
+> **All feature work goes on a `feature/<short-kebab-description>` branch — no exceptions.**
+> Claude Code / web sessions frequently start on an auto-assigned
+> `claude/<random-words>` branch (e.g. `claude/happy-archimedes-4zz7fc`). That is
+> a harness artifact, **NOT** our branch convention — do not commit to it, push
+> it, or open a PR from it. Before committing, create a feature branch from the
+> latest `master` (`git checkout -b feature/<name> origin/master`) and work
+> there. If you only notice after committing, rename with
+> `git branch -m feature/<name>` before you push.
 
 New work goes on a **`feature/<short-kebab-description>`** branch cut from the
 latest `master`, where the suffix names the feature being added (e.g.
