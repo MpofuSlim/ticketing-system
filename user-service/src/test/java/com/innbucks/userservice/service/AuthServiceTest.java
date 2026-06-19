@@ -251,7 +251,13 @@ class AuthServiceTest {
         RegisterRequestDTO req = baseRequest("c@example.com", "0777222222", "not-a-bundle");
 
         RuntimeException ex = assertThrows(RuntimeException.class, () -> service.register(req));
-        assertTrue(ex.getMessage().toLowerCase().contains("unknown service bundle"));
+        // Wording rewritten in the descriptive-error pass — no more "Unknown service
+        // bundle: X" jargon; the user sees "We don't recognise the service 'X'.
+        // Available services: …" and the GlobalExceptionHandler surfaces it 1:1 via
+        // the ResponseStatusException branch (raw RuntimeException would collapse
+        // into "We couldn't process your request").
+        assertTrue(ex.getMessage().contains("We don't recognise the service"));
+        assertTrue(ex.getMessage().contains("not-a-bundle"));
         verify(userRepo, never()).save(any());
     }
 
@@ -264,8 +270,13 @@ class AuthServiceTest {
 
         RegisterRequestDTO req = baseRequest("dup@example.com", "0777000002", "loyalty");
 
-        RuntimeException ex = assertThrows(RuntimeException.class, () -> service.register(req));
-        assertEquals("Email already registered", ex.getMessage());
+        org.springframework.web.server.ResponseStatusException ex = assertThrows(
+                org.springframework.web.server.ResponseStatusException.class, () -> service.register(req));
+        // getReason() is what GlobalExceptionHandler.handleResponseStatus puts on
+        // the wire — that's the user-facing copy. (getMessage() formats it as
+        // "400 BAD_REQUEST \"…\"" and isn't what the client sees.)
+        assertEquals("Email already registered", ex.getReason());
+        assertEquals(org.springframework.http.HttpStatus.BAD_REQUEST, ex.getStatusCode());
         verify(userRepo, never()).save(any());
     }
 

@@ -8,9 +8,11 @@ import com.innbucks.userservice.security.JwtUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -117,19 +119,20 @@ public class AuthService {
         Set<String> bundles = parseBundles(request.getDefaultServices());
         Set<User.Role> roles = Services.rolesFor(bundles);
         if (roles.isEmpty()) {
-            throw new RuntimeException("Could not derive any role from the supplied defaultServices");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "We don't have a role available for the services you selected.");
         }
 
         if (userRepository.existsByEmail(request.getEmail())) {
             log.warn("Registration failed, email already registered email={}", request.getEmail());
-            throw new RuntimeException("Email already registered");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Email already registered");
         }
         // Step 4: use the composite (phone, home_country) check matching the
         // new uk_users_phone_country constraint. System users are anchored
         // to this cell's deployment country.
         if (userRepository.existsByPhoneNumberAndHomeCountry(request.getPhoneNumber(), deploymentCountry)) {
             log.warn("Registration failed, phone already registered phone={}", MsisdnMasking.mask(request.getPhoneNumber()));
-            throw new RuntimeException("Phone number already registered");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Phone number already registered");
         }
 
         // No password is collected at registration. Store an unguessable
@@ -535,7 +538,8 @@ public class AuthService {
 
     private Set<String> parseBundles(List<String> raw) {
         if (raw == null || raw.isEmpty()) {
-            throw new RuntimeException("At least one default service is required");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Please select at least one service to register for.");
         }
         Set<String> parsed = new LinkedHashSet<>();
         for (String b : raw) {
@@ -544,8 +548,9 @@ public class AuthService {
             }
             String normalised = b.trim().toLowerCase(Locale.ROOT);
             if (!Services.isKnownBundle(normalised)) {
-                throw new RuntimeException("Unknown service bundle: " + b
-                        + ". Allowed values: " + Services.ALL_BUNDLES);
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "We don't recognise the service '" + b
+                                + "'. Available services: " + Services.ALL_BUNDLES + ".");
             }
             parsed.add(normalised);
         }

@@ -41,4 +41,46 @@ class GlobalExceptionHandlerTest {
         assertNotNull(resp.getBody());
         assertEquals("Forbidden", resp.getBody().getMessage());
     }
+
+    @Test
+    void runtimeCatchAll_replacesRawMessage_withFriendlyText() {
+        // Defence-in-depth: an untyped RuntimeException slipping through any
+        // service must NOT leak its raw text (could be a stack-trace fragment,
+        // table name, etc.). The user sees the friendly fallback; the raw
+        // text only reaches the log. The descriptive-error fix means
+        // registration paths now throw typed ResponseStatusException instead
+        // and bypass this — but the safety net stays.
+        ResponseEntity<ApiResult<Void>> resp = handler.handleRuntime(
+                new RuntimeException("constraint uk_users_email violated near \"...)"));
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
+        assertNotNull(resp.getBody());
+        assertEquals("We couldn't process your request. Please try again.",
+                resp.getBody().getMessage());
+    }
+
+    @Test
+    void registrationErrors_surfaceTheirDescriptiveReason_notTheCatchAllPlaceholder() {
+        // The bug this contract pins: AuthService.register and
+        // CustomerService.loadProfile used to throw bare RuntimeException,
+        // and the registering user saw "We couldn't process your request"
+        // instead of the actual reason (email/phone already registered,
+        // service bundle missing, tier prerequisite, etc.). Each typed
+        // ResponseStatusException must reach the wire with its descriptive
+        // reason intact so the FE can render something the user can act on.
+        for (String reason : new String[]{
+                "Email already registered",
+                "Phone number already registered",
+                "Please select at least one service to register for.",
+                "We don't recognise the service 'pop-rock'. Available services: [LOYALTY, TICKETING].",
+                "This account isn't a customer account.",
+                "Please complete tier 1 registration first."
+        }) {
+            ResponseEntity<ApiResult<Void>> resp = handler.handleResponseStatus(
+                    new ResponseStatusException(HttpStatus.BAD_REQUEST, reason));
+            assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode(), reason);
+            assertNotNull(resp.getBody(), reason);
+            assertEquals(reason, resp.getBody().getMessage(),
+                    "descriptive registration error must reach the wire verbatim");
+        }
+    }
 }
