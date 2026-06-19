@@ -158,6 +158,52 @@ class GlobalExceptionHandlerTest {
         assertEquals(HttpStatus.SERVICE_UNAVAILABLE, resp.getStatusCode());
     }
 
+    @Test
+    void invalidPaymentRequestException_409_carriesMessageAndStatusToTheClient() {
+        // Regression guard for the bug a user actually hits: without a dedicated
+        // handler, InvalidPaymentRequestException (a RuntimeException carrying a
+        // curated customer-facing message + intended HTTP status) fell through
+        // to the Exception catch-all and surfaced as a generic
+        // "500 internal error" — leaving the customer no idea whether to retry,
+        // refresh, or contact support. Pin that the descriptive reason reaches
+        // the wire at the intended status code instead.
+        ResponseEntity<ApiResult<Void>> resp = handler.handle(
+                new innbucks.paymentservice.service.InnbucksPaymentService
+                        .InvalidPaymentRequestException(
+                        "Your booking has expired — please create a new booking and try again",
+                        409));
+        assertEquals(HttpStatus.CONFLICT, resp.getStatusCode());
+        assertNotNull(resp.getBody());
+        assertEquals("409 CONFLICT", resp.getBody().getCode());
+        assertEquals("Your booking has expired — please create a new booking and try again",
+                resp.getBody().getMessage());
+    }
+
+    @Test
+    void invalidPaymentRequestException_503_isPreserved() {
+        ResponseEntity<ApiResult<Void>> resp = handler.handle(
+                new innbucks.paymentservice.service.InnbucksPaymentService
+                        .InvalidPaymentRequestException(
+                        "InnBucks is temporarily unavailable; please try again shortly", 503));
+        assertEquals(HttpStatus.SERVICE_UNAVAILABLE, resp.getStatusCode());
+        assertNotNull(resp.getBody());
+        assertEquals("InnBucks is temporarily unavailable; please try again shortly",
+                resp.getBody().getMessage());
+    }
+
+    @Test
+    void invalidPaymentRequestException_unknownStatusCode_fallsBackTo400_notTheGeneric500() {
+        // Defence-in-depth: if a throw site picks a non-resolvable status code
+        // we still surface the descriptive message at a 400, not the catch-all's
+        // 500 — the user remains informed.
+        ResponseEntity<ApiResult<Void>> resp = handler.handle(
+                new innbucks.paymentservice.service.InnbucksPaymentService
+                        .InvalidPaymentRequestException("descriptive but odd-code reason", 599));
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
+        assertNotNull(resp.getBody());
+        assertEquals("descriptive but odd-code reason", resp.getBody().getMessage());
+    }
+
     // Dummy controller-method signature so MethodParameter has something to
     // bind to. The body is never invoked.
     @SuppressWarnings("unused")
