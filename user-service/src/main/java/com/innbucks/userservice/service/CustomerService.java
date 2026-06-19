@@ -18,9 +18,11 @@ import com.innbucks.userservice.util.MsisdnCountryResolver;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -65,7 +67,7 @@ public class CustomerService {
         // — but the right tuple keeps reading honest for cell #2 onwards.
         String homeCountry = MsisdnCountryResolver.resolve(request.getPhoneNumber()).orElse(deploymentCountry);
         if (userRepository.existsByPhoneNumberAndHomeCountry(request.getPhoneNumber(), homeCountry)) {
-            throw new RuntimeException("Phone number already registered");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Phone number already registered");
         }
 
         // Replace any in-flight pending registration — lets users recover from a mistyped password.
@@ -349,15 +351,25 @@ public class CustomerService {
     }
 
     private CustomerProfile loadProfile(String phoneNumber, int requiredCurrentTier) {
+        // Status codes stay 400 (not 404) on the "not found" branches even though
+        // 404 is semantically purer — the existing IT contract
+        // (AuthControllerIT.customerTier2_returns400WhenMsisdnDoesNotMatchAnyTier1)
+        // pins 400, the FE branches on it, and the user's complaint was about the
+        // generic MESSAGE catching this path, not the status code. The descriptive
+        // reason still reaches the wire via GlobalExceptionHandler.handleResponseStatus.
         User user = userRepository.findByPhoneNumber(phoneNumber)
-                .orElseThrow(() -> new RuntimeException("Customer not found for phone " + phoneNumber));
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "No account found for this phone number."));
         if (!user.hasRole(User.Role.CUSTOMER)) {
-            throw new RuntimeException("User is not a customer");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "This account isn't a customer account.");
         }
         CustomerProfile profile = customerProfileRepository.findByUserId(user.getId())
-                .orElseThrow(() -> new RuntimeException("Customer profile not found"));
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "We couldn't find your customer profile. Please contact support."));
         if (profile.getRegistrationTier() < requiredCurrentTier) {
-            throw new RuntimeException("Customer must complete tier " + requiredCurrentTier + " first");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Please complete tier " + requiredCurrentTier + " registration first.");
         }
         return profile;
     }
