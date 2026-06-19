@@ -457,6 +457,11 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}
       RATE_LIMIT_REPLENISH_PER_SECOND: ${RATE_LIMIT_REPLENISH_PER_SECOND:-50}
       RATE_LIMIT_BURST_CAPACITY: ${RATE_LIMIT_BURST_CAPACITY:-100}
+      # HTTP Basic login for the aggregated Swagger UI. Leave SWAGGER_PASSWORD
+      # unset to keep Swagger open (a startup warning is logged); set it to
+      # require a login. Username defaults to "admin".
+      SWAGGER_USER: ${SWAGGER_USER:-admin}
+      SWAGGER_PASSWORD: ${SWAGGER_PASSWORD:-}
     ports:
       - "18080:8080"
       - "127.0.0.1:19090:9090"

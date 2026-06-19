@@ -69,6 +69,16 @@
             <version>${springdoc.version}</version>
         </dependency>
 
+        <!-- Reactive Spring Security — used ONLY to put HTTP Basic in front of
+             the aggregated Swagger UI + the per-service OpenAPI docs it fetches
+             through the gateway (see SwaggerSecurityConfig). Every other
+             exchange is left permitAll here; routed API traffic is still
+             authenticated by the downstream services' JWT filters. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-devtools</artifactId>
