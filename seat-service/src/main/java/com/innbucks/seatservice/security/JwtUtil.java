@@ -9,6 +9,7 @@ import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
 import java.util.Collection;
 import java.util.List;
+import java.util.UUID;
 
 @Component
 public class JwtUtil {
@@ -90,6 +91,23 @@ public class JwtUtil {
      * MSISDN, customers whose phone prefix isn't a known InnBucks market).
      * JwtFilter pushes it into MDC for the request's lifetime.
      */
+    /**
+     * Stable owning-organizer pointer (matches {@code users.user_uuid} in
+     * user-service). Populated on EVENT_ORGANIZER and TEAM_MEMBER tokens;
+     * null on customer tokens, legacy tokens, and any parse failure. The
+     * seat-category ownership check compares this against each event's
+     * {@code tenantUserUuid} now that email-as-tenantId is gone (event-service
+     * V7 / PR #259).
+     */
+    public UUID extractOrganizerUuid(String token) {
+        try {
+            String raw = getClaims(token).get("organizerUuid", String.class);
+            return (raw == null || raw.isBlank()) ? null : UUID.fromString(raw);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     public String extractHomeCountry(String token) {
         try {
             String home = getClaims(token).get("homeCountry", String.class);

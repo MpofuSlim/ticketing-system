@@ -43,16 +43,17 @@ public class SeatCategoryService {
 
     @Transactional
     public CreateCategoryResponseDTO createCategory(CreateCategoryRequestDTO request) {
-        return createCategory(request, null, true, null);
+        return createCategory(request, null, null, true, null);
     }
 
     @Transactional
     public CreateCategoryResponseDTO createCategory(CreateCategoryRequestDTO request,
+                                                    UUID callerOrganizerUuid,
                                                     String requesterEmail,
                                                     boolean isAdmin,
                                                     String authHeader) {
         if (!isAdmin) {
-            requireEventOwnership(request.getEventId(), requesterEmail, authHeader);
+            requireEventOwnership(request.getEventId(), callerOrganizerUuid, requesterEmail, authHeader);
         }
         log.info("Creating seat category eventId={} name={} sections={} requesterEmail={} isAdmin={}",
                 request.getEventId(), request.getName(), request.getSections().size(),
@@ -207,11 +208,12 @@ public class SeatCategoryService {
 
     @Transactional
     public void deleteCategory(UUID categoryId) {
-        deleteCategory(categoryId, null, true, null);
+        deleteCategory(categoryId, null, null, true, null);
     }
 
     @Transactional
     public void deleteCategory(UUID categoryId,
+                               UUID callerOrganizerUuid,
                                String requesterEmail,
                                boolean isAdmin,
                                String authHeader) {
@@ -223,7 +225,7 @@ public class SeatCategoryService {
                     return new NotFoundException("Category not found");
                 });
         if (!isAdmin) {
-            requireEventOwnership(category.getEventId(), requesterEmail, authHeader);
+            requireEventOwnership(category.getEventId(), callerOrganizerUuid, requesterEmail, authHeader);
         }
         category.setDeleted(true);
         categoryRepository.save(category);
@@ -232,10 +234,19 @@ public class SeatCategoryService {
 
     /**
      * Looks up the event in event-service and throws AccessDeniedException if
-     * the requester is not its tenant. SUPER_ADMIN callers are checked at the
-     * controller layer and never reach here.
+     * the caller is not its owning organizer. SUPER_ADMIN callers are checked
+     * at the controller layer and never reach here. Matches the caller's
+     * {@code organizerUuid} JWT claim against the event's
+     * {@code tenantUserUuid} (event-service V7 / PR #259 dropped the legacy
+     * email-as-tenantId column the prior check compared against).
      */
-    private void requireEventOwnership(UUID eventId, String requesterEmail, String authHeader) {
+    private void requireEventOwnership(UUID eventId, UUID callerOrganizerUuid,
+                                       String requesterEmail, String authHeader) {
+        if (callerOrganizerUuid == null) {
+            log.warn("Event ownership rejected — caller has no organizerUuid claim eventId={} requesterEmail={}",
+                    eventId, requesterEmail);
+            throw new AccessDeniedException("You do not own this event");
+        }
         EventServiceClient client = eventClientProvider == null
                 ? null : eventClientProvider.getIfAvailable();
         if (client == null) {
@@ -248,10 +259,10 @@ public class SeatCategoryService {
             log.warn("Event ownership lookup empty eventId={}", eventId);
             throw new AccessDeniedException("Cannot verify event ownership");
         }
-        String ownerTenantId = lookup.get().getTenantId();
-        if (ownerTenantId == null || !ownerTenantId.equals(requesterEmail)) {
-            log.warn("Event ownership check failed eventId={} requesterEmail={} ownerTenantId={}",
-                    eventId, requesterEmail, ownerTenantId);
+        UUID ownerUuid = lookup.get().getTenantUserUuid();
+        if (ownerUuid == null || !ownerUuid.equals(callerOrganizerUuid)) {
+            log.warn("Event ownership check failed eventId={} requesterEmail={} callerOrganizerUuid={} ownerUuid={}",
+                    eventId, requesterEmail, callerOrganizerUuid, ownerUuid);
             throw new AccessDeniedException("You do not own this event");
         }
     }

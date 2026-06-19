@@ -15,6 +15,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 @Component
 @RequiredArgsConstructor
@@ -88,6 +89,7 @@ public class JwtFilter extends OncePerRequestFilter {
             Integer tier = jwtUtil.extractTier(token);
             Boolean verified = jwtUtil.extractVerified(token);
             String phoneNumber = jwtUtil.extractPhoneNumber(token);
+            UUID organizerUuid = jwtUtil.extractOrganizerUuid(token);
 
             List<SimpleGrantedAuthority> authorities = new ArrayList<>();
             for (String role : roles) {
@@ -110,7 +112,7 @@ public class JwtFilter extends OncePerRequestFilter {
             }
 
             var auth = new UsernamePasswordAuthenticationToken(email, null, authorities);
-            auth.setDetails(new JwtAuthDetails(email, phoneNumber));
+            auth.setDetails(new JwtAuthDetails(email, phoneNumber, organizerUuid));
             SecurityContextHolder.getContext().setAuthentication(auth);
             log.debug("JWT authenticated subject={} roles={} services={} tier={} path={}",
                     email, roles, services, tier, request.getRequestURI());
