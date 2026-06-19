@@ -492,7 +492,7 @@ public class BookingController {
     public ResponseEntity<ApiResult<BookingResponseDTO>> extendHoldInternal(
             @PathVariable UUID id,
             @RequestHeader(value = "X-Internal-Token", required = false) String internalToken,
-            @RequestBody ExtendHoldRequestDTO request
+            @Valid @RequestBody ExtendHoldRequestDTO request
     ) {
         if (!authorizedInternal(internalToken)) {
             log.warn("Unauthorized PATCH /bookings/internal/{}/extend-hold — missing or wrong X-Internal-Token", id);
@@ -1033,7 +1033,7 @@ public class BookingController {
     public ResponseEntity<ApiResult<BookingResponseDTO>> confirmBooking(
             @PathVariable UUID id,
             @RequestHeader(value = "X-Internal-Token", required = false) String internalToken,
-            @RequestBody(required = false) ConfirmBookingRequestDTO request
+            @Valid @RequestBody(required = false) ConfirmBookingRequestDTO request
     ) {
         if (!authorizedInternal(internalToken)) {
             log.warn("Unauthorized PATCH /bookings/{}/confirm — missing or wrong X-Internal-Token", id);

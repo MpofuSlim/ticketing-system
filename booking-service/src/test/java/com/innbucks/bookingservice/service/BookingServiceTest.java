@@ -7,6 +7,7 @@ import com.innbucks.bookingservice.dto.AvailabilityResponseDTO;
 import com.innbucks.bookingservice.dto.BookingResponseDTO;
 import com.innbucks.bookingservice.dto.CategoryBookingDTO;
 import com.innbucks.bookingservice.dto.CategoryLookupDTO;
+import com.innbucks.bookingservice.dto.ConfirmBookingRequestDTO;
 import com.innbucks.bookingservice.dto.CreateBookingRequestDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
@@ -606,6 +607,72 @@ class BookingServiceTest {
         assertTrue(ex.getMessage().toLowerCase().contains("expired"));
         // Booking stays PENDING — the expiration scheduler will pick it up.
         assertEquals(Booking.BookingStatus.PENDING, booking.getStatus());
+        verify(bookingRepo, never()).save(any());
+    }
+
+    @Test
+    void extendHold_rejectsPastHoldUntil_defenceInDepth() {
+        // Bean validation's @Future fires only on the @Valid-bound controller
+        // call. An S2S caller (today: payment-service) that passes a past
+        // timestamp must be rejected at the service layer too — otherwise the
+        // hold would silently shrink, expiring the booking right after the
+        // customer started paying.
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+
+        UUID id = UUID.randomUUID();
+        Booking booking = Booking.builder().id(id).userEmail("u@example.com")
+                .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN)
+                .expiresAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).plusMinutes(3))
+                .build();
+        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> service.extendHold(id, java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusMinutes(1)));
+        assertTrue(ex.getMessage().contains("holdUntil must be in the future"),
+                "actual: " + ex.getMessage());
+        verify(bookingRepo, never()).save(any());
+    }
+
+    @Test
+    void confirmBooking_rejectsNegativeCashAmount_defenceInDepth() {
+        // Bean validation's @DecimalMin(0) fires only on the @Valid-bound
+        // controller call. The split-math reconstruction in applyLoyalty checks
+        // the SUM but not individual field signs — a negative cash + an
+        // offsetting positive points would still add up to totalAmount.
+        // Reject negatives at the service entry instead.
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+
+        ConfirmBookingRequestDTO req = ConfirmBookingRequestDTO.builder()
+                .cashAmount(new BigDecimal("-1.00"))
+                .build();
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> service.confirmBooking(UUID.randomUUID(), req));
+        assertTrue(ex.getMessage().contains("cashAmount must be >= 0"),
+                "actual: " + ex.getMessage());
+        verify(bookingRepo, never()).findById(any(UUID.class));
+        verify(bookingRepo, never()).save(any());
+    }
+
+    @Test
+    void confirmBooking_rejectsNegativePointsToUse_defenceInDepth() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+
+        ConfirmBookingRequestDTO req = ConfirmBookingRequestDTO.builder()
+                .pointsToUse(new BigDecimal("-100"))
+                .build();
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> service.confirmBooking(UUID.randomUUID(), req));
+        assertTrue(ex.getMessage().contains("pointsToUse must be >= 0"),
+                "actual: " + ex.getMessage());
+        verify(bookingRepo, never()).findById(any(UUID.class));
         verify(bookingRepo, never()).save(any());
     }
 

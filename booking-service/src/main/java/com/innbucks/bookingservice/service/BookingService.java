@@ -729,6 +729,14 @@ public class BookingService {
                     "This booking's seat hold can no longer be extended — it's not in a PENDING state.");
         }
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        // Defence-in-depth on top of the DTO's @Future. Without this check an
+        // S2S caller passing a past timestamp would silently SHRINK the hold
+        // (the isBefore-guard below would then refuse to apply it, but the
+        // first-pass NPE / quiet-no-op shape is fragile — fail loudly instead).
+        // Bean validation runs only on the @Valid-bound controller call.
+        if (holdUntil.isBefore(now)) {
+            throw new BadRequestException("holdUntil must be in the future.");
+        }
         if (booking.getExpiresAt() != null && booking.getExpiresAt().isBefore(now)) {
             throw new BookingConflictException(
                     "Your seat reservation has expired. Please start a new booking and complete payment within "
@@ -753,6 +761,25 @@ public class BookingService {
                 bookingId,
                 confirmRequest == null ? null : confirmRequest.getPointsToUse(),
                 confirmRequest == null ? null : confirmRequest.getCashAmount());
+
+        // Defence-in-depth on top of the DTO's @DecimalMin(0). Bean validation
+        // fires only on the @Valid-bound controller call, so an S2S caller (or
+        // a direct service caller in a future code path) could otherwise sneak
+        // a negative cashAmount or pointsToUse through. The split-math check
+        // in applyLoyalty re-validates the SUM but not the individual signs —
+        // a negative cash + a positive points still passes when the math adds
+        // up to totalAmount, but it isn't a payment we should accept.
+        if (confirmRequest != null) {
+            if (confirmRequest.getPointsToUse() != null
+                    && confirmRequest.getPointsToUse().signum() < 0) {
+                throw new BadRequestException("pointsToUse must be >= 0.");
+            }
+            if (confirmRequest.getCashAmount() != null
+                    && confirmRequest.getCashAmount().signum() < 0) {
+                throw new BadRequestException("cashAmount must be >= 0.");
+            }
+        }
+
         Booking booking = bookingRepository.findById(bookingId)
                 .orElseThrow(() -> {
                     log.warn("Confirm failed, booking not found bookingId={}", bookingId);
