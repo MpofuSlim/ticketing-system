@@ -5,8 +5,8 @@ import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.repository.UserRepository;
 import io.swagger.v3.oas.annotations.Hidden;
 import io.swagger.v3.oas.annotations.Operation;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -15,8 +15,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -43,12 +41,12 @@ import java.util.stream.Collectors;
 public class InternalMerchantAssignmentController {
 
     private final UserRepository userRepository;
-    private final String expectedToken;
+    private final InternalTokenAuthorizer tokenAuthorizer;
 
     public InternalMerchantAssignmentController(UserRepository userRepository,
-                                                @Value("${innbucks.internal-api-token:}") String expectedToken) {
+                                                InternalTokenAuthorizer tokenAuthorizer) {
         this.userRepository = userRepository;
-        this.expectedToken = expectedToken;
+        this.tokenAuthorizer = tokenAuthorizer;
     }
 
     @GetMapping("/merchants/assigned")
@@ -59,8 +57,9 @@ public class InternalMerchantAssignmentController {
                     + "Requires X-Internal-Token.")
     public ResponseEntity<?> assignedMerchantIds(
             @RequestHeader(value = "X-Internal-Token", required = false) String token,
-            @RequestParam(value = "role", defaultValue = "MERCHANT_ADMIN") String role) {
-        if (!authorized(token)) {
+            @RequestParam(value = "role", defaultValue = "MERCHANT_ADMIN") String role,
+            HttpServletRequest request) {
+        if (!tokenAuthorizer.authorized(token, request)) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
         User.Role parsed;
@@ -76,18 +75,5 @@ public class InternalMerchantAssignmentController {
                 .collect(Collectors.toList());
         log.debug("Assigned-merchant-id lookup role={} count={}", parsed, ids.size());
         return ResponseEntity.ok(ApiResult.ok("Assigned merchant ids", ids));
-    }
-
-    private boolean authorized(String presented) {
-        if (expectedToken == null || expectedToken.isBlank()) {
-            log.warn("Internal API token is not configured; rejecting call");
-            return false;
-        }
-        if (presented == null) {
-            return false;
-        }
-        return MessageDigest.isEqual(
-                expectedToken.getBytes(StandardCharsets.UTF_8),
-                presented.getBytes(StandardCharsets.UTF_8));
     }
 }
