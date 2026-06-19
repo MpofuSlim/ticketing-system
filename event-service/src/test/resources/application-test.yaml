@@ -18,7 +18,3 @@ spring:
 jwt:
   secret: test-test-test-test-test-test-test-test
   expiration: 3600000
-
-innbucks:
-  tenant-uuid-backfill:
-    enabled: false

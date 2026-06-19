@@ -52,19 +52,12 @@ public class Booking {
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal totalAmount;
 
-    // tenantId of the event being booked. Captured at booking creation by
-    // calling event-service. Null when event-service was unreachable at the
-    // time, in which case loyalty earn/redeem will be skipped at confirm.
-    @Column
-    private String tenantId;
-
     // Stable cross-service identifier of the owning organizer, mirrored
     // from events.tenant_user_uuid via EventLookupDTO at create time.
     // Powers the team-member scan authorization: the scanner's
     // organizerUuid JWT claim must equal this column for the ticket to
-    // redeem. Null on legacy rows / when event-service was unreachable
-    // at create — the scan path falls back to the email-based tenantId
-    // check in that case.
+    // redeem. Null only when event-service was unreachable at create —
+    // such a ticket refuses with WRONG_ORGANIZER at the gate.
     @Column(name = "tenant_user_uuid")
     private UUID tenantUserUuid;
 

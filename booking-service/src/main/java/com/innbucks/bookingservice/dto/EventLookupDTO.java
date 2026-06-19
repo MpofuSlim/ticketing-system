@@ -7,10 +7,11 @@ import lombok.NoArgsConstructor;
 
 import java.util.UUID;
 
-// Minimal mirror of event-service's EventResponseDTO. We capture `tenantId` at
-// booking creation (to attribute loyalty transactions to the owning tenant) and
-// `title` at confirmation time (for the WhatsApp e-ticket message's eventName) —
-// the rest of the event payload is ignored.
+// Minimal mirror of event-service's EventResponseDTO. We capture `tenantUserUuid`
+// at booking creation (the owning organizer's stable cross-service id, mirrored
+// onto bookings.tenant_user_uuid for loyalty attribution and ticket-scan
+// authorization) and `title` at confirmation time (for the WhatsApp e-ticket
+// message's eventName) — the rest of the event payload is ignored.
 @Data
 @Builder
 @NoArgsConstructor
@@ -18,11 +19,10 @@ import java.util.UUID;
 public class EventLookupDTO {
 
     private UUID eventId;
-    private String tenantId;
-    // Stable cross-service organizer identifier. Captured alongside tenantId at
-    // booking creation and mirrored onto bookings.tenant_user_uuid so the
-    // ticket-scan handler can authorize "scanner's organizerUuid == booking's
-    // tenantUserUuid" without a per-scan cross-service call to event-service.
+    // Stable cross-service organizer identifier. Mirrored onto
+    // bookings.tenant_user_uuid so the ticket-scan handler can authorize
+    // "scanner's organizerUuid == booking's tenantUserUuid" without a
+    // per-scan cross-service call, and used as the loyalty attribution key.
     private UUID tenantUserUuid;
     // Event display name, used as `eventName` on the WhatsApp e-ticket QR message.
     private String title;

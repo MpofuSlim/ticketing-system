@@ -22,14 +22,9 @@ public class BookingResponseDTO {
     private String confirmationNumber;
     private Booking.BookingStatus status;
     private BigDecimal totalAmount;
-    // Owning tenant of the event (used for loyalty attribution). Null for
-    // bookings created before tenant capture, or when event-service was
-    // unreachable at booking time.
-    private String tenantId;
     // Stable cross-service organizer identifier — mirrors events.tenant_user_uuid.
-    // Captured at booking creation via EventLookupDTO. Prefer this over tenantId
-    // for any new client code; tenantId is the legacy email pointer kept for
-    // backwards compatibility until the FE migrates.
+    // Captured at booking creation via EventLookupDTO; the loyalty attribution
+    // key and the ticket-scan ownership pointer.
     private UUID tenantUserUuid;
     // Set after a confirm that included points. Null on PENDING/cancelled
     // bookings and pure-cash confirmations.

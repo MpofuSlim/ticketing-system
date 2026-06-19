@@ -45,8 +45,7 @@ import java.util.UUID;
  *
  * <p>Authorization: the scanner's {@code organizerUuid} JWT claim must
  * equal the booking's {@code tenant_user_uuid} (which mirrors the
- * event's owning organizer). Legacy bookings without a uuid fall back
- * to the email-based tenantId match.
+ * event's owning organizer).
  *
  * <p><b>Audit invariant:</b> every scan attempt, regardless of outcome,
  * writes exactly one {@code scan_attempts} row. The audit insert shares
@@ -153,11 +152,11 @@ public class TicketScanService {
             return result;
         }
 
-        if (!scannerOwnsEvent(booking, scannerOrganizerUuid, scannerEmail)) {
+        if (!scannerOwnsEvent(booking, scannerOrganizerUuid)) {
             log.warn("Ticket scan rejected, organizer mismatch ticketNumber={} scannerEmail={} " +
-                            "scannerOrganizerUuid={} bookingTenantUserUuid={} bookingTenantId={}",
+                            "scannerOrganizerUuid={} bookingTenantUserUuid={}",
                     ticketNumber, scannerEmail, scannerOrganizerUuid,
-                    booking.getTenantUserUuid(), booking.getTenantId());
+                    booking.getTenantUserUuid());
             ScanTicketResponseDTO result = ScanTicketResponseDTO.builder()
                     .status(ScanTicketResponseDTO.Status.WRONG_ORGANIZER)
                     .ticketNumber(ticketNumber)
@@ -308,25 +307,18 @@ public class TicketScanService {
     }
 
     /**
-     * Authorization check. Prefers the UUID-keyed comparison (immune to
-     * email churn); falls back to the legacy tenantId email match for
-     * bookings created before V13 (their {@code tenant_user_uuid} is
-     * null). The legacy fallback only helps EVENT_ORGANIZERs scanning
-     * their own events — a TEAM_MEMBER's JWT subject is their own email,
-     * not the organizer's, so a legacy booking can only be scanned by
-     * the organizer themself until V13 has been backfilled.
+     * Authorization check: the booking's {@code tenant_user_uuid} (the owning
+     * organizer, mirrored from the event) must equal the scanner's
+     * {@code organizerUuid} JWT claim. UUID-keyed and immune to email churn.
+     * A booking whose {@code tenant_user_uuid} is null (event-service was
+     * unreachable at create) fails closed — better to refuse the scan than to
+     * let a ticket nobody can attribute through the gate.
      */
-    private boolean scannerOwnsEvent(Booking booking, UUID scannerOrganizerUuid, String scannerEmail) {
+    private boolean scannerOwnsEvent(Booking booking, UUID scannerOrganizerUuid) {
         UUID bookingOrganizerUuid = booking.getTenantUserUuid();
-        if (bookingOrganizerUuid != null && scannerOrganizerUuid != null) {
-            return bookingOrganizerUuid.equals(scannerOrganizerUuid);
-        }
-        // Legacy: no uuid stored, fall back to "organizer email == booking
-        // tenantId". A TEAM_MEMBER's email never matches their organizer's
-        // tenantId, so they're effectively blocked from scanning legacy
-        // bookings — acceptable while the backfill catches up.
-        String bookingTenantId = booking.getTenantId();
-        return bookingTenantId != null && bookingTenantId.equalsIgnoreCase(scannerEmail);
+        return bookingOrganizerUuid != null
+                && scannerOrganizerUuid != null
+                && bookingOrganizerUuid.equals(scannerOrganizerUuid);
     }
 
     private boolean isOrganizer(Authentication auth) {

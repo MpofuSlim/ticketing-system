@@ -8,10 +8,8 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
-import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -146,13 +144,10 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
     Optional<Event> findByEventIdAndDeletedFalse(UUID eventId);
 
     // Paginated list of an organizer's own (non-deleted) events. Keyed on the
-    // stable cross-service organizerUuid (was email-as-tenantId until the V7
-    // refactor dropped the entity-side mapping; the {@code tenant_id} column
-    // itself stays on the table for one more deploy cycle so the backfill
-    // runner can keep populating pre-V6 rows that still have a null
-    // tenant_user_uuid). Used by GET /events/my so an EVENT_ORGANIZER only
-    // sees the events they created, and by TEAM_MEMBERs to enumerate their
-    // parent organizer's events.
+    // stable cross-service organizerUuid (was email-as-tenantId until the V6/V7
+    // refactor; the tenant_id column was dropped in V8). Used by GET /events/my
+    // so an EVENT_ORGANIZER only sees the events they created, and by
+    // TEAM_MEMBERs to enumerate their parent organizer's events.
     @Query("""
         SELECT e FROM Event e
         WHERE e.deleted = false
@@ -304,56 +299,12 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
 
     // Detects an already-created event by the same organizer with identical title,
     // venue, and scheduled dateTime. Used as a duplicate-create guard. The legacy
-    // (tenant_id, title, venue, start_date_time) unique constraint on the table
-    // is inactive for new rows now that {@code tenant_id} is null on every
-    // INSERT (Postgres treats NULLs as distinct in unique constraints) — the
-    // follow-up migration drops the column AND that constraint together and
-    // rebuilds it on (tenant_user_uuid, ...). Until then this exists-check is
-    // the only dup guard for new rows.
+    // (tenant_id, title, venue, start_date_time) DB-level unique constraint was
+    // dropped with the tenant_id column in V8, so this app-layer exists-check is
+    // the dup guard for new rows.
     boolean existsByTenantUserUuidAndTitleAndVenueAndStartDateTimeAndDeletedFalse(
             UUID tenantUserUuid, String title, String venue, LocalDateTime startDateTime
     );
-
-    // Backfill support: returns up to {@code limit} distinct tenant emails for
-    // events whose tenant_user_uuid hasn't been populated yet. Used by
-    // {@link com.innbucks.eventservice.service.TenantUserUuidBackfillRunner} to
-    // batch-resolve emails -> uuids via user-service's internal lookup endpoint.
-    // Native SQL on purpose — the {@code tenant_id} column is no longer mapped
-    // on the {@link Event} entity (entity-side dropped in V7), but the column
-    // itself lives on for one more deploy cycle precisely so this backfill can
-    // run. The follow-up migration drops both the column and this method
-    // together once operator confirms zero rows with tenant_user_uuid IS NULL.
-    @Query(value = """
-        SELECT DISTINCT tenant_id FROM events
-        WHERE tenant_user_uuid IS NULL
-        AND tenant_id IS NOT NULL
-        LIMIT :limit
-    """, nativeQuery = true)
-    List<String> findDistinctTenantIdsMissingUuid(@Param("limit") int limit);
-
-    // Backfill support: writes the resolved uuid onto every row whose tenant_id
-    // matches AND whose tenant_user_uuid is still null. Idempotent by
-    // construction (the WHERE clause restricts to unmigrated rows). Native SQL
-    // for the same reason as findDistinctTenantIdsMissingUuid above.
-    //
-    // {@code @Transactional} lives HERE (on the repository method) rather than
-    // relying on the caller, because the only caller —
-    // TenantUserUuidBackfillRunner — invokes its own helper via
-    // self-invocation, which bypasses Spring's proxy and leaves no active
-    // transaction (the {@code @Modifying} UPDATE then throws
-    // TransactionRequiredException and crashes startup). Annotating the repo
-    // method puts the transaction boundary on the repository proxy, where the
-    // external call from the runner actually crosses it. Each call is its own
-    // short transaction — correct for an idempotent per-tenant backfill.
-    @Modifying
-    @Transactional
-    @Query(value = """
-        UPDATE events
-        SET tenant_user_uuid = :uuid
-        WHERE tenant_id = :tenantId
-        AND tenant_user_uuid IS NULL
-    """, nativeQuery = true)
-    int backfillTenantUserUuid(@Param("tenantId") String tenantId, @Param("uuid") UUID uuid);
 
     // Free-text search across title, description and venue. Case-insensitive
     // substring match — typing "H" matches every event with H anywhere in
