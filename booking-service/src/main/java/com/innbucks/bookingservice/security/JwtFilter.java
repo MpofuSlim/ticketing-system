@@ -118,7 +118,11 @@ public class JwtFilter extends OncePerRequestFilter {
                     jwtUtil.extractFirstName(token),
                     jwtUtil.extractLastName(token)));
             SecurityContextHolder.getContext().setAuthentication(auth);
-            log.debug("JWT authenticated subject={} roles={} services={} tier={} path={}",
+            // TRACE, not DEBUG: this line carries the subject (email = PII) plus
+            // the caller's roles/services on every authenticated request. Keep it
+            // off by default in every environment (prod log level is INFO; even a
+            // DEBUG investigation shouldn't spill identity + authz into the logs).
+            log.trace("JWT authenticated subject={} roles={} services={} tier={} path={}",
                     email, roles, services, tier, request.getRequestURI());
         } catch (Exception e) {
             log.warn("JWT validation error path={} message={}", request.getRequestURI(), e.getMessage());

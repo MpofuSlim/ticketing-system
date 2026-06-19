@@ -14,8 +14,10 @@ public class CustomerTier1RegisterDTO {
     @NotBlank(message = "Phone number is required")
     private String phoneNumber;
 
-    @Schema(example = "S3cur3Pass!", description = "Minimum 8 characters.")
+    @Schema(example = "S3cur3Pass!", description = "8 to 72 characters.")
     @NotBlank(message = "Password is required")
-    @Size(min = 8, message = "Password must be at least 8 characters")
+    // max 72: BCrypt only hashes the first 72 bytes; capping the set path also
+    // stops a multi-megabyte password from burning CPU in the hash (cheap DoS).
+    @Size(min = 8, max = 72, message = "Password must be 8 to 72 characters")
     private String password;
 }

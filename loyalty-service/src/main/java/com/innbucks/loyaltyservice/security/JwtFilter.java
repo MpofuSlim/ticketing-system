@@ -121,7 +121,11 @@ public class JwtFilter extends OncePerRequestFilter {
             var auth = new UsernamePasswordAuthenticationToken(email, null, authorities);
             auth.setDetails(new CallerDetails(merchantId, shopId, phoneNumber));
             SecurityContextHolder.getContext().setAuthentication(auth);
-            log.debug("JWT authenticated subject={} roles={} merchantId={} shopId={} path={}",
+            // TRACE, not DEBUG: this line carries the subject (email = PII) plus
+            // the caller's roles on every authenticated request. Keep it off by
+            // default in every environment (prod log level is INFO; even a DEBUG
+            // investigation shouldn't spill identity + authz into the logs).
+            log.trace("JWT authenticated subject={} roles={} merchantId={} shopId={} path={}",
                     email, roles, merchantId, shopId, request.getRequestURI());
         } catch (Exception e) {
             // Defensive: if claim extraction blows up for any reason (corrupt
