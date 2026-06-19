@@ -173,7 +173,11 @@ services:
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
-      JWT_EXPIRATION_MS: 86400000
+      # Access-token TTL: 15 min (matches the application default). The FE
+      # silently refreshes via the rotating refresh token, so a stolen/stale
+      # access token is usable for at most 15 min instead of a full day.
+      # (Was 86400000 = 24h.) Refresh-token TTL is unchanged (7-day default).
+      JWT_EXPIRATION_MS: 900000
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
       INNBUCKS_CORE_BANKING: ${INNBUCKS_CORE_BANKING:-oradian}
