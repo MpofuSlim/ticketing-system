@@ -351,15 +351,21 @@ public class CustomerService {
     }
 
     private CustomerProfile loadProfile(String phoneNumber, int requiredCurrentTier) {
+        // Status codes stay 400 (not 404) on the "not found" branches even though
+        // 404 is semantically purer — the existing IT contract
+        // (AuthControllerIT.customerTier2_returns400WhenMsisdnDoesNotMatchAnyTier1)
+        // pins 400, the FE branches on it, and the user's complaint was about the
+        // generic MESSAGE catching this path, not the status code. The descriptive
+        // reason still reaches the wire via GlobalExceptionHandler.handleResponseStatus.
         User user = userRepository.findByPhoneNumber(phoneNumber)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "No account found for this phone number."));
         if (!user.hasRole(User.Role.CUSTOMER)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "This account isn't a customer account.");
         }
         CustomerProfile profile = customerProfileRepository.findByUserId(user.getId())
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "We couldn't find your customer profile. Please contact support."));
         if (profile.getRegistrationTier() < requiredCurrentTier) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
