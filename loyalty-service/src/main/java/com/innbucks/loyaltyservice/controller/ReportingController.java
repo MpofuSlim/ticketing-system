@@ -179,7 +179,9 @@ public class ReportingController {
     @Operation(summary = "SuperApp user dashboard",
             description = "Customer-facing dashboard: total points across all wallets, the wallet list, " +
                           "active vouchers, and recent transactions. The {id} is the LoyaltyUser UUID, not " +
-                          "the user-service userId.")
+                          "the user-service userId. Requires X-Tenant-Id and only resolves a user that " +
+                          "belongs to that tenant — a request for a user in another tenant is rejected with " +
+                          "403 CROSS_TENANT (SUPER_ADMIN may target any tenant via the header).")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -259,11 +261,26 @@ public class ReportingController {
                                     }
                                     """)
                     )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "User belongs to a different tenant than the X-Tenant-Id header",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Cross-tenant", value = """
+                                    {
+                                      "code": "403 FORBIDDEN",
+                                      "message": "user belongs to a different tenant",
+                                      "data": null
+                                    }
+                                    """)
+                    )
             )
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.UserDashboard>> user(@PathVariable UUID id) {
-        Dtos.UserDashboard data = superApp.dashboard(id);
+        Dtos.UserDashboard data = superApp.dashboard(tenantContext.requireTenantId(), id);
         return ResponseEntity.ok(ApiResult.ok("User dashboard retrieved successfully", data));
     }
 
