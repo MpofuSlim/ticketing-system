@@ -67,6 +67,16 @@ public class SeatCategoryService {
                     + "' already exists for this event");
         }
 
+        // Defence-in-depth on top of @DecimalMin(inclusive=false) at the DTO:
+        // the bean-validation guard only fires on @Valid-bound controller calls,
+        // so service-layer / S2S callers don't ride on it. Same shape as the
+        // totalSeats cap check below.
+        if (request.getPrice() == null || request.getPrice().signum() <= 0) {
+            log.warn("Category creation rejected, non-positive price eventId={} name={} price={}",
+                    request.getEventId(), request.getName(), request.getPrice());
+            throw new BadRequestException("Price must be greater than 0.");
+        }
+
         // Sum in long to dodge int overflow when validation has already
         // passed but section counts approach Integer.MAX_VALUE collectively.
         long totalSeatsLong = request.getSections().stream()
