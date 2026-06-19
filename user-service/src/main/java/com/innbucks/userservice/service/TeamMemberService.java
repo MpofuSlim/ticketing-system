@@ -311,12 +311,13 @@ public class TeamMemberService {
         return loadMemberOwnedByCaller(teamMemberUuid, caller.getUserUuid());
     }
 
-    /** True iff the current request is from a user with {@code ROLE_SUPER_ADMIN}. */
+    /** True iff the current request is from a user with {@code ROLE_SUPER_ADMIN}.
+     *  {@code getAuthorities()} is @NonNull on Spring's AbstractAuthenticationToken
+     *  (defaults to AuthorityUtils.NO_AUTHORITIES), so only the outer auth check
+     *  matters. */
     private boolean isCallerSuperAdmin() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth == null || auth.getAuthorities() == null) {
-            return false;
-        }
+        if (auth == null) return false;
         for (GrantedAuthority a : auth.getAuthorities()) {
             if ("ROLE_SUPER_ADMIN".equals(a.getAuthority())) {
                 return true;
@@ -333,7 +334,9 @@ public class TeamMemberService {
      */
     private String callerLogTag() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
-        if (auth == null || auth.getName() == null) return "unknown";
+        if (auth == null) return "unknown";
+        // getName() returns "" (never null) on AbstractAuthenticationToken when
+        // the principal is unset, so no inner null guard is needed.
         return isCallerSuperAdmin() ? "admin:" + auth.getName() : auth.getName();
     }
 
