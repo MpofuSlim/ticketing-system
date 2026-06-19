@@ -30,9 +30,14 @@ public class CreateCategoryRequestDTO {
     @Size(max = 255, message = "Description must be at most 255 characters")
     private String description;
 
-    @Schema(example = "100.00", description = "Ticket price per seat in the event's currency.")
+    @Schema(example = "100.00", description = "Ticket price per seat in the event's currency. Must be greater than 0.")
     @NotNull(message = "Price is required")
-    @DecimalMin(value = "0.00", message = "Price cannot be negative")
+    // inclusive=false rejects 0 too — a $0 seat category isn't a domain we
+    // support (an organizer running a free event still needs a price set, even
+    // if they manually refund off-platform). The previous "0.00 minimum"
+    // allowed both 0 and slight negatives through to the DB.
+    @DecimalMin(value = "0.00", inclusive = false,
+            message = "Price must be greater than 0")
     private BigDecimal price;
 
     @Schema(description = "One entry per physical section. Total seats = sum of all seatCount values. "

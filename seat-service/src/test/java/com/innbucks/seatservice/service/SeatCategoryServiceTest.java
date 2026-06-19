@@ -102,6 +102,52 @@ class SeatCategoryServiceTest {
     }
 
     @Test
+    void createCategory_rejectsZeroPrice() {
+        // A $0 seat category isn't a domain we support — even a free event
+        // still gets a positive price set; the organizer doesn't get to mint a
+        // category whose tickets bypass payment. Bean validation catches this
+        // at the controller (@DecimalMin inclusive=false), but the service
+        // re-checks as defence-in-depth so S2S / direct callers can't bypass.
+        SeatCategoryService service = service(
+                mock(SeatCategoryRepository.class), mock(SeatRepository.class));
+        CreateCategoryRequestDTO req = request(UUID.randomUUID(), "VIP",
+                List.of(section("A", 5)));
+        req.setPrice(BigDecimal.ZERO);
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> service.createCategory(req));
+        assertTrue(ex.getMessage().contains("Price must be greater than 0"),
+                "actual: " + ex.getMessage());
+    }
+
+    @Test
+    void createCategory_rejectsNegativePrice() {
+        SeatCategoryService service = service(
+                mock(SeatCategoryRepository.class), mock(SeatRepository.class));
+        CreateCategoryRequestDTO req = request(UUID.randomUUID(), "VIP",
+                List.of(section("A", 5)));
+        req.setPrice(new BigDecimal("-1.00"));
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> service.createCategory(req));
+        assertTrue(ex.getMessage().contains("Price must be greater than 0"));
+    }
+
+    @Test
+    void createCategory_rejectsNullPrice() {
+        // Belt-and-braces — bean validation's @NotNull catches this at the
+        // controller, but a service-level call (or a future broken caller)
+        // must not silently insert NULL into the price column.
+        SeatCategoryService service = service(
+                mock(SeatCategoryRepository.class), mock(SeatRepository.class));
+        CreateCategoryRequestDTO req = request(UUID.randomUUID(), "VIP",
+                List.of(section("A", 5)));
+        req.setPrice(null);
+
+        assertThrows(RuntimeException.class, () -> service.createCategory(req));
+    }
+
+    @Test
     void createCategory_rejectsDuplicateCategoryNameForSameEvent() {
         SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
         SeatRepository seatRepo = mock(SeatRepository.class);
