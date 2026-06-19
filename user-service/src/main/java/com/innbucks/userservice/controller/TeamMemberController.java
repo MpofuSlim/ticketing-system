@@ -50,6 +50,10 @@ public class TeamMemberController {
     private final TeamMemberService teamMemberService;
 
     @PostMapping
+    // Deliberately organizer-only: create stamps the new TEAM_MEMBER with the
+    // caller's organizerUuid claim, which SUPER_ADMIN tokens don't carry.
+    // Admin-create would need an organizerUuid in the request body — a
+    // separate contract change tracked as a follow-up.
     @PreAuthorize("hasRole('EVENT_ORGANIZER')")
     @Operation(
             summary = "Onboard a TEAM_MEMBER under your organizer account",
@@ -111,7 +115,7 @@ public class TeamMemberController {
     }
 
     @GetMapping
-    @PreAuthorize("hasRole('EVENT_ORGANIZER')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(
             summary = "List every team member under your organizer account",
             description = "Returns every TEAM_MEMBER the calling organizer has created, active and " +
@@ -160,7 +164,7 @@ public class TeamMemberController {
     }
 
     @GetMapping("/{teamMemberUuid}")
-    @PreAuthorize("hasRole('EVENT_ORGANIZER')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(
             summary = "Retrieve one of your team members by uuid",
             description = "Returns the team member identified by `teamMemberUuid` if it belongs to " +
@@ -208,7 +212,7 @@ public class TeamMemberController {
     }
 
     @DeleteMapping("/{teamMemberUuid}")
-    @PreAuthorize("hasRole('EVENT_ORGANIZER')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(
             summary = "Disable a team member (soft-delete)",
             description = "Marks the team member inactive, bumps their token_version so every " +
@@ -260,7 +264,7 @@ public class TeamMemberController {
     }
 
     @PatchMapping("/{teamMemberUuid}/enable")
-    @PreAuthorize("hasRole('EVENT_ORGANIZER')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(
             summary = "Re-enable a previously disabled team member",
             description = "Flips `active` back to true. The member must log in again (the disable " +
@@ -309,7 +313,7 @@ public class TeamMemberController {
     }
 
     @PostMapping("/{teamMemberUuid}/reset-password")
-    @PreAuthorize("hasRole('EVENT_ORGANIZER')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(
             summary = "Re-issue a team member's temporary password",
             description = "Mints a fresh 10-character temporary password for the team member and " +
@@ -359,7 +363,7 @@ public class TeamMemberController {
     }
 
     @GetMapping("/{teamMemberUuid}/events")
-    @PreAuthorize("hasRole('EVENT_ORGANIZER')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(
             summary = "List the events a team member is assigned to",
             description = "Returns the event IDs this team member may scan. **Deny-by-default**: " +
@@ -392,7 +396,7 @@ public class TeamMemberController {
     }
 
     @PutMapping("/{teamMemberUuid}/events/{eventId}")
-    @PreAuthorize("hasRole('EVENT_ORGANIZER')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(
             summary = "Assign a team member to an event",
             description = "Grants the team member access to this event. **Deny-by-default**: without " +
@@ -429,7 +433,7 @@ public class TeamMemberController {
     }
 
     @DeleteMapping("/{teamMemberUuid}/events/{eventId}")
-    @PreAuthorize("hasRole('EVENT_ORGANIZER')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(
             summary = "Remove a team member's event assignment",
             description = "Revokes the team member's access to this event. Idempotent. If this was " +

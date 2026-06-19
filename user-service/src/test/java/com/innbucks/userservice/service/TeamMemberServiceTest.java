@@ -581,4 +581,154 @@ class TeamMemberServiceTest {
         assertThat(member.getTokenVersion()).isEqualTo(versionBefore);
         verify(refreshTokenRepository, never()).revokeAllForUser(anyLong(), any(Instant.class));
     }
+
+    // -------------------------------------------------------------------------
+    // SUPER_ADMIN visibility — pins that SUPER_ADMIN reads / acts on EVERY
+    // team member across all organizers, and is NEVER 403'd by the
+    // organizer-scoped checks. Organizer-scoped behaviour for the same calls
+    // is covered by the cases above.
+    // -------------------------------------------------------------------------
+
+    private User superAdmin() {
+        return User.builder()
+                .id(7L)
+                .userUuid(UUID.randomUUID())
+                .email("admin@innbucks.co.zw")
+                .firstName("Sys")
+                .lastName("Admin")
+                .phoneNumber("+263770000000")
+                .roles(EnumSet.of(User.Role.SUPER_ADMIN))
+                .active(true)
+                .build();
+    }
+
+    private void authenticateAsSuperAdmin(User admin) {
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(
+                        admin.getEmail(), null,
+                        List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority(
+                                "ROLE_SUPER_ADMIN"))));
+        // No userRepository.findByEmail stub here: the SUPER_ADMIN path is
+        // role-claim-based (isCallerSuperAdmin reads the auth authorities) and
+        // never resolves the admin in the DB. Strict Mockito rejects an
+        // unused stub.
+    }
+
+    @Test
+    void list_asSuperAdmin_returnsEveryTeamMember_acrossAllOrganizers() {
+        authenticateAsSuperAdmin(superAdmin());
+        UUID orgA = UUID.randomUUID();
+        UUID orgB = UUID.randomUUID();
+        User memberA = teamMember(UUID.randomUUID(), orgA);
+        User memberB = teamMember(UUID.randomUUID(), orgB);
+        memberB.setId(100L);
+        memberB.setEmail("staff-b@example.com");
+        when(userRepository.findByAnyRole(List.of(User.Role.TEAM_MEMBER)))
+                .thenReturn(List.of(memberA, memberB));
+
+        List<UserResponseDTO> out = service.listMyTeam();
+
+        assertThat(out).hasSize(2);
+        assertThat(out).extracting(UserResponseDTO::getCreatedByOrganizerUuid)
+                .containsExactlyInAnyOrder(orgA, orgB);
+        verify(userRepository, never()).findByCreatedByOrganizerUuid(any(UUID.class));
+    }
+
+    @Test
+    void list_asSuperAdmin_emptySystem_returnsEmptyList_neverForbidden() {
+        // The whole point: admin must never see a 403 here. With no team
+        // members anywhere on the platform we return [] cleanly.
+        authenticateAsSuperAdmin(superAdmin());
+        when(userRepository.findByAnyRole(List.of(User.Role.TEAM_MEMBER)))
+                .thenReturn(List.of());
+
+        assertThat(service.listMyTeam()).isEmpty();
+    }
+
+    @Test
+    void get_asSuperAdmin_bypassesOrganizerOwnershipCheck() {
+        authenticateAsSuperAdmin(superAdmin());
+        UUID memberUuid = UUID.randomUUID();
+        UUID otherOrganizer = UUID.randomUUID();
+        User member = teamMember(memberUuid, otherOrganizer);
+        when(userRepository.findByUserUuid(memberUuid)).thenReturn(Optional.of(member));
+
+        UserResponseDTO out = service.getMyTeamMember(memberUuid);
+
+        assertThat(out.getUserUuid()).isEqualTo(memberUuid);
+        assertThat(out.getCreatedByOrganizerUuid()).isEqualTo(otherOrganizer);
+    }
+
+    @Test
+    void get_asSuperAdmin_unknownUuid_returns404_notForbidden() {
+        // Still 404 (not 403) for a uuid that doesn't resolve — admin just
+        // sees "not found", same shape the organizer path returns.
+        authenticateAsSuperAdmin(superAdmin());
+        UUID missing = UUID.randomUUID();
+        when(userRepository.findByUserUuid(missing)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.getMyTeamMember(missing))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    @Test
+    void disable_asSuperAdmin_canDisableAnyOrganizersTeamMember() {
+        authenticateAsSuperAdmin(superAdmin());
+        UUID memberUuid = UUID.randomUUID();
+        User member = teamMember(memberUuid, UUID.randomUUID());
+        long versionBefore = member.getTokenVersion();
+        when(userRepository.findByUserUuid(memberUuid)).thenReturn(Optional.of(member));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(refreshTokenRepository.revokeAllForUser(eq(member.getId()), any(Instant.class)))
+                .thenReturn(2);
+
+        UserResponseDTO out = service.disableTeamMember(memberUuid);
+
+        assertThat(out.isActive()).isFalse();
+        assertThat(member.getTokenVersion()).isEqualTo(versionBefore + 1);
+        verify(refreshTokenRepository).revokeAllForUser(eq(member.getId()), any(Instant.class));
+    }
+
+    @Test
+    void enable_asSuperAdmin_canReEnableAnyOrganizersTeamMember() {
+        authenticateAsSuperAdmin(superAdmin());
+        UUID memberUuid = UUID.randomUUID();
+        User member = teamMember(memberUuid, UUID.randomUUID());
+        member.setActive(false);
+        when(userRepository.findByUserUuid(memberUuid)).thenReturn(Optional.of(member));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        UserResponseDTO out = service.enableTeamMember(memberUuid);
+
+        assertThat(out.isActive()).isTrue();
+    }
+
+    @Test
+    void assignEvent_asSuperAdmin_stampsOwningOrganizer_notAdmin() {
+        // SUPER_ADMIN assigning records the team member's OWN organizer as
+        // assignedBy — the admin's uuid would be misleading (admin has no
+        // organizerUuid claim) and break per-organizer reporting on
+        // assignments.
+        authenticateAsSuperAdmin(superAdmin());
+        UUID memberUuid = UUID.randomUUID();
+        UUID owningOrganizer = UUID.randomUUID();
+        UUID eventId = UUID.randomUUID();
+        User member = teamMember(memberUuid, owningOrganizer);
+        when(userRepository.findByUserUuid(memberUuid)).thenReturn(Optional.of(member));
+        when(assignmentRepository.existsByTeamMemberUserUuidAndEventId(memberUuid, eventId))
+                .thenReturn(false);
+        when(assignmentRepository.findByTeamMemberUserUuid(memberUuid)).thenReturn(List.of());
+        ArgumentCaptor<TeamMemberEventAssignment> saved =
+                ArgumentCaptor.forClass(TeamMemberEventAssignment.class);
+        when(assignmentRepository.save(saved.capture()))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        service.assignEvent(memberUuid, eventId);
+
+        assertThat(saved.getValue().getAssignedByOrganizerUuid()).isEqualTo(owningOrganizer);
+        assertThat(saved.getValue().getTeamMemberUserUuid()).isEqualTo(memberUuid);
+        assertThat(saved.getValue().getEventId()).isEqualTo(eventId);
+    }
 }
