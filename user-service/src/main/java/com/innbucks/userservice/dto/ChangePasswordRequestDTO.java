@@ -18,7 +18,12 @@ public class ChangePasswordRequestDTO {
     private String currentPassword;
 
     @NotBlank(message = "newPassword is required")
-    @Size(min = 8, message = "newPassword must be at least 8 characters")
-    @Schema(example = "MyNewPass!2026", description = "The replacement password. Must be at least 8 characters.")
+    // max 72: BCrypt only consumes the first 72 bytes, so a longer value would
+    // be silently truncated AND an uncapped field lets a multi-megabyte password
+    // burn CPU in the hash (a cheap DoS). Capping the SET path is safe — login /
+    // currentPassword stay uncapped so anyone who set a long password before this
+    // can still authenticate.
+    @Size(min = 8, max = 72, message = "newPassword must be 8 to 72 characters")
+    @Schema(example = "MyNewPass!2026", description = "The replacement password. 8 to 72 characters.")
     private String newPassword;
 }

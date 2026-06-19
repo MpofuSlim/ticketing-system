@@ -86,6 +86,14 @@ springdoc:
 server:
   port: ${SERVER_PORT:8086}
   shutdown: graceful
+  # Never leak internals to clients on the fallback /error path (stack traces,
+  # raw exception messages, binding-error detail). Handled errors already return
+  # the ApiResult envelope via GlobalExceptionHandler — incl. field-level
+  # validation detail — so this only sanitises the unhandled fallthrough.
+  error:
+    include-stacktrace: never
+    include-message: never
+    include-binding-errors: never
 
 eureka:
   client:
