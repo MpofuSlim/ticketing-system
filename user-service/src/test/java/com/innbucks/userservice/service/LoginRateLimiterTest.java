@@ -137,12 +137,29 @@ class LoginRateLimiterTest {
     }
 
     @Test
-    void checkLogin_failsOpen_whenRedisUnreachable() {
-        // Fail-open: an honest user must not be locked out by a Redis
-        // hiccup. The auth path itself still enforces password match.
+    void checkLogin_allowsHonestUserUnderCap_whenRedisUnreachable() {
+        // Redis down: the limiter falls back to a per-instance in-memory counter
+        // (not fail-open). A single honest attempt is well under the cap, so it
+        // must still pass — a brief Redis hiccup can't lock honest users out.
         when(ops.increment(anyString())).thenThrow(new RedisConnectionFailureException("down"));
 
         assertDoesNotThrow(() -> limiter.checkLogin("alice@example.com", "1.2.3.4"));
+    }
+
+    @Test
+    void checkLogin_inMemoryFallbackThrottles_whenRedisUnreachable() {
+        // With Redis down the limiter must NOT fail open: the in-memory fallback
+        // enforces the same identifier cap (5), so the first five attempts from
+        // one identifier pass and the sixth is rejected.
+        when(ops.increment(anyString())).thenThrow(new RedisConnectionFailureException("down"));
+
+        for (int i = 0; i < LOGIN_ID_MAX; i++) {
+            int attempt = i + 1;
+            assertDoesNotThrow(() -> limiter.checkLogin("attacker@example.com", "9.9.9.9"),
+                    "attempt " + attempt + " should pass under the cap");
+        }
+        assertThrows(LoginRateLimiter.RateLimitedException.class,
+                () -> limiter.checkLogin("attacker@example.com", "9.9.9.9"));
     }
 
     @Test
