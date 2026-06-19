@@ -44,6 +44,13 @@ jwt:
   expiration: ${JWT_EXPIRATION_MS:900000}
   refresh-expiration: ${JWT_REFRESH_EXPIRATION_MS:604800000}
 
+# Keyed hash for national IDs at rest (PII). The stored customer_profiles
+# .national_id is HMAC-SHA256'd with this secret; the raw value only ever
+# travels to core-banking off the registration request. ProductionSecretsGuard
+# refuses to boot under prod while this holds the change-me placeholder.
+national-id:
+  hmac-secret: ${NATIONAL_ID_HMAC_SECRET:change-me-national-id-hmac-secret}
+
 loyalty-service:
   base-url: http://loyalty-service
   connect-timeout-ms: ${LOYALTY_SERVICE_CONNECT_TIMEOUT_MS:2000}

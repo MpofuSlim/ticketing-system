@@ -183,6 +183,7 @@ services:
       INNBUCKS_GATEWAY_URL: ${INNBUCKS_GATEWAY_URL:-http://10.0.155.69:8088}
       WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-https://maximum-implicitly-treefrog.ngrok-free.app}
       WHATSAPP_API_KEY: ${WHATSAPP_API_KEY:?set WHATSAPP_API_KEY in .env}
+      NATIONAL_ID_HMAC_SECRET: ${NATIONAL_ID_HMAC_SECRET:?set NATIONAL_ID_HMAC_SECRET in .env (see .env.example) — keep it stable; rotating it orphans existing hashes}
     ports:
       - "127.0.0.1:8081:8081"
     healthcheck:
