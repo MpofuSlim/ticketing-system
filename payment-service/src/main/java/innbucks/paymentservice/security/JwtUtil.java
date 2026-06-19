@@ -24,6 +24,14 @@ import java.nio.charset.StandardCharsets;
 @Component
 public class JwtUtil {
 
+    /** Fixed JWT issuer (iss) required on every token this service verifies.
+     *  Minted by user-service; a token lacking it (or with a different value)
+     *  is rejected even when the shared HS256 signature checks out. */
+    public static final String TOKEN_ISSUER = "innbucks-ticketing";
+
+    /** Fixed JWT audience (aud) required on every token this service verifies. */
+    public static final String TOKEN_AUDIENCE = "innbucks-app";
+
     private final SecretKey signingKey;
 
     public JwtUtil(@Value("${jwt.secret}") String secret) {
@@ -102,6 +110,8 @@ public class JwtUtil {
         try {
             return Jwts.parser()
                     .verifyWith(signingKey)
+                    .requireIssuer(TOKEN_ISSUER)
+                    .requireAudience(TOKEN_AUDIENCE)
                     .build()
                     .parseSignedClaims(token)
                     .getPayload();

@@ -36,6 +36,16 @@ public class JwtUtil {
      *  {@code /auth/refresh}. */
     public static final String TOKEN_TYPE_REFRESH = "refresh";
 
+    /** Fixed JWT issuer (iss). Every token this fleet mints carries it and
+     *  every verifying service requires it, so a token minted with the shared
+     *  HS256 secret for a different purpose/system is rejected. */
+    public static final String TOKEN_ISSUER = "innbucks-ticketing";
+
+    /** Fixed JWT audience (aud). Same rationale as {@link #TOKEN_ISSUER} —
+     *  binds the token to this application so it can't be replayed against a
+     *  different audience that happens to share the secret. */
+    public static final String TOKEN_AUDIENCE = "innbucks-app";
+
     private SecretKey getSigningKey() {
         return Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
     }
@@ -54,6 +64,8 @@ public class JwtUtil {
                 .id(UUID.randomUUID().toString())
                 .subject(subject)
                 .claim("type", TOKEN_TYPE_REFRESH)
+                .issuer(TOKEN_ISSUER)
+                .audience().add(TOKEN_AUDIENCE).and()
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + refreshExpiration))
                 .signWith(getSigningKey(), Jwts.SIG.HS256)
@@ -179,6 +191,8 @@ public class JwtUtil {
             builder.claim("lastName", lastName);
         }
         return builder
+                .issuer(TOKEN_ISSUER)
+                .audience().add(TOKEN_AUDIENCE).and()
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + expiration))
                 .signWith(getSigningKey(), Jwts.SIG.HS256)
@@ -414,6 +428,8 @@ public class JwtUtil {
     private Claims getClaims(String token) {
         return Jwts.parser()
                 .verifyWith(getSigningKey())
+                .requireIssuer(TOKEN_ISSUER)
+                .requireAudience(TOKEN_AUDIENCE)
                 .build()
                 .parseSignedClaims(token)
                 .getPayload();

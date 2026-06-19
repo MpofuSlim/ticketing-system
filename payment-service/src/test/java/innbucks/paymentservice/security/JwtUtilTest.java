@@ -22,6 +22,8 @@ class JwtUtilTest {
     private static String mintToken(String secret, Map<String, ?> claims, long ttlMs) {
         return Jwts.builder()
                 .claims(claims)
+                .issuer("innbucks-ticketing")
+                .audience().add("innbucks-app").and()
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + ttlMs))
                 .signWith(key(secret), Jwts.SIG.HS256)
@@ -81,6 +83,58 @@ class JwtUtilTest {
         String token = mintToken(SECRET, Map.of("phoneNumber", ""), 60_000);
 
         assertTrue(util.isTokenValid(token));
+        assertNull(util.extractPhoneNumber(token));
+    }
+
+    // --- issuer / audience binding ------------------------------------------
+    // A token signed with the right secret but minted for a different system /
+    // audience must be rejected. These guard the cross-service token binding:
+    // every token the fleet accepts must carry iss=innbucks-ticketing and
+    // aud=innbucks-app.
+
+    @Test
+    void isTokenValid_returnsFalse_whenIssuerClaimIsMissing() {
+        JwtUtil util = new JwtUtil(SECRET);
+        String token = Jwts.builder()
+                .claim("phoneNumber", "+263771234567")
+                .audience().add("innbucks-app").and()   // correct aud, but no iss
+                .issuedAt(new Date())
+                .expiration(new Date(System.currentTimeMillis() + 60_000))
+                .signWith(key(SECRET), Jwts.SIG.HS256)
+                .compact();
+
+        assertFalse(util.isTokenValid(token));
+        assertNull(util.extractPhoneNumber(token));
+    }
+
+    @Test
+    void isTokenValid_returnsFalse_whenAudienceClaimIsMissing() {
+        JwtUtil util = new JwtUtil(SECRET);
+        String token = Jwts.builder()
+                .claim("phoneNumber", "+263771234567")
+                .issuer("innbucks-ticketing")           // correct iss, but no aud
+                .issuedAt(new Date())
+                .expiration(new Date(System.currentTimeMillis() + 60_000))
+                .signWith(key(SECRET), Jwts.SIG.HS256)
+                .compact();
+
+        assertFalse(util.isTokenValid(token));
+        assertNull(util.extractPhoneNumber(token));
+    }
+
+    @Test
+    void isTokenValid_returnsFalse_whenIssuerIsForeign() {
+        JwtUtil util = new JwtUtil(SECRET);
+        String token = Jwts.builder()
+                .claim("phoneNumber", "+263771234567")
+                .issuer("someone-else")                 // right secret + aud, wrong iss
+                .audience().add("innbucks-app").and()
+                .issuedAt(new Date())
+                .expiration(new Date(System.currentTimeMillis() + 60_000))
+                .signWith(key(SECRET), Jwts.SIG.HS256)
+                .compact();
+
+        assertFalse(util.isTokenValid(token));
         assertNull(util.extractPhoneNumber(token));
     }
 }

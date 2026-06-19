@@ -150,6 +150,8 @@ class PaymentSecurityIT extends PostgresIntegrationTestBase {
         SecretKey wrongKey = Keys.hmacShaKeyFor("not-the-right-secret-not-the-right-secret".getBytes(StandardCharsets.UTF_8));
         String token = Jwts.builder()
                 .claims(Map.of("phoneNumber", "0712345678"))
+                .issuer("innbucks-ticketing")
+                .audience().add("innbucks-app").and()
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + 60_000))
                 .signWith(wrongKey)
@@ -174,6 +176,8 @@ class PaymentSecurityIT extends PostgresIntegrationTestBase {
         SecretKey key = Keys.hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8));
         String token = Jwts.builder()
                 .claims(Map.of("roles", java.util.List.of("MERCHANT_ADMIN")))
+                .issuer("innbucks-ticketing")
+                .audience().add("innbucks-app").and()
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + 60_000))
                 .signWith(key)
@@ -203,6 +207,8 @@ class PaymentSecurityIT extends PostgresIntegrationTestBase {
         SecretKey key = Keys.hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8));
         String token = Jwts.builder()
                 .claims(Map.of("phoneNumber", "0712345678"))
+                .issuer("innbucks-ticketing")
+                .audience().add("innbucks-app").and()
                 .issuedAt(new Date())
                 .expiration(new Date(System.currentTimeMillis() + 60_000))
                 .signWith(key)

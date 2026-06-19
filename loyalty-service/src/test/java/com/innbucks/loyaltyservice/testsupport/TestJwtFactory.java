@@ -127,6 +127,8 @@ public final class TestJwtFactory {
             SecretKey key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
             var builder = Jwts.builder()
                     .subject(email)
+                    .issuer("innbucks-ticketing")
+                    .audience().add("innbucks-app").and()
                     .claim("roles", roles)
                     .claim("services", services)
                     .claim("tier", tier)
