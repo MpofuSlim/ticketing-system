@@ -316,8 +316,9 @@ public class TicketScanService {
      */
     private boolean scannerOwnsEvent(Booking booking, UUID scannerOrganizerUuid) {
         UUID bookingOrganizerUuid = booking.getTenantUserUuid();
+        // No null-guard on scannerOrganizerUuid: equals(null) is already false,
+        // so a null scanner uuid correctly fails the check.
         return bookingOrganizerUuid != null
-                && scannerOrganizerUuid != null
                 && bookingOrganizerUuid.equals(scannerOrganizerUuid);
     }
 
