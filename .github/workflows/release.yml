@@ -44,7 +44,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
@@ -112,7 +112,7 @@ jobs:
 
     steps:
       - name: Checkout (for docker-compose.yml + scripts/)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Prepare SSH
         run: |

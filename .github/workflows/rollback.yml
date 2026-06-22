@@ -40,7 +40,7 @@ jobs:
           echo "Rolling back to sha-${{ inputs.target_sha }}"
 
       - name: Checkout (for docker-compose.yml + scripts/)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ inputs.target_sha }}
 
