@@ -3,10 +3,12 @@ package com.innbucks.userservice.service;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.util.Locale;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Brute-force / credential-stuffing gate on the public auth endpoints
@@ -37,12 +39,14 @@ import java.util.Locale;
  * cap the call is rejected with a {@link RateLimitedException} carrying
  * the seconds the caller should wait before retrying.
  *
- * <p><b>Fail-open</b>: if Redis is unreachable the limiter logs and lets
- * the call through. The auth path itself already enforces correctness
- * (password match / refresh-token rotation / family revocation), so a
- * brief Redis hiccup shouldn't lock honest users out. Compare to the
- * payment-service velocity gate which is intentionally fail-CLOSED —
- * different threat model (money movement vs. attempted access).
+ * <p><b>Redis-down fallback</b>: if Redis is unreachable the limiter does
+ * NOT fail open — it falls back to a per-instance in-memory fixed-window
+ * counter ({@link #fallbackWindows}) enforcing the same caps. That keeps a
+ * throttle in place during a Redis outage (a single host can't get unlimited
+ * free attempts) while staying loose enough — per-JVM, so N replicas give an
+ * N×max effective cap — that a brief hiccup won't lock honest users out. The
+ * auth path itself still enforces correctness (password match / refresh-token
+ * rotation / family revocation) as the backstop.
  */
 @Service
 @Slf4j
@@ -59,6 +63,17 @@ public class LoginRateLimiter {
     private final Duration refreshWindow;
 
     private final StringRedisTemplate redis;
+
+    /**
+     * Per-instance fixed-window counters used ONLY when Redis is unreachable.
+     * Keyed identically to the Redis buckets. Lives in the JVM, so with N
+     * user-service replicas the effective cap during a Redis outage is N×max —
+     * a deliberately loose floor that still throttles a single-host brute-force,
+     * rather than the previous fail-open behaviour that removed the floor
+     * entirely. Entries self-expire (lazily on access + a scheduled sweep), so
+     * the map is empty whenever Redis is healthy.
+     */
+    private final ConcurrentHashMap<String, FallbackWindow> fallbackWindows = new ConcurrentHashMap<>();
 
     public LoginRateLimiter(
             @Value("${innbucks.auth-rate-limit.login.per-identifier-max:5}") int loginPerIdentifierMax,
@@ -157,9 +172,48 @@ public class LoginRateLimiter {
             }
             return count;
         } catch (RuntimeException ex) {
-            // Fail open — see class javadoc.
-            log.error("Redis auth rate-limiter unreachable key={}; allowing call through", key, ex);
-            return 0L;
+            // Redis down — fall back to the per-instance in-memory limiter
+            // instead of failing open. See class javadoc.
+            log.error("Redis auth rate-limiter unreachable key={}; using per-instance in-memory fallback", key, ex);
+            return incrementInMemory(key, ttl);
+        }
+    }
+
+    /**
+     * Per-instance fixed-window counter, used only when {@link #increment}
+     * can't reach Redis. Same window semantics as the Redis path: the first
+     * hit in a window stamps the reset time; later hits increment until it
+     * elapses, after which the window resets.
+     */
+    private long incrementInMemory(String key, Duration ttl) {
+        long now = System.currentTimeMillis();
+        return fallbackWindows.compute(key, (k, cur) -> {
+            if (cur == null || now >= cur.resetAtMillis) {
+                return new FallbackWindow(now + ttl.toMillis());
+            }
+            cur.count++;
+            return cur;
+        }).count;
+    }
+
+    /**
+     * Evicts elapsed fallback windows so the map can't grow unbounded during a
+     * prolonged Redis outage. A no-op (empty map) whenever Redis is healthy.
+     */
+    @Scheduled(fixedDelayString = "PT1M")
+    void purgeFallbackWindows() {
+        long now = System.currentTimeMillis();
+        fallbackWindows.values().removeIf(w -> now >= w.resetAtMillis);
+    }
+
+    /** A per-instance fixed-window counter for the Redis-down fallback. */
+    private static final class FallbackWindow {
+        private final long resetAtMillis;
+        private long count;
+
+        private FallbackWindow(long resetAtMillis) {
+            this.resetAtMillis = resetAtMillis;
+            this.count = 1;
         }
     }
 
