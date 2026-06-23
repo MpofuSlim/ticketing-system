@@ -113,13 +113,6 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- Stripe payment integration -->
-        <dependency>
-            <groupId>com.stripe</groupId>
-            <artifactId>stripe-java</artifactId>
-            <version>32.2.0</version>
-        </dependency>
-
         <!-- JJWT — verify-only. payment-service does NOT mint tokens; it
              validates the bearer JWT issued by user-service on the public
              /payments/deposit endpoint (the only authenticated endpoint in
@@ -180,13 +173,6 @@
         <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-circuitbreaker-resilience4j</artifactId>
-        </dependency>
-
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-devtools</artifactId>
-            <scope>runtime</scope>
-            <optional>true</optional>
         </dependency>
 
         <dependency>

@@ -58,7 +58,7 @@ oradian-middleware:
   read-timeout-ms: ${ORADIAN_MIDDLEWARE_READ_TIMEOUT_MS:10000}
 
 whatsapp:
-  base-url: ${WHATSAPP_GATEWAY_URL:https://maximum-implicitly-treefrog.ngrok-free.app}
+  base-url: ${WHATSAPP_GATEWAY_URL:http://localhost:8089}
   api-key: ${WHATSAPP_API_KEY:change-me-whatsapp-api-key}
   connect-timeout-ms: ${WHATSAPP_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${WHATSAPP_READ_TIMEOUT_MS:10000}
