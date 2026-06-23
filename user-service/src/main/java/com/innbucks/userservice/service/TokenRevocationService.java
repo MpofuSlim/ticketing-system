@@ -6,6 +6,7 @@ import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.security.JwtUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -13,6 +14,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.Optional;
@@ -22,9 +24,20 @@ import java.util.Optional;
 @Slf4j
 public class TokenRevocationService {
 
+    /**
+     * Redis key prefix for the cross-service logout denylist. user-service
+     * publishes {@code <prefix><sha256HexLower(token)> -> "1"} here on revoke
+     * so the downstream services (payment/seat/booking) that share this Redis
+     * can reject an explicitly logged-out token immediately, instead of waiting
+     * out the access-token TTL. Postgres ({@code revoked_tokens}) stays
+     * user-service's own source of truth; this publish is best-effort.
+     */
+    public static final String SHARED_DENYLIST_PREFIX = "auth:revoked:";
+
     private final RevokedTokenRepository revokedTokenRepository;
     private final UserRepository userRepository;
     private final JwtUtil jwtUtil;
+    private final StringRedisTemplate redis;
 
     @Transactional
     public void revoke(String token) {
@@ -44,6 +57,22 @@ public class TokenRevocationService {
                 .build();
         revokedTokenRepository.save(entry);
         log.info("Token revoked subject={}", entry.getSubject());
+
+        // Best-effort publish to the shared Redis denylist so payment/seat/
+        // booking honour the logout immediately. TTL = remaining token life;
+        // a token at/past expiry needs no entry (the readers reject it on
+        // their own TTL check). Never fail the logout if Redis is down —
+        // Postgres above is our source of truth and the downstream services
+        // still have the short access-token TTL as a backstop.
+        Duration ttl = Duration.between(Instant.now(), entry.getExpiresAt());
+        if (!ttl.isZero() && !ttl.isNegative()) {
+            try {
+                redis.opsForValue().set(SHARED_DENYLIST_PREFIX + hash, "1", ttl);
+            } catch (RuntimeException ex) {
+                log.warn("Failed to publish revoked token to shared Redis denylist subject={}; "
+                        + "downstream relies on access-token TTL until it expires", entry.getSubject(), ex);
+            }
+        }
     }
 
     public boolean isRevoked(String token) {
