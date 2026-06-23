@@ -181,7 +181,7 @@ services:
       ORADIAN_INTERNAL_TOKEN: ${ORADIAN_INTERNAL_TOKEN:?set ORADIAN_INTERNAL_TOKEN in .env (must match middleware INTERNAL_API_TOKEN)}
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
       INNBUCKS_GATEWAY_URL: ${INNBUCKS_GATEWAY_URL:-http://10.0.155.69:8088}
-      WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-https://maximum-implicitly-treefrog.ngrok-free.app}
+      WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-http://localhost:8089}
       WHATSAPP_API_KEY: ${WHATSAPP_API_KEY:?set WHATSAPP_API_KEY in .env}
       NATIONAL_ID_HMAC_SECRET: ${NATIONAL_ID_HMAC_SECRET:?set NATIONAL_ID_HMAC_SECRET in .env (see .env.example) — keep it stable; rotating it orphans existing hashes}
     ports:
@@ -316,7 +316,7 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/,http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD}@discovery-server-2:8761/eureka/
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
-      WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-https://maximum-implicitly-treefrog.ngrok-free.app}
+      WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-http://localhost:8089}
       WHATSAPP_API_KEY: ${WHATSAPP_API_KEY:?set WHATSAPP_API_KEY in .env}
       INNBUCKS_GATEWAY_URL: ${INNBUCKS_GATEWAY_URL:-http://10.0.155.69:8088}
       TICKETS_PUBLIC_BASE_URL: ${TICKETS_PUBLIC_BASE_URL:-http://localhost:8080}
@@ -371,7 +371,7 @@ services:
       ORADIAN_MIDDLEWARE_URL: http://oradian-middleware:8090
       ORADIAN_INTERNAL_TOKEN: ${ORADIAN_INTERNAL_TOKEN:?set ORADIAN_INTERNAL_TOKEN in .env (must match middleware INTERNAL_API_TOKEN)}
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
-      WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-https://maximum-implicitly-treefrog.ngrok-free.app}
+      WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-http://localhost:8089}
       WHATSAPP_API_KEY: ${WHATSAPP_API_KEY:?set WHATSAPP_API_KEY in .env}
       BANK_API_URL: ${BANK_API_URL:-https://staging.innbucks.co.zw}
       BANK_API_KEY: ${BANK_API_KEY:?set BANK_API_KEY in .env}

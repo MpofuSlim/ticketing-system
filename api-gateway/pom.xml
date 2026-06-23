@@ -79,13 +79,6 @@
             <artifactId>spring-boot-starter-security</artifactId>
         </dependency>
 
-        <dependency>
-            <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-devtools</artifactId>
-            <scope>runtime</scope>
-            <optional>true</optional>
-        </dependency>
-
         <!-- spring-cloud-starter-gateway-server-webflux (bumped to 5.0.2 by
              PR #224's spring-ecosystem update) ships
              org.springframework.cloud.gateway.config.GrpcSslConfigurer at

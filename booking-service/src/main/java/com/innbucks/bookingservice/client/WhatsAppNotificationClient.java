@@ -1,6 +1,7 @@
 package com.innbucks.bookingservice.client;
 
 import com.innbucks.bookingservice.config.WhatsAppProperties;
+import com.innbucks.bookingservice.util.MsisdnMasking;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.MediaType;
@@ -58,14 +59,14 @@ public class WhatsAppNotificationClient {
                     .body(Map.of("to", to, "notification", notification))
                     .retrieve()
                     .toBodilessEntity();
-            log.info("WhatsApp notification sent to={}", to);
+            log.info("WhatsApp notification sent to={}", MsisdnMasking.mask(to));
         } catch (RestClientResponseException ex) {
             log.warn("WhatsApp gateway rejected notification to={} status={} body={}",
-                    to, ex.getStatusCode(), ex.getResponseBodyAsString());
+                    MsisdnMasking.mask(to), ex.getStatusCode(), ex.getResponseBodyAsString());
             throw new NotificationDeliveryException(
                     "WhatsApp gateway rejected the message: HTTP " + ex.getStatusCode().value(), ex);
         } catch (RuntimeException ex) {
-            log.warn("WhatsApp gateway unreachable to={} message={}", to, ex.getMessage());
+            log.warn("WhatsApp gateway unreachable to={} message={}", MsisdnMasking.mask(to), ex.getMessage());
             throw new NotificationDeliveryException(
                     "WhatsApp gateway is unreachable: " + ex.getMessage(), ex);
         }
@@ -109,14 +110,14 @@ public class WhatsAppNotificationClient {
                     .body(Map.of("to", to, "eventName", eventName, "qrCodePath", qrCodePath))
                     .retrieve()
                     .toBodilessEntity();
-            log.info("WhatsApp e-ticket QR sent to={} qrCodePath={}", to, qrCodePath);
+            log.info("WhatsApp e-ticket QR sent to={} qrCodePath={}", MsisdnMasking.mask(to), qrCodePath);
         } catch (RestClientResponseException ex) {
             log.warn("WhatsApp gateway rejected e-ticket QR to={} status={} body={}",
-                    to, ex.getStatusCode(), ex.getResponseBodyAsString());
+                    MsisdnMasking.mask(to), ex.getStatusCode(), ex.getResponseBodyAsString());
             throw new NotificationDeliveryException(
                     "WhatsApp gateway rejected the e-ticket QR: HTTP " + ex.getStatusCode().value(), ex);
         } catch (RuntimeException ex) {
-            log.warn("WhatsApp gateway unreachable for e-ticket QR to={} message={}", to, ex.getMessage());
+            log.warn("WhatsApp gateway unreachable for e-ticket QR to={} message={}", MsisdnMasking.mask(to), ex.getMessage());
             throw new NotificationDeliveryException(
                     "WhatsApp gateway is unreachable: " + ex.getMessage(), ex);
         }
