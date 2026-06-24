@@ -408,8 +408,13 @@ public class AuthController {
                     stolen-token attacker from locking the legitimate user out.
 
                     Used by system users to replace the one-time temporary password they were issued at
-                    onboarding (delivered over email/SMS). The existing JWT continues to work until it
-                    expires; no re-login is required.
+                    onboarding (delivered over email/SMS), and by any logged-in user who wants to rotate
+                    their password.
+
+                    **On success the caller is forced to re-authenticate**: the access token used for this
+                    call is added to the denylist, every refresh token for the user is revoked, and the
+                    user's `token_version` is bumped so any other cached JWT is rejected fleet-wide. The
+                    FE must redirect to the login screen and obtain fresh tokens with the new password.
                     """)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
