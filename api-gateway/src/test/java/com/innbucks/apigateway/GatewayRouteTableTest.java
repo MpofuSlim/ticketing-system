@@ -48,7 +48,8 @@ class GatewayRouteTableTest {
             "user-internal-deny", "user-self-route",
             "event-availability-deny", "event-service-route",
             "seat-service-seat-route", "seat-service-category-route",
-            "booking-internal-deny", "booking-service-route", "booking-tickets-route",
+            "booking-internal-deny", "booking-service-route", "booking-invoices-route",
+            "booking-tickets-route",
             "scans-route", "brand-assets-route",
             "payment-internal-deny", "payment-service-read-route",
             "payments-innbucks-write-route", "payment-service-write-route",
@@ -70,6 +71,7 @@ class GatewayRouteTableTest {
             Map.entry("seat-service-seat-route", "/seats/**"),
             Map.entry("seat-service-category-route", "/seat-categories/**"),
             Map.entry("booking-service-route", "/bookings/**"),
+            Map.entry("booking-invoices-route", "/invoices/**"),
             Map.entry("booking-tickets-route", "/tickets/**"),
             Map.entry("scans-route", "/scans/**"),
             Map.entry("loyalty-service-route", "/loyalty/**"));
@@ -80,7 +82,8 @@ class GatewayRouteTableTest {
             "user-admin-route", "user-event-organizer-route", "booking-event-organizer-reports-route",
             "user-self-route", "event-service-route",
             "seat-service-seat-route", "seat-service-category-route",
-            "booking-service-route", "booking-tickets-route", "scans-route", "brand-assets-route",
+            "booking-service-route", "booking-invoices-route", "booking-tickets-route",
+            "scans-route", "brand-assets-route",
             "payment-service-read-route", "payments-innbucks-write-route", "payment-service-write-route",
             "loyalty-service-route");
 

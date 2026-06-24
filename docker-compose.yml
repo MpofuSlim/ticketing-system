@@ -324,6 +324,13 @@ services:
       WHATSAPP_API_KEY: ${WHATSAPP_API_KEY:?set WHATSAPP_API_KEY in .env}
       INNBUCKS_GATEWAY_URL: ${INNBUCKS_GATEWAY_URL:-http://10.0.155.69:8088}
       TICKETS_PUBLIC_BASE_URL: ${TICKETS_PUBLIC_BASE_URL:-http://localhost:8080}
+      # Platform->organizer commission invoicing (all optional; safe defaults in
+      # application.yaml). Rates are percentages. INVOICE_VAT_RATE is per-country.
+      INVOICE_DEFAULT_COMMISSION_RATE: ${INVOICE_DEFAULT_COMMISSION_RATE:-10.0}
+      INVOICE_VAT_RATE: ${INVOICE_VAT_RATE:-15.0}
+      INVOICE_DEFAULT_BILLING_CYCLE: ${INVOICE_DEFAULT_BILLING_CYCLE:-MONTHLY}
+      INVOICE_DUE_DAYS: ${INVOICE_DUE_DAYS:-14}
+      INVOICE_SCHEDULER_ENABLED: ${INVOICE_SCHEDULER_ENABLED:-true}
     ports:
       - "127.0.0.1:8084:8084"
     healthcheck:
