@@ -59,17 +59,20 @@ public class InvoiceService {
     private final EventInvoiceRepository invoices;
     private final InvoiceGenerator generator;
     private final InvoiceMetrics metrics;
+    private final InvoiceNotifier invoiceNotifier;
     private final String cellCurrency;
 
     public InvoiceService(InvoiceAggregationRepository aggregation,
                           EventInvoiceRepository invoices,
                           InvoiceGenerator generator,
                           InvoiceMetrics metrics,
+                          InvoiceNotifier invoiceNotifier,
                           @Value("${innbucks.currency:USD}") String cellCurrency) {
         this.aggregation = aggregation;
         this.invoices = invoices;
         this.generator = generator;
         this.metrics = metrics;
+        this.invoiceNotifier = invoiceNotifier;
         this.cellCurrency = (cellCurrency == null || cellCurrency.isBlank()) ? "USD" : cellCurrency.trim();
     }
 
@@ -133,6 +136,8 @@ public class InvoiceService {
             Optional<EventInvoice> invoice = generator.generate(organizerUuid, periodStart, periodEnd, lines);
             if (invoice.isPresent()) {
                 metrics.incGenerated(invoice.get().getTotalAmount());
+                // Email the organizer their invoice — best-effort, never fails the generation.
+                invoiceNotifier.notifyIssued(invoice.get());
             } else {
                 metrics.incGenerationSkipped();
             }

@@ -396,6 +396,25 @@ class UserAdminServiceTest {
     }
 
     @Test
+    void deactivation_notifiesUserByEmail_swiftInnBrandForSystemUser() {
+        UserRepository userRepo = mock(UserRepository.class);
+        EmailNotificationClient email = mock(EmailNotificationClient.class);
+        User user = User.builder().id(12L).email("staff@acme.co.zw").firstName("Tendai")
+                .roles(java.util.EnumSet.of(User.Role.SHOP_ADMIN))
+                .active(true).approved(true).password("pw").build();
+        when(userRepo.findById(12L)).thenReturn(Optional.of(user));
+        when(userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        new UserAdminService(userRepo, mock(PasswordEncoder.class),
+                mock(WhatsAppNotificationClient.class), mock(SmsNotificationClient.class),
+                email, mock(AuditService.class))
+                .setActive(12L, false);
+
+        verify(email).sendEmail(eq("staff@acme.co.zw"), contains("deactivated"),
+                contains("SwiftInn"), startsWith("ACCOUNT-DEACTIVATED-"));
+    }
+
+    @Test
     void noOpIdempotentRetry_recordsNoAudit() {
         UserRepository userRepo = mock(UserRepository.class);
         AuditService audit = mock(AuditService.class);

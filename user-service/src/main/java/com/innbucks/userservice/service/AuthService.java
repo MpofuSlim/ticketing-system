@@ -2,12 +2,15 @@ package com.innbucks.userservice.service;
 
 import com.innbucks.userservice.dto.*;
 import com.innbucks.userservice.entity.*;
+import com.innbucks.userservice.event.AccountLockedEvent;
 import com.innbucks.userservice.repository.*;
 import com.innbucks.userservice.util.MsisdnMasking;
 import com.innbucks.userservice.security.JwtUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.context.ApplicationEventPublisherAware;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -27,7 +30,26 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 @Slf4j
-public class AuthService {
+public class AuthService implements ApplicationEventPublisherAware {
+
+    // Setter-injected (not constructor) so @RequiredArgsConstructor — and every
+    // unit-test construction of AuthService — is unaffected. Null only in a
+    // plain unit test that didn't set it; publishAccountLocked() null-guards.
+    private ApplicationEventPublisher eventPublisher;
+
+    @Override
+    public void setApplicationEventPublisher(ApplicationEventPublisher applicationEventPublisher) {
+        this.eventPublisher = applicationEventPublisher;
+    }
+
+    private void publishAccountLocked(User user, Instant lockedUntil) {
+        if (eventPublisher == null) {
+            return; // plain unit test without a Spring context
+        }
+        eventPublisher.publishEvent(new AccountLockedEvent(
+                user.getId(), user.getFirstName(), user.getEmail(), user.getPhoneNumber(),
+                user.hasRole(User.Role.CUSTOMER), lockedUntil));
+    }
 
     private final UserRepository userRepository;
     private final TenantProfileRepository tenantProfileRepository;
@@ -244,17 +266,21 @@ public class AuthService {
             int attempts = user.getFailedLoginAttempts() + 1;
             user.setFailedLoginAttempts(attempts);
             boolean justLocked = false;
+            Instant lockedUntil = null;
             if (attempts >= maxFailedLoginAttempts) {
-                Instant until = now.plus(Duration.ofMinutes(lockoutDurationMinutes));
-                user.setLockedUntil(until);
+                lockedUntil = now.plus(Duration.ofMinutes(lockoutDurationMinutes));
+                user.setLockedUntil(lockedUntil);
                 justLocked = true;
                 log.warn("Account locked userId={} attempts={} until={}",
-                        user.getId(), attempts, until);
+                        user.getId(), attempts, lockedUntil);
             } else {
                 log.info("Failed login attempt userId={} attempts={} threshold={}",
                         user.getId(), attempts, maxFailedLoginAttempts);
             }
             userRepository.save(user);
+            if (justLocked) {
+                publishAccountLocked(user, lockedUntil);
+            }
 
             auditService.recordFailure(
                     AuditEventType.AUTH_LOGIN_FAILURE,
