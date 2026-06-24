@@ -183,4 +183,22 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(
                 ApiResult.of(HttpStatus.CONFLICT, ex.getMessage(), data));
     }
+
+    /** Mfa-token verify failures (wrong purpose, expired, malformed). 400 with the precise reason. */
+    @ExceptionHandler(com.innbucks.userservice.security.MfaTokenService.InvalidMfaTokenException.class)
+    public ResponseEntity<ApiResult<Void>> handleInvalidMfaToken(
+            com.innbucks.userservice.security.MfaTokenService.InvalidMfaTokenException ex) {
+        log.info("Invalid mfaToken: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResult.error(HttpStatus.BAD_REQUEST, ex.getMessage()));
+    }
+
+    /** Mfa code rejected / enrolment mis-step. 400 with the user-visible reason. */
+    @ExceptionHandler(com.innbucks.userservice.service.MfaService.MfaException.class)
+    public ResponseEntity<ApiResult<Void>> handleMfaException(
+            com.innbucks.userservice.service.MfaService.MfaException ex) {
+        log.info("MFA rejected: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResult.error(HttpStatus.BAD_REQUEST, ex.getMessage()));
+    }
 }

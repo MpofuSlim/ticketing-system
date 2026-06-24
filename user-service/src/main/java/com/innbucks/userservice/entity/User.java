@@ -1,5 +1,6 @@
 package com.innbucks.userservice.entity;
 
+import com.innbucks.userservice.security.MfaSecretConverter;
 import jakarta.persistence.*;
 import lombok.*;
 import java.time.Instant;
@@ -88,6 +89,13 @@ public class User {
     private Set<String> defaultServices = new HashSet<>();
 
     private boolean mfaEnabled = false;
+
+    /**
+     * Base32 TOTP shared secret. Stored AES-GCM-encrypted at rest via
+     * {@link MfaSecretConverter}; callers see the plaintext.
+     */
+    @Convert(converter = MfaSecretConverter.class)
+    @Column(name = "mfa_secret", columnDefinition = "TEXT")
     private String mfaSecret;
 
     @Column(nullable = false)

@@ -64,6 +64,16 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- TOTP (RFC 6238): generates secrets, builds otpauth:// provisioning
+             URIs, verifies 6-digit codes with a configurable time-step skew.
+             Google-Authenticator / Authy compatible. Used by MfaService for the
+             2FA-on-login flow. ~30KB jar, no transitive Spring deps. -->
+        <dependency>
+            <groupId>dev.samstevens.totp</groupId>
+            <artifactId>totp</artifactId>
+            <version>1.7.1</version>
+        </dependency>
+
         <!-- Input validation -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

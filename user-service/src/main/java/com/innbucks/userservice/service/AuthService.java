@@ -37,6 +37,17 @@ public class AuthService implements ApplicationEventPublisherAware {
     // plain unit test that didn't set it; publishAccountLocked() null-guards.
     private ApplicationEventPublisher eventPublisher;
 
+    // MFA collaborators — setter-injected so the existing 8 AuthServiceTest
+    // construction sites don't need to widen. A login that finds them null
+    // (only in plain unit tests) behaves as if MFA were disabled, matching the
+    // pre-feature behaviour those tests were written against.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.innbucks.userservice.security.MfaPolicy mfaPolicy;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.innbucks.userservice.security.MfaTokenService mfaTokenService;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private MfaService mfaService;
+
     @Override
     public void setApplicationEventPublisher(ApplicationEventPublisher applicationEventPublisher) {
         this.eventPublisher = applicationEventPublisher;
@@ -219,7 +230,19 @@ public class AuthService implements ApplicationEventPublisherAware {
             InvalidCredentialsException.class,
             AccountLockedException.class
     })
+    /**
+     * Backwards-compatible overload used by tests / callers that don't have a
+     * channel header. Defaults to WEB — the strictest-by-default policy means
+     * unit tests get the same MFA decisions a real WEB login would.
+     */
     public AuthResponseDTO login(LoginRequestDTO request, String deviceId, AuditContext auditContext) {
+        return login(request, deviceId,
+                com.innbucks.userservice.security.AuthChannel.WEB, auditContext);
+    }
+
+    public AuthResponseDTO login(LoginRequestDTO request, String deviceId,
+                                 com.innbucks.userservice.security.AuthChannel channel,
+                                 AuditContext auditContext) {
         java.util.Optional<User> resolved = resolveUser(request);
         if (resolved.isEmpty()) {
             // Unknown identifier. actor stays ANONYMOUS; target_id is
@@ -347,6 +370,66 @@ public class AuthService implements ApplicationEventPublisherAware {
                         "revokedPriorFamilies", revokedFamilies),
                 auditContext);
 
+        // MFA gate. On USSD/WhatsApp the policy bypasses 2FA entirely; on
+        // WEB/MOBILE, system users MUST satisfy 2FA, customers only if they've
+        // opted in. mfaPolicy is null only in plain unit tests (no Spring) —
+        // such tests get the pre-feature behaviour (no MFA challenge).
+        if (mfaPolicy != null && mfaPolicy.shouldChallenge(user, channel)) {
+            if (!user.isMfaEnabled() || user.getMfaSecret() == null) {
+                // System user on web/mobile but no secret yet → force enrolment.
+                String enrolToken = mfaTokenService.issue(user.getId(),
+                        com.innbucks.userservice.security.MfaTokenService.Purpose.ENROLLMENT);
+                log.info("Login requires MFA enrolment userId={}", user.getId());
+                return AuthResponseDTO.builder()
+                        .mfaEnrollmentRequired(true)
+                        .mfaToken(enrolToken)
+                        .build();
+            }
+            String loginToken = mfaTokenService.issue(user.getId(),
+                    com.innbucks.userservice.security.MfaTokenService.Purpose.LOGIN_MFA);
+            log.info("Login requires MFA code userId={}", user.getId());
+            return AuthResponseDTO.builder()
+                    .mfaRequired(true)
+                    .mfaToken(loginToken)
+                    .build();
+        }
+
+        return issueToken(user, deviceId);
+    }
+
+    /**
+     * Step 2 of an MFA-required login: verify the TOTP / backup code carried
+     * with the step-1 mfaToken, and (if it matches) mint the real access +
+     * refresh tokens via {@link #issueToken}. Same authorization model as the
+     * original {@code login} from here on.
+     */
+    @Transactional(noRollbackFor = {InvalidCredentialsException.class,
+            MfaService.MfaException.class,
+            com.innbucks.userservice.security.MfaTokenService.InvalidMfaTokenException.class})
+    public AuthResponseDTO completeLoginWithMfa(String mfaToken, String code, String deviceId,
+                                                AuditContext auditContext) {
+        if (mfaPolicy == null || mfaTokenService == null || mfaService == null) {
+            // Misconfigured / unit-test path — fail closed.
+            throw new MfaService.MfaException("MFA is not available");
+        }
+        Long userId = mfaTokenService.verify(mfaToken,
+                com.innbucks.userservice.security.MfaTokenService.Purpose.LOGIN_MFA);
+        User user = userRepository.findById(userId)
+                .orElseThrow(InvalidCredentialsException::new);
+        if (!mfaService.verifyForLogin(user, code)) {
+            auditService.recordFailure(
+                    AuditEventType.AUTH_LOGIN_FAILURE,
+                    String.valueOf(user.getId()), AuditService.ACTOR_TYPE_USER,
+                    String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
+                    "mfa_code_invalid", java.util.Map.of(), auditContext);
+            throw new MfaService.MfaException("That code didn't match. Try the next one your app shows.");
+        }
+        auditService.recordSuccess(
+                AuditEventType.AUTH_LOGIN_SUCCESS,
+                String.valueOf(user.getId()), AuditService.ACTOR_TYPE_USER,
+                String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
+                java.util.Map.of("mfa", true),
+                auditContext);
         return issueToken(user, deviceId);
     }
 

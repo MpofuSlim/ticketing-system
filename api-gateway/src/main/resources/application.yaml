@@ -73,6 +73,23 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
+            # 2FA endpoints: rate-limit per-IP to bound TOTP/backup-code brute
+            # force. The downstream MfaService also caps via the OTP failed-
+            # attempt counter on the user row; the gateway throttle adds an
+            # IP-level guard that fires before any work happens. Matched BEFORE
+            # the /auth/** catch-all below.
+            - id: auth-mfa-route
+              uri: lb://user-service
+              predicates:
+                - Path=/auth/login/mfa,/auth/mfa/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${AUTH_OTP_RATE_LIMIT_REPLENISH_PER_SECOND:1}
+                    redis-rate-limiter.burstCapacity: ${AUTH_OTP_RATE_LIMIT_BURST_CAPACITY:3}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
+
             # Forgot-password: the request step sends an OTP (SMS cost + abuse
             # vector), so rate-limit it like /auth/otp/**. Matched BEFORE the
             # /auth/** catch-all below. reset-password is included so a brute

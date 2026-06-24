@@ -27,12 +27,14 @@ public class ProductionSecretsGuard {
     //   - oradian.internal-token       (env ORADIAN_INTERNAL_TOKEN)  -> talks to Oradian middleware S2S endpoints
     //   - whatsapp.api-key             (env WHATSAPP_API_KEY)         -> x-api-key for the WhatsApp notification gateway
     //   - national-id.hmac-secret      (env NATIONAL_ID_HMAC_SECRET)  -> keyed hash protecting national IDs at rest
+    //   - mfa.encryption-key           (env MFA_ENCRYPTION_KEY)       -> AES-GCM key encrypting TOTP secrets at rest
     private static final List<String> SECRETS_TO_CHECK = List.of(
             "jwt.secret",
             "innbucks.internal-api-token",
             "oradian.internal-token",
             "whatsapp.api-key",
-            "national-id.hmac-secret"
+            "national-id.hmac-secret",
+            "mfa.encryption-key"
     );
 
     private static final String PLACEHOLDER_MARKER = "change-me";

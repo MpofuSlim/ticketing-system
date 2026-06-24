@@ -11,9 +11,14 @@ import com.innbucks.userservice.service.AuditService;
 import com.innbucks.userservice.service.AuthService;
 import com.innbucks.userservice.service.CustomerService;
 import com.innbucks.userservice.service.LoginRateLimiter;
+import com.innbucks.userservice.repository.UserRepository;
+import com.innbucks.userservice.security.MfaPolicy;
+import com.innbucks.userservice.security.MfaTokenService;
+import com.innbucks.userservice.service.MfaService;
 import com.innbucks.userservice.service.OtpService;
 import com.innbucks.userservice.service.PasswordResetService;
 import com.innbucks.userservice.service.TokenRevocationService;
+import org.springframework.web.server.ResponseStatusException;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
@@ -47,6 +52,10 @@ public class AuthController {
     private final LoginRateLimiter loginRateLimiter;
     private final AuditService auditService;
     private final PasswordResetService passwordResetService;
+    private final MfaService mfaService;
+    private final MfaTokenService mfaTokenService;
+    private final MfaPolicy mfaPolicy;
+    private final UserRepository userRepository;
 
     @PostMapping("/register")
     @SecurityRequirements()
@@ -207,17 +216,177 @@ public class AuthController {
     public ResponseEntity<ApiResult<AuthResponseDTO>> login(
             HttpServletRequest httpRequest,
             @Valid @RequestBody LoginRequestDTO request,
-            @RequestHeader(value = "X-Device-Id", required = false) String deviceId) {
+            @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+            @RequestHeader(value = "X-Auth-Channel", required = false) String authChannel) {
         // Affinity check FIRST — drop wrong-cell calls before the Redis rate
         // limiter hit. Email identifiers fall through (we can't resolve a
         // country from an email); JWT affinity catches them post-auth.
         cellAffinityChecker.requireDomesticIfMsisdn(request.getIdentifier());
         loginRateLimiter.checkLogin(request.getIdentifier(), clientIp(httpRequest));
-        log.info("Received login request identifier={} hasDeviceId={}",
-                request.getIdentifier(), deviceId != null && !deviceId.isBlank());
-        AuthResponseDTO response = authService.login(request, deviceId, auditContext(httpRequest));
+        com.innbucks.userservice.security.AuthChannel channel =
+                com.innbucks.userservice.security.AuthChannel.parseOrDefault(authChannel);
+        log.info("Received login request identifier={} hasDeviceId={} channel={}",
+                request.getIdentifier(), deviceId != null && !deviceId.isBlank(), channel);
+        AuthResponseDTO response = authService.login(request, deviceId, channel, auditContext(httpRequest));
+        if (Boolean.TRUE.equals(response.getMfaEnrollmentRequired())) {
+            return ResponseEntity.ok(ApiResult.ok("Enrol in 2FA to continue", response));
+        }
+        if (response.isMfaRequired()) {
+            return ResponseEntity.ok(ApiResult.ok("Enter your 2FA code to continue", response));
+        }
         log.info("Login successful roles={}", response.getRoles());
         return ResponseEntity.ok(ApiResult.ok("Login successful", response));
+    }
+
+    @PostMapping("/login/mfa")
+    @SecurityRequirements()
+    @Operation(summary = "Complete a 2FA-required login (step 2)",
+            description = """
+                    Submits the 6-digit TOTP code (or a one-time backup code) plus the `mfaToken` returned
+                    by step-1 (`POST /auth/login`). On success the response is the full
+                    `AuthResponse` — `token` + `refreshToken` populated and the user is signed in.
+
+                    The mfaToken is single-purpose and short-lived (~5 minutes). If it has expired the FE
+                    must restart from `/auth/login`.
+                    """)
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "Login completed",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "200 OK", "message": "Login successful",
+                                      "data": { "token": "eyJ...", "refreshToken": "eyJ...", "roles": ["SUPER_ADMIN"] } }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "Wrong code, expired mfaToken, or wrong-purpose token",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "400 BAD_REQUEST", "message": "That code didn't match. Try the next one your app shows.", "data": null }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<AuthResponseDTO>> loginMfa(
+            HttpServletRequest httpRequest,
+            @Valid @RequestBody MfaVerifyRequestDTO request,
+            @RequestHeader(value = "X-Device-Id", required = false) String deviceId) {
+        AuthResponseDTO response = authService.completeLoginWithMfa(
+                request.getMfaToken(), request.getCode(), deviceId, auditContext(httpRequest));
+        return ResponseEntity.ok(ApiResult.ok("Login successful", response));
+    }
+
+    @PostMapping("/mfa/enroll/start")
+    @SecurityRequirements()
+    @Operation(summary = "Begin 2FA enrolment (returns QR + secret)",
+            description = """
+                    Gated by the `mfaToken` returned by `/auth/login` with `mfaEnrollmentRequired=true`.
+                    Generates a fresh TOTP secret, persists it (encrypted) against the account, and returns
+                    the otpauth:// URI + a PNG QR code (Base64) the FE renders for the user to scan with
+                    Google Authenticator / Authy / etc. The FE then collects the first 6-digit code and
+                    POSTs it to `/auth/mfa/enroll/complete` together with the echoed `mfaToken`.
+
+                    Calling this a second time replaces the pending secret (the user's app would have to
+                    rescan) — useful when the user closes the screen before finishing.
+                    """)
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "Enrolment started",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "200 OK", "message": "Enrolment started",
+                                      "data": { "secret": "JBSWY3DPEHPK3PXP",
+                                                "otpauthUri": "otpauth://totp/InnBucks:alice%40example.com?secret=JBSWY3DPEHPK3PXP&issuer=InnBucks",
+                                                "qrPngBase64": "iVBORw0KGgo...", "mfaToken": "eyJ..." } }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "mfaToken missing / wrong purpose / expired",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "400 BAD_REQUEST", "message": "mfaToken purpose mismatch", "data": null }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<MfaEnrollStartResponseDTO>> enrollStart(
+            @Valid @RequestBody MfaEnrollStartRequestDTO request) {
+        Long userId = mfaTokenService.verify(request.getMfaToken(),
+                com.innbucks.userservice.security.MfaTokenService.Purpose.ENROLLMENT);
+        MfaService.EnrollmentStart started = mfaService.startEnrollment(userId);
+        MfaEnrollStartResponseDTO body = new MfaEnrollStartResponseDTO(
+                started.secret(), started.otpauthUri(), started.qrPngBase64(), request.getMfaToken());
+        return ResponseEntity.ok(ApiResult.ok("Enrolment started", body));
+    }
+
+    @PostMapping("/mfa/enroll/complete")
+    @SecurityRequirements()
+    @Operation(summary = "Finish 2FA enrolment (verify first code, receive backup codes + tokens)",
+            description = """
+                    Submits the first 6-digit code from the authenticator app to confirm the user actually
+                    has the secret loaded. On success the response carries the real access + refresh tokens
+                    (the FE handles them exactly like a normal login response) PLUS a one-time list of 10
+                    single-use backup codes. **The backup codes are shown ONCE — the FE must prompt the
+                    user to save them.**
+                    """)
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "Enrolment complete",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "200 OK", "message": "MFA enabled",
+                                      "data": { "token": "eyJ...", "refreshToken": "eyJ...",
+                                                "backupCodes": ["X4Q7-K9F2-A3B1-M8H6", "..."] } }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "Wrong code or expired/mismatched mfaToken")
+    })
+    public ResponseEntity<ApiResult<MfaEnrollCompleteResponseDTO>> enrollComplete(
+            HttpServletRequest httpRequest,
+            @Valid @RequestBody MfaVerifyRequestDTO request,
+            @RequestHeader(value = "X-Device-Id", required = false) String deviceId) {
+        Long userId = mfaTokenService.verify(request.getMfaToken(),
+                com.innbucks.userservice.security.MfaTokenService.Purpose.ENROLLMENT);
+        java.util.List<String> backupCodes = mfaService.completeEnrollment(userId, request.getCode());
+        // Synthesise a step-1-completed mfaToken so we can reuse the same code
+        // path that mints real tokens for an MFA-required login.
+        String reusableLoginToken = mfaTokenService.issue(userId,
+                com.innbucks.userservice.security.MfaTokenService.Purpose.LOGIN_MFA);
+        AuthResponseDTO authResponse = authService.completeLoginWithMfa(
+                reusableLoginToken, request.getCode(), deviceId, auditContext(httpRequest));
+        return ResponseEntity.ok(ApiResult.ok("MFA enabled",
+                new MfaEnrollCompleteResponseDTO(authResponse.getToken(), authResponse.getRefreshToken(), backupCodes)));
+    }
+
+    @PostMapping("/mfa/disable")
+    @SecurityRequirement(name = "bearerAuth")
+    @Operation(summary = "Disable MFA on the caller's account",
+            description = """
+                    Authenticated. Requires a fresh TOTP/backup code so a stolen access token alone can't
+                    turn MFA off. System users cannot disable MFA via this endpoint — their policy requires
+                    it; an admin must use `/admin/users/{id}/mfa/reset` instead.
+                    """)
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "MFA disabled"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Wrong code"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "Caller's role requires MFA — only an admin can reset")
+    })
+    public ResponseEntity<ApiResult<Void>> disableMfa(HttpServletRequest httpRequest,
+                                                      @Valid @RequestBody MfaDisableRequestDTO request) {
+        String authHeader = httpRequest.getHeader("Authorization");
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing Bearer token"));
+        }
+        String token = authHeader.substring(7);
+        String subject = jwtUtil.extractEmail(token);
+        com.innbucks.userservice.entity.User caller = (subject != null && subject.contains("@")
+                ? userRepository.findByEmail(subject)
+                : userRepository.findByPhoneNumber(subject))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "User not found"));
+        // System users can't self-disable; their policy requires MFA.
+        if (mfaPolicy.required(caller, com.innbucks.userservice.security.AuthChannel.WEB)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                    .body(ApiResult.error(HttpStatus.FORBIDDEN,
+                            "Your role requires MFA. An administrator must reset it via /admin/users/{id}/mfa/reset."));
+        }
+        mfaService.disable(caller.getId(), request.getCode());
+        return ResponseEntity.ok(ApiResult.ok("MFA disabled", null));
     }
 
     @PostMapping("/refresh")
