@@ -12,6 +12,7 @@ import com.innbucks.userservice.service.AuthService;
 import com.innbucks.userservice.service.CustomerService;
 import com.innbucks.userservice.service.LoginRateLimiter;
 import com.innbucks.userservice.service.OtpService;
+import com.innbucks.userservice.service.PasswordResetService;
 import com.innbucks.userservice.service.TokenRevocationService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -45,6 +46,7 @@ public class AuthController {
     private final JwtUtil jwtUtil;
     private final LoginRateLimiter loginRateLimiter;
     private final AuditService auditService;
+    private final PasswordResetService passwordResetService;
 
     @PostMapping("/register")
     @SecurityRequirements()
@@ -408,8 +410,13 @@ public class AuthController {
                     stolen-token attacker from locking the legitimate user out.
 
                     Used by system users to replace the one-time temporary password they were issued at
-                    onboarding (delivered over email/SMS). The existing JWT continues to work until it
-                    expires; no re-login is required.
+                    onboarding (delivered over email/SMS), and by any logged-in user who wants to rotate
+                    their password.
+
+                    **On success the caller is forced to re-authenticate**: the access token used for this
+                    call is added to the denylist, every refresh token for the user is revoked, and the
+                    user's `token_version` is bumped so any other cached JWT is rejected fleet-wide. The
+                    FE must redirect to the login screen and obtain fresh tokens with the new password.
                     """)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -853,5 +860,92 @@ public class AuthController {
                     .body(ApiResult.error(HttpStatus.BAD_REQUEST, "Invalid or expired OTP"));
         }
         return ResponseEntity.ok(ApiResult.ok("OTP verified", null));
+    }
+
+    @PostMapping("/forgot-password")
+    @SecurityRequirements()
+    @Operation(summary = "Start a password reset (send OTP by phone or email)",
+            description = """
+                    Sends a 6-digit password-reset code so the owner can set a new password via
+                    `POST /auth/reset-password`. Identify the account by EITHER `phoneNumber` OR `email`;
+                    the code is delivered on the matching channel — SMS (WhatsApp fallback) for a phone,
+                    email for an email. If both are supplied, email is used.
+
+                    **Always returns 200** with the same message whether or not the account exists — this is
+                    deliberate, so the endpoint can't be used to discover which numbers/emails have accounts.
+                    A code is actually sent only when the identifier belongs to an existing user.
+
+                    **Rate limit:** shares the OTP quota — at most 3 codes per identifier per 10-minute
+                    window, then a 30-minute lockout (HTTP 429).
+                    """)
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "Request accepted (a code is sent only if the identifier is registered)",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "If that account exists, a reset code has been sent.",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Neither phoneNumber nor email supplied"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429", description = "OTP quota exceeded — try again after the lockout expires")
+    })
+    public ResponseEntity<ApiResult<Void>> forgotPassword(@Valid @RequestBody ForgotPasswordRequestDTO request) {
+        log.info("Forgot-password request via={}",
+                request.getEmail() != null && !request.getEmail().isBlank() ? "email" : "phone");
+        try {
+            passwordResetService.requestReset(request.getPhoneNumber(), request.getEmail());
+        } catch (OtpService.OtpRateLimitException e) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .body(ApiResult.error(HttpStatus.TOO_MANY_REQUESTS, e.getMessage()));
+        }
+        // Same response regardless of whether the account exists (anti-enumeration).
+        return ResponseEntity.ok(ApiResult.ok("If that account exists, a reset code has been sent.", null));
+    }
+
+    @PostMapping("/reset-password")
+    @SecurityRequirements()
+    @Operation(summary = "Complete a password reset (verify OTP + set new password)",
+            description = """
+                    Verifies the reset OTP from `POST /auth/forgot-password` and sets the new password. The
+                    new password is entered twice (`newPassword` + `confirmPassword`); they must match.
+
+                    On success the account is cleaned up for a fresh login: every refresh token is revoked,
+                    `token_version` is bumped (so any stray JWT is rejected fleet-wide), and any failed-login
+                    lockout is cleared. The FE should send the user to the login screen with the new password.
+
+                    The confirm-match is checked BEFORE the OTP is consumed, so a typo in `confirmPassword`
+                    lets the user retry with the same code.
+                    """)
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "Password reset",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Password reset. Please log in with your new password.",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "Passwords don't match, OTP invalid/expired, or validation failure",
+                    content = @Content(mediaType = "application/json",
+                            examples = {
+                                    @ExampleObject(name = "Mismatch", value = """
+                                            { "code": "400 BAD_REQUEST", "message": "Passwords do not match", "data": null }"""),
+                                    @ExampleObject(name = "Bad code", value = """
+                                            { "code": "400 BAD_REQUEST", "message": "Invalid or expired code", "data": null }""")
+                            }))
+    })
+    public ResponseEntity<ApiResult<Void>> resetPassword(HttpServletRequest httpRequest,
+                                                         @Valid @RequestBody ResetPasswordRequestDTO request) {
+        log.info("Reset-password attempt via={}",
+                request.getEmail() != null && !request.getEmail().isBlank() ? "email" : "phone");
+        passwordResetService.resetPassword(request.getPhoneNumber(), request.getEmail(), request.getOtp(),
+                request.getNewPassword(), request.getConfirmPassword(), auditContext(httpRequest));
+        return ResponseEntity.ok(ApiResult.ok("Password reset. Please log in with your new password.", null));
     }
 }

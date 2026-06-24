@@ -1,5 +1,6 @@
 package com.innbucks.userservice.service;
 
+import com.innbucks.userservice.client.EmailNotificationClient;
 import com.innbucks.userservice.client.NotificationDeliveryException;
 import com.innbucks.userservice.util.MsisdnMasking;
 import com.innbucks.userservice.client.SmsNotificationClient;
@@ -48,6 +49,7 @@ public class OtpService {
     private final com.innbucks.userservice.integration.LoyaltyServiceClient loyaltyServiceClient;
     private final WhatsAppNotificationClient whatsAppNotificationClient;
     private final SmsNotificationClient smsNotificationClient;
+    private final EmailNotificationClient emailNotificationClient;
 
     /** Deployment country (ISO-3166-1 alpha-2) — single SMS gateway per
      *  deployment, so a non-domestic MSISDN must skip SMS and go straight to
@@ -77,25 +79,86 @@ public class OtpService {
      */
     @Transactional
     public boolean verifyOtp(String phoneNumber, String code) {
-        Instant now = Instant.now();
-        int consumed = otpRepository.consume(phoneNumber, code, now);
-        if (consumed > 0) {
-            retryRepository.findByPhoneNumber(phoneNumber).ifPresent(retryRepository::delete);
+        if (consumeOtp(phoneNumber, code)) {
             finalizeVerification(phoneNumber);
             log.info("OTP verified phone={}", MsisdnMasking.mask(phoneNumber));
             return true;
         }
+        log.warn("OTP verification failed phone={}", MsisdnMasking.mask(phoneNumber));
+        return false;
+    }
 
+    /**
+     * Send a password-reset OTP to a PHONE (SMS, WhatsApp fallback). The OTP is
+     * keyed by the phone. The existing-user gate lives in PasswordResetService
+     * (which resolves the user first), so this just mints + dispatches. Same
+     * rate-limit + single-active-OTP semantics as {@link #sendOtp}.
+     */
+    @Transactional
+    public void sendPasswordResetOtpToPhone(String phoneNumber) {
+        Instant now = Instant.now();
+        enforceRetryQuota(phoneNumber, now);
+        String code = generateCode();
+        replaceOtp(phoneNumber, now, code);
+        dispatchResetCode(phoneNumber, code);
+    }
+
+    /**
+     * Send a password-reset OTP to an EMAIL. The OTP is keyed by the email
+     * address (so the verify step uses the same identifier). Used when the user
+     * starts the reset with their email rather than their phone — system users
+     * are email-first and may have no phone. Plain-text email via the InnBucks
+     * notification API.
+     */
+    @Transactional
+    public void sendPasswordResetOtpToEmail(String email) {
+        Instant now = Instant.now();
+        enforceRetryQuota(email, now);
+        String code = generateCode();
+        replaceOtp(email, now, code);
+        emailNotificationClient.sendEmail(email,
+                "Your InnBucks password reset code",
+                "Your password reset code is " + code + ". It expires in " + OTP_TTL.toMinutes()
+                        + " minutes. If you didn't request this, you can ignore this message.",
+                "PWDRESET-OTP-" + System.currentTimeMillis());
+    }
+
+    /**
+     * Verify + consume a password-reset OTP. Same consume / failed-attempt
+     * semantics as {@link #verifyOtp} but WITHOUT {@link #finalizeVerification}
+     * — a forgot-password caller is an existing user proving phone ownership,
+     * not a customer registration to materialise (or a phoneVerified flip).
+     */
+    @Transactional
+    public boolean verifyPasswordResetOtp(String phoneNumber, String code) {
+        boolean ok = consumeOtp(phoneNumber, code);
+        log.info("Password-reset OTP verify phone={} ok={}", MsisdnMasking.mask(phoneNumber), ok);
+        return ok;
+    }
+
+    /**
+     * Atomically consume the OTP; on a wrong code, bump the failed-attempt
+     * counter (invalidating the OTP after {@link #MAX_FAILED_VERIFICATIONS}).
+     * Returns true iff the code matched a live OTP. Shared by the registration
+     * verify and the password-reset verify.
+     */
+    private boolean consumeOtp(String phoneNumber, String code) {
+        Instant now = Instant.now();
+        int consumed = otpRepository.consume(phoneNumber, code, now);
+        if (consumed > 0) {
+            retryRepository.findByPhoneNumber(phoneNumber).ifPresent(retryRepository::delete);
+            return true;
+        }
         otpRepository.findByPhoneNumber(phoneNumber).ifPresent(otp -> {
             otp.setFailedAttempts(otp.getFailedAttempts() + 1);
             if (otp.getFailedAttempts() >= MAX_FAILED_VERIFICATIONS) {
-                log.warn("OTP invalidated after {} failed attempts phone={}", otp.getFailedAttempts(), MsisdnMasking.mask(phoneNumber));
+                log.warn("OTP invalidated after {} failed attempts phone={}",
+                        otp.getFailedAttempts(), MsisdnMasking.mask(phoneNumber));
                 otpRepository.delete(otp);
             } else {
                 otpRepository.save(otp);
             }
         });
-        log.warn("OTP verification failed phone={}", MsisdnMasking.mask(phoneNumber));
         return false;
     }
 
@@ -160,12 +223,21 @@ public class OtpService {
     }
 
     private void dispatch(String phoneNumber, String code) {
-        // Runs inside the @Transactional sendOtp boundary: if delivery fails,
+        dispatchMessage(phoneNumber, "Your InnBucks verification code is " + code
+                + ". It expires in " + OTP_TTL.toMinutes()
+                + " minutes. Do not share this code with anyone.");
+    }
+
+    private void dispatchResetCode(String phoneNumber, String code) {
+        dispatchMessage(phoneNumber, "Your InnBucks password reset code is " + code
+                + ". It expires in " + OTP_TTL.toMinutes()
+                + " minutes. If you didn't request this, you can ignore this message.");
+    }
+
+    private void dispatchMessage(String phoneNumber, String message) {
+        // Runs inside the @Transactional send boundary: if delivery fails,
         // the persisted OTP and retry-counter roll back for a clean retry.
         // Never log the code itself.
-        String message = "Your InnBucks verification code is " + code
-                + ". It expires in " + OTP_TTL.toMinutes()
-                + " minutes. Do not share this code with anyone.";
 
         // Country-aware channel routing. The InnBucks SMS gateway is currently
         // a single per-country adapter (the ZW deployment ships SMS via the ZW

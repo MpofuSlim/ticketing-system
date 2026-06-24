@@ -952,4 +952,49 @@ class AuthServiceTest {
                 .isInstanceOf(AuthService.PasswordChangeException.class)
                 .hasMessage("New password must differ from current password");
     }
+
+    @Test
+    void changePassword_success_revokesCurrentTokenAndAllRefreshTokens_andBumpsVersion() {
+        // The contract pinned here: on a successful password change the user is
+        // FORCED to re-authenticate. Three things must happen, in addition to
+        // the hash rotation:
+        //   1) tokenVersion is bumped (fleet-wide kill via every JwtFilter),
+        //   2) the access token on THIS call is denylisted (next request 401s
+        //      at the first filter check, not just on version mismatch),
+        //   3) every refresh-token family for the user is revoked (a leaked
+        //      refresh can't silently mint a new access token under the new pw).
+        UserRepository userRepo = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        User user = User.builder()
+                .id(7L).email("alice@x.co").password("hashed-current")
+                .tokenVersion(3L)
+                .roles(EnumSet.of(User.Role.CUSTOMER)).active(true).build();
+        when(userRepo.findByEmail("alice@x.co")).thenReturn(Optional.of(user));
+        when(userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(encoder.matches("current", "hashed-current")).thenReturn(true);
+        when(encoder.matches("new-pw", "hashed-current")).thenReturn(false);
+        when(encoder.encode("new-pw")).thenReturn("hashed-new");
+
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.isTokenValid(anyString())).thenReturn(true);
+        when(jwt.extractEmail(anyString())).thenReturn("alice@x.co");
+        TokenRevocationService rev = mock(TokenRevocationService.class);
+        when(rev.isRevoked(anyString())).thenReturn(false);
+        RefreshTokenRepository refreshRepo = mock(RefreshTokenRepository.class);
+
+        AuthService svc = withLockoutConfig(new AuthService(userRepo, mock(TenantProfileRepository.class),
+                mock(CustomerProfileRepository.class), encoder, jwt, rev,
+                mock(RefreshTokenService.class), refreshRepo, mock(AuditService.class)));
+
+        svc.changePassword("the-access-token", changeReq("current", "new-pw"),
+                com.innbucks.userservice.service.AuditContext.none());
+
+        // (1) Hash + token-version rotation persisted
+        assertEquals("hashed-new", user.getPassword());
+        assertEquals(4L, user.getTokenVersion());
+        // (2) The exact JWT used for this call is denylisted
+        verify(rev).revoke("the-access-token");
+        // (3) Every refresh-token family for the user is revoked
+        verify(refreshRepo).revokeAllForUser(eq(7L), any());
+    }
 }

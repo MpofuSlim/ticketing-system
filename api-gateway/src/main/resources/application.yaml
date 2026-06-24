@@ -73,6 +73,23 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
+            # Forgot-password: the request step sends an OTP (SMS cost + abuse
+            # vector), so rate-limit it like /auth/otp/**. Matched BEFORE the
+            # /auth/** catch-all below. reset-password is included so a brute
+            # force of the code is throttled per-IP on top of the per-phone OTP
+            # failed-attempt cap.
+            - id: auth-password-reset-route
+              uri: lb://user-service
+              predicates:
+                - Path=/auth/forgot-password,/auth/reset-password
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${AUTH_OTP_RATE_LIMIT_REPLENISH_PER_SECOND:1}
+                    redis-rate-limiter.burstCapacity: ${AUTH_OTP_RATE_LIMIT_BURST_CAPACITY:3}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
+
             - id: user-auth-route
               uri: lb://user-service
               predicates:

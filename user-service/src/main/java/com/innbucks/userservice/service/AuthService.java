@@ -386,12 +386,21 @@ public class AuthService implements ApplicationEventPublisherAware {
 
         user.setPassword(passwordEncoder.encode(request.getNewPassword()));
         user.setMustChangePassword(false);
-        // Bump the session epoch — the current JWT may carry
-        // mustChangePassword: true; every service's JwtFilter compares the
+        // Bump the session epoch — every service's JwtFilter compares the
         // claim's tokenVersion against users.token_version and rejects on
-        // mismatch. The next login mints a fresh JWT with the flag off.
+        // mismatch, so this is the fleet-wide kill switch for the old JWT.
         user.setTokenVersion(user.getTokenVersion() + 1);
         userRepository.save(user);
+
+        // Force a re-login: defence-in-depth on top of the tokenVersion bump.
+        //   1) Denylist the exact access token used for THIS call so the very
+        //      next request is rejected at the first filter check (not the
+        //      version-mismatch check) and on the gateway too.
+        //   2) Revoke every refresh-token family for this user so a stolen /
+        //      cached refresh can't silently mint a fresh access token under
+        //      the new password.
+        tokenRevocationService.revoke(token);
+        refreshTokenRepository.revokeAllForUser(user.getId(), Instant.now());
         log.info("Password changed userId={} subject={}", user.getId(), subject);
         auditService.recordSuccess(
                 AuditEventType.AUTH_PASSWORD_CHANGED,
