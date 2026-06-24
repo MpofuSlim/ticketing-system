@@ -19,3 +19,9 @@ jwt:
   secret: test-test-test-test-test-test-test-test
   expiration: 3600000
   refresh-expiration: 86400000
+
+# Valid Base64 32-byte AES-GCM key so MfaSecretCipher constructs and the
+# @SpringBootTest context loads. NOT a real key — test-only.
+mfa:
+  encryption-key: bWZhLXRlc3Qta2V5LTAwMDAwMDAwMDAwMDAwMDAtMzI=
+  issuer: InnBucks-Test
