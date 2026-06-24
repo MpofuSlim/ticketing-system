@@ -49,7 +49,8 @@ class InvoiceServiceTest {
         invoices = mock(EventInvoiceRepository.class);
         generator = mock(InvoiceGenerator.class);
         metrics = mock(InvoiceMetrics.class);
-        service = new InvoiceService(aggregation, invoices, generator, metrics, "USD");
+        service = new InvoiceService(aggregation, invoices, generator, metrics,
+                mock(InvoiceNotifier.class), "USD");
     }
 
     @Test

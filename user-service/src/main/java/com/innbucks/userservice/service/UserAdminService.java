@@ -102,8 +102,50 @@ public class UserAdminService {
 
         if (firstApproval) {
             notifyApproval(saved, tempPassword);
+        } else if (!active) {
+            notifyDeactivation(saved);
         }
         return saved;
+    }
+
+    /**
+     * Tell a user their account was deactivated (they can no longer sign in).
+     * Best-effort email -> SMS, branded by audience (InnBucks for customers,
+     * SwiftInn for system users). A delivery failure never affects the
+     * already-committed deactivation. Not sent on the SUPER_ADMIN path (guarded
+     * earlier) or on (re)activation.
+     */
+    private void notifyDeactivation(User user) {
+        String brand = user.hasRole(User.Role.CUSTOMER) ? "InnBucks" : "SwiftInn";
+        String ref = "ACCOUNT-DEACTIVATED-" + user.getId();
+        String subject = "Your " + brand + " account has been deactivated";
+        String name = (user.getFirstName() != null && !user.getFirstName().isBlank())
+                ? user.getFirstName() : "there";
+        String message = "Hi " + name + ",\n\n"
+                + "Your " + brand + " account has been deactivated and you can no longer sign in. "
+                + "If you believe this was a mistake, please contact your administrator.\n\n"
+                + "— The " + brand + " Team";
+
+        String email = user.getEmail();
+        if (email != null && !email.isBlank()) {
+            try {
+                emailNotificationClient.sendEmail(email, subject, message, ref);
+                log.info("Deactivation email sent userId={}", user.getId());
+                return;
+            } catch (RuntimeException ex) {
+                log.warn("Deactivation email failed userId={}, trying SMS: {}", user.getId(), ex.getMessage());
+            }
+        }
+        String phone = user.getPhoneNumber();
+        if (phone != null && !phone.isBlank()) {
+            try {
+                smsNotificationClient.sendSms(phone, message, ref);
+                log.info("Deactivation SMS sent userId={}", user.getId());
+            } catch (RuntimeException ex) {
+                log.warn("Deactivation notification failed on all channels userId={} "
+                        + "(account still deactivated): {}", user.getId(), ex.getMessage());
+            }
+        }
     }
 
     /**
