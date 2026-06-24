@@ -308,4 +308,77 @@ class OtpServiceTest {
         verifyNoInteractions(whatsApp);
     }
 
+    // ---- password-reset OTP -------------------------------------------------
+
+    @Test
+    void sendPasswordResetOtp_unknownPhone_isSilentNoOp() {
+        OtpRepository otpRepo = mock(OtpRepository.class);
+        OtpRetryAttemptRepository retryRepo = mock(OtpRetryAttemptRepository.class);
+        UserRepository userRepo = mock(UserRepository.class);
+        WhatsAppNotificationClient whatsApp = mock(WhatsAppNotificationClient.class);
+        SmsNotificationClient sms = mock(SmsNotificationClient.class);
+        when(userRepo.findByPhoneNumber("+263771234567")).thenReturn(Optional.empty());
+
+        newService(otpRepo, retryRepo, userRepo, mock(CustomerProfileRepository.class),
+                mock(PendingRegistrationRepository.class), whatsApp, sms)
+                .sendPasswordResetOtp("+263771234567");
+
+        // No code minted, nothing dispatched, quota untouched — no enumeration, no spam.
+        verify(otpRepo, never()).save(any());
+        verifyNoInteractions(sms, whatsApp, retryRepo);
+    }
+
+    @Test
+    void sendPasswordResetOtp_knownUser_sendsResetCode() {
+        OtpRepository otpRepo = mock(OtpRepository.class);
+        OtpRetryAttemptRepository retryRepo = mock(OtpRetryAttemptRepository.class);
+        UserRepository userRepo = mock(UserRepository.class);
+        WhatsAppNotificationClient whatsApp = mock(WhatsAppNotificationClient.class);
+        SmsNotificationClient sms = mock(SmsNotificationClient.class);
+        when(retryRepo.findByPhoneNumber(anyString())).thenReturn(Optional.empty());
+        when(userRepo.findByPhoneNumber("+263771234567"))
+                .thenReturn(Optional.of(User.builder().id(1L).phoneNumber("+263771234567").build()));
+
+        newService(otpRepo, retryRepo, userRepo, mock(CustomerProfileRepository.class),
+                mock(PendingRegistrationRepository.class), whatsApp, sms)
+                .sendPasswordResetOtp("+263771234567");
+
+        verify(otpRepo).save(any(Otp.class));
+        verify(sms).sendSms(eq("+263771234567"), contains("password reset code"), anyString());
+    }
+
+    @Test
+    void verifyPasswordResetOtp_correct_consumes_withoutCustomerFinalisation() {
+        OtpRepository otpRepo = mock(OtpRepository.class);
+        OtpRetryAttemptRepository retryRepo = mock(OtpRetryAttemptRepository.class);
+        PendingRegistrationRepository pendingRepo = mock(PendingRegistrationRepository.class);
+        when(otpRepo.consume(eq("+263771234567"), eq("123456"), any())).thenReturn(1);
+        when(retryRepo.findByPhoneNumber(anyString())).thenReturn(Optional.empty());
+
+        boolean ok = newService(otpRepo, retryRepo, mock(UserRepository.class),
+                mock(CustomerProfileRepository.class), pendingRepo)
+                .verifyPasswordResetOtp("+263771234567", "123456");
+
+        assertTrue(ok);
+        // The registration-only side effect must NOT run for a password reset.
+        verify(pendingRepo, never()).findByPhoneNumber(anyString());
+    }
+
+    @Test
+    void verifyPasswordResetOtp_wrong_returnsFalse_andBumpsFailedAttempts() {
+        OtpRepository otpRepo = mock(OtpRepository.class);
+        OtpRetryAttemptRepository retryRepo = mock(OtpRetryAttemptRepository.class);
+        when(otpRepo.consume(anyString(), anyString(), any())).thenReturn(0);
+        Otp live = Otp.builder().phoneNumber("+263771234567").code("999999").failedAttempts(0).build();
+        when(otpRepo.findByPhoneNumber("+263771234567")).thenReturn(Optional.of(live));
+
+        boolean ok = newService(otpRepo, retryRepo, mock(UserRepository.class),
+                mock(CustomerProfileRepository.class), mock(PendingRegistrationRepository.class))
+                .verifyPasswordResetOtp("+263771234567", "000000");
+
+        assertFalse(ok);
+        ArgumentCaptor<Otp> saved = ArgumentCaptor.forClass(Otp.class);
+        verify(otpRepo).save(saved.capture());
+        assertEquals(1, saved.getValue().getFailedAttempts());
+    }
 }

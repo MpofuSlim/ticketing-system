@@ -43,7 +43,8 @@ class GatewayRouteTableTest {
 
     private static final List<String> EXPECTED_ROUTE_IDS = List.of(
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
-            "auth-otp-route", "user-auth-route", "cells-lookup-route", "user-admin-route",
+            "auth-otp-route", "auth-password-reset-route", "user-auth-route",
+            "cells-lookup-route", "user-admin-route",
             "booking-event-organizer-reports-route", "user-event-organizer-route",
             "user-internal-deny", "user-self-route",
             "event-availability-deny", "event-service-route",
@@ -78,7 +79,7 @@ class GatewayRouteTableTest {
 
     private static final List<String> RATE_LIMITED_ROUTES = List.of(
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
-            "auth-otp-route",
+            "auth-otp-route", "auth-password-reset-route",
             "user-admin-route", "user-event-organizer-route", "booking-event-organizer-reports-route",
             "user-self-route", "event-service-route",
             "seat-service-seat-route", "seat-service-category-route",
@@ -226,7 +227,8 @@ class GatewayRouteTableTest {
     void authSensitiveSubRoutesPrecedeTheAuthCatchAll() {
         List<String> order = orderedIds();
         int catchAll = order.indexOf("user-auth-route");
-        List.of("auth-customer-lookup-route", "auth-customer-route", "auth-register-route", "auth-otp-route")
+        List.of("auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
+                        "auth-otp-route", "auth-password-reset-route")
                 .forEach(id -> assertThat(order.indexOf(id))
                         .as("%s must match before the /auth/** catch-all", id)
                         .isBetween(0, catchAll - 1));
@@ -247,6 +249,8 @@ class GatewayRouteTableTest {
                 .containsExactly("/auth/register");
         assertThat(predicateArgs("auth-otp-route", "Path"))
                 .containsExactly("/auth/otp/**");
+        assertThat(predicateArgs("auth-password-reset-route", "Path"))
+                .containsExactly("/auth/forgot-password", "/auth/reset-password");
     }
 
     @Test
