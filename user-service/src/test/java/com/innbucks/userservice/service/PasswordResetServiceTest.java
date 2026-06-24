@@ -29,6 +29,9 @@ class PasswordResetServiceTest {
     private AuditService auditService;
     private PasswordResetService service;
 
+    private static final String PHONE = "+263771234567";
+    private static final String EMAIL = "user@example.com";
+
     @BeforeEach
     void setUp() {
         otpService = mock(OtpService.class);
@@ -40,28 +43,63 @@ class PasswordResetServiceTest {
                 refreshTokenRepository, auditService);
     }
 
+    // ---- requestReset --------------------------------------------------------
+
     @Test
-    void requestReset_delegatesToOtpService() {
-        service.requestReset("+263771234567");
-        verify(otpService).sendPasswordResetOtp("+263771234567");
+    void requestReset_byPhone_knownUser_sendsPhoneOtp() {
+        when(userRepository.findByPhoneNumber(PHONE)).thenReturn(Optional.of(new User()));
+        service.requestReset(PHONE, null);
+        verify(otpService).sendPasswordResetOtpToPhone(PHONE);
+        verify(otpService, never()).sendPasswordResetOtpToEmail(any());
     }
 
     @Test
+    void requestReset_byEmail_knownUser_sendsEmailOtp() {
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(new User()));
+        service.requestReset(null, EMAIL);
+        verify(otpService).sendPasswordResetOtpToEmail(EMAIL);
+        verify(otpService, never()).sendPasswordResetOtpToPhone(any());
+    }
+
+    @Test
+    void requestReset_emailWinsWhenBothSupplied() {
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(new User()));
+        service.requestReset(PHONE, EMAIL);
+        verify(otpService).sendPasswordResetOtpToEmail(EMAIL);
+        verify(otpService, never()).sendPasswordResetOtpToPhone(any());
+    }
+
+    @Test
+    void requestReset_unknownIdentifier_isSilentNoOp() {
+        when(userRepository.findByPhoneNumber(PHONE)).thenReturn(Optional.empty());
+        service.requestReset(PHONE, null);
+        verifyNoInteractions(otpService);
+    }
+
+    @Test
+    void requestReset_neitherProvided_throws() {
+        assertThatThrownBy(() -> service.requestReset(null, "  "))
+                .isInstanceOf(AuthService.PasswordChangeException.class)
+                .hasMessageContaining("Provide a phone number or email");
+    }
+
+    // ---- resetPassword -------------------------------------------------------
+
+    @Test
     void resetPassword_passwordsMismatch_throws_andNeverConsumesOtp() {
-        assertThatThrownBy(() -> service.resetPassword("+263771234567", "123456",
+        assertThatThrownBy(() -> service.resetPassword(PHONE, null, "123456",
                 "newpass12", "different34", AuditContext.none()))
                 .isInstanceOf(AuthService.PasswordChangeException.class)
                 .hasMessage("Passwords do not match");
-        // Confirm-match is checked before the OTP is touched — the code isn't burned.
         verifyNoInteractions(otpService);
         verify(userRepository, never()).save(any());
     }
 
     @Test
     void resetPassword_badOtp_throws_andDoesNotChangePassword() {
-        when(otpService.verifyPasswordResetOtp("+263771234567", "000000")).thenReturn(false);
+        when(otpService.verifyPasswordResetOtp(PHONE, "000000")).thenReturn(false);
 
-        assertThatThrownBy(() -> service.resetPassword("+263771234567", "000000",
+        assertThatThrownBy(() -> service.resetPassword(PHONE, null, "000000",
                 "newpass12", "newpass12", AuditContext.none()))
                 .isInstanceOf(AuthService.PasswordChangeException.class)
                 .hasMessage("Invalid or expired code");
@@ -70,18 +108,18 @@ class PasswordResetServiceTest {
     }
 
     @Test
-    void resetPassword_success_setsPassword_revokesRefresh_bumpsVersion_clearsLockout() {
+    void resetPassword_phonePath_success_setsPassword_revokes_bumps_unlocks() {
         User user = User.builder()
-                .id(5L).phoneNumber("+263771234567").password("old-hash")
+                .id(5L).phoneNumber(PHONE).password("old-hash")
                 .tokenVersion(2L).failedLoginAttempts(4)
                 .lockedUntil(Instant.now().plusSeconds(600))
                 .build();
-        when(otpService.verifyPasswordResetOtp("+263771234567", "123456")).thenReturn(true);
-        when(userRepository.findByPhoneNumber("+263771234567")).thenReturn(Optional.of(user));
+        when(otpService.verifyPasswordResetOtp(PHONE, "123456")).thenReturn(true);
+        when(userRepository.findByPhoneNumber(PHONE)).thenReturn(Optional.of(user));
         when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
         when(passwordEncoder.encode("newpass12")).thenReturn("new-hash");
 
-        service.resetPassword("+263771234567", "123456", "newpass12", "newpass12", AuditContext.none());
+        service.resetPassword(PHONE, null, "123456", "newpass12", "newpass12", AuditContext.none());
 
         assertThat(user.getPassword()).isEqualTo("new-hash");
         assertThat(user.getTokenVersion()).isEqualTo(3L);
@@ -90,5 +128,20 @@ class PasswordResetServiceTest {
         verify(refreshTokenRepository).revokeAllForUser(eq(5L), any());
         verify(auditService).recordSuccess(eq(AuditEventType.AUTH_PASSWORD_CHANGED),
                 any(), any(), any(), any(), any(), any());
+    }
+
+    @Test
+    void resetPassword_emailPath_success_resolvesUserByEmail() {
+        User user = User.builder().id(8L).email(EMAIL).password("old").tokenVersion(0L).build();
+        when(otpService.verifyPasswordResetOtp(EMAIL, "123456")).thenReturn(true);
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(user));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(passwordEncoder.encode("newpass12")).thenReturn("new-hash");
+
+        service.resetPassword(null, EMAIL, "123456", "newpass12", "newpass12", AuditContext.none());
+
+        assertThat(user.getPassword()).isEqualTo("new-hash");
+        verify(otpService).verifyPasswordResetOtp(EMAIL, "123456");   // OTP keyed by email
+        verify(refreshTokenRepository).revokeAllForUser(eq(8L), any());
     }
 }

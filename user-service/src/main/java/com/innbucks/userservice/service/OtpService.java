@@ -1,5 +1,6 @@
 package com.innbucks.userservice.service;
 
+import com.innbucks.userservice.client.EmailNotificationClient;
 import com.innbucks.userservice.client.NotificationDeliveryException;
 import com.innbucks.userservice.util.MsisdnMasking;
 import com.innbucks.userservice.client.SmsNotificationClient;
@@ -48,6 +49,7 @@ public class OtpService {
     private final com.innbucks.userservice.integration.LoyaltyServiceClient loyaltyServiceClient;
     private final WhatsAppNotificationClient whatsAppNotificationClient;
     private final SmsNotificationClient smsNotificationClient;
+    private final EmailNotificationClient emailNotificationClient;
 
     /** Deployment country (ISO-3166-1 alpha-2) — single SMS gateway per
      *  deployment, so a non-domestic MSISDN must skip SMS and go straight to
@@ -87,23 +89,38 @@ public class OtpService {
     }
 
     /**
-     * Send a password-reset OTP — but ONLY to a phone that belongs to an
-     * existing user. The caller always responds 200 regardless (see
-     * PasswordResetService), so this silently no-ops for an unknown phone: no
-     * SMS spam, no account enumeration. Same rate-limit + single-active-OTP
-     * semantics as {@link #sendOtp}.
+     * Send a password-reset OTP to a PHONE (SMS, WhatsApp fallback). The OTP is
+     * keyed by the phone. The existing-user gate lives in PasswordResetService
+     * (which resolves the user first), so this just mints + dispatches. Same
+     * rate-limit + single-active-OTP semantics as {@link #sendOtp}.
      */
     @Transactional
-    public void sendPasswordResetOtp(String phoneNumber) {
-        if (userRepository.findByPhoneNumber(phoneNumber).isEmpty()) {
-            log.info("Password-reset OTP for unknown phone={} — no-op", MsisdnMasking.mask(phoneNumber));
-            return;
-        }
+    public void sendPasswordResetOtpToPhone(String phoneNumber) {
         Instant now = Instant.now();
         enforceRetryQuota(phoneNumber, now);
         String code = generateCode();
         replaceOtp(phoneNumber, now, code);
         dispatchResetCode(phoneNumber, code);
+    }
+
+    /**
+     * Send a password-reset OTP to an EMAIL. The OTP is keyed by the email
+     * address (so the verify step uses the same identifier). Used when the user
+     * starts the reset with their email rather than their phone — system users
+     * are email-first and may have no phone. Plain-text email via the InnBucks
+     * notification API.
+     */
+    @Transactional
+    public void sendPasswordResetOtpToEmail(String email) {
+        Instant now = Instant.now();
+        enforceRetryQuota(email, now);
+        String code = generateCode();
+        replaceOtp(email, now, code);
+        emailNotificationClient.sendEmail(email,
+                "Your InnBucks password reset code",
+                "Your password reset code is " + code + ". It expires in " + OTP_TTL.toMinutes()
+                        + " minutes. If you didn't request this, you can ignore this message.",
+                "PWDRESET-OTP-" + System.currentTimeMillis());
     }
 
     /**

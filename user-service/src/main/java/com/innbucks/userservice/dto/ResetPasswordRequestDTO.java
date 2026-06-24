@@ -14,12 +14,17 @@ import lombok.Data;
  */
 @Data
 @Schema(name = "ResetPasswordRequest",
-        description = "Complete a forgot-password reset: OTP + the new password entered twice.")
+        description = "Complete a forgot-password reset: the identifier used to start it (phone OR email) "
+                + "+ the OTP + the new password entered twice.")
 public class ResetPasswordRequestDTO {
 
-    @NotBlank(message = "Phone number is required")
-    @Schema(description = "Phone number the reset OTP was sent to.", example = "+263771234567")
+    @Schema(description = "Phone number the reset started with (if started by phone). Provide this OR email.",
+            example = "+263771234567", nullable = true)
     private String phoneNumber;
+
+    @Schema(description = "Email the reset started with (if started by email). Provide this OR phoneNumber.",
+            example = "user@example.com", nullable = true)
+    private String email;
 
     @NotBlank(message = "OTP code is required")
     @Pattern(regexp = "\\d{6}", message = "OTP must be 6 digits")

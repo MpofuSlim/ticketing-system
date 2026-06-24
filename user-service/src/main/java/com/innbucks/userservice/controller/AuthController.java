@@ -864,42 +864,45 @@ public class AuthController {
 
     @PostMapping("/forgot-password")
     @SecurityRequirements()
-    @Operation(summary = "Start a password reset (send OTP)",
+    @Operation(summary = "Start a password reset (send OTP by phone or email)",
             description = """
-                    Sends a 6-digit password-reset code to the supplied phone number by SMS (WhatsApp
-                    fallback) so the owner can set a new password via `POST /auth/reset-password`.
+                    Sends a 6-digit password-reset code so the owner can set a new password via
+                    `POST /auth/reset-password`. Identify the account by EITHER `phoneNumber` OR `email`;
+                    the code is delivered on the matching channel — SMS (WhatsApp fallback) for a phone,
+                    email for an email. If both are supplied, email is used.
 
-                    **Always returns 200** with the same message whether or not the number is registered —
-                    this is deliberate, so the endpoint can't be used to discover which numbers have accounts.
-                    A code is actually sent only when the number belongs to an existing user.
+                    **Always returns 200** with the same message whether or not the account exists — this is
+                    deliberate, so the endpoint can't be used to discover which numbers/emails have accounts.
+                    A code is actually sent only when the identifier belongs to an existing user.
 
-                    **Rate limit:** shares the OTP quota — at most 3 codes per phone per 10-minute window,
-                    then a 30-minute lockout (HTTP 429).
+                    **Rate limit:** shares the OTP quota — at most 3 codes per identifier per 10-minute
+                    window, then a 30-minute lockout (HTTP 429).
                     """)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
-                    description = "Request accepted (a code is sent only if the number is registered)",
+                    description = "Request accepted (a code is sent only if the identifier is registered)",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     {
                                       "code": "200 OK",
-                                      "message": "If that number has an account, a reset code has been sent.",
+                                      "message": "If that account exists, a reset code has been sent.",
                                       "data": null
                                     }
                                     """))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Missing or invalid phone number"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Neither phoneNumber nor email supplied"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429", description = "OTP quota exceeded — try again after the lockout expires")
     })
-    public ResponseEntity<ApiResult<Void>> forgotPassword(@Valid @RequestBody OtpRequestDTO request) {
-        log.info("Forgot-password request phone={}", MsisdnMasking.mask(request.getPhoneNumber()));
+    public ResponseEntity<ApiResult<Void>> forgotPassword(@Valid @RequestBody ForgotPasswordRequestDTO request) {
+        log.info("Forgot-password request via={}",
+                request.getEmail() != null && !request.getEmail().isBlank() ? "email" : "phone");
         try {
-            passwordResetService.requestReset(request.getPhoneNumber());
+            passwordResetService.requestReset(request.getPhoneNumber(), request.getEmail());
         } catch (OtpService.OtpRateLimitException e) {
             return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
                     .body(ApiResult.error(HttpStatus.TOO_MANY_REQUESTS, e.getMessage()));
         }
-        // Same response regardless of whether the number was registered.
-        return ResponseEntity.ok(ApiResult.ok("If that number has an account, a reset code has been sent.", null));
+        // Same response regardless of whether the account exists (anti-enumeration).
+        return ResponseEntity.ok(ApiResult.ok("If that account exists, a reset code has been sent.", null));
     }
 
     @PostMapping("/reset-password")
@@ -939,8 +942,9 @@ public class AuthController {
     })
     public ResponseEntity<ApiResult<Void>> resetPassword(HttpServletRequest httpRequest,
                                                          @Valid @RequestBody ResetPasswordRequestDTO request) {
-        log.info("Reset-password attempt phone={}", MsisdnMasking.mask(request.getPhoneNumber()));
-        passwordResetService.resetPassword(request.getPhoneNumber(), request.getOtp(),
+        log.info("Reset-password attempt via={}",
+                request.getEmail() != null && !request.getEmail().isBlank() ? "email" : "phone");
+        passwordResetService.resetPassword(request.getPhoneNumber(), request.getEmail(), request.getOtp(),
                 request.getNewPassword(), request.getConfirmPassword(), auditContext(httpRequest));
         return ResponseEntity.ok(ApiResult.ok("Password reset. Please log in with your new password.", null));
     }

@@ -1,5 +1,6 @@
 package com.innbucks.userservice.service;
 
+import com.innbucks.userservice.client.EmailNotificationClient;
 import com.innbucks.userservice.client.NotificationDeliveryException;
 import com.innbucks.userservice.client.SmsNotificationClient;
 import com.innbucks.userservice.client.WhatsAppNotificationClient;
@@ -45,11 +46,23 @@ class OtpServiceTest {
                                   PendingRegistrationRepository pendingRepo,
                                   WhatsAppNotificationClient whatsApp,
                                   SmsNotificationClient sms) {
+        return newService(otpRepo, retryRepo, userRepo, profileRepo, pendingRepo,
+                whatsApp, sms, mock(EmailNotificationClient.class));
+    }
+
+    private OtpService newService(OtpRepository otpRepo,
+                                  OtpRetryAttemptRepository retryRepo,
+                                  UserRepository userRepo,
+                                  CustomerProfileRepository profileRepo,
+                                  PendingRegistrationRepository pendingRepo,
+                                  WhatsAppNotificationClient whatsApp,
+                                  SmsNotificationClient sms,
+                                  EmailNotificationClient email) {
         // LoyaltyServiceClient.promoteUserByPhone is fired post-OTP-verify but
         // the call is best-effort and never affects assertions in these tests,
         // so a noop mock is fine.
         return new OtpService(otpRepo, retryRepo, userRepo, profileRepo, pendingRepo,
-                mock(LoyaltyServiceClient.class), whatsApp, sms);
+                mock(LoyaltyServiceClient.class), whatsApp, sms, email);
     }
 
     @Test
@@ -311,40 +324,41 @@ class OtpServiceTest {
     // ---- password-reset OTP -------------------------------------------------
 
     @Test
-    void sendPasswordResetOtp_unknownPhone_isSilentNoOp() {
+    void sendPasswordResetOtpToPhone_mintsAndSendsResetCodeViaSms() {
         OtpRepository otpRepo = mock(OtpRepository.class);
         OtpRetryAttemptRepository retryRepo = mock(OtpRetryAttemptRepository.class);
-        UserRepository userRepo = mock(UserRepository.class);
-        WhatsAppNotificationClient whatsApp = mock(WhatsAppNotificationClient.class);
-        SmsNotificationClient sms = mock(SmsNotificationClient.class);
-        when(userRepo.findByPhoneNumber("+263771234567")).thenReturn(Optional.empty());
-
-        newService(otpRepo, retryRepo, userRepo, mock(CustomerProfileRepository.class),
-                mock(PendingRegistrationRepository.class), whatsApp, sms)
-                .sendPasswordResetOtp("+263771234567");
-
-        // No code minted, nothing dispatched, quota untouched — no enumeration, no spam.
-        verify(otpRepo, never()).save(any());
-        verifyNoInteractions(sms, whatsApp, retryRepo);
-    }
-
-    @Test
-    void sendPasswordResetOtp_knownUser_sendsResetCode() {
-        OtpRepository otpRepo = mock(OtpRepository.class);
-        OtpRetryAttemptRepository retryRepo = mock(OtpRetryAttemptRepository.class);
-        UserRepository userRepo = mock(UserRepository.class);
         WhatsAppNotificationClient whatsApp = mock(WhatsAppNotificationClient.class);
         SmsNotificationClient sms = mock(SmsNotificationClient.class);
         when(retryRepo.findByPhoneNumber(anyString())).thenReturn(Optional.empty());
-        when(userRepo.findByPhoneNumber("+263771234567"))
-                .thenReturn(Optional.of(User.builder().id(1L).phoneNumber("+263771234567").build()));
 
-        newService(otpRepo, retryRepo, userRepo, mock(CustomerProfileRepository.class),
+        newService(otpRepo, retryRepo, mock(UserRepository.class), mock(CustomerProfileRepository.class),
                 mock(PendingRegistrationRepository.class), whatsApp, sms)
-                .sendPasswordResetOtp("+263771234567");
+                .sendPasswordResetOtpToPhone("+263771234567");
 
         verify(otpRepo).save(any(Otp.class));
         verify(sms).sendSms(eq("+263771234567"), contains("password reset code"), anyString());
+    }
+
+    @Test
+    void sendPasswordResetOtpToEmail_mintsCodeKeyedByEmail_andSendsEmail() {
+        OtpRepository otpRepo = mock(OtpRepository.class);
+        OtpRetryAttemptRepository retryRepo = mock(OtpRetryAttemptRepository.class);
+        WhatsAppNotificationClient whatsApp = mock(WhatsAppNotificationClient.class);
+        SmsNotificationClient sms = mock(SmsNotificationClient.class);
+        EmailNotificationClient email = mock(EmailNotificationClient.class);
+        when(retryRepo.findByPhoneNumber(anyString())).thenReturn(Optional.empty());
+
+        newService(otpRepo, retryRepo, mock(UserRepository.class), mock(CustomerProfileRepository.class),
+                mock(PendingRegistrationRepository.class), whatsApp, sms, email)
+                .sendPasswordResetOtpToEmail("user@example.com");
+
+        // OTP row is keyed by the email (so verify uses the same identifier).
+        ArgumentCaptor<Otp> saved = ArgumentCaptor.forClass(Otp.class);
+        verify(otpRepo).save(saved.capture());
+        assertEquals("user@example.com", saved.getValue().getPhoneNumber());
+        verify(email).sendEmail(eq("user@example.com"), contains("password reset"),
+                contains("password reset code"), anyString());
+        verifyNoInteractions(sms, whatsApp);
     }
 
     @Test
