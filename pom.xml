@@ -360,6 +360,35 @@
                     </execution>
                 </executions>
             </plugin>
+
+            <!-- JaCoCo line/branch/method coverage across every module.
+                 prepare-agent injects the coverage agent into surefire's
+                 argLine before unit tests run; report reads target/jacoco.exec
+                 and writes target/site/jacoco/{index.html,jacoco.xml} on
+                 `mvn verify`. No coverage thresholds are enforced yet — this
+                 PR measures the baseline; a follow-up sets realistic per-
+                 module minimums (likely 60-70% line) once we know what
+                 current coverage actually is. -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>0.8.13</version>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 

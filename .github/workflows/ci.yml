@@ -51,3 +51,40 @@ jobs:
 
       - name: Build + test + integration-test
         run: ./mvnw -B -ntp verify
+
+      - name: Summarise JaCoCo coverage per module
+        if: always()
+        run: |
+          {
+            echo "## JaCoCo coverage"
+            echo ""
+            echo "| Module | Line % | Branch % | Method % |"
+            echo "|--------|-------:|---------:|---------:|"
+            for xml in $(find . -path '*/target/site/jacoco/jacoco.xml' | sort); do
+              module=$(echo "$xml" | sed 's|^\./||;s|/target.*||')
+              pcts=$(python3 - "$xml" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          root = ET.parse(sys.argv[1]).getroot()
+          out = {}
+          for c in root.findall('counter'):
+              t, m, cv = c.get('type'), int(c.get('missed')), int(c.get('covered'))
+              total = m + cv
+              out[t] = f"{100*cv/total:.1f}" if total else "n/a"
+          print(f"{out.get('LINE','n/a')}|{out.get('BRANCH','n/a')}|{out.get('METHOD','n/a')}")
+          PY
+              )
+              line=$(echo "$pcts" | cut -d'|' -f1)
+              branch=$(echo "$pcts" | cut -d'|' -f2)
+              method=$(echo "$pcts" | cut -d'|' -f3)
+              echo "| ${module} | ${line} | ${branch} | ${method} |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload JaCoCo HTML + XML reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jacoco-coverage
+          path: '**/target/site/jacoco/**'
+          if-no-files-found: warn
+          retention-days: 14
