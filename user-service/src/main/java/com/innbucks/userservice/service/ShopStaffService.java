@@ -19,7 +19,6 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
-import org.springframework.web.util.HtmlUtils;
 
 import java.util.EnumSet;
 import java.util.LinkedHashSet;
@@ -230,8 +229,8 @@ public class ShopStaffService {
             try {
                 emailNotificationClient.sendEmail(
                         email,
-                        "Your InnBucks " + roleLabel + " password has been reset",
-                        buildResetHtml(staff.getFirstName(), email, roleLabel, tempPassword),
+                        "Your SwiftInn " + roleLabel + " password has been reset",
+                        buildResetText(staff.getFirstName(), email, roleLabel, tempPassword),
                         ref);
                 log.info("Password-reset email sent userId={} role={}", staff.getId(), roleLabel);
                 return;
@@ -247,7 +246,7 @@ public class ShopStaffService {
             return;
         }
         String account = (email != null && !email.isBlank()) ? " (" + email + ")" : "";
-        String sms = "Your InnBucks account" + account
+        String sms = "Your SwiftInn account" + account
                 + " password has been reset. New temporary password: " + tempPassword
                 + ". Log in and change it immediately.";
         try {
@@ -259,19 +258,16 @@ public class ShopStaffService {
         }
     }
 
-    private String buildResetHtml(String firstName, String email, String roleLabel, String tempPassword) {
-        String name = (firstName != null && !firstName.isBlank())
-                ? HtmlUtils.htmlEscape(firstName) : "there";
-        return "<p>Hi " + name + ",</p>"
-                + "<p>Your InnBucks <strong>" + roleLabel + "</strong> password has been reset.</p>"
-                + "<p>Use these credentials to sign in:</p>"
-                + "<ul>"
-                + "<li><strong>Username:</strong> " + HtmlUtils.htmlEscape(email) + "</li>"
-                + "<li><strong>New temporary password:</strong> " + HtmlUtils.htmlEscape(tempPassword) + "</li>"
-                + "</ul>"
-                + "<p>For your security, please log in and change your password immediately. "
-                + "If you didn't request this reset, contact your administrator.</p>"
-                + "<p>— The InnBucks Team</p>";
+    private String buildResetText(String firstName, String email, String roleLabel, String tempPassword) {
+        String name = (firstName != null && !firstName.isBlank()) ? firstName : "there";
+        return "Hi " + name + ",\n\n"
+                + "Your SwiftInn " + roleLabel + " password has been reset.\n\n"
+                + "Use these credentials to sign in:\n"
+                + "Username: " + email + "\n"
+                + "New temporary password: " + tempPassword + "\n\n"
+                + "For your security, please log in and change your password immediately. "
+                + "If you didn't request this reset, contact your administrator.\n\n"
+                + "— The SwiftInn Team";
     }
 
     private User buildStaff(String firstName, String middleName, String lastName,
@@ -318,8 +314,8 @@ public class ShopStaffService {
             try {
                 emailNotificationClient.sendEmail(
                         email,
-                        "Welcome to InnBucks — your account is ready",
-                        buildOnboardingHtml(staff.getFirstName(), email, roleLabel, tempPassword),
+                        "Welcome to SwiftInn — your account is ready",
+                        buildOnboardingText(staff.getFirstName(), email, roleLabel, tempPassword),
                         "STAFF-ONBOARD-" + staff.getId());
                 log.info("Onboarding email sent userId={} role={}", staff.getId(), roleLabel);
                 return;
@@ -338,7 +334,7 @@ public class ShopStaffService {
             return;
         }
         String account = (email != null && !email.isBlank()) ? " (" + email + ")" : "";
-        String sms = "Welcome to InnBucks. Your account" + account + " is ready. Temporary password: "
+        String sms = "Welcome to SwiftInn. Your account" + account + " is ready. Temporary password: "
                 + tempPassword + ". Log in and change it immediately.";
         try {
             smsNotificationClient.sendSms(phone, sms, "STAFF-ONBOARD-" + staff.getId());
@@ -355,19 +351,15 @@ public class ShopStaffService {
      * message. The temporary password is a freshly-generated random value
      * (server-side, not caller-supplied) — escaped regardless as defence in depth.
      */
-    private String buildOnboardingHtml(String firstName, String email, String roleLabel, String tempPassword) {
-        String name = (firstName != null && !firstName.isBlank())
-                ? HtmlUtils.htmlEscape(firstName) : "there";
-        return "<p>Hi " + name + ",</p>"
-                + "<p>An InnBucks account has been created for you as a <strong>"
-                + roleLabel + "</strong>.</p>"
-                + "<p>Use these credentials to sign in:</p>"
-                + "<ul>"
-                + "<li><strong>Username:</strong> " + HtmlUtils.htmlEscape(email) + "</li>"
-                + "<li><strong>Temporary password:</strong> " + HtmlUtils.htmlEscape(tempPassword) + "</li>"
-                + "</ul>"
-                + "<p>For your security, please log in and change your password immediately.</p>"
-                + "<p>— The InnBucks Team</p>";
+    private String buildOnboardingText(String firstName, String email, String roleLabel, String tempPassword) {
+        String name = (firstName != null && !firstName.isBlank()) ? firstName : "there";
+        return "Hi " + name + ",\n\n"
+                + "A SwiftInn account has been created for you as a " + roleLabel + ".\n\n"
+                + "Use these credentials to sign in:\n"
+                + "Username: " + email + "\n"
+                + "Temporary password: " + tempPassword + "\n\n"
+                + "For your security, please log in and change your password immediately.\n\n"
+                + "— The SwiftInn Team";
     }
 
     private User requireCaller() {

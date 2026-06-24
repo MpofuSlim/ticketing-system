@@ -188,6 +188,12 @@ services:
       WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-http://localhost:8089}
       WHATSAPP_API_KEY: ${WHATSAPP_API_KEY:?set WHATSAPP_API_KEY in .env}
       NATIONAL_ID_HMAC_SECRET: ${NATIONAL_ID_HMAC_SECRET:?set NATIONAL_ID_HMAC_SECRET in .env (see .env.example) — keep it stable; rotating it orphans existing hashes}
+      # InnBucks notification API (system-user emails). Same creds as payment-service.
+      # Optional: blank → email no-ops and falls back to SMS/WhatsApp.
+      BANK_API_URL: ${BANK_API_URL:-https://staging.innbucks.co.zw}
+      BANK_API_KEY: ${BANK_API_KEY:-}
+      BANK_API_USERNAME: ${BANK_API_USERNAME:-}
+      BANK_API_PASSWORD: ${BANK_API_PASSWORD:-}
     ports:
       - "127.0.0.1:8081:8081"
     healthcheck:
@@ -331,6 +337,12 @@ services:
       INVOICE_DEFAULT_BILLING_CYCLE: ${INVOICE_DEFAULT_BILLING_CYCLE:-MONTHLY}
       INVOICE_DUE_DAYS: ${INVOICE_DUE_DAYS:-14}
       INVOICE_SCHEDULER_ENABLED: ${INVOICE_SCHEDULER_ENABLED:-true}
+      # InnBucks notification API (booking-confirm email). Same creds as payment-service.
+      # Optional: blank → email no-ops and the WhatsApp QR remains the delivery channel.
+      BANK_API_URL: ${BANK_API_URL:-https://staging.innbucks.co.zw}
+      BANK_API_KEY: ${BANK_API_KEY:-}
+      BANK_API_USERNAME: ${BANK_API_USERNAME:-}
+      BANK_API_PASSWORD: ${BANK_API_PASSWORD:-}
     ports:
       - "127.0.0.1:8084:8084"
     healthcheck:

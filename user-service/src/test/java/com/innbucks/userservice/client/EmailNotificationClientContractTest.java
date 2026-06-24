@@ -1,227 +1,174 @@
 package com.innbucks.userservice.client;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
-import com.innbucks.userservice.config.InnbucksGatewayProperties;
+import com.github.tomakehurst.wiremock.stubbing.Scenario;
+import com.innbucks.userservice.config.InnbucksNotifyProperties;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
-
-import java.time.Duration;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Contract test: pins {@link EmailNotificationClient}'s behaviour against each
- * response shape the {@code innbucks-core-gateway} adapter's
- * {@code POST /notifications/email} endpoint returns. Mirrors the audit-#10
- * template established by {@link SmsNotificationClientContractTest} — it exists
- * so any change in the adapter's wire contract (status code, path, error
- * envelope, OUTBOUND payload shape) fails the build at PR time rather than at
- * 2am in prod.
- *
- * <p>WireMock stands in for the adapter; the client's real {@code RestClient}
- * is built with the same shape {@code InnbucksGatewayClientConfig} produces,
- * just pointed at the WireMock port. The stubbed responses match what {@code
- * EmailController#send} actually returns: 200 {@code {reference,status:SUBMITTED}}
- * on a healthy messenger, 502 {@code {reference,status:FAILED,error}} when
- * messenger-interface itself answered non-2xx, and 503 when it was unreachable.
- *
- * <p>Pure JUnit + WireMock, no Spring context — fast and surgical to the wire
- * contract.
+ * Contract test for user-service's {@link EmailNotificationClient} against the
+ * InnBucks public notification API: {@code POST /auth/third-party} for the bearer
+ * then {@code POST /api/notification/email}. Pins the OUTBOUND auth headers +
+ * plain-text body shape and the 401-refresh-and-replay behaviour. A fresh client
+ * per test keeps the token cache empty.
  */
 class EmailNotificationClientContractTest {
 
+    private static final String LOGIN = "/auth/third-party";
+    private static final String EMAIL = "/api/notification/email";
+    private static final String API_KEY = "test-api-key";
+
     private static WireMockServer wireMock;
-    private static EmailNotificationClient client;
 
     @BeforeAll
-    static void startWireMockAndWireClient() {
+    static void start() {
         wireMock = new WireMockServer(wireMockConfig().dynamicPort());
         wireMock.start();
-
-        // Build the EmailNotificationClient with the same RestClient shape the
-        // prod InnbucksGatewayClientConfig produces, just pointed at WireMock —
-        // exercises the real serialisation path; only the host:port differs.
-        InnbucksGatewayProperties props = new InnbucksGatewayProperties();
-        props.setBaseUrl("http://localhost:" + wireMock.port());
-        props.setConnectTimeoutMs(500);
-        props.setReadTimeoutMs(2000);
-
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofMillis(props.getConnectTimeoutMs()));
-        factory.setReadTimeout(Duration.ofMillis(props.getReadTimeoutMs()));
-        RestClient restClient = RestClient.builder()
-                .baseUrl(props.getBaseUrl())
-                .requestFactory(factory)
-                .build();
-        client = new EmailNotificationClient(restClient);
     }
 
     @AfterAll
-    static void stopWireMock() {
-        if (wireMock != null) wireMock.stop();
+    static void stop() {
+        if (wireMock != null) {
+            wireMock.stop();
+        }
     }
 
     @AfterEach
-    void resetStubs() {
+    void reset() {
         wireMock.resetAll();
     }
 
-    @Test
-    @DisplayName("happy path: single HTML recipient, adapter returns 200 → client returns normally")
-    void sendEmail_happyPathSingleHtml_doesNotThrow() {
-        // Recorded shape: { "reference": "r1", "status": "SUBMITTED" }.
-        wireMock.stubFor(post(urlEqualTo("/notifications/email"))
-                .willReturn(aResponse()
-                        .withStatus(200)
-                        .withHeader("Content-Type", "application/json")
-                        .withBody("{\"reference\":\"r1\",\"status\":\"SUBMITTED\"}")));
-
-        client.sendEmail("ops@innbucks.co.zw", "Your InnBucks account", "<p>Welcome</p>", "r1");
-
-        // Verify wire-level contract: path, JSON shape, to[] as an array,
-        // isHtml flag, and the required fields.
-        wireMock.verify(postRequestedFor(urlEqualTo("/notifications/email"))
-                .withHeader("Content-Type", equalTo("application/json"))
-                .withRequestBody(matchingJsonPath("$.to[0]", equalTo("ops@innbucks.co.zw")))
-                .withRequestBody(matchingJsonPath("$.subject", equalTo("Your InnBucks account")))
-                .withRequestBody(matchingJsonPath("$.body", equalTo("<p>Welcome</p>")))
-                .withRequestBody(matchingJsonPath("$.isHtml", equalTo("true")))
-                .withRequestBody(matchingJsonPath("$.reference", equalTo("r1"))));
+    private static EmailNotificationClient client(int port) {
+        InnbucksNotifyProperties props = new InnbucksNotifyProperties();
+        props.setBaseUrl("http://localhost:" + port);
+        props.setApiKey(API_KEY);
+        props.setUsername("test-user");
+        props.setPassword("test-pass");
+        return new EmailNotificationClient(
+                RestClient.builder().baseUrl("http://localhost:" + port).build(),
+                props, new ObjectMapper());
     }
 
     @Test
-    @DisplayName("multi-recipient with cc/bcc, plain text: arrays serialise and blank entries are stripped")
-    void sendEmail_multiRecipientWithCcBcc_serialisesArraysAndStripsBlanks() {
-        wireMock.stubFor(post(urlEqualTo("/notifications/email"))
-                .willReturn(aResponse().withStatus(200)
-                        .withHeader("Content-Type", "application/json")
-                        .withBody("{\"reference\":\"r2\",\"status\":\"SUBMITTED\"}")));
+    @DisplayName("happy path: logs in then posts {subject,message,reference,destinationEmail} with X-Api-Key + Bearer")
+    void sendEmail_postsDocumentedShape() {
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).willReturn(okJson("{\"accessToken\":\"tok-abc\"}")));
+        wireMock.stubFor(post(urlEqualTo(EMAIL)).willReturn(aResponse().withStatus(200)));
 
-        // Blank / null entries in to are dropped; the first two valid addresses
-        // must land at indices 0 and 1.
-        client.sendEmail(
-                new String[]{"a@x.com", "", null, "b@x.com"},
-                new String[]{"cc@x.com"},
-                new String[]{"bcc@x.com"},
-                "Statement", "plain body", false, "r2");
+        client(wireMock.port()).sendEmail("staff@example.com",
+                "Welcome to SwiftInn — your account is ready",
+                "Temporary password: abc123", "STAFF-ONBOARD-1");
 
-        wireMock.verify(postRequestedFor(urlEqualTo("/notifications/email"))
-                .withRequestBody(matchingJsonPath("$.to[0]", equalTo("a@x.com")))
-                .withRequestBody(matchingJsonPath("$.to[1]", equalTo("b@x.com")))
-                .withRequestBody(matchingJsonPath("$.cc[0]", equalTo("cc@x.com")))
-                .withRequestBody(matchingJsonPath("$.bcc[0]", equalTo("bcc@x.com")))
-                .withRequestBody(matchingJsonPath("$.isHtml", equalTo("false"))));
+        wireMock.verify(postRequestedFor(urlEqualTo(LOGIN))
+                .withHeader("X-Api-Key", equalTo(API_KEY))
+                .withRequestBody(matchingJsonPath("$.username", equalTo("test-user")))
+                .withRequestBody(matchingJsonPath("$.password", equalTo("test-pass"))));
+        wireMock.verify(postRequestedFor(urlEqualTo(EMAIL))
+                .withHeader("X-Api-Key", equalTo(API_KEY))
+                .withHeader("Authorization", equalTo("Bearer tok-abc"))
+                .withRequestBody(matchingJsonPath("$.subject", equalTo("Welcome to SwiftInn — your account is ready")))
+                .withRequestBody(matchingJsonPath("$.message", equalTo("Temporary password: abc123")))
+                .withRequestBody(matchingJsonPath("$.destinationEmail", equalTo("staff@example.com")))
+                .withRequestBody(matchingJsonPath("$.reference", equalTo("STAFF-ONBOARD-1"))));
     }
 
     @Test
-    @DisplayName("adapter returns 502 (messenger rejected): throws NotificationDeliveryException with status")
-    void sendEmail_adapterReturns502_throwsWithRejectionDetail() {
-        // From EmailController#body(): { reference, status:FAILED, error }.
-        wireMock.stubFor(post(urlEqualTo("/notifications/email"))
-                .willReturn(aResponse()
-                        .withStatus(502)
-                        .withHeader("Content-Type", "application/json")
-                        .withBody("{\"reference\":\"r3\",\"status\":\"FAILED\","
-                                + "\"error\":\"messenger-interface rejected: HTTP 500\"}")));
+    @DisplayName("blank recipient/subject/message: guarded before any network call")
+    void blankInputs_neverHitTheWire() {
+        EmailNotificationClient client = client(wireMock.port());
+        assertThatThrownBy(() -> client.sendEmail(" ", "s", "m", "r"))
+                .isInstanceOf(NotificationDeliveryException.class);
+        assertThatThrownBy(() -> client.sendEmail("a@b.com", " ", "m", "r"))
+                .isInstanceOf(NotificationDeliveryException.class);
+        assertThatThrownBy(() -> client.sendEmail("a@b.com", "s", " ", "r"))
+                .isInstanceOf(NotificationDeliveryException.class);
+        wireMock.verify(0, postRequestedFor(urlEqualTo(LOGIN)));
+        wireMock.verify(0, postRequestedFor(urlEqualTo(EMAIL)));
+    }
 
-        assertThatThrownBy(() ->
-                client.sendEmail("ops@innbucks.co.zw", "subject", "body", "r3"))
+    @Test
+    @DisplayName("blank reference: auto-fills TKT-EMAIL-<uuid>")
+    void blankReference_autoFilled() {
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).willReturn(okJson("{\"accessToken\":\"tok-abc\"}")));
+        wireMock.stubFor(post(urlEqualTo(EMAIL)).willReturn(aResponse().withStatus(200)));
+
+        client(wireMock.port()).sendEmail("staff@example.com", "subj", "msg", null);
+
+        wireMock.verify(postRequestedFor(urlEqualTo(EMAIL))
+                .withRequestBody(matchingJsonPath("$.reference", matching("TKT-EMAIL-[0-9a-f-]{36}"))));
+    }
+
+    @Test
+    @DisplayName("401 on email: refresh token and replay once, then succeed")
+    void unauthorized_refreshesAndReplays() {
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).willReturn(okJson("{\"accessToken\":\"tok-abc\"}")));
+        wireMock.stubFor(post(urlEqualTo(EMAIL)).inScenario("auth")
+                .whenScenarioStateIs(Scenario.STARTED)
+                .willReturn(aResponse().withStatus(401))
+                .willSetStateTo("retried"));
+        wireMock.stubFor(post(urlEqualTo(EMAIL)).inScenario("auth")
+                .whenScenarioStateIs("retried")
+                .willReturn(aResponse().withStatus(200)));
+
+        assertThatCode(() -> client(wireMock.port()).sendEmail("a@b.com", "s", "m", "r"))
+                .doesNotThrowAnyException();
+
+        wireMock.verify(2, postRequestedFor(urlEqualTo(EMAIL)));
+        wireMock.verify(2, postRequestedFor(urlEqualTo(LOGIN)));
+    }
+
+    @Test
+    @DisplayName("persistent 401: refresh once then give up with NotificationDeliveryException")
+    void unauthorizedTwice_throws() {
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).willReturn(okJson("{\"accessToken\":\"tok-abc\"}")));
+        wireMock.stubFor(post(urlEqualTo(EMAIL)).willReturn(aResponse().withStatus(401)));
+
+        assertThatThrownBy(() -> client(wireMock.port()).sendEmail("a@b.com", "s", "m", "r"))
                 .isInstanceOf(NotificationDeliveryException.class)
-                .hasMessageContaining("HTTP 502");
+                .hasMessageContaining("401");
     }
 
     @Test
-    @DisplayName("adapter returns 503 (messenger unreachable): throws NotificationDeliveryException")
-    void sendEmail_adapterReturns503_throwsAsRejection() {
-        wireMock.stubFor(post(urlEqualTo("/notifications/email"))
-                .willReturn(aResponse()
-                        .withStatus(503)
-                        .withHeader("Content-Type", "application/json")
-                        .withBody("{\"reference\":\"r4\",\"status\":\"FAILED\","
-                                + "\"error\":\"messenger-interface unreachable\"}")));
+    @DisplayName("login rejected (401): NotificationDeliveryException, email never attempted")
+    void loginRejected_throws() {
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).willReturn(aResponse().withStatus(401)));
 
-        assertThatThrownBy(() ->
-                client.sendEmail("ops@innbucks.co.zw", "subject", "body", "r4"))
+        assertThatThrownBy(() -> client(wireMock.port()).sendEmail("a@b.com", "s", "m", "r"))
                 .isInstanceOf(NotificationDeliveryException.class)
-                .hasMessageContaining("HTTP 503");
+                .hasMessageContaining("login failed");
+        wireMock.verify(0, postRequestedFor(urlEqualTo(EMAIL)));
     }
 
     @Test
-    @DisplayName("adapter unreachable (connection refused): throws NotificationDeliveryException")
-    void sendEmail_adapterUnreachable_throwsWithUnreachableMessage() throws Exception {
-        // Point a SEPARATE client at a known-closed port (grab a free port then
-        // close it) so the shared WireMock is untouched and other tests stay
-        // green regardless of execution order.
+    @DisplayName("500 on email (non-401): NotificationDeliveryException")
+    void serverError_throws() {
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).willReturn(okJson("{\"accessToken\":\"tok-abc\"}")));
+        wireMock.stubFor(post(urlEqualTo(EMAIL)).willReturn(aResponse().withStatus(500)));
+
+        assertThatThrownBy(() -> client(wireMock.port()).sendEmail("a@b.com", "s", "m", "r"))
+                .isInstanceOf(NotificationDeliveryException.class)
+                .hasMessageContaining("500");
+    }
+
+    @Test
+    @DisplayName("connect refused: NotificationDeliveryException (separate dead-port client)")
+    void connectRefused_throws() throws Exception {
         int closedPort;
         try (java.net.ServerSocket s = new java.net.ServerSocket(0)) {
             closedPort = s.getLocalPort();
-        } // socket closed -> port unbound -> connect attempts get RST
-
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofMillis(500));
-        factory.setReadTimeout(Duration.ofMillis(500));
-        RestClient deadClient = RestClient.builder()
-                .baseUrl("http://localhost:" + closedPort)
-                .requestFactory(factory)
-                .build();
-        EmailNotificationClient unreachableClient = new EmailNotificationClient(deadClient);
-
-        assertThatThrownBy(() ->
-                unreachableClient.sendEmail("ops@innbucks.co.zw", "subject", "body", "r5"))
-                .isInstanceOf(NotificationDeliveryException.class)
-                .hasMessageContaining("unreachable");
-    }
-
-    @Test
-    @DisplayName("blank recipient is rejected client-side; no HTTP call is made")
-    void sendEmail_blankRecipient_rejectedBeforeNetwork() {
-        wireMock.stubFor(post(urlEqualTo("/notifications/email"))
-                .willReturn(aResponse().withStatus(200)));
-
-        assertThatThrownBy(() -> client.sendEmail("  ", "subject", "body", "r6"))
-                .isInstanceOf(NotificationDeliveryException.class)
-                .hasMessageContaining("recipient is blank");
-
-        wireMock.verify(0, postRequestedFor(urlEqualTo("/notifications/email")));
-    }
-
-    @Test
-    @DisplayName("blank subject is rejected client-side; no HTTP call is made")
-    void sendEmail_blankSubject_rejectedBeforeNetwork() {
-        assertThatThrownBy(() -> client.sendEmail("ops@innbucks.co.zw", "  ", "body", "r7"))
-                .isInstanceOf(NotificationDeliveryException.class)
-                .hasMessageContaining("subject is blank");
-        wireMock.verify(0, postRequestedFor(urlEqualTo("/notifications/email")));
-    }
-
-    @Test
-    @DisplayName("blank body is rejected client-side; no HTTP call is made")
-    void sendEmail_blankBody_rejectedBeforeNetwork() {
-        assertThatThrownBy(() -> client.sendEmail("ops@innbucks.co.zw", "subject", "  ", "r8"))
-                .isInstanceOf(NotificationDeliveryException.class)
-                .hasMessageContaining("body is blank");
-        wireMock.verify(0, postRequestedFor(urlEqualTo("/notifications/email")));
-    }
-
-    @Test
-    @DisplayName("null reference is replaced with a TKT-EMAIL-<uuid> reference on the wire")
-    void sendEmail_nullReference_isAutoGenerated() {
-        wireMock.stubFor(post(urlEqualTo("/notifications/email"))
-                .willReturn(aResponse().withStatus(200)));
-
-        client.sendEmail("ops@innbucks.co.zw", "subject", "body", null);
-
-        // Reference must always be present so messenger can dedupe and the
-        // adapter has an idempotency key. Auto-generated format: TKT-EMAIL-<uuid>.
-        wireMock.verify(postRequestedFor(urlEqualTo("/notifications/email"))
-                .withRequestBody(matchingJsonPath("$.reference",
-                        matching("TKT-EMAIL-[0-9a-f-]{36}"))));
+        }
+        assertThatThrownBy(() -> client(closedPort).sendEmail("a@b.com", "s", "m", "r"))
+                .isInstanceOf(NotificationDeliveryException.class);
     }
 }

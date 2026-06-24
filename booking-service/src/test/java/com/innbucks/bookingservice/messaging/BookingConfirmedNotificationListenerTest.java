@@ -10,7 +10,6 @@ import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
 import com.innbucks.bookingservice.event.BookingDomainEvent;
 import com.innbucks.bookingservice.repository.BookingRepository;
-import com.innbucks.bookingservice.service.TicketRenderingService;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -26,36 +25,30 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Pins the listener's single-WhatsApp-channel contract: per-ticket QR sends
- * via the gateway's {@code /api/messages/event-qr-code} endpoint, with the
- * event title + booking-confirmation summary + brand sign-off concatenated
- * into the Twilio template's {@code eventName} variable. There is NO
- * {@code /api/messages/send} (custom-notification) call, and NO SMS fallback —
- * email is the only secondary channel.
+ * Pins the listener's two-channel contract: a plain-text confirmation email via
+ * the InnBucks notification API, plus one per-ticket QR send via the WhatsApp
+ * gateway's {@code /api/messages/event-qr-code} endpoint (event title + booking
+ * summary concatenated into the Twilio template's {@code eventName} variable).
+ * There is NO {@code /api/messages/send} call and NO SMS fallback — email is the
+ * only secondary channel. Each channel is independent best-effort.
  */
 class BookingConfirmedNotificationListenerTest {
 
-    private static final String BASE = "https://api.test";
-
     private record Mocks(BookingRepository repo, WhatsAppNotificationClient wa,
-                         EmailNotificationClient email,
-                         TicketRenderingService rendering, EventServiceClient events,
+                         EmailNotificationClient email, EventServiceClient events,
                          BookingConfirmedNotificationListener listener) {}
 
     private static Mocks mocks() {
         BookingRepository repo = mock(BookingRepository.class);
         WhatsAppNotificationClient wa = mock(WhatsAppNotificationClient.class);
         EmailNotificationClient email = mock(EmailNotificationClient.class);
-        TicketRenderingService rendering = mock(TicketRenderingService.class);
         EventServiceClient events = mock(EventServiceClient.class);
-        lenient().when(rendering.confirmationEmailHtml(any(), anyString()))
-                .thenReturn("<div>tickets</div>");
         // Default event lookup resolves a title; tests needing the fallback override this.
         lenient().when(events.getEvent(any()))
                 .thenReturn(ApiResult.ok(EventLookupDTO.builder().title("InnBucks Gala 2026").build()));
         BookingConfirmedNotificationListener listener =
-                new BookingConfirmedNotificationListener(repo, wa, email, rendering, events, BASE);
-        return new Mocks(repo, wa, email, rendering, events, listener);
+                new BookingConfirmedNotificationListener(repo, wa, email, events);
+        return new Mocks(repo, wa, email, events, listener);
     }
 
     private static Booking bookingFixture(String phone, String emailAddr, int ticketCount) {
@@ -85,21 +78,26 @@ class BookingConfirmedNotificationListenerTest {
                 b.getId(), b.getUserEmail(), b.getConfirmationNumber(), Instant.now());
     }
 
-    // ---- Happy path: email + per-ticket QR sends; NO /send call -------------
+    // ---- Happy path: plain-text email + per-ticket QR sends; NO /send call ----
 
     @Test
-    void confirmed_sendsEmail_andOneQrPerTicket_neverHitsCustomNotificationEndpoint() {
+    void confirmed_sendsPlainTextEmail_andOneQrPerTicket_neverHitsCustomNotificationEndpoint() {
         Mocks m = mocks();
         Booking b = bookingFixture("+263771234567", "rufaro@example.com", 2);
         when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
 
         m.listener().onBookingConfirmed(eventFor(b));
 
-        // Email goes out (subject carries the booking ref).
+        // Plain-text email goes out; subject + body carry the booking ref + ticket summary.
         ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
-        verify(m.email()).sendHtmlEmail(eq("rufaro@example.com"), subject.capture(),
-                eq("<div>tickets</div>"), startsWith("BOOKING-CONFIRM-"));
+        ArgumentCaptor<String> message = ArgumentCaptor.forClass(String.class);
+        verify(m.email()).sendEmail(eq("rufaro@example.com"), subject.capture(),
+                message.capture(), startsWith("BOOKING-CONFIRM-"));
         assertThat(subject.getValue()).contains("INN-20260610-A1B2C3");
+        assertThat(message.getValue())
+                .contains("INN-20260610-A1B2C3")
+                .contains("Tickets: 2")
+                .contains("WhatsApp");
 
         // One QR send per ticket — and the /custom-notification text endpoint is NEVER touched.
         ArgumentCaptor<String> path = ArgumentCaptor.forClass(String.class);
@@ -196,7 +194,7 @@ class BookingConfirmedNotificationListenerTest {
         Booking b = bookingFixture("+263771234567", "rufaro@example.com", 1);
         when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
         doThrow(new NotificationDeliveryException("email gw down"))
-                .when(m.email()).sendHtmlEmail(anyString(), anyString(), anyString(), anyString());
+                .when(m.email()).sendEmail(anyString(), anyString(), anyString(), anyString());
 
         assertThatCode(() -> m.listener().onBookingConfirmed(eventFor(b))).doesNotThrowAnyException();
         verify(m.wa()).sendEventQrCode(eq("+263771234567"), anyString(), anyString());
@@ -213,7 +211,7 @@ class BookingConfirmedNotificationListenerTest {
         assertThatCode(() -> m.listener().onBookingConfirmed(eventFor(b))).doesNotThrowAnyException();
 
         verify(m.wa(), times(2)).sendEventQrCode(anyString(), anyString(), anyString());
-        verify(m.email()).sendHtmlEmail(eq("rufaro@example.com"), anyString(), anyString(), anyString());
+        verify(m.email()).sendEmail(eq("rufaro@example.com"), anyString(), anyString(), anyString());
     }
 
     // ---- Channel presence: only the channels with addresses fire -----------
@@ -226,7 +224,7 @@ class BookingConfirmedNotificationListenerTest {
 
         m.listener().onBookingConfirmed(eventFor(b));
 
-        verify(m.email()).sendHtmlEmail(eq("rufaro@example.com"), anyString(), anyString(), anyString());
+        verify(m.email()).sendEmail(eq("rufaro@example.com"), anyString(), anyString(), anyString());
         verifyNoInteractions(m.wa());
     }
 

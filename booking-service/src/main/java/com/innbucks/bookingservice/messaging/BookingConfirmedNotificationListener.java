@@ -9,9 +9,7 @@ import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
 import com.innbucks.bookingservice.event.BookingDomainEvent;
 import com.innbucks.bookingservice.repository.BookingRepository;
-import com.innbucks.bookingservice.service.TicketRenderingService;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -29,10 +27,11 @@ import java.util.List;
  * <p>Two INDEPENDENT, best-effort channels — a failure on either never affects
  * the committed booking:
  * <ul>
- *   <li><b>Email</b> (to the booking's {@code userEmail}, if present) — an HTML
- *       message with each seat's scannable QR, rendered from the hosted ticket
- *       endpoint ({@code /bookings/{id}/tickets/{tn}/qr}) so it shows in Gmail/
- *       Outlook (data-URIs are stripped), plus a link to the ticket page.</li>
+ *   <li><b>Email</b> (to the booking's {@code userEmail}, if present) — a
+ *       plain-text confirmation (booking ref, tickets, total) sent via the
+ *       InnBucks notification API. Plain text matches the SMS/WhatsApp standard;
+ *       the scannable QR is delivered over WhatsApp, so the email points the
+ *       customer there for gate entry.</li>
  *   <li><b>WhatsApp</b> (to {@code phoneNumber}, if present) — one approved
  *       Twilio Content Template send per ticket via the gateway's
  *       {@code /api/messages/event-qr-code} endpoint, delivering the scannable
@@ -56,9 +55,7 @@ public class BookingConfirmedNotificationListener {
     private final BookingRepository bookingRepository;
     private final WhatsAppNotificationClient whatsApp;
     private final EmailNotificationClient email;
-    private final TicketRenderingService ticketRendering;
     private final EventServiceClient eventServiceClient;
-    private final String publicBaseUrl;
 
     /** Event-title fallback when event-service can't be reached (cosmetic only). */
     private static final String EVENT_NAME_FALLBACK = "your event";
@@ -67,15 +64,11 @@ public class BookingConfirmedNotificationListener {
             BookingRepository bookingRepository,
             WhatsAppNotificationClient whatsApp,
             EmailNotificationClient email,
-            TicketRenderingService ticketRendering,
-            EventServiceClient eventServiceClient,
-            @Value("${innbucks.tickets.public-base-url:}") String publicBaseUrl) {
+            EventServiceClient eventServiceClient) {
         this.bookingRepository = bookingRepository;
         this.whatsApp = whatsApp;
         this.email = email;
-        this.ticketRendering = ticketRendering;
         this.eventServiceClient = eventServiceClient;
-        this.publicBaseUrl = publicBaseUrl == null ? "" : publicBaseUrl.trim();
     }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
@@ -94,9 +87,9 @@ public class BookingConfirmedNotificationListener {
         if (emailAddr != null && !emailAddr.isBlank()) {
             anyChannel = true;
             try {
-                email.sendHtmlEmail(emailAddr,
+                email.sendEmail(emailAddr,
                         "Your InnBucks tickets — booking " + booking.getConfirmationNumber(),
-                        ticketRendering.confirmationEmailHtml(booking, publicBaseUrl),
+                        buildConfirmationText(booking),
                         "BOOKING-CONFIRM-" + booking.getId());
                 log.info("Booking-confirm email sent bookingId={} ref={}",
                         booking.getId(), booking.getConfirmationNumber());
@@ -198,6 +191,42 @@ public class BookingConfirmedNotificationListener {
             }
         }
         sb.append(')');
+        return sb.toString();
+    }
+
+    /**
+     * Plain-text confirmation email body — the same information as the WhatsApp
+     * summary (event, booking ref, ticket count, total, ticket numbers), one
+     * fact per line. The notification API is plain-text only; the scannable QR
+     * e-ticket(s) are delivered over WhatsApp, so this email is the textual
+     * record and points the customer at that QR for gate entry.
+     */
+    private String buildConfirmationText(Booking booking) {
+        List<BookingItem> items = booking.getItems() == null ? List.of() : booking.getItems();
+        StringBuilder sb = new StringBuilder("Hi! Your booking is confirmed.\n\n");
+        sb.append("Event: ").append(resolveEventTitle(booking)).append('\n');
+        sb.append("Booking reference: ").append(booking.getConfirmationNumber()).append('\n');
+        if (!items.isEmpty()) {
+            sb.append("Tickets: ").append(items.size()).append('\n');
+        }
+        BigDecimal total = booking.getTotalAmount();
+        if (total != null) {
+            sb.append("Total: ").append(total.toPlainString()).append('\n');
+        }
+        if (!items.isEmpty()) {
+            sb.append("Ticket numbers: ");
+            for (int i = 0; i < items.size(); i++) {
+                if (i > 0) {
+                    sb.append(", ");
+                }
+                sb.append(items.get(i).getTicketNumber());
+            }
+            sb.append('\n');
+        }
+        sb.append("\nYour scannable e-ticket")
+                .append(items.size() == 1 ? " has" : "s have")
+                .append(" been sent to your WhatsApp — present the QR at the gate.\n\n")
+                .append("— The InnBucks Team");
         return sb.toString();
     }
 
