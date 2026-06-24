@@ -240,6 +240,18 @@ public class AuthService implements ApplicationEventPublisherAware {
                 com.innbucks.userservice.security.AuthChannel.WEB, auditContext);
     }
 
+    // This 4-arg method is the real transactional boundary. The 3-arg overload
+    // above delegates here by a self-invocation (which bypasses the Spring proxy),
+    // so the annotation MUST live here too — otherwise a direct caller (the
+    // controller, which always passes the channel) runs the failed-attempt /
+    // last-login writes with no active transaction and Hibernate throws
+    // InvalidDataAccessApiUsageException ("No active transaction for update or
+    // delete query"). noRollbackFor mirrors the overload so a bad-credential /
+    // lockout failure still commits its counter increment + audit row.
+    @Transactional(noRollbackFor = {
+            InvalidCredentialsException.class,
+            AccountLockedException.class
+    })
     public AuthResponseDTO login(LoginRequestDTO request, String deviceId,
                                  com.innbucks.userservice.security.AuthChannel channel,
                                  AuditContext auditContext) {
