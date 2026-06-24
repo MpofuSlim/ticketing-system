@@ -12,6 +12,8 @@ import com.innbucks.bookingservice.testsupport.PostgresIntegrationTestBase;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
@@ -51,6 +53,8 @@ class InvoiceAggregationIT extends PostgresIntegrationTestBase {
     private EventInvoiceRepository invoices;
     @Autowired
     private InvoiceService invoiceService;
+    @Autowired
+    private PlatformTransactionManager txManager;
 
     @Test
     void aggregatesConfirmedRevenueWithoutFanOut_andExcludesNonConfirmed() {
@@ -117,9 +121,12 @@ class InvoiceAggregationIT extends PostgresIntegrationTestBase {
         assertThat(inv.lineItems()).hasSize(2);
         assertThat(inv.invoiceNumber()).startsWith("INV-" + today.getYear() + "-");
 
-        // Persisted with its line items.
-        EventInvoice persisted = invoices.findById(inv.id()).orElseThrow();
-        assertThat(persisted.getLineItems()).hasSize(2);
+        // Persisted with its line items. Reload + read the lazy collection inside a
+        // transaction so the session is still open when we navigate it.
+        new TransactionTemplate(txManager).executeWithoutResult(status -> {
+            EventInvoice persisted = invoices.findById(inv.id()).orElseThrow();
+            assertThat(persisted.getLineItems()).hasSize(2);
+        });
         assertThat(invoices.existsByOrganizerUuidAndPeriodStartAndPeriodEnd(organizer, today, today)).isTrue();
 
         // Re-running the same period is a no-op (idempotent).
