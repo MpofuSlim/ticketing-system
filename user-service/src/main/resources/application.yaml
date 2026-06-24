@@ -67,6 +67,19 @@ innbucks-gateway:
   connect-timeout-ms: ${INNBUCKS_GATEWAY_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${INNBUCKS_GATEWAY_READ_TIMEOUT_MS:10000}
 
+# InnBucks public notification API (system-user emails). Same API Gateway +
+# BANK_API_* credentials as the payment rail (POST /auth/third-party for the
+# bearer, X-Api-Key header). Email body is plain text {subject,message,
+# reference,destinationEmail}.
+innbucks-notify:
+  base-url: ${BANK_API_URL:https://staging.innbucks.co.zw}
+  api-key: ${BANK_API_KEY:}
+  username: ${BANK_API_USERNAME:}
+  password: ${BANK_API_PASSWORD:}
+  connect-timeout-ms: ${BANK_API_CONNECT_TIMEOUT_MS:3000}
+  read-timeout-ms: ${BANK_API_READ_TIMEOUT_MS:20000}
+  token-ttl: ${BANK_API_TOKEN_TTL:PT8M}
+
 whatsapp:
   base-url: ${WHATSAPP_GATEWAY_URL:http://localhost:8089}
   api-key: ${WHATSAPP_API_KEY:change-me-whatsapp-api-key}

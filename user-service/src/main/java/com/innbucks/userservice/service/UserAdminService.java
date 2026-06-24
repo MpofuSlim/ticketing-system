@@ -14,7 +14,6 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
-import org.springframework.web.util.HtmlUtils;
 
 import java.util.Map;
 
@@ -192,18 +191,18 @@ public class UserAdminService {
      */
     private void notifyApproval(User user, String tempPassword) {
         deliverCredential(user, tempPassword,
-                "Your InnBucks account has been approved",
-                "Good news — your InnBucks account has been approved and is now active.",
-                "Your InnBucks account has been approved. Your temporary password is "
+                "Your SwiftInn account has been approved",
+                "Good news — your SwiftInn account has been approved and is now active.",
+                "Your SwiftInn account has been approved. Your temporary password is "
                         + tempPassword + ". Please log in and change it immediately.",
                 "APPROVAL-" + user.getId());
     }
 
     private void notifyPasswordReset(User user, String tempPassword) {
         deliverCredential(user, tempPassword,
-                "Your InnBucks temporary password has been reset",
-                "Your InnBucks temporary password has been reset by an administrator.",
-                "Your InnBucks temporary password has been reset to "
+                "Your SwiftInn temporary password has been reset",
+                "Your SwiftInn temporary password has been reset by an administrator.",
+                "Your SwiftInn temporary password has been reset to "
                         + tempPassword + ". Please log in and change it immediately.",
                 "PWRESET-" + user.getId());
     }
@@ -228,7 +227,7 @@ public class UserAdminService {
             try {
                 emailNotificationClient.sendEmail(
                         email, emailSubject,
-                        buildCredentialHtml(user.getFirstName(), email, tempPassword, emailIntro),
+                        buildCredentialText(user.getFirstName(), email, tempPassword, emailIntro),
                         ref);
                 log.info("Credential email sent userId={} ref={}", user.getId(), ref);
                 return;
@@ -262,23 +261,18 @@ public class UserAdminService {
     }
 
     /**
-     * Renders the credential email body. Dynamic values (name, email) are
-     * HTML-escaped; the temporary password is a freshly-generated random value
-     * from {@link TemporaryPasswordGenerator} (server-side, not caller-supplied),
-     * so it carries no injection risk, but we keep it outside any attribute
-     * context regardless.
+     * Renders the credential email body as plain text (the notification API has
+     * no HTML mode), matching the SMS/WhatsApp standard. The temporary password
+     * is a freshly-generated random value from {@link TemporaryPasswordGenerator}.
      */
-    private String buildCredentialHtml(String firstName, String email, String tempPassword, String intro) {
-        String name = (firstName != null && !firstName.isBlank())
-                ? HtmlUtils.htmlEscape(firstName) : "there";
-        return "<p>Hi " + name + ",</p>"
-                + "<p>" + intro + "</p>"
-                + "<p>Use these credentials to sign in:</p>"
-                + "<ul>"
-                + "<li><strong>Username:</strong> " + HtmlUtils.htmlEscape(email) + "</li>"
-                + "<li><strong>Temporary password:</strong> " + HtmlUtils.htmlEscape(tempPassword) + "</li>"
-                + "</ul>"
-                + "<p>For your security, please log in and change your password immediately.</p>"
-                + "<p>— The InnBucks Team</p>";
+    private String buildCredentialText(String firstName, String email, String tempPassword, String intro) {
+        String name = (firstName != null && !firstName.isBlank()) ? firstName : "there";
+        return "Hi " + name + ",\n\n"
+                + intro + "\n\n"
+                + "Use these credentials to sign in:\n"
+                + "Username: " + email + "\n"
+                + "Temporary password: " + tempPassword + "\n\n"
+                + "For your security, please log in and change your password immediately.\n\n"
+                + "— The SwiftInn Team";
     }
 }

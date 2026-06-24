@@ -123,7 +123,7 @@ class ShopStaffServiceTest {
                 .matches("[A-Za-z0-9]{5}-[A-Za-z0-9]{5}");
 
         assertThat(to.getValue()).isEqualTo("tendai@shop.co.zw");
-        assertThat(subject.getValue()).contains("Welcome to InnBucks");
+        assertThat(subject.getValue()).contains("Welcome to SwiftInn");
         assertThat(body.getValue())
                 .contains("Shop Administrator")
                 .contains("Tendai")

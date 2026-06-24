@@ -23,7 +23,6 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
-import org.springframework.web.util.HtmlUtils;
 
 import java.time.Instant;
 import java.util.EnumSet;
@@ -389,8 +388,7 @@ public class TeamMemberService {
      */
     private void notifyOnboarding(User member, String tempPassword) {
         deliverCredentials(member, tempPassword,
-                "Welcome to InnBucks — your team-member account is ready",
-                buildOnboardingHtml(member.getFirstName(), member.getEmail(), tempPassword),
+                "Welcome to SwiftInn — your team-member account is ready",
                 buildOnboardingPlainText(member.getEmail(), tempPassword),
                 "TEAM-ONBOARD-" + member.getId(),
                 "Onboarding");
@@ -400,8 +398,7 @@ public class TeamMemberService {
      *  different wording so the recipient understands this is a re-issue. */
     private void notifyPasswordReset(User member, String tempPassword) {
         deliverCredentials(member, tempPassword,
-                "Your InnBucks team-member password has been reset",
-                buildResetHtml(member.getFirstName(), member.getEmail(), tempPassword),
+                "Your SwiftInn team-member password has been reset",
                 buildResetPlainText(member.getEmail(), tempPassword),
                 "TEAM-RESET-" + member.getId() + "-" + System.currentTimeMillis(),
                 "Password reset");
@@ -419,14 +416,14 @@ public class TeamMemberService {
      * read timeout, so no dedicated executor is warranted.
      */
     private void deliverCredentials(User member, String tempPassword,
-                                    String subject, String htmlBody, String plainBody,
+                                    String subject, String body,
                                     String ref, String logTag) {
         String phone = member.getPhoneNumber();
 
         CompletableFuture<Boolean> emailFuture = CompletableFuture.supplyAsync(
-                () -> trySendEmail(member, subject, htmlBody, ref, logTag));
+                () -> trySendEmail(member, subject, body, ref, logTag));
         CompletableFuture<Boolean> whatsappFuture = CompletableFuture.supplyAsync(
-                () -> trySendWhatsapp(member, phone, plainBody, logTag));
+                () -> trySendWhatsapp(member, phone, body, logTag));
 
         CompletableFuture.allOf(emailFuture, whatsappFuture).join();
         boolean emailOk = emailFuture.join();
@@ -443,7 +440,7 @@ public class TeamMemberService {
             return;
         }
         try {
-            smsNotificationClient.sendSms(phone, plainBody, ref);
+            smsNotificationClient.sendSms(phone, body, ref);
             log.info("{} SMS fallback delivered userId={}", logTag, member.getId());
         } catch (RuntimeException smsEx) {
             log.warn("{} failed on all channels (email, WhatsApp, SMS); state change still " +
@@ -455,14 +452,14 @@ public class TeamMemberService {
     /** Returns true iff the email was accepted by the gateway. Skipped (false)
      *  when the member has no email on file; that's reported once via the
      *  aggregate log line, not here. */
-    private boolean trySendEmail(User member, String subject, String htmlBody,
+    private boolean trySendEmail(User member, String subject, String body,
                                  String ref, String logTag) {
         String email = member.getEmail();
         if (email == null || email.isBlank()) {
             return false;
         }
         try {
-            emailNotificationClient.sendEmail(email, subject, htmlBody, ref);
+            emailNotificationClient.sendEmail(email, subject, body, ref);
             return true;
         } catch (RuntimeException ex) {
             log.warn("{} email failed userId={} reason={}", logTag, member.getId(), ex.getMessage());
@@ -489,45 +486,16 @@ public class TeamMemberService {
      *  segments don't multiply needlessly. */
     private String buildOnboardingPlainText(String email, String tempPassword) {
         String account = (email != null && !email.isBlank()) ? " (" + email + ")" : "";
-        return "Welcome to InnBucks. Your team-member account" + account
+        return "Welcome to SwiftInn. Your team-member account" + account
                 + " is ready. Temporary password: " + tempPassword
                 + ". Log in and change it immediately.";
     }
 
-    private String buildOnboardingHtml(String firstName, String email, String tempPassword) {
-        String name = (firstName != null && !firstName.isBlank())
-                ? HtmlUtils.htmlEscape(firstName) : "there";
-        return "<p>Hi " + name + ",</p>"
-                + "<p>An InnBucks account has been created for you as a <strong>Team Member</strong>.</p>"
-                + "<p>Use these credentials to sign in to the scanner app:</p>"
-                + "<ul>"
-                + "<li><strong>Username:</strong> " + HtmlUtils.htmlEscape(email) + "</li>"
-                + "<li><strong>Temporary password:</strong> " + HtmlUtils.htmlEscape(tempPassword) + "</li>"
-                + "</ul>"
-                + "<p>For your security, please log in and change your password immediately.</p>"
-                + "<p>— The InnBucks Team</p>";
-    }
-
     private String buildResetPlainText(String email, String tempPassword) {
         String account = (email != null && !email.isBlank()) ? " (" + email + ")" : "";
-        return "Your InnBucks team-member password" + account
+        return "Your SwiftInn team-member password" + account
                 + " has been reset. New temporary password: " + tempPassword
                 + ". Log in and change it immediately. If you didn't request this, contact your organizer.";
-    }
-
-    private String buildResetHtml(String firstName, String email, String tempPassword) {
-        String name = (firstName != null && !firstName.isBlank())
-                ? HtmlUtils.htmlEscape(firstName) : "there";
-        return "<p>Hi " + name + ",</p>"
-                + "<p>Your InnBucks team-member password has been reset by your organizer.</p>"
-                + "<p>Use these credentials to sign in:</p>"
-                + "<ul>"
-                + "<li><strong>Username:</strong> " + HtmlUtils.htmlEscape(email) + "</li>"
-                + "<li><strong>New temporary password:</strong> " + HtmlUtils.htmlEscape(tempPassword) + "</li>"
-                + "</ul>"
-                + "<p>For your security, please log in and change your password immediately. "
-                + "If you didn't request this reset, contact your organizer.</p>"
-                + "<p>— The InnBucks Team</p>";
     }
 
     private ResponseStatusException badRequest(String msg) {
