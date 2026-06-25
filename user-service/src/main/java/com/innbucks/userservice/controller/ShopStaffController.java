@@ -291,12 +291,12 @@ public class ShopStaffController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "403", description = "Caller is not a MERCHANT_ADMIN",
+                    responseCode = "403", description = "Caller is not a MERCHANT_ADMIN, or the merchantId belongs to a different merchant",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     {
                                       "code": "403 FORBIDDEN",
-                                      "message": "Forbidden",
+                                      "message": "Merchant does not belong to your account",
                                       "data": null
                                     }
                                     """)))
