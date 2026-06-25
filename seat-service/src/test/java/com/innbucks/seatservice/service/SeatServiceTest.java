@@ -4,6 +4,8 @@ import com.innbucks.seatservice.dto.SeatLockResponseDTO;
 import com.innbucks.seatservice.dto.SeatResponseDTO;
 import com.innbucks.seatservice.entity.Seat;
 import com.innbucks.seatservice.entity.SeatCategory;
+import com.innbucks.seatservice.exception.ConflictException;
+import com.innbucks.seatservice.exception.ForbiddenException;
 import com.innbucks.seatservice.repository.SeatCategoryRepository;
 import com.innbucks.seatservice.repository.SeatRepository;
 import org.junit.jupiter.api.Test;
@@ -251,7 +253,7 @@ class SeatServiceTest {
         Seat seat = availableSeat(seatId, cat);
         seat.setStatus(Seat.SeatStatus.LOCKED);
         seat.setLockExpiresAt(LocalDateTime.now().plusSeconds(60));
-        when(seatRepo.findById(seatId)).thenReturn(Optional.of(seat));
+        when(seatRepo.findByIdForUpdate(seatId)).thenReturn(Optional.of(seat));
         when(store.get(any())).thenReturn("me@example.com");
         when(catRepo.incrementAvailableSeats(cat.getId())).thenReturn(1);
 
@@ -352,16 +354,20 @@ class SeatServiceTest {
         UUID seatId = UUID.randomUUID();
         Seat seat = availableSeat(seatId, category(9));
         seat.setStatus(Seat.SeatStatus.LOCKED);
-        when(seatRepo.findById(seatId)).thenReturn(Optional.of(seat));
+        when(seatRepo.findByIdForUpdate(seatId)).thenReturn(Optional.of(seat));
         when(store.get(any())).thenReturn("owner@example.com");
 
-        assertThrows(RuntimeException.class,
+        assertThrows(ForbiddenException.class,
                 () -> service.releaseSeat(seatId, "intruder@example.com"));
         verify(seatRepo, never()).save(any());
     }
 
     @Test
-    void releaseSeat_succeedsWhenLockAlreadyExpired() {
+    void releaseSeat_rejectsWhenLockOwnerUnknown_evenIfSeatStillLocked() {
+        // Was releaseSeat_succeedsWhenLockAlreadyExpired — which encoded the
+        // fail-OPEN bug: ANY caller could free a LOCKED seat once the Redis lock
+        // was gone. A hold whose owner can't be proven is no longer releasable
+        // here; the reaper (releaseStaleLock) reclaims genuinely-expired holds.
         SeatRepository seatRepo = mock(SeatRepository.class);
         SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
         SeatLockStore store = mock(SeatLockStore.class);
@@ -371,14 +377,40 @@ class SeatServiceTest {
         SeatCategory cat = category(9);
         Seat seat = availableSeat(seatId, cat);
         seat.setStatus(Seat.SeatStatus.LOCKED);
-        when(seatRepo.findById(seatId)).thenReturn(Optional.of(seat));
-        when(store.get(any())).thenReturn(null);
-        when(catRepo.incrementAvailableSeats(cat.getId())).thenReturn(1);
+        when(seatRepo.findByIdForUpdate(seatId)).thenReturn(Optional.of(seat));
+        when(store.get(any())).thenReturn(null); // lock evicted / expired
 
-        service.releaseSeat(seatId, "anyone@example.com");
+        assertThrows(ForbiddenException.class,
+                () -> service.releaseSeat(seatId, "anyone@example.com"));
+        assertEquals(Seat.SeatStatus.LOCKED, seat.getStatus());
+        verify(seatRepo, never()).save(any());
+        verify(catRepo, never()).incrementAvailableSeats(any());
+    }
 
-        assertEquals(Seat.SeatStatus.AVAILABLE, seat.getStatus());
-        verify(catRepo).incrementAvailableSeats(cat.getId());
+    @Test
+    void releaseSeat_rejectsReleaseOfBookedSeat_andDoesNotOversell() {
+        // The core exploit: a victim CONFIRMED a seat (status BOOKED; confirmSeat
+        // deleted the lock key), then an attacker calls releaseSeat. The old
+        // fail-open code skipped the (null) ownership check and flipped the PAID
+        // seat back to AVAILABLE + incremented the counter (oversell + voided
+        // booking). A non-LOCKED seat is now rejected outright.
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatLockStore store = mock(SeatLockStore.class);
+        SeatService service = new SeatService(seatRepo, catRepo, store);
+
+        UUID seatId = UUID.randomUUID();
+        SeatCategory cat = category(8);
+        Seat seat = availableSeat(seatId, cat);
+        seat.setStatus(Seat.SeatStatus.BOOKED);
+        when(seatRepo.findByIdForUpdate(seatId)).thenReturn(Optional.of(seat));
+
+        assertThrows(ConflictException.class,
+                () -> service.releaseSeat(seatId, "attacker@example.com"));
+        assertEquals(Seat.SeatStatus.BOOKED, seat.getStatus(), "paid booking must stay BOOKED");
+        verify(seatRepo, never()).save(any());
+        verify(catRepo, never()).incrementAvailableSeats(any());
+        verify(store, never()).delete(any());
     }
 
     @Test
