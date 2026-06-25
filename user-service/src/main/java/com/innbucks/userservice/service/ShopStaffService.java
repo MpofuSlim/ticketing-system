@@ -30,9 +30,9 @@ import java.util.UUID;
  *
  * <ul>
  *   <li><b>SHOP_ADMIN</b> by a MERCHANT_ADMIN — caller supplies the target shopId in the body.
- *       The shop is resolved via loyalty-service to pick up its merchantId, which is then
- *       stamped on the new SHOP_ADMIN. The shop must exist; cross-tenant attempts are caught
- *       by loyalty-service's tenant scoping on the lookup endpoint.</li>
+ *       The shop is resolved via loyalty-service to pick up its merchantId, which MUST match the
+ *       caller's own {@code loyaltyMerchantId} (a MERCHANT_ADMIN can only provision staff into
+ *       their own merchant's shops); the merchantId is then stamped on the new SHOP_ADMIN.</li>
  *   <li><b>SHOP_USER</b> by a SHOP_ADMIN — shopId is pulled from the caller's User row, never
  *       from the body, so a SHOP_ADMIN can only create staff for their own shop.</li>
  * </ul>
@@ -70,6 +70,10 @@ public class ShopStaffService {
             throw badRequest("Shop has no merchant binding");
         }
         UUID merchantId = UUID.fromString(shop.merchantId());
+        // Scope to the caller's own merchant: a MERCHANT_ADMIN must not be able
+        // to provision a SHOP_ADMIN into another merchant's shop (cross-tenant
+        // privilege escalation) -> 403 "Shop does not belong to your merchant".
+        requireCallerOwnsShop(caller, shop.merchantId());
 
         String tempPassword = TemporaryPasswordGenerator.generate();
         User staff = buildStaff(req.getFirstName(), req.getMiddleName(), req.getLastName(),
@@ -119,12 +123,14 @@ public class ShopStaffService {
 
     @Transactional(readOnly = true)
     public List<UserResponseDTO> listForShop(UUID shopId) {
-        requireCaller();
-        // The MERCHANT_ADMIN role gate on the controller plus the shop's existence in
-        // loyalty-service are the protection here — we no longer cross-check caller's
-        // merchant binding because that data path has been removed.
-        loyaltyServiceClient.findShop(shopId)
+        User caller = requireCaller();
+        // Scope to the caller's own merchant: a MERCHANT_ADMIN may only list the
+        // staff of shops belonging to THEIR merchant. Resolve the shop, then
+        // require its merchant to match the caller's — 403 otherwise (closes the
+        // cross-merchant staff-PII leak).
+        var shop = loyaltyServiceClient.findShop(shopId)
                 .orElseThrow(() -> badRequest("Shop not found in loyalty-service"));
+        requireCallerOwnsShop(caller, shop.merchantId());
         return userRepository.findByLoyaltyShopId(shopId).stream()
                 .map(UserResponseDTO::from)
                 .toList();
@@ -138,7 +144,14 @@ public class ShopStaffService {
      */
     @Transactional(readOnly = true)
     public List<UserResponseDTO> listForMerchant(UUID merchantId) {
-        requireCaller();
+        User caller = requireCaller();
+        // Scope to the caller's own merchant: a MERCHANT_ADMIN may only list the
+        // headcount of THEIR merchant, not enumerate any merchant's staff PII by
+        // id -> 403 for a foreign merchantId.
+        UUID callerMerchant = caller.getLoyaltyMerchantId();
+        if (callerMerchant == null || !callerMerchant.equals(merchantId)) {
+            throw forbidden("Merchant does not belong to your account");
+        }
         return userRepository.findByLoyaltyMerchantId(merchantId).stream()
                 .map(UserResponseDTO::from)
                 .toList();
@@ -369,6 +382,22 @@ public class ShopStaffService {
         }
         return userRepository.findByEmail(auth.getName())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Caller not found"));
+    }
+
+    /**
+     * A MERCHANT_ADMIN may only act on shops belonging to their OWN merchant.
+     * Compares the resolved shop's {@code merchantId} against the caller's
+     * {@code loyaltyMerchantId}; on mismatch — or a caller with no merchant
+     * scope — throws 403, which is exactly the response the controller's Swagger
+     * already advertises ("Shop does not belong to your merchant") but the code
+     * never enforced.
+     */
+    private void requireCallerOwnsShop(User caller, String shopMerchantId) {
+        UUID callerMerchant = caller.getLoyaltyMerchantId();
+        if (callerMerchant == null || shopMerchantId == null
+                || !callerMerchant.toString().equals(shopMerchantId)) {
+            throw forbidden("Shop does not belong to your merchant");
+        }
     }
 
     private ResponseStatusException badRequest(String msg) {
