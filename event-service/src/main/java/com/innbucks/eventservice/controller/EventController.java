@@ -180,6 +180,19 @@ public class EventController {
             log.debug("Listing events (organizer scope) organizerUuid={} from={} to={} venue={} page={} size={} sortBy={}",
                     organizerUuid, from, to, venue, page, size, sortBy);
             result = eventService.getMyEvents(organizerUuid, fromDateTime, toDateTime, venue, page, size, sortBy);
+        } else if (isTeamMember(authentication)) {
+            // Deny-by-default: a TEAM_MEMBER on the broad catalog sees ONLY the
+            // events their organizer has explicitly assigned to them — never
+            // every organizer's events (that was the broken-access-control bug
+            // where a team member fell through to the public branch). Resolved
+            // the same way as GET /events/my; organizerUuid is the parent
+            // organizer's uuid, used as the defence-in-depth ownership filter.
+            UUID organizerUuid = com.innbucks.eventservice.security.AuthenticatedCaller
+                    .organizerUuid(authentication);
+            java.util.List<UUID> assignedEventIds = resolveAssignedEventIds(authentication);
+            log.debug("Listing events (team-member scope) organizerUuid={} assignedCount={} from={} to={} venue={} page={} size={} sortBy={}",
+                    organizerUuid, assignedEventIds.size(), from, to, venue, page, size, sortBy);
+            result = eventService.getMyAssignedEvents(organizerUuid, assignedEventIds, fromDateTime, toDateTime, venue, page, size, sortBy);
         } else {
             log.debug("Listing events (public scope) from={} to={} venue={} page={} size={} sortBy={}",
                     from, to, venue, page, size, sortBy);
@@ -515,6 +528,15 @@ public class EventController {
             log.debug("Listing active events (organizer scope) organizerUuid={} from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
                     organizerUuid, from, to, venue, country, category, page, size, sortBy);
             result = eventService.getMyActiveEvents(organizerUuid, fromDateTime, toDateTime, venue, country, category, page, size, sortBy);
+        } else if (isTeamMember(authentication)) {
+            // Deny-by-default: a TEAM_MEMBER sees ONLY their assigned events
+            // (here, the active subset), never every organizer's active events.
+            UUID organizerUuid = com.innbucks.eventservice.security.AuthenticatedCaller
+                    .organizerUuid(authentication);
+            java.util.List<UUID> assignedEventIds = resolveAssignedEventIds(authentication);
+            log.debug("Listing active events (team-member scope) organizerUuid={} assignedCount={} from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
+                    organizerUuid, assignedEventIds.size(), from, to, venue, country, category, page, size, sortBy);
+            result = eventService.getMyAssignedActiveEvents(organizerUuid, assignedEventIds, fromDateTime, toDateTime, venue, country, category, page, size, sortBy);
         } else {
             log.debug("Listing active events (public scope) from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
                     from, to, venue, country, category, page, size, sortBy);
@@ -658,6 +680,15 @@ public class EventController {
             log.debug("Listing inactive events (organizer scope) organizerUuid={} from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
                     organizerUuid, from, to, venue, country, category, page, size, sortBy);
             result = eventService.getMyInactiveEvents(organizerUuid, fromDateTime, toDateTime, venue, country, category, page, size, sortBy);
+        } else if (isTeamMember(authentication)) {
+            // Deny-by-default: a TEAM_MEMBER sees ONLY their assigned events
+            // (here, the inactive subset), never every organizer's inactive events.
+            UUID organizerUuid = com.innbucks.eventservice.security.AuthenticatedCaller
+                    .organizerUuid(authentication);
+            java.util.List<UUID> assignedEventIds = resolveAssignedEventIds(authentication);
+            log.debug("Listing inactive events (team-member scope) organizerUuid={} assignedCount={} from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
+                    organizerUuid, assignedEventIds.size(), from, to, venue, country, category, page, size, sortBy);
+            result = eventService.getMyAssignedInactiveEvents(organizerUuid, assignedEventIds, fromDateTime, toDateTime, venue, country, category, page, size, sortBy);
         } else {
             log.debug("Listing inactive events (public scope) from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
                     from, to, venue, country, category, page, size, sortBy);
@@ -1566,5 +1597,39 @@ public class EventController {
             else if ("ROLE_SUPER_ADMIN".equals(a)) superAdmin = true;
         }
         return organizer && !superAdmin;
+    }
+
+    /**
+     * True when the caller is authenticated as a TEAM_MEMBER. A team member is
+     * scoped to ONLY the events their organizer has explicitly assigned to them
+     * (deny-by-default), so the broad catalog endpoints route them through the
+     * assigned-events path rather than the organizer-wide or public listing.
+     * Checked AFTER {@link #isOrganizerOnly} so the branch order is
+     * organizer-only → team-member → public.
+     */
+    private boolean isTeamMember(Authentication authentication) {
+        if (authentication == null || !authentication.isAuthenticated()) return false;
+        for (var authority : authentication.getAuthorities()) {
+            if ("ROLE_TEAM_MEMBER".equals(authority.getAuthority())) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Resolves the event UUIDs a TEAM_MEMBER caller is assigned to, exactly the
+     * way {@code GET /events/my} does: keyed on the team member's OWN userUuid
+     * (the assignment is per-member, not per-organizer) and fetched per-request
+     * so an assignment change takes effect immediately. On a user-service
+     * outage the gateway returns an empty list — the team member then sees no
+     * events, which is the correct deny-by-default for a broad-access call (it
+     * must never fall through to the organizer-wide or public set). A missing
+     * userUuid claim (legacy token) likewise yields an empty list.
+     */
+    private java.util.List<UUID> resolveAssignedEventIds(Authentication authentication) {
+        UUID teamMemberUuid = com.innbucks.eventservice.security
+                .AuthenticatedCaller.userUuid(authentication);
+        return teamMemberUuid == null
+                ? java.util.List.of()
+                : userUuidLookupGateway.assignedEventIdsFor(teamMemberUuid);
     }
 }
