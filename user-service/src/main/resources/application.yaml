@@ -77,7 +77,11 @@ innbucks-notify:
   username: ${BANK_API_USERNAME:}
   password: ${BANK_API_PASSWORD:}
   connect-timeout-ms: ${BANK_API_CONNECT_TIMEOUT_MS:3000}
-  read-timeout-ms: ${BANK_API_READ_TIMEOUT_MS:20000}
+  # 5s read timeout: an email/SMS enqueue is a thin acknowledgement-only call;
+  # the 20s the gateway used to take when broken (HTTP 403 on /api/notification/email
+  # took ~39s elapsed) is a defect, not normal slow. Capping at 5s also keeps a
+  # single failing channel from monopolising notify pool threads under burst.
+  read-timeout-ms: ${BANK_API_READ_TIMEOUT_MS:5000}
   token-ttl: ${BANK_API_TOKEN_TTL:PT8M}
 
 whatsapp:

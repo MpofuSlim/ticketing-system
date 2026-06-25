@@ -1,29 +1,54 @@
 package com.innbucks.userservice.service;
 
 import com.innbucks.userservice.client.EmailNotificationClient;
-import com.innbucks.userservice.client.NotificationDeliveryException;
 import com.innbucks.userservice.client.SmsNotificationClient;
-import com.innbucks.userservice.client.WhatsAppNotificationClient;
 import com.innbucks.userservice.entity.User;
+import com.innbucks.userservice.event.CredentialDeliveryRequested;
 import com.innbucks.userservice.exception.NotFoundException;
 import com.innbucks.userservice.repository.UserRepository;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.LocalDateTime;
 import java.util.Optional;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
+/**
+ * Unit tests for UserAdminService.
+ *
+ * <p>Credential delivery moved off this class into {@code CredentialDeliveryListener}
+ * (see CredentialDeliveryListenerTest for the email->SMS->WhatsApp fallback chain).
+ * The assertions here only cover what UserAdminService is still responsible for:
+ * the state machine, audit emission, deactivation notification (still inline,
+ * pending its own follow-up), and the {@link CredentialDeliveryRequested} event
+ * it now publishes for the async listener.
+ */
 class UserAdminServiceTest {
 
     /** Shape of a generated temp password: two hyphen-separated 5-char groups
      *  (10 password chars + 1 hyphen for readability). Exact alphabet is
      *  pinned in TemporaryPasswordGeneratorTest. */
     private static final String TEMP_PW_SHAPE = "[A-Za-z0-9]{5}-[A-Za-z0-9]{5}";
+
+    /** Build a UserAdminService with all collaborators mocked. Tests can grab
+     *  the same mocks via the field accessors below. */
+    private static class Fixture {
+        final UserRepository userRepo = mock(UserRepository.class);
+        final PasswordEncoder encoder = mock(PasswordEncoder.class);
+        final SmsNotificationClient sms = mock(SmsNotificationClient.class);
+        final EmailNotificationClient email = mock(EmailNotificationClient.class);
+        final AuditService audit = mock(AuditService.class);
+        final ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+        final UserAdminService service = new UserAdminService(
+                userRepo, encoder, sms, email, audit, publisher);
+    }
 
     /** Capture the plaintext handed to encode() — it's the generated temp password. */
     private static String capturePassword(PasswordEncoder encoder) {
@@ -32,212 +57,225 @@ class UserAdminServiceTest {
         return pw.getValue();
     }
 
+    private static CredentialDeliveryRequested captureEvent(ApplicationEventPublisher publisher) {
+        ArgumentCaptor<CredentialDeliveryRequested> cap =
+                ArgumentCaptor.forClass(CredentialDeliveryRequested.class);
+        verify(publisher).publishEvent(cap.capture());
+        return cap.getValue();
+    }
+
+    // -- Approval / first activation -----------------------------------------
+
     @Test
-    void firstActivation_approvesAssignsRandomPasswordAndEmailsCredentials() {
-        UserRepository userRepo = mock(UserRepository.class);
-        PasswordEncoder encoder = mock(PasswordEncoder.class);
-        WhatsAppNotificationClient whatsApp = mock(WhatsAppNotificationClient.class);
-        SmsNotificationClient sms = mock(SmsNotificationClient.class);
-        EmailNotificationClient email = mock(EmailNotificationClient.class);
-        // As created by /auth/register: inactive, unapproved, placeholder password.
+    void firstActivation_approves_assignsRandomPassword_andPublishesApprovalEvent() {
+        Fixture f = new Fixture();
         User user = User.builder().id(1L).email("a@b.com").phoneNumber("+263771234567")
                 .password("placeholder").active(false).approved(false).build();
-        when(userRepo.findById(1L)).thenReturn(Optional.of(user));
-        when(userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(encoder.encode(anyString())).thenReturn("encoded-temp");
+        when(f.userRepo.findById(1L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(f.encoder.encode(anyString())).thenReturn("encoded-temp");
 
-        User result = new UserAdminService(userRepo, encoder, whatsApp, sms, email,
-                mock(AuditService.class)).setActive(1L, true);
+        User result = f.service.setActive(1L, true);
 
         assertTrue(result.isActive());
         assertTrue(result.isApproved());
         assertTrue(result.isMustChangePassword());
         assertEquals("encoded-temp", result.getPassword());
 
-        // The generated password is per-user random, NOT the old public default.
-        String generated = capturePassword(encoder);
+        String generated = capturePassword(f.encoder);
         assertNotEquals("#Pass123", generated);
         assertTrue(generated.matches(TEMP_PW_SHAPE), "unexpected temp password shape: " + generated);
 
-        // Email is the primary channel: the SAME generated password lands in the
-        // email body, and the phone fallbacks are NOT touched.
-        verify(email).sendEmail(eq("a@b.com"), anyString(), contains(generated), anyString());
-        verifyNoInteractions(whatsApp, sms);
+        // Hand-off to the async listener: the event carries the SAME plaintext
+        // password that was encoded, plus enough identity for the listener to
+        // pick channels without re-reading the user.
+        CredentialDeliveryRequested ev = captureEvent(f.publisher);
+        assertEquals(1L, ev.userId());
+        assertEquals("a@b.com", ev.email());
+        assertEquals("+263771234567", ev.phoneNumber());
+        assertEquals(generated, ev.tempPassword());
+        assertEquals(CredentialDeliveryRequested.Reason.APPROVAL, ev.reason());
+
+        // No inline notification calls — that lived in this class before the
+        // refactor; the listener owns delivery now.
+        verifyNoInteractions(f.email, f.sms);
     }
 
     @Test
-    void firstActivation_fallsBackToSmsWhenEmailFails() {
-        UserRepository userRepo = mock(UserRepository.class);
-        PasswordEncoder encoder = mock(PasswordEncoder.class);
-        WhatsAppNotificationClient whatsApp = mock(WhatsAppNotificationClient.class);
-        SmsNotificationClient sms = mock(SmsNotificationClient.class);
-        EmailNotificationClient email = mock(EmailNotificationClient.class);
-        doThrow(new NotificationDeliveryException("email gateway down"))
-                .when(email).sendEmail(anyString(), anyString(), anyString(), anyString());
-        User user = User.builder().id(1L).email("a@b.com").phoneNumber("+263771234567")
-                .password("placeholder").active(false).approved(false).build();
-        when(userRepo.findById(1L)).thenReturn(Optional.of(user));
-        when(userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(encoder.encode(anyString())).thenReturn("encoded-temp");
-
-        User result = new UserAdminService(userRepo, encoder, whatsApp, sms, email,
-                mock(AuditService.class)).setActive(1L, true);
-
-        assertTrue(result.isApproved());
-        String generated = capturePassword(encoder);
-        // Approval still succeeds; the SAME password falls back to SMS, WhatsApp untouched.
-        verify(sms).sendSms(eq("+263771234567"), contains(generated), anyString());
-        verifyNoInteractions(whatsApp);
-    }
-
-    @Test
-    void firstActivation_fallsBackToWhatsAppWhenEmailAndSmsFail() {
-        UserRepository userRepo = mock(UserRepository.class);
-        PasswordEncoder encoder = mock(PasswordEncoder.class);
-        WhatsAppNotificationClient whatsApp = mock(WhatsAppNotificationClient.class);
-        SmsNotificationClient sms = mock(SmsNotificationClient.class);
-        EmailNotificationClient email = mock(EmailNotificationClient.class);
-        doThrow(new NotificationDeliveryException("email gateway down"))
-                .when(email).sendEmail(anyString(), anyString(), anyString(), anyString());
-        doThrow(new NotificationDeliveryException("SMS gateway down"))
-                .when(sms).sendSms(anyString(), anyString(), anyString());
-        User user = User.builder().id(1L).email("a@b.com").phoneNumber("+263771234567")
-                .password("placeholder").active(false).approved(false).build();
-        when(userRepo.findById(1L)).thenReturn(Optional.of(user));
-        when(userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(encoder.encode(anyString())).thenReturn("encoded-temp");
-
-        User result = new UserAdminService(userRepo, encoder, whatsApp, sms, email,
-                mock(AuditService.class)).setActive(1L, true);
-
-        assertTrue(result.isApproved());
-        String generated = capturePassword(encoder);
-        // Both prior channels failed, WhatsApp is the last resort — same password.
-        verify(whatsApp).sendCustomNotification(eq("+263771234567"), contains(generated));
-    }
-
-    @Test
-    void firstActivation_usesSmsWhenNoEmailOnFile() {
-        UserRepository userRepo = mock(UserRepository.class);
-        PasswordEncoder encoder = mock(PasswordEncoder.class);
-        WhatsAppNotificationClient whatsApp = mock(WhatsAppNotificationClient.class);
-        SmsNotificationClient sms = mock(SmsNotificationClient.class);
-        EmailNotificationClient email = mock(EmailNotificationClient.class);
-        // No email address — the email channel is skipped entirely (never guess).
+    void firstActivation_publishesEvenWhenOnlyPhoneOnFile() {
+        // The listener decides which channels to try based on what's set on the
+        // event; UserAdminService doesn't pre-filter. So even "no email" users
+        // get an event — the listener will skip the email branch internally.
+        Fixture f = new Fixture();
         User user = User.builder().id(5L).phoneNumber("+263771234567")
                 .password("placeholder").active(false).approved(false).build();
-        when(userRepo.findById(5L)).thenReturn(Optional.of(user));
-        when(userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(encoder.encode(anyString())).thenReturn("encoded-temp");
+        when(f.userRepo.findById(5L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(f.encoder.encode(anyString())).thenReturn("encoded-temp");
 
-        new UserAdminService(userRepo, encoder, whatsApp, sms, email,
-                mock(AuditService.class)).setActive(5L, true);
+        f.service.setActive(5L, true);
 
-        String generated = capturePassword(encoder);
-        verify(sms).sendSms(eq("+263771234567"), contains(generated), anyString());
-        verifyNoInteractions(email, whatsApp);
+        CredentialDeliveryRequested ev = captureEvent(f.publisher);
+        assertNull(ev.email());
+        assertEquals("+263771234567", ev.phoneNumber());
+    }
+
+    // -- Idempotent / retry semantics ----------------------------------------
+
+    @Test
+    void noOp_whenAlreadyActiveAndCredentialDelivered() {
+        // The classic happy-path retry: row already active, credentials were
+        // delivered (timestamp set). The retry returns the existing user
+        // unchanged, no save, no audit, no event.
+        Fixture f = new Fixture();
+        User user = User.builder().id(3L).active(true).approved(true)
+                .mustChangePassword(true).credentialDeliveredAt(LocalDateTime.now())
+                .password("pw").build();
+        when(f.userRepo.findById(3L)).thenReturn(Optional.of(user));
+
+        f.service.setActive(3L, true);
+
+        verify(f.userRepo, never()).save(any());
+        verify(f.encoder, never()).encode(any());
+        verifyNoInteractions(f.publisher, f.audit);
     }
 
     @Test
-    void reactivation_doesNotResetPasswordOrNotify() {
-        UserRepository userRepo = mock(UserRepository.class);
-        PasswordEncoder encoder = mock(PasswordEncoder.class);
-        WhatsAppNotificationClient whatsApp = mock(WhatsAppNotificationClient.class);
-        SmsNotificationClient sms = mock(SmsNotificationClient.class);
-        EmailNotificationClient email = mock(EmailNotificationClient.class);
-        // Already approved, later deactivated; user has since chosen their own password.
+    void retry_whenPreviousDeliveryFailed_rotatesPassword_andRepublishesEvent() {
+        // The bug-fix path: an earlier activation committed the row but the
+        // listener's fallback chain failed on every channel, so
+        // credential_delivered_at is still NULL. A retried activation must
+        // rotate the temp password and publish a fresh event so the user can
+        // actually log in. Audit row is NOT re-emitted (the activation event
+        // already happened on the first call); this is purely a re-delivery.
+        Fixture f = new Fixture();
+        User user = User.builder().id(4L).email("c@d.com").phoneNumber("+263771234567")
+                .active(true).approved(true).mustChangePassword(true)
+                .credentialDeliveredAt(null)
+                .password("old-hash").build();
+        when(f.userRepo.findById(4L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(f.encoder.encode(anyString())).thenReturn("new-hash");
+
+        User result = f.service.setActive(4L, true);
+
+        assertEquals("new-hash", result.getPassword());
+        assertTrue(result.isMustChangePassword());
+
+        String generated = capturePassword(f.encoder);
+        CredentialDeliveryRequested ev = captureEvent(f.publisher);
+        assertEquals(generated, ev.tempPassword());
+        assertEquals(CredentialDeliveryRequested.Reason.APPROVAL, ev.reason());
+        verifyNoInteractions(f.audit);
+    }
+
+    @Test
+    void reactivation_doesNotResetPassword_orPublishEvent() {
+        // Already approved, previously deactivated, user has since chosen
+        // their own password (mustChangePassword=false). Re-activating must
+        // not rotate the credential and must not publish a delivery event.
+        Fixture f = new Fixture();
         User user = User.builder().id(2L).email("c@d.com").password("user-chosen")
                 .active(false).approved(true).mustChangePassword(false).build();
-        when(userRepo.findById(2L)).thenReturn(Optional.of(user));
-        when(userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(f.userRepo.findById(2L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        User result = new UserAdminService(userRepo, encoder, whatsApp, sms, email,
-                mock(AuditService.class)).setActive(2L, true);
+        User result = f.service.setActive(2L, true);
 
         assertTrue(result.isActive());
         assertEquals("user-chosen", result.getPassword());
         assertFalse(result.isMustChangePassword());
-        verify(encoder, never()).encode(any());
-        // Re-activation is not a first approval — no password is re-sent on any channel.
-        verifyNoInteractions(whatsApp, sms, email);
+        verify(f.encoder, never()).encode(any());
+        verifyNoInteractions(f.publisher);
+    }
+
+    // -- markCredentialDelivered (callback for the listener) ------------------
+
+    @Test
+    void markCredentialDelivered_setsTimestamp_onSave() {
+        Fixture f = new Fixture();
+        User user = User.builder().id(99L).active(true).approved(true).build();
+        when(f.userRepo.findById(99L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        f.service.markCredentialDelivered(99L);
+
+        ArgumentCaptor<User> cap = ArgumentCaptor.forClass(User.class);
+        verify(f.userRepo).save(cap.capture());
+        assertNotNull(cap.getValue().getCredentialDeliveredAt());
     }
 
     @Test
-    void noOp_whenAlreadyActiveAndApproved() {
-        UserRepository userRepo = mock(UserRepository.class);
-        PasswordEncoder encoder = mock(PasswordEncoder.class);
-        WhatsAppNotificationClient whatsApp = mock(WhatsAppNotificationClient.class);
-        SmsNotificationClient sms = mock(SmsNotificationClient.class);
-        EmailNotificationClient email = mock(EmailNotificationClient.class);
-        User user = User.builder().id(3L).active(true).approved(true).password("pw").build();
-        when(userRepo.findById(3L)).thenReturn(Optional.of(user));
+    void markCredentialDelivered_noOp_whenUserGone() {
+        // User deleted between event publish and listener callback — log and
+        // move on, don't throw and crash the listener thread.
+        Fixture f = new Fixture();
+        when(f.userRepo.findById(404L)).thenReturn(Optional.empty());
 
-        new UserAdminService(userRepo, encoder, whatsApp, sms, email,
-                mock(AuditService.class)).setActive(3L, true);
+        assertDoesNotThrow(() -> f.service.markCredentialDelivered(404L));
+        verify(f.userRepo, never()).save(any());
+    }
 
-        verify(userRepo, never()).save(any());
-        verify(encoder, never()).encode(any());
-        verifyNoInteractions(whatsApp, sms, email);
+    // -- Deactivation (still inline, with TODO marker) -----------------------
+
+    @Test
+    void deactivation_notifiesByEmail_swiftInnBrandForSystemUser() {
+        Fixture f = new Fixture();
+        User user = User.builder().id(12L).email("staff@acme.co.zw").firstName("Tendai")
+                .roles(java.util.EnumSet.of(User.Role.SHOP_ADMIN))
+                .active(true).approved(true).password("pw").build();
+        when(f.userRepo.findById(12L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        f.service.setActive(12L, false);
+
+        verify(f.email).sendEmail(eq("staff@acme.co.zw"), contains("deactivated"),
+                contains("SwiftInn"), startsWith("ACCOUNT-DEACTIVATED-"));
+        // Deactivation must never publish a credential-delivery event.
+        verifyNoInteractions(f.publisher);
     }
 
     @Test
     void deactivation_ofApprovedUser_leavesPasswordUntouched() {
-        UserRepository userRepo = mock(UserRepository.class);
-        PasswordEncoder encoder = mock(PasswordEncoder.class);
-        WhatsAppNotificationClient whatsApp = mock(WhatsAppNotificationClient.class);
-        SmsNotificationClient sms = mock(SmsNotificationClient.class);
-        EmailNotificationClient email = mock(EmailNotificationClient.class);
+        Fixture f = new Fixture();
         User user = User.builder().id(4L).active(true).approved(true).password("pw").build();
-        when(userRepo.findById(4L)).thenReturn(Optional.of(user));
-        when(userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(f.userRepo.findById(4L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        User result = new UserAdminService(userRepo, encoder, whatsApp, sms, email,
-                mock(AuditService.class)).setActive(4L, false);
+        User result = f.service.setActive(4L, false);
 
         assertFalse(result.isActive());
         assertEquals("pw", result.getPassword());
-        verify(encoder, never()).encode(any());
-        verifyNoInteractions(whatsApp, sms, email);
+        verify(f.encoder, never()).encode(any());
+        verifyNoInteractions(f.publisher);
     }
 
-    @Test
-    void throwsNotFound_whenUserMissing() {
-        UserRepository userRepo = mock(UserRepository.class);
-        when(userRepo.findById(99L)).thenReturn(Optional.empty());
-
-        assertThrows(NotFoundException.class,
-                () -> new UserAdminService(userRepo, mock(PasswordEncoder.class),
-                        mock(WhatsAppNotificationClient.class), mock(SmsNotificationClient.class),
-                        mock(EmailNotificationClient.class), mock(AuditService.class))
-                        .setActive(99L, true));
-    }
+    // -- Reset temp password (admin recovery) --------------------------------
 
     @Test
-    void resetTemporaryPassword_rotatesFlagsChangeAndNotifies() {
-        UserRepository userRepo = mock(UserRepository.class);
-        PasswordEncoder encoder = mock(PasswordEncoder.class);
-        EmailNotificationClient email = mock(EmailNotificationClient.class);
-        AuditService audit = mock(AuditService.class);
-        // Approved user who never got their onboarding notification.
+    void resetTemporaryPassword_rotatesFlagsChange_clearsDeliveredAt_andPublishesResetEvent() {
+        Fixture f = new Fixture();
         User user = User.builder().id(42L).email("alice@innbucks.co.zw").phoneNumber("+263771234567")
                 .password("old-hash").active(true).approved(true).mustChangePassword(false)
+                .credentialDeliveredAt(LocalDateTime.now().minusDays(1))
                 .roles(java.util.EnumSet.of(User.Role.EVENT_ORGANIZER)).build();
-        when(userRepo.findById(42L)).thenReturn(Optional.of(user));
-        when(userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(encoder.encode(anyString())).thenReturn("new-hash");
+        when(f.userRepo.findById(42L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(f.encoder.encode(anyString())).thenReturn("new-hash");
 
-        User result = new UserAdminService(userRepo, encoder,
-                mock(WhatsAppNotificationClient.class), mock(SmsNotificationClient.class), email, audit)
-                .resetTemporaryPassword(42L, "admin@innbucks.co.zw", AuditContext.none());
+        User result = f.service.resetTemporaryPassword(42L, "admin@innbucks.co.zw", AuditContext.none());
 
         assertEquals("new-hash", result.getPassword());
         assertTrue(result.isMustChangePassword());            // single-use again
-        String generated = capturePassword(encoder);
+        assertNull(result.getCredentialDeliveredAt());        // cleared so re-delivery resets it cleanly
+        String generated = capturePassword(f.encoder);
         assertNotEquals("#Pass123", generated);
         assertTrue(generated.matches(TEMP_PW_SHAPE));
-        // The fresh password is delivered (email primary).
-        verify(email).sendEmail(eq("alice@innbucks.co.zw"), anyString(), contains(generated), anyString());
-        verify(audit).recordSuccess(
+
+        CredentialDeliveryRequested ev = captureEvent(f.publisher);
+        assertEquals(generated, ev.tempPassword());
+        assertEquals(CredentialDeliveryRequested.Reason.RESET, ev.reason());
+        verify(f.audit).recordSuccess(
                 eq(AuditEventType.USER_TEMP_PASSWORD_RESET),
                 eq("admin@innbucks.co.zw"), eq(AuditService.ACTOR_TYPE_USER),
                 eq("42"), eq(AuditService.TARGET_TYPE_USER),
@@ -246,99 +284,85 @@ class UserAdminServiceTest {
 
     @Test
     void resetTemporaryPassword_refusesSuperAdminTarget() {
-        UserRepository userRepo = mock(UserRepository.class);
-        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        Fixture f = new Fixture();
         User superAdmin = User.builder().id(1L).email("admin@innbucks.co.zw")
                 .password("pw").active(true).approved(true)
                 .roles(java.util.EnumSet.of(User.Role.SUPER_ADMIN)).build();
-        when(userRepo.findById(1L)).thenReturn(Optional.of(superAdmin));
+        when(f.userRepo.findById(1L)).thenReturn(Optional.of(superAdmin));
 
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> new UserAdminService(userRepo, encoder,
-                        mock(WhatsAppNotificationClient.class), mock(SmsNotificationClient.class),
-                        mock(EmailNotificationClient.class), mock(AuditService.class))
-                        .resetTemporaryPassword(1L, "admin@innbucks.co.zw", AuditContext.none()));
+                () -> f.service.resetTemporaryPassword(1L, "admin@innbucks.co.zw", AuditContext.none()));
 
-        assertTrue(ex.getReason() != null && ex.getReason().contains("SUPER_ADMIN"));
-        // Nothing rotated, nothing saved.
-        verify(encoder, never()).encode(any());
-        verify(userRepo, never()).save(any());
+        assertThat(ex.getReason()).contains("SUPER_ADMIN");
+        verify(f.encoder, never()).encode(any());
+        verify(f.userRepo, never()).save(any());
+        verifyNoInteractions(f.publisher);
     }
 
     @Test
     void resetTemporaryPassword_throwsNotFoundWhenMissing() {
-        UserRepository userRepo = mock(UserRepository.class);
-        when(userRepo.findById(99L)).thenReturn(Optional.empty());
-
+        Fixture f = new Fixture();
+        when(f.userRepo.findById(99L)).thenReturn(Optional.empty());
         assertThrows(NotFoundException.class,
-                () -> new UserAdminService(userRepo, mock(PasswordEncoder.class),
-                        mock(WhatsAppNotificationClient.class), mock(SmsNotificationClient.class),
-                        mock(EmailNotificationClient.class), mock(AuditService.class))
-                        .resetTemporaryPassword(99L, "admin@innbucks.co.zw", AuditContext.none()));
+                () -> f.service.resetTemporaryPassword(99L, "admin@innbucks.co.zw", AuditContext.none()));
     }
+
+    // -- SUPER_ADMIN protection ----------------------------------------------
 
     @Test
     void setActive_refusesSuperAdminTarget_403() {
-        UserRepository userRepo = mock(UserRepository.class);
-        PasswordEncoder encoder = mock(PasswordEncoder.class);
-        AuditService audit = mock(AuditService.class);
+        Fixture f = new Fixture();
         User superAdmin = User.builder().id(1L).email("admin@innbucks.co.zw")
                 .password("pw").active(true).approved(true)
                 .roles(java.util.EnumSet.of(User.Role.SUPER_ADMIN)).build();
-        when(userRepo.findById(1L)).thenReturn(Optional.of(superAdmin));
+        when(f.userRepo.findById(1L)).thenReturn(Optional.of(superAdmin));
 
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> new UserAdminService(userRepo, encoder,
-                        mock(WhatsAppNotificationClient.class), mock(SmsNotificationClient.class),
-                        mock(EmailNotificationClient.class), audit)
-                        .setActive(1L, /* active */ false, "admin@innbucks.co.zw", AuditContext.none()));
+                () -> f.service.setActive(1L, /* active */ false, "admin@innbucks.co.zw", AuditContext.none()));
 
         assertEquals(org.springframework.http.HttpStatus.FORBIDDEN, ex.getStatusCode());
-        assertTrue(ex.getReason() != null && ex.getReason().contains("SUPER_ADMIN"));
-        // Nothing written, no audit row, no notification.
-        verify(userRepo, never()).save(any());
-        verify(audit, never()).recordSuccess(any(), anyString(), anyString(), anyString(), anyString(),
+        assertThat(ex.getReason()).contains("SUPER_ADMIN");
+        verify(f.userRepo, never()).save(any());
+        verify(f.audit, never()).recordSuccess(any(), anyString(), anyString(), anyString(), anyString(),
                 any(), any());
+        verifyNoInteractions(f.publisher);
     }
 
     @Test
     void setActive_refusesSuperAdminTarget_evenWhenReactivating() {
-        // Same protection in the opposite direction — once SUPER_ADMIN is
-        // deactivated (it cannot be, see above), no one could re-enable it.
-        // Cover the active=true path too so a future regression that splits
-        // the guard by direction is caught.
-        UserRepository userRepo = mock(UserRepository.class);
+        Fixture f = new Fixture();
         User superAdmin = User.builder().id(1L).email("admin@innbucks.co.zw")
                 .password("pw").active(false).approved(true)
                 .roles(java.util.EnumSet.of(User.Role.SUPER_ADMIN)).build();
-        when(userRepo.findById(1L)).thenReturn(Optional.of(superAdmin));
+        when(f.userRepo.findById(1L)).thenReturn(Optional.of(superAdmin));
 
         assertThrows(ResponseStatusException.class,
-                () -> new UserAdminService(userRepo, mock(PasswordEncoder.class),
-                        mock(WhatsAppNotificationClient.class), mock(SmsNotificationClient.class),
-                        mock(EmailNotificationClient.class), mock(AuditService.class))
-                        .setActive(1L, /* active */ true, "admin@innbucks.co.zw", AuditContext.none()));
-        verify(userRepo, never()).save(any());
+                () -> f.service.setActive(1L, /* active */ true, "admin@innbucks.co.zw", AuditContext.none()));
+        verify(f.userRepo, never()).save(any());
     }
 
     @Test
+    void throwsNotFound_whenUserMissing() {
+        Fixture f = new Fixture();
+        when(f.userRepo.findById(99L)).thenReturn(Optional.empty());
+        assertThrows(NotFoundException.class, () -> f.service.setActive(99L, true));
+    }
+
+    // -- Audit ----------------------------------------------------------------
+
+    @Test
     void firstActivation_recordsUSER_APPROVED_withAdminAsActor() {
-        UserRepository userRepo = mock(UserRepository.class);
-        PasswordEncoder encoder = mock(PasswordEncoder.class);
-        AuditService audit = mock(AuditService.class);
+        Fixture f = new Fixture();
         User user = User.builder().id(7L).email("merchant@acme.co.zw").phoneNumber("+263771234567")
                 .password("placeholder").active(false).approved(false).build();
-        when(userRepo.findById(7L)).thenReturn(Optional.of(user));
-        when(userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
-        when(encoder.encode(anyString())).thenReturn("encoded-temp");
+        when(f.userRepo.findById(7L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(f.encoder.encode(anyString())).thenReturn("encoded-temp");
 
         AuditContext ctx = new AuditContext("203.0.113.5", "curl/8.4.0");
-        new UserAdminService(userRepo, encoder,
-                mock(WhatsAppNotificationClient.class), mock(SmsNotificationClient.class),
-                mock(EmailNotificationClient.class), audit)
-                .setActive(7L, true, "admin@innbucks.co.zw", ctx);
+        f.service.setActive(7L, true, "admin@innbucks.co.zw", ctx);
 
-        verify(audit).recordSuccess(
+        verify(f.audit).recordSuccess(
                 eq(AuditEventType.USER_APPROVED),
                 eq("admin@innbucks.co.zw"), eq(AuditService.ACTOR_TYPE_USER),
                 eq("7"), eq(AuditService.TARGET_TYPE_USER),
@@ -351,21 +375,15 @@ class UserAdminServiceTest {
 
     @Test
     void reactivation_recordsUSER_ACTIVATED_notUSER_APPROVED() {
-        UserRepository userRepo = mock(UserRepository.class);
-        AuditService audit = mock(AuditService.class);
-        // Already-approved user that admin previously deactivated. Re-activating
-        // is NOT an approval, so the event must be USER_ACTIVATED.
+        Fixture f = new Fixture();
         User user = User.builder().id(8L).email("staff@acme.co.zw")
                 .password("user-chosen").active(false).approved(true).mustChangePassword(false).build();
-        when(userRepo.findById(8L)).thenReturn(Optional.of(user));
-        when(userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(f.userRepo.findById(8L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        new UserAdminService(userRepo, mock(PasswordEncoder.class),
-                mock(WhatsAppNotificationClient.class), mock(SmsNotificationClient.class),
-                mock(EmailNotificationClient.class), audit)
-                .setActive(8L, true, "admin@innbucks.co.zw", AuditContext.none());
+        f.service.setActive(8L, true, "admin@innbucks.co.zw", AuditContext.none());
 
-        verify(audit).recordSuccess(
+        verify(f.audit).recordSuccess(
                 eq(AuditEventType.USER_ACTIVATED),
                 eq("admin@innbucks.co.zw"), eq(AuditService.ACTOR_TYPE_USER),
                 eq("8"), eq(AuditService.TARGET_TYPE_USER),
@@ -375,19 +393,15 @@ class UserAdminServiceTest {
 
     @Test
     void deactivation_recordsUSER_DEACTIVATED() {
-        UserRepository userRepo = mock(UserRepository.class);
-        AuditService audit = mock(AuditService.class);
+        Fixture f = new Fixture();
         User user = User.builder().id(9L).email("staff@acme.co.zw")
                 .password("pw").active(true).approved(true).build();
-        when(userRepo.findById(9L)).thenReturn(Optional.of(user));
-        when(userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(f.userRepo.findById(9L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        new UserAdminService(userRepo, mock(PasswordEncoder.class),
-                mock(WhatsAppNotificationClient.class), mock(SmsNotificationClient.class),
-                mock(EmailNotificationClient.class), audit)
-                .setActive(9L, false, "admin@innbucks.co.zw", AuditContext.none());
+        f.service.setActive(9L, false, "admin@innbucks.co.zw", AuditContext.none());
 
-        verify(audit).recordSuccess(
+        verify(f.audit).recordSuccess(
                 eq(AuditEventType.USER_DEACTIVATED),
                 eq("admin@innbucks.co.zw"), eq(AuditService.ACTOR_TYPE_USER),
                 eq("9"), eq(AuditService.TARGET_TYPE_USER),
@@ -396,53 +410,28 @@ class UserAdminServiceTest {
     }
 
     @Test
-    void deactivation_notifiesUserByEmail_swiftInnBrandForSystemUser() {
-        UserRepository userRepo = mock(UserRepository.class);
-        EmailNotificationClient email = mock(EmailNotificationClient.class);
-        User user = User.builder().id(12L).email("staff@acme.co.zw").firstName("Tendai")
-                .roles(java.util.EnumSet.of(User.Role.SHOP_ADMIN))
-                .active(true).approved(true).password("pw").build();
-        when(userRepo.findById(12L)).thenReturn(Optional.of(user));
-        when(userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
-
-        new UserAdminService(userRepo, mock(PasswordEncoder.class),
-                mock(WhatsAppNotificationClient.class), mock(SmsNotificationClient.class),
-                email, mock(AuditService.class))
-                .setActive(12L, false);
-
-        verify(email).sendEmail(eq("staff@acme.co.zw"), contains("deactivated"),
-                contains("SwiftInn"), startsWith("ACCOUNT-DEACTIVATED-"));
-    }
-
-    @Test
     void noOpIdempotentRetry_recordsNoAudit() {
-        UserRepository userRepo = mock(UserRepository.class);
-        AuditService audit = mock(AuditService.class);
-        User user = User.builder().id(10L).active(true).approved(true).password("pw").build();
-        when(userRepo.findById(10L)).thenReturn(Optional.of(user));
+        Fixture f = new Fixture();
+        User user = User.builder().id(10L).active(true).approved(true)
+                .mustChangePassword(true).credentialDeliveredAt(LocalDateTime.now())
+                .password("pw").build();
+        when(f.userRepo.findById(10L)).thenReturn(Optional.of(user));
 
-        new UserAdminService(userRepo, mock(PasswordEncoder.class),
-                mock(WhatsAppNotificationClient.class), mock(SmsNotificationClient.class),
-                mock(EmailNotificationClient.class), audit)
-                .setActive(10L, true, "admin@innbucks.co.zw", AuditContext.none());
+        f.service.setActive(10L, true, "admin@innbucks.co.zw", AuditContext.none());
 
-        verifyNoInteractions(audit);
+        verifyNoInteractions(f.audit);
     }
 
     @Test
     void noArgOverload_recordsSystemActor_forBackwardCompat() {
-        UserRepository userRepo = mock(UserRepository.class);
-        AuditService audit = mock(AuditService.class);
+        Fixture f = new Fixture();
         User user = User.builder().id(11L).active(false).approved(true).password("pw").build();
-        when(userRepo.findById(11L)).thenReturn(Optional.of(user));
-        when(userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(f.userRepo.findById(11L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        new UserAdminService(userRepo, mock(PasswordEncoder.class),
-                mock(WhatsAppNotificationClient.class), mock(SmsNotificationClient.class),
-                mock(EmailNotificationClient.class), audit)
-                .setActive(11L, true); // legacy overload — no admin email, no context
+        f.service.setActive(11L, true);
 
-        verify(audit).recordSuccess(
+        verify(f.audit).recordSuccess(
                 eq(AuditEventType.USER_ACTIVATED),
                 eq("system"), eq(AuditService.ACTOR_TYPE_SYSTEM),
                 eq("11"), eq(AuditService.TARGET_TYPE_USER),

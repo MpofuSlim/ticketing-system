@@ -53,6 +53,12 @@ public class UserResponseDTO {
     @Schema(example = "2026-01-15T10:30:00")
     private LocalDateTime createdAt;
 
+    @Schema(example = "2026-01-15T10:31:42", nullable = true,
+            description = "When ANY notification channel confirmed delivery of the user's temporary password. "
+                    + "NULL means activation succeeded but no channel reached the user — the admin UI should "
+                    + "flag this account and offer a Resend Credentials action (POST /admin/users/{id}/reset-temp-password).")
+    private LocalDateTime credentialDeliveredAt;
+
     @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
             description = "Loyalty merchant the user is scoped to. Populated for SHOP_ADMIN and SHOP_USER.")
     private UUID loyaltyMerchantId;
@@ -129,6 +135,7 @@ public class UserResponseDTO {
                         : List.copyOf(user.getDefaultServices()))
                 .active(user.isActive())
                 .createdAt(user.getCreatedAt())
+                .credentialDeliveredAt(user.getCredentialDeliveredAt())
                 .loyaltyMerchantId(user.getLoyaltyMerchantId())
                 .loyaltyShopId(user.getLoyaltyShopId())
                 .createdByOrganizerUuid(user.getCreatedByOrganizerUuid())
