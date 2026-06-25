@@ -6,6 +6,15 @@ spring:
       pageable:
         max-page-size: ${PAGEABLE_MAX_PAGE_SIZE:100}
         default-page-size: ${PAGEABLE_DEFAULT_PAGE_SIZE:20}
+    # Shared Redis — read side of the cross-service logout denylist only (no
+    # Spring Data Redis repositories). Same Redis the gateway / user-service /
+    # payment / seat / booking services use.
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      repositories:
+        enabled: false
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/loyalty_service}
     driver-class-name: ${DB_DRIVER:org.postgresql.Driver}

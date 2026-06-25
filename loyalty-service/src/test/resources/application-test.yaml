@@ -1,4 +1,10 @@
 spring:
+  # No Redis in tests — the denylist's StringRedisTemplate is optional
+  # (ObjectProvider) and fails open when absent.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.data.redis.autoconfigure.RedisAutoConfiguration
+      - org.springframework.boot.data.redis.autoconfigure.RedisRepositoriesAutoConfiguration
   datasource:
     url: jdbc:tc:postgresql:16-alpine:///loyalty_test
     driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
