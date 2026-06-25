@@ -2,19 +2,22 @@ package com.innbucks.userservice.service;
 
 import com.innbucks.userservice.client.EmailNotificationClient;
 import com.innbucks.userservice.client.SmsNotificationClient;
-import com.innbucks.userservice.client.WhatsAppNotificationClient;
 import com.innbucks.userservice.entity.User;
+import com.innbucks.userservice.event.CredentialDeliveryRequested;
 import com.innbucks.userservice.exception.NotFoundException;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.util.TemporaryPasswordGenerator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Map;
 
 /**
@@ -28,6 +31,15 @@ import java.util.Map;
  * commit. Moved here so the controller can stay thin (translate HTTP <->
  * DTO, nothing else) and so future admin operations don't keep
  * reinventing the pattern.
+ *
+ * <p>Credential delivery used to run inline here, holding the @Transactional
+ * open through three sequential outbound HTTP calls (email -> SMS -> WhatsApp)
+ * and stretching the admin {@code PUT /admin/users/{id}/active} response out
+ * to 30–48s — past the FE's AbortController, surfacing as a misleading
+ * "Request timeout" while the DB had already committed. We now publish a
+ * {@link CredentialDeliveryRequested} event and a {@code @TransactionalEventListener
+ * (AFTER_COMMIT) + @Async} listener handles the fan-out off the request
+ * thread (see {@code notification.CredentialDeliveryListener}).
  */
 @Slf4j
 @Service
@@ -36,10 +48,13 @@ public class UserAdminService {
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
-    private final WhatsAppNotificationClient whatsAppNotificationClient;
+    // Deactivation still notifies inline today (separate code path, same root
+    // cause to fix in a follow-up). Credential delivery moved off this class —
+    // those clients are now consumed by CredentialDeliveryListener.
     private final SmsNotificationClient smsNotificationClient;
     private final EmailNotificationClient emailNotificationClient;
     private final AuditService auditService;
+    private final ApplicationEventPublisher eventPublisher;
 
     /**
      * Backward-compatible overload used by unit tests / callers that don't have
@@ -74,12 +89,29 @@ public class UserAdminService {
         // the user has since changed.
         boolean firstApproval = active && !user.isApproved();
 
-        // Idempotent: a retried call sees the same outcome without a write, but
-        // must never short-circuit a still-pending first approval. No audit
-        // row either — the no-op didn't change observable state.
+        // Retry semantics: if the row already shows the requested state AND it
+        // isn't a still-pending first approval, only treat as a no-op when the
+        // previous credential delivery actually reached the user. The original
+        // incident showed a user stuck "approved but unreachable" because every
+        // channel failed and the retry button hit this short-circuit without
+        // re-firing. Now: if no channel ever confirmed delivery, we rotate the
+        // temp password and re-publish.
         if (user.isActive() == active && !firstApproval) {
-            log.info("setActive no-op userId={} active={}", id, active);
-            return user;
+            boolean deliveryStillPending = active
+                    && user.isMustChangePassword()
+                    && user.getCredentialDeliveredAt() == null;
+            if (!deliveryStillPending) {
+                log.info("setActive no-op userId={} active={}", id, active);
+                return user;
+            }
+            String fresh = TemporaryPasswordGenerator.generate();
+            user.setPassword(passwordEncoder.encode(fresh));
+            user.setMustChangePassword(true);
+            User saved = userRepository.save(user);
+            log.info("setActive retry re-publishing credential delivery userId={} "
+                    + "(previous attempt left credential_delivered_at NULL)", id);
+            publishCredentialDelivery(saved, fresh, CredentialDeliveryRequested.Reason.APPROVAL);
+            return saved;
         }
 
         // The generated temp password (firstApproval only) has to survive past
@@ -101,11 +133,30 @@ public class UserAdminService {
         recordAudit(saved, firstApproval, active, adminEmail, auditContext);
 
         if (firstApproval) {
-            notifyApproval(saved, tempPassword);
+            publishCredentialDelivery(saved, tempPassword,
+                    CredentialDeliveryRequested.Reason.APPROVAL);
         } else if (!active) {
             notifyDeactivation(saved);
         }
         return saved;
+    }
+
+    /**
+     * Callback target for {@code CredentialDeliveryListener} — marks the moment
+     * any channel (email / SMS / WhatsApp) confirmed delivery so a retried
+     * activation knows not to re-fire. Runs in its own transaction because the
+     * listener executes after the original setActive() transaction has already
+     * committed (and on a different thread, thanks to @Async). Failure to mark
+     * is non-fatal (the timestamp is a UX hint, not an invariant) so a transient
+     * DB hiccup here doesn't blow up the listener thread; logged at WARN.
+     */
+    @Transactional
+    public void markCredentialDelivered(Long userId) {
+        userRepository.findById(userId).ifPresentOrElse(u -> {
+            u.setCredentialDeliveredAt(LocalDateTime.now(ZoneOffset.UTC));
+            userRepository.save(u);
+        }, () -> log.warn("markCredentialDelivered: user vanished between event publish "
+                + "and listener callback userId={}", userId));
     }
 
     /**
@@ -114,6 +165,11 @@ public class UserAdminService {
      * SwiftInn for system users). A delivery failure never affects the
      * already-committed deactivation. Not sent on the SUPER_ADMIN path (guarded
      * earlier) or on (re)activation.
+     *
+     * <p>TODO: this still runs synchronously inside the @Transactional method;
+     * a slow email gateway here will reproduce the same FE-timeout symptom on
+     * the deactivate endpoint. Pending follow-up to extract into its own
+     * event + @Async listener (same pattern as CredentialDeliveryListener).
      */
     private void notifyDeactivation(User user) {
         String brand = user.hasRole(User.Role.CUSTOMER) ? "InnBucks" : "SwiftInn";
@@ -158,7 +214,8 @@ public class UserAdminService {
      * <p>The old password is irretrievably bcrypt-hashed, so "resend" can only
      * mean "generate a new one" — that's why this rotates rather than re-sends.
      * The user is re-flagged {@code mustChangePassword} so the fresh value is
-     * still single-use.
+     * still single-use. {@code credentialDeliveredAt} is cleared so a successful
+     * delivery on this fresh password updates the timestamp cleanly.
      *
      * <p>Refuses to act on a SUPER_ADMIN target: that account's credential is
      * owned by the {@code BOOTSTRAP_ADMIN_PASSWORD} env seed, not this
@@ -179,6 +236,7 @@ public class UserAdminService {
         String tempPassword = TemporaryPasswordGenerator.generate();
         user.setPassword(passwordEncoder.encode(tempPassword));
         user.setMustChangePassword(true);
+        user.setCredentialDeliveredAt(null);
         User saved = userRepository.save(user);
         log.info("Temporary password reset userId={} by={}", id, adminEmail == null ? "system" : adminEmail);
 
@@ -190,7 +248,7 @@ public class UserAdminService {
                 Map.of("targetEmail", saved.getEmail() == null ? "" : saved.getEmail()),
                 auditContext == null ? AuditContext.none() : auditContext);
 
-        notifyPasswordReset(saved, tempPassword);
+        publishCredentialDelivery(saved, tempPassword, CredentialDeliveryRequested.Reason.RESET);
         return saved;
     }
 
@@ -223,98 +281,11 @@ public class UserAdminService {
                 auditContext == null ? AuditContext.none() : auditContext);
     }
 
-    /**
-     * Notify the freshly-approved user of their first-time password. Best-effort:
-     * a delivery failure must NOT block the approval — the account is already
-     * approved and the password set. Email is the primary channel (system users
-     * authenticate by email and a credential belongs in an inbox, not an SMS);
-     * SMS then WhatsApp are the phone-based fallbacks for when no address is on
-     * file or the email gateway is unreachable. Never logs the password.
-     */
-    private void notifyApproval(User user, String tempPassword) {
-        deliverCredential(user, tempPassword,
-                "Your SwiftInn account has been approved",
-                "Good news — your SwiftInn account has been approved and is now active.",
-                "Your SwiftInn account has been approved. Your temporary password is "
-                        + tempPassword + ". Please log in and change it immediately.",
-                "APPROVAL-" + user.getId());
-    }
-
-    private void notifyPasswordReset(User user, String tempPassword) {
-        deliverCredential(user, tempPassword,
-                "Your SwiftInn temporary password has been reset",
-                "Your SwiftInn temporary password has been reset by an administrator.",
-                "Your SwiftInn temporary password has been reset to "
-                        + tempPassword + ". Please log in and change it immediately.",
-                "PWRESET-" + user.getId());
-    }
-
-    /**
-     * Deliver a freshly-generated temporary password to the user. Best-effort:
-     * a delivery failure must NOT roll back the (already-committed) approval /
-     * reset — the password is set either way. Email is the primary channel (a
-     * credential belongs in an inbox); SMS then WhatsApp are the phone-based
-     * fallbacks for when no address is on file or the email gateway is
-     * unreachable. Never logs the password.
-     *
-     * <p>With per-user random passwords this is the ONLY channel that carries
-     * the credential, so a total delivery failure leaves the user unable to log
-     * in — the SUPER_ADMIN recovers them via {@code resetTemporaryPassword}.
-     */
-    private void deliverCredential(User user, String tempPassword,
-                                   String emailSubject, String emailIntro,
-                                   String smsText, String ref) {
-        String email = user.getEmail();
-        if (email != null && !email.isBlank()) {
-            try {
-                emailNotificationClient.sendEmail(
-                        email, emailSubject,
-                        buildCredentialText(user.getFirstName(), email, tempPassword, emailIntro),
-                        ref);
-                log.info("Credential email sent userId={} ref={}", user.getId(), ref);
-                return;
-            } catch (RuntimeException emailEx) {
-                log.warn("Credential email failed userId={} ref={}, trying SMS: {}",
-                        user.getId(), ref, emailEx.getMessage());
-            }
-        }
-
-        String phone = user.getPhoneNumber();
-        if (phone == null || phone.isBlank()) {
-            log.warn("User has no reachable email or phone; skipping credential delivery userId={} ref={}",
-                    user.getId(), ref);
-            return;
-        }
-        try {
-            smsNotificationClient.sendSms(phone, smsText, ref);
-            log.info("Credential SMS sent userId={} ref={}", user.getId(), ref);
-            return;
-        } catch (RuntimeException smsEx) {
-            log.warn("Credential SMS failed userId={} ref={}, trying WhatsApp: {}",
-                    user.getId(), ref, smsEx.getMessage());
-        }
-        try {
-            whatsAppNotificationClient.sendCustomNotification(phone, smsText);
-            log.info("Credential WhatsApp notification sent userId={} ref={}", user.getId(), ref);
-        } catch (RuntimeException ex) {
-            log.warn("Credential delivery failed userId={} ref={} (account state unchanged): {}",
-                    user.getId(), ref, ex.getMessage());
-        }
-    }
-
-    /**
-     * Renders the credential email body as plain text (the notification API has
-     * no HTML mode), matching the SMS/WhatsApp standard. The temporary password
-     * is a freshly-generated random value from {@link TemporaryPasswordGenerator}.
-     */
-    private String buildCredentialText(String firstName, String email, String tempPassword, String intro) {
-        String name = (firstName != null && !firstName.isBlank()) ? firstName : "there";
-        return "Hi " + name + ",\n\n"
-                + intro + "\n\n"
-                + "Use these credentials to sign in:\n"
-                + "Username: " + email + "\n"
-                + "Temporary password: " + tempPassword + "\n\n"
-                + "For your security, please log in and change your password immediately.\n\n"
-                + "— The SwiftInn Team";
+    /** Fires the event the async listener picks up after this transaction commits. */
+    private void publishCredentialDelivery(User user, String tempPassword,
+                                           CredentialDeliveryRequested.Reason reason) {
+        eventPublisher.publishEvent(new CredentialDeliveryRequested(
+                user.getId(), user.getFirstName(), user.getEmail(),
+                user.getPhoneNumber(), tempPassword, reason));
     }
 }
