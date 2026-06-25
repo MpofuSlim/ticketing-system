@@ -204,21 +204,40 @@ public class SeatService {
     @Transactional
     public void releaseSeat(UUID seatId, String userEmail) {
         log.info("Releasing seat seatId={} userEmail={}", seatId, userEmail);
-        Seat seat = seatRepository.findById(seatId)
+        // Row-lock the seat so the status check + transition can't race a
+        // concurrent confirm/lock (mirrors lockSeat / releaseStaleLock). The
+        // previous findById (no lock) plus a fail-OPEN ownership check let any
+        // tier-2 user release a seat whose Redis lock had gone — and the lock is
+        // gone exactly after a seat is CONFIRMED (confirmSeat deletes the key) or
+        // its TTL lapsed — flipping another customer's BOOKED seat back to
+        // AVAILABLE and inflating the availability counter (oversell).
+        Seat seat = seatRepository.findByIdForUpdate(seatId)
                 .orElseThrow(() -> {
                     log.warn("Release failed, seat not found seatId={}", seatId);
                     return new NotFoundException("Seat not found");
                 });
 
+        // Only a held (LOCKED) seat is releasable through this user path. A
+        // BOOKED seat is a confirmed (paid) booking and must NOT be releasable
+        // here — that would void the booking and oversell the category; an
+        // AVAILABLE seat has nothing to release.
+        if (seat.getStatus() != Seat.SeatStatus.LOCKED) {
+            log.warn("Release rejected, seat not in LOCKED state seatId={} userEmail={} status={}",
+                    seatId, userEmail, seat.getStatus());
+            throw new ConflictException("Seat is not held and cannot be released");
+        }
+
+        // Ownership is authoritative from the lock store, and is now required to
+        // be present AND match: a null owner (lock evicted/expired) on a
+        // still-LOCKED seat cannot be proven to belong to the caller, so it is
+        // NOT releasable here — the reaper (releaseStaleLock) reclaims genuinely
+        // expired holds instead. This closes the fail-open hole.
         String lockKey = LOCK_KEY_PREFIX + seatId;
         String lockOwner = seatLockStore.get(lockKey);
-
-        if (lockOwner != null && !lockOwner.equals(userEmail)) {
-            // 403 not 409: this is an explicit ownership violation (different
-            // user trying to release someone else's hold), not a state-race
-            // outcome. Distinct from confirmSeat's 409 — there the message
-            // lumps expiry-race + ownership; here only ownership applies.
-            log.warn("Release rejected, lock owned by another user seatId={} userEmail={} lockOwner={}",
+        if (lockOwner == null || !lockOwner.equals(userEmail)) {
+            // 403: ownership violation (releasing a hold that isn't yours, or one
+            // whose ownership can't be proven).
+            log.warn("Release rejected, caller does not own the lock seatId={} userEmail={} lockOwner={}",
                     seatId, userEmail, lockOwner);
             throw new ForbiddenException("You cannot release a lock that belongs to another user");
         }
