@@ -4,6 +4,7 @@ import com.innbucks.userservice.cells.WrongCellException;
 import com.innbucks.userservice.client.NotificationDeliveryException;
 import com.innbucks.userservice.client.OradianClientException;
 import com.innbucks.userservice.dto.ApiResult;
+import com.innbucks.userservice.security.KycVerificationTokenException;
 import com.innbucks.userservice.service.AuthService;
 import com.innbucks.userservice.service.RefreshTokenService;
 import lombok.extern.slf4j.Slf4j;
@@ -32,6 +33,21 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AccessDeniedException.class)
     public void handleAccessDenied(AccessDeniedException ex) throws AccessDeniedException {
         throw ex;
+    }
+
+    /**
+     * Customer KYC-upgrade verification-token failure (missing / invalid /
+     * expired / wrong-purpose / phone-mismatch / replayed). Mapped to 401. The
+     * {@link KycVerificationTokenException.Reason} is logged for support but the
+     * client only sees a generic message — telling an attacker which specific
+     * check failed would help them probe.
+     */
+    @ExceptionHandler(KycVerificationTokenException.class)
+    public ResponseEntity<ApiResult<Void>> handleKycVerificationToken(KycVerificationTokenException ex) {
+        log.warn("KYC verification token rejected reason={}", ex.getReason());
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(ApiResult.error(HttpStatus.UNAUTHORIZED,
+                        "Phone verification required. Please verify your phone via OTP and try again."));
     }
 
     /**

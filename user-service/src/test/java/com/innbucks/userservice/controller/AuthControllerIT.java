@@ -233,10 +233,14 @@ class AuthControllerIT {
         // the User + Tier-1 profile.
         String code = otpRepository.findByPhoneNumber(phone).orElseThrow().getCode();
         Map<String, String> verify = Map.of("phoneNumber", phone, "code", code);
-        mockMvc.perform(post("/auth/otp/verify")
+        String verifyResponse = mockMvc.perform(post("/auth/otp/verify")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(verify)))
-                .andExpect(status().isOk());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.verificationToken").isNotEmpty())
+                .andReturn().getResponse().getContentAsString();
+        String verificationToken = objectMapper.readTree(verifyResponse)
+                .path("data").path("verificationToken").asText();
 
         // Tier 2: send the exact shape the frontend asked for.
         String tier2Body = """
@@ -263,6 +267,7 @@ class AuthControllerIT {
                 """.formatted(phone);
 
         mockMvc.perform(post("/auth/customer/register/tier2")
+                        .header("X-Verification-Token", verificationToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(tier2Body))
                 .andExpect(status().isOk())
@@ -274,6 +279,10 @@ class AuthControllerIT {
 
     @Test
     void customerTier2_returns400WhenMsisdnDoesNotMatchAnyTier1() throws Exception {
+        // A valid verification token for this phone passes the proof-of-phone
+        // gate, so the request reaches the tier-1-existence check — which still
+        // 400s because no tier-1 profile exists for this msisdn.
+        String verificationToken = verificationTokenFor("0700000000");
         String tier2Body = """
                 {
                   "firstName": "Sarah",
@@ -289,6 +298,7 @@ class AuthControllerIT {
                 }
                 """;
         mockMvc.perform(post("/auth/customer/register/tier2")
+                        .header("X-Verification-Token", verificationToken)
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(tier2Body))
                 .andExpect(status().isBadRequest());
@@ -342,5 +352,73 @@ class AuthControllerIT {
                         .content("{\"email\":\"not-an-email\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.data.email").value("Email must be a valid email address"));
+    }
+
+    @Test
+    void customerTier2_returns401WhenNoVerificationToken() throws Exception {
+        // The C1 fix at the HTTP layer: a well-formed tier-2 body with NO
+        // verification token is rejected at the proof-of-phone gate (401) and
+        // never reaches the KYC mutation. Without this the endpoint was an
+        // unauthenticated account/KYC takeover keyed only on a body msisdn.
+        String tier2Body = """
+                {
+                  "firstName": "Mallory",
+                  "lastName": "Attacker",
+                  "dateOfBirth": "2001-01-01",
+                  "gender": "FEMALE",
+                  "msisdn": "0700000777",
+                  "nationalId": "X",
+                  "email": "mallory@evil.example",
+                  "address": { "street1": "a", "city": "b", "postCode": "c", "country": "ZW" }
+                }
+                """;
+        mockMvc.perform(post("/auth/customer/register/tier2")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(tier2Body))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void customerTier2_returns401WhenTokenBoundToDifferentPhone() throws Exception {
+        // Attacker holds a valid token for their OWN phone but targets a
+        // victim's msisdn in the body — phone-mismatch -> 401, before any DB
+        // read/write. The token's bound phone is authoritative.
+        String attackerToken = verificationTokenFor("0788000111");
+        String tier2Body = """
+                {
+                  "firstName": "Mallory",
+                  "lastName": "Attacker",
+                  "dateOfBirth": "2001-01-01",
+                  "gender": "FEMALE",
+                  "msisdn": "0700000777",
+                  "nationalId": "X",
+                  "email": "mallory@evil.example",
+                  "address": { "street1": "a", "city": "b", "postCode": "c", "country": "ZW" }
+                }
+                """;
+        mockMvc.perform(post("/auth/customer/register/tier2")
+                        .header("X-Verification-Token", attackerToken)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(tier2Body))
+                .andExpect(status().isUnauthorized());
+    }
+
+    /**
+     * Drives the OTP request+verify flow for {@code phone} and returns the
+     * KYC-upgrade verification token from the verify response — the proof a
+     * customer must present on tier-2/3/4.
+     */
+    private String verificationTokenFor(String phone) throws Exception {
+        mockMvc.perform(post("/auth/otp/request")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("phoneNumber", phone))))
+                .andExpect(status().isOk());
+        String code = otpRepository.findByPhoneNumber(phone).orElseThrow().getCode();
+        String verifyResponse = mockMvc.perform(post("/auth/otp/verify")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("phoneNumber", phone, "code", code))))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        return objectMapper.readTree(verifyResponse).path("data").path("verificationToken").asText();
     }
 }
