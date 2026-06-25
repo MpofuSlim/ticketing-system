@@ -29,6 +29,11 @@ public class JwtFilter extends OncePerRequestFilter {
 
     private final JwtUtil jwtUtil;
 
+    /** Shared cross-service logout denylist (Redis). Checked after the token
+     *  passes signature/claim validation, so a logged-out token is rejected
+     *  here fleet-wide instead of lingering until its short TTL expires. */
+    private final RevokedTokenDenylist revokedTokenDenylist;
+
     /** This cell's country (INNBUCKS_COUNTRY). Compared against the JWT's
      *  {@code homeCountry} claim to spot wrong-cell requests. Non-final so
      *  Lombok's @RequiredArgsConstructor stays untouched — Spring sets it
@@ -76,6 +81,15 @@ public class JwtFilter extends OncePerRequestFilter {
                 // unauthenticated and hitting a downstream 401/403 with the same
                 // generic message.
                 writeUnauthorized(request, response, "INVALID_TOKEN", "Token is invalid or expired");
+                return;
+            }
+
+            // Shared cross-service logout denylist. A signature/claim-valid
+            // token the user has explicitly logged out is rejected here
+            // (fail-open on any Redis trouble — see RevokedTokenDenylist).
+            if (revokedTokenDenylist.isRevoked(token)) {
+                log.warn("Rejected revoked (logged-out) token path={}", request.getRequestURI());
+                writeUnauthorized(request, response, "TOKEN_REVOKED", "Token has been revoked");
                 return;
             }
 

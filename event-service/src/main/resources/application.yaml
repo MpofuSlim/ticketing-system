@@ -28,6 +28,17 @@ spring:
     baseline-on-migrate: false
     locations: classpath:db/migration
 
+  # Shared Redis — read side of the cross-service logout denylist only (no
+  # Spring Data Redis repositories). Points at the same Redis the gateway /
+  # user-service / payment / seat / booking services use.
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      repositories:
+        enabled: false
+
   lifecycle:
     timeout-per-shutdown-phase: 30s
 
