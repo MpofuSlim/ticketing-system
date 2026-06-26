@@ -70,13 +70,21 @@ class EmailNotificationClientContractTest {
                 "Welcome to SwiftInn — your account is ready",
                 "Temporary password: abc123", "STAFF-ONBOARD-1");
 
+        // Accept: application/json on both calls — the InnBucks gateway in front
+        // of this API is Cloudflare-fronted and serves different content-types
+        // depending on whether Accept is set; we pin it here so a regression
+        // that drops the header (and re-triggers the "Error while extracting
+        // response for type [String] and content type [application/octet-stream]"
+        // class of bug we hit in production) fails the test.
         wireMock.verify(postRequestedFor(urlEqualTo(LOGIN))
                 .withHeader("X-Api-Key", equalTo(API_KEY))
+                .withHeader("Accept", containing("application/json"))
                 .withRequestBody(matchingJsonPath("$.username", equalTo("test-user")))
                 .withRequestBody(matchingJsonPath("$.password", equalTo("test-pass"))));
         wireMock.verify(postRequestedFor(urlEqualTo(EMAIL))
                 .withHeader("X-Api-Key", equalTo(API_KEY))
                 .withHeader("Authorization", equalTo("Bearer tok-abc"))
+                .withHeader("Accept", containing("application/json"))
                 .withRequestBody(matchingJsonPath("$.subject", equalTo("Welcome to SwiftInn — your account is ready")))
                 .withRequestBody(matchingJsonPath("$.message", equalTo("Temporary password: abc123")))
                 .withRequestBody(matchingJsonPath("$.destinationEmail", equalTo("staff@example.com")))

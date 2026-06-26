@@ -89,6 +89,7 @@ public class EmailNotificationClient {
                         .header(API_KEY_HEADER, properties.getApiKey())
                         .header("Authorization", "Bearer " + token)
                         .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.APPLICATION_JSON)
                         .body(payload)
                         .retrieve()
                         .toBodilessEntity();
@@ -136,6 +137,7 @@ public class EmailNotificationClient {
                     .uri(LOGIN_PATH)
                     .header(API_KEY_HEADER, properties.getApiKey())
                     .contentType(MediaType.APPLICATION_JSON)
+                    .accept(MediaType.APPLICATION_JSON)
                     .body(Map.of("username", properties.getUsername(),
                             "password", properties.getPassword()))
                     .retrieve()
@@ -150,11 +152,22 @@ public class EmailNotificationClient {
             log.info("Notification API login succeeded; token cached until {}", tokenExpiry);
             return accessToken;
         } catch (RestClientResponseException e) {
+            // Surface the upstream body — the previous "HTTP 4xx" message hid
+            // the real reason (e.g. {"errors":["Invalid username"]} from this
+            // very gateway) and led us on a multi-hour octet-stream wild goose
+            // chase in production. The body is bounded by the gateway response,
+            // safe to log at WARN, and never carries the credential we sent.
+            log.warn("Notification API rejected login status={} body={}",
+                    e.getStatusCode(), e.getResponseBodyAsString());
             throw new NotificationDeliveryException(
                     "Notification API login failed: HTTP " + e.getStatusCode().value(), e);
         } catch (NotificationDeliveryException e) {
             throw e;
         } catch (RuntimeException e) {
+            // Catch-all for connect timeouts / SSL handshake fails / read
+            // timeouts. The exception's message usually carries enough to
+            // diagnose ('Read timed out', 'Connection refused', etc.).
+            log.warn("Notification API unreachable for login: {}", e.getMessage());
             throw new NotificationDeliveryException(
                     "Unable to reach the notification API for login: " + e.getMessage(), e);
         }
