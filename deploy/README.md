@@ -15,6 +15,7 @@ the rendering layer (this script vs `helm install`) differs.
 deploy/
 ├── cell.sh                   # the one wrapper you run
 ├── README.md                 # this file
+├── NEW_INSTANCE_RUNBOOK.md   # standing a cell up on a fresh host (empty DB)
 └── cells/
     ├── cell.example.env      # template — copy this for new cells
     ├── cell.zw.env           # Zimbabwe cell (committed defaults only)
@@ -123,6 +124,14 @@ When you're ready to fully migrate Zimbabwe over:
 cp .env deploy/cells/cell.zw.local.env   # secrets carry across as-is
 deploy/cell.sh zw up
 ```
+
+## Standing a cell up on a brand-new host (empty DB)
+
+Moving a cell to a fresh instance with no data migration (the DB
+self-provisions: init script creates the per-service databases, Flyway builds
+the schema on first boot) — see **[`NEW_INSTANCE_RUNBOOK.md`](./NEW_INSTANCE_RUNBOOK.md)**
+for the full step-by-step (instance sizing, secrets, GHCR login, smoke test,
+DNS/TLS cutover, decommission).
 
 ## Cross-cell concerns explicitly NOT solved here
 
