@@ -33,8 +33,10 @@ FROM eclipse-temurin:21-jre-alpine AS runtime
 # re-run when a new Alpine point release ships the fix.
 # CVE-2026-45447 (HIGH) — libssl3 / libcrypto3 / openssl PKCS#7 / S/MIME
 # signed-message handling. Fixed in alpine 3.5.7-r0.
+# CVE-2026-2100 (HIGH) — p11-kit / p11-kit-trust NULL-deref via C_DeriveKey with
+# specific NULL params. Fixed in alpine p11-kit 0.26.2-r0.
 RUN apk update \
- && apk --no-cache upgrade libssl3 libcrypto3 openssl \
+ && apk --no-cache upgrade libssl3 libcrypto3 openssl p11-kit p11-kit-trust \
  && addgroup -S app && adduser -S -G app app
 WORKDIR /app
 USER app
