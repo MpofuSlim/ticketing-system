@@ -86,6 +86,8 @@ LOYALTY_VOUCHER_SECRET=$(openssl rand -base64 32)
 LOYALTY_QR_SECRET=$(openssl rand -base64 32)
 NATIONAL_ID_HMAC_SECRET=$(openssl rand -base64 32)
 MFA_ENCRYPTION_KEY=$(openssl rand -base64 32)        # MUST decode to 32 bytes (AES-GCM-256)
+SWAGGER_USER=admin
+SWAGGER_PASSWORD=$(openssl rand -base64 18)          # gateway Swagger UI login (recommended)
 BOOTSTRAP_ADMIN_PASSWORD=$(openssl rand -base64 24)  # one-time; cleared in step 9
 
 # --- copy REAL values (external providers / sibling stacks) — do NOT regenerate ---
@@ -170,6 +172,15 @@ in the committed `cell.<iso>.env`:
 `LOYALTY_QR_SECRET`, `NATIONAL_ID_HMAC_SECRET`, `MFA_ENCRYPTION_KEY`,
 `WHATSAPP_API_KEY`, `BANK_API_KEY`, `BANK_API_USERNAME`, `BANK_API_PASSWORD`
 — plus `INNBUCKS_COUNTRY` (committed).
+
+### Recommended (boots without it, but you should set it)
+
+`SWAGGER_PASSWORD` is **not** guarded by `${VAR:?}`, so the cell boots without
+it — but then the aggregated Swagger UI at the gateway is left **open** (the
+gateway logs a loud startup warning). On any cell reachable from outside, set
+it in `cell.<iso>.local.env` so the API surface isn't browsable by anyone who
+reaches the gateway. `SWAGGER_USER` defaults to `admin`; generate a password
+with `openssl rand -base64 18`. (Step 6's secrets heredoc already does this.)
 
 ## Published ports (reference)
 
