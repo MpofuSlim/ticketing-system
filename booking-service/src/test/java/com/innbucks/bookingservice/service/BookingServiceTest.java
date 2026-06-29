@@ -60,6 +60,13 @@ class BookingServiceTest {
         }
     }
 
+    /** N seats all priced at 1.00 — for the per-tier seat-cap boundary tests. */
+    private static BigDecimal[] nPrices(int n) {
+        BigDecimal[] prices = new BigDecimal[n];
+        java.util.Arrays.fill(prices, BigDecimal.ONE);
+        return prices;
+    }
+
     private RequestFixture request(BigDecimal... prices) {
         UUID eventId = UUID.randomUUID();
         CreateBookingRequestDTO req = new CreateBookingRequestDTO();
@@ -166,32 +173,46 @@ class BookingServiceTest {
                 () -> service.createBooking("u@example.com", 1, null, fx.request));
         assertTrue(ex.getMessage().toLowerCase().contains("tier"));
         assertEquals(1, ex.getCurrentTier());
-        assertEquals(2, ex.getRequiredTier()); // 1 seat fits tier 2's cap of 2
+        assertEquals(2, ex.getRequiredTier()); // 1 seat fits tier 2's cap of 10
     }
 
     @Test
-    void createBooking_rejectsWhenTier2ExceedsTwoSeats() {
-        RequestFixture fx = request(BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE);
+    void createBooking_allowsTier2UpToTenSeats() {
+        // Tier 2's per-booking cap is 10 — exactly 10 must succeed.
+        RequestFixture fx = request(nPrices(10));
+        BookingService service = newService(mock(BookingRepository.class),
+                mock(BookingItemRepository.class), stubClient(fx));
+
+        BookingResponseDTO resp = service.createBooking("u@example.com", 2, null, fx.request);
+
+        assertEquals(10, resp.getItems().size());
+    }
+
+    @Test
+    void createBooking_rejectsWhenTier2ExceedsTenSeats() {
+        // 11 seats is over tier 2's cap of 10; 11 still fits tier 3 (cap 15),
+        // so the required tier surfaced to the caller is 3.
+        RequestFixture fx = request(nPrices(11));
         BookingService service = newService(mock(BookingRepository.class),
                 mock(BookingItemRepository.class), stubClient(fx));
 
         TierRequirementException ex = assertThrows(TierRequirementException.class,
                 () -> service.createBooking("u@example.com", 2, null, fx.request));
-        assertTrue(ex.getMessage().contains("2 seats"));
+        assertTrue(ex.getMessage().contains("10 seats"));
         assertEquals(2, ex.getCurrentTier());
-        assertEquals(3, ex.getRequiredTier()); // 3 seats need tier 3 (cap 6)
+        assertEquals(3, ex.getRequiredTier());
     }
 
     @Test
-    void createBooking_allowsTier3UpToSixSeats() {
-        RequestFixture fx = request(BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE,
-                BigDecimal.ONE, BigDecimal.ONE, BigDecimal.ONE);
+    void createBooking_allowsTier3UpToFifteenSeats() {
+        // Tier 3's cap is now 15 — exactly 15 must succeed.
+        RequestFixture fx = request(nPrices(15));
         BookingService service = newService(mock(BookingRepository.class),
                 mock(BookingItemRepository.class), stubClient(fx));
 
         BookingResponseDTO resp = service.createBooking("u@example.com", 3, null, fx.request);
 
-        assertEquals(6, resp.getItems().size());
+        assertEquals(15, resp.getItems().size());
     }
 
     @Test

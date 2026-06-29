@@ -62,9 +62,9 @@ public class BookingService {
     // cashAmount must equal totalAmount within $0.01.
     private static final BigDecimal SPLIT_TOLERANCE = new BigDecimal("0.01");
 
-    private static final int TIER_2_MAX_SEATS = 2;
-    private static final int TIER_3_MAX_SEATS = 6;
-    private static final int TIER_4_MAX_SEATS = 10;
+    private static final int TIER_2_MAX_SEATS = 10;
+    private static final int TIER_3_MAX_SEATS = 15;
+    private static final int TIER_4_MAX_SEATS = 20;
 
     // How long a PENDING booking holds its seats before the expiration
     // scheduler auto-cancels it. Java-side default of 5 means unit tests that
