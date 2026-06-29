@@ -170,6 +170,89 @@ public class SeatCategoryService {
                 .build();
     }
 
+    @Transactional
+    public CreateCategoryResponseDTO updateCategory(UUID categoryId, UpdateCategoryRequestDTO request) {
+        return updateCategory(categoryId, request, null, null, true, null);
+    }
+
+    /**
+     * Update the editable metadata (name, description, price) of a category.
+     * Seat layout and event are immutable here — see {@link UpdateCategoryRequestDTO}.
+     * Mirrors {@code deleteCategory}'s auth shape: SUPER_ADMIN passes straight
+     * through, an EVENT_ORGANIZER must own the category's event.
+     */
+    @Transactional
+    public CreateCategoryResponseDTO updateCategory(UUID categoryId,
+                                                    UpdateCategoryRequestDTO request,
+                                                    UUID callerOrganizerUuid,
+                                                    String requesterEmail,
+                                                    boolean isAdmin,
+                                                    String authHeader) {
+        SeatCategory category = categoryRepository.findById(categoryId)
+                .filter(c -> !c.isDeleted())
+                .orElseThrow(() -> {
+                    log.warn("Category update failed, not found categoryId={}", categoryId);
+                    return new NotFoundException("Seat category not found");
+                });
+
+        if (!isAdmin) {
+            requireEventOwnership(category.getEventId(), callerOrganizerUuid, requesterEmail, authHeader);
+        }
+
+        // Defence-in-depth on top of the DTO @DecimalMin (only fires on @Valid
+        // controller calls), same as createCategory.
+        if (request.getPrice() == null || request.getPrice().signum() <= 0) {
+            log.warn("Category update rejected, non-positive price categoryId={} price={}",
+                    categoryId, request.getPrice());
+            throw new BadRequestException("Price must be greater than 0.");
+        }
+
+        // Renaming onto a name another live category in the same event already
+        // uses is a conflict; ...AndIdNot lets a no-op rename (same name) through.
+        if (categoryRepository.existsByEventIdAndNameAndDeletedFalseAndIdNot(
+                category.getEventId(), request.getName(), categoryId)) {
+            log.warn("Category update rejected, duplicate name eventId={} name={} categoryId={}",
+                    category.getEventId(), request.getName(), categoryId);
+            throw new ConflictException("Category '" + request.getName()
+                    + "' already exists for this event");
+        }
+
+        log.info("Updating seat category categoryId={} eventId={} name={} requesterEmail={} isAdmin={}",
+                categoryId, category.getEventId(), request.getName(), requesterEmail, isAdmin);
+
+        category.setName(request.getName());
+        category.setDescription(request.getDescription());
+        category.setPrice(request.getPrice());
+        categoryRepository.save(category);
+
+        // Return the same shape getCategoriesByEvent emits — sections rebuilt
+        // from the persisted seats (unchanged by this edit) + live availability
+        // (degrades to the stored mirror if booking-service is down).
+        List<SectionSeatConfigDTO> sections = sectionsForCategory(categoryId);
+        Map<UUID, Long> counts = bookingServiceClient
+                .fetchActiveCountsByCategories(List.of(categoryId))
+                .orElse(null);
+        log.info("Seat category updated categoryId={} eventId={}", categoryId, category.getEventId());
+        return toCreateResponseDTO(category, sections, liveAvailableSeats(category, counts));
+    }
+
+    /** Rebuild the per-section seat counts for a single category from its
+     *  persisted seat rows (section label → count), preserving insertion order. */
+    private List<SectionSeatConfigDTO> sectionsForCategory(UUID categoryId) {
+        Map<String, Integer> bySection = new LinkedHashMap<>();
+        for (Seat seat : seatRepository.findByCategoryIdIn(List.of(categoryId))) {
+            bySection.merge(seat.getSectionLabel(), 1, Integer::sum);
+        }
+        return bySection.entrySet().stream()
+                .map(entry -> {
+                    SectionSeatConfigDTO dto = new SectionSeatConfigDTO();
+                    dto.setSection(entry.getKey());
+                    dto.setSeatCount(entry.getValue());
+                    return dto;
+                })
+                .collect(Collectors.toList());
+    }
+
     public List<CreateCategoryResponseDTO> getCategoriesByEvent(UUID eventId) {
         log.debug("Fetching seat categories eventId={}", eventId);
         List<SeatCategory> categories = categoryRepository.findByEventIdAndDeletedFalse(eventId);

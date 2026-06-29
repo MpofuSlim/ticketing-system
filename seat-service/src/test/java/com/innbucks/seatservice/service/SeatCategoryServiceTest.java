@@ -5,6 +5,7 @@ import com.innbucks.seatservice.client.EventServiceClient;
 import com.innbucks.seatservice.dto.CreateCategoryRequestDTO;
 import com.innbucks.seatservice.dto.CreateCategoryResponseDTO;
 import com.innbucks.seatservice.dto.SectionSeatConfigDTO;
+import com.innbucks.seatservice.dto.UpdateCategoryRequestDTO;
 import com.innbucks.seatservice.entity.Seat;
 import com.innbucks.seatservice.entity.SeatCategory;
 import com.innbucks.seatservice.repository.SeatCategoryRepository;
@@ -228,6 +229,118 @@ class SeatCategoryServiceTest {
         ArgumentCaptor<SeatCategory> savedCategory = ArgumentCaptor.forClass(SeatCategory.class);
         verify(catRepo).save(savedCategory.capture());
         assertEquals(500_000, savedCategory.getValue().getTotalSeats());
+    }
+
+    private UpdateCategoryRequestDTO updateRequest(String name, String description, String price) {
+        UpdateCategoryRequestDTO req = new UpdateCategoryRequestDTO();
+        req.setName(name);
+        req.setDescription(description);
+        req.setPrice(new BigDecimal(price));
+        return req;
+    }
+
+    @Test
+    void updateCategory_appliesNameDescriptionPrice_andReturnsRebuiltSections() {
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        BookingServiceClient booking = mock(BookingServiceClient.class);
+        UUID eventId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+
+        SeatCategory existing = category(id, eventId, 50, 50);
+        existing.setName("VIP");
+        when(catRepo.findById(id)).thenReturn(Optional.of(existing));
+        when(catRepo.existsByEventIdAndNameAndDeletedFalseAndIdNot(eventId, "VVIP", id)).thenReturn(false);
+        // Sections come back from the persisted seats, not the request.
+        when(seatRepo.findByCategoryIdIn(List.of(id))).thenReturn(List.of(
+                Seat.builder().sectionLabel("A").seatNumber(1).build(),
+                Seat.builder().sectionLabel("A").seatNumber(2).build(),
+                Seat.builder().sectionLabel("B").seatNumber(1).build()));
+        when(booking.fetchActiveCountsByCategories(List.of(id)))
+                .thenReturn(Optional.of(Map.of(id, 13L)));
+
+        CreateCategoryResponseDTO resp = service(catRepo, seatRepo, booking)
+                .updateCategory(id, updateRequest("VVIP", "Now with lounge", "120.00"));
+
+        // Entity mutated + persisted.
+        assertEquals("VVIP", existing.getName());
+        assertEquals("Now with lounge", existing.getDescription());
+        assertEquals(new BigDecimal("120.00"), existing.getPrice());
+        verify(catRepo).save(existing);
+
+        // Response carries the new metadata, sections rebuilt from seats (A:2, B:1),
+        // and LIVE availability (50 total − 13 active = 37).
+        assertEquals("VVIP", resp.getName());
+        assertEquals(37, resp.getAvailableSeats());
+        Map<String, Integer> sections = resp.getSections().stream()
+                .collect(Collectors.toMap(SectionSeatConfigDTO::getSection, SectionSeatConfigDTO::getSeatCount));
+        assertEquals(2, sections.get("A"));
+        assertEquals(1, sections.get("B"));
+    }
+
+    @Test
+    void updateCategory_renameToOwnCurrentName_isAllowed() {
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        UUID eventId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        SeatCategory existing = category(id, eventId, 10, 10);
+        existing.setName("VIP");
+        when(catRepo.findById(id)).thenReturn(Optional.of(existing));
+        // ...AndIdNot excludes self, so the same-name check returns false → no conflict.
+        when(catRepo.existsByEventIdAndNameAndDeletedFalseAndIdNot(eventId, "VIP", id)).thenReturn(false);
+        when(seatRepo.findByCategoryIdIn(List.of(id))).thenReturn(List.of());
+
+        assertDoesNotThrow(() -> service(catRepo, seatRepo)
+                .updateCategory(id, updateRequest("VIP", "tweaked copy", "75.00")));
+        verify(catRepo).save(existing);
+    }
+
+    @Test
+    void updateCategory_rejectsNameTakenByAnotherCategory() {
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        UUID eventId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        SeatCategory existing = category(id, eventId, 10, 10);
+        when(catRepo.findById(id)).thenReturn(Optional.of(existing));
+        when(catRepo.existsByEventIdAndNameAndDeletedFalseAndIdNot(eventId, "GA", id)).thenReturn(true);
+
+        RuntimeException ex = assertThrows(RuntimeException.class, () -> service(catRepo, seatRepo)
+                .updateCategory(id, updateRequest("GA", null, "50.00")));
+        assertTrue(ex.getMessage().contains("already exists"), "actual: " + ex.getMessage());
+        verify(catRepo, never()).save(any());
+    }
+
+    @Test
+    void updateCategory_throwsNotFound_whenMissingOrDeleted() {
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        UUID id = UUID.randomUUID();
+        when(catRepo.findById(id)).thenReturn(Optional.empty());
+
+        assertThrows(RuntimeException.class, () -> service(catRepo, mock(SeatRepository.class))
+                .updateCategory(id, updateRequest("VIP", null, "50.00")));
+
+        // A soft-deleted category is treated as not-found too.
+        SeatCategory deleted = category(id, UUID.randomUUID(), 10, 10);
+        deleted.setDeleted(true);
+        when(catRepo.findById(id)).thenReturn(Optional.of(deleted));
+        assertThrows(RuntimeException.class, () -> service(catRepo, mock(SeatRepository.class))
+                .updateCategory(id, updateRequest("VIP", null, "50.00")));
+    }
+
+    @Test
+    void updateCategory_rejectsNonPositivePrice() {
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        UUID eventId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+        when(catRepo.findById(id)).thenReturn(Optional.of(category(id, eventId, 10, 10)));
+
+        RuntimeException ex = assertThrows(RuntimeException.class, () -> service(catRepo, seatRepo)
+                .updateCategory(id, updateRequest("VIP", null, "0.00")));
+        assertTrue(ex.getMessage().contains("Price must be greater than 0"), "actual: " + ex.getMessage());
+        verify(catRepo, never()).save(any());
     }
 
     @Test

@@ -5,6 +5,7 @@ import com.innbucks.seatservice.dto.CategoryCapacityDTO;
 import com.innbucks.seatservice.dto.CreateCategoryRequestDTO;
 import com.innbucks.seatservice.dto.CreateCategoryResponseDTO;
 import com.innbucks.seatservice.dto.EventAnalyticsDTO;
+import com.innbucks.seatservice.dto.UpdateCategoryRequestDTO;
 import com.innbucks.seatservice.security.JwtAuthDetails;
 import com.innbucks.seatservice.service.SeatCategoryAnalyticsService;
 import com.innbucks.seatservice.service.SeatCategoryService;
@@ -32,6 +33,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -212,6 +214,91 @@ public class SeatCategoryController {
                 request, callerOrganizerUuid, requesterEmail, isAdmin, authHeader);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Seat category created successfully", created));
+    }
+
+    @PutMapping("/{id}")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @Operation(summary = "Update category",
+            description = "Updates a seat category's name, description, and price. The seat layout "
+                    + "(sections / total seats) and the owning event are immutable here — changing them "
+                    + "would collide with already-generated seats and live bookings. Requires the owning "
+                    + "EVENT_ORGANIZER or SUPER_ADMIN. Returns the updated category in the same shape as the "
+                    + "list endpoint (sections rebuilt from persisted seats, live availableSeats).")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Category updated",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = CreateCategoryResponseDTO.class),
+                            examples = @ExampleObject(name = "Category updated", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Seat category updated successfully",
+                                      "data": {
+                                        "seatCategoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "name": "VIP",
+                                        "description": "Premium front-row seats, now with lounge access",
+                                        "price": 120.00,
+                                        "availableSeats": 37,
+                                        "sections": [
+                                          { "section": "A", "seatCount": 25 },
+                                          { "section": "B", "seatCount": 25 }
+                                        ]
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "Validation error (blank name, non-positive price)",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Bad price", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "Price must be greater than 0.",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not the owning EVENT_ORGANIZER / SUPER_ADMIN"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "Category not found",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Not found", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "Seat category not found",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
+                    description = "Another live category in the event already uses that name",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Duplicate name", value = """
+                                    {
+                                      "code": "409 CONFLICT",
+                                      "message": "Category 'VIP' already exists for this event",
+                                      "data": null
+                                    }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<CreateCategoryResponseDTO>> updateCategory(
+            @Parameter(description = "Seat category UUID") @PathVariable UUID id,
+            @Valid @RequestBody UpdateCategoryRequestDTO request,
+            Authentication authentication,
+            HttpServletRequest httpRequest
+    ) {
+        String requesterEmail = authentication.getName();
+        UUID callerOrganizerUuid = organizerUuid(authentication);
+        boolean isAdmin = hasRole(authentication, "ROLE_SUPER_ADMIN");
+        String authHeader = httpRequest.getHeader("Authorization");
+        log.info("PUT /seat-categories/{} name={} requesterEmail={} isAdmin={}",
+                id, request.getName(), requesterEmail, isAdmin);
+        CreateCategoryResponseDTO updated = categoryService.updateCategory(
+                id, request, callerOrganizerUuid, requesterEmail, isAdmin, authHeader);
+        return ResponseEntity.ok(ApiResult.ok("Seat category updated successfully", updated));
     }
 
     @GetMapping("/analytics")
