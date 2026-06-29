@@ -15,6 +15,10 @@ public interface SeatCategoryRepository extends JpaRepository<SeatCategory, UUID
 
     boolean existsByEventIdAndNameAndDeletedFalse(UUID eventId, String name);
 
+    // Same duplicate-name guard as create, but excludes the category being
+    // updated so renaming a category to its own current name isn't a conflict.
+    boolean existsByEventIdAndNameAndDeletedFalseAndIdNot(UUID eventId, String name, UUID id);
+
     @Modifying
     @Query("UPDATE SeatCategory c SET c.availableSeats = c.availableSeats - 1 " +
             "WHERE c.id = :id AND c.availableSeats > 0")
