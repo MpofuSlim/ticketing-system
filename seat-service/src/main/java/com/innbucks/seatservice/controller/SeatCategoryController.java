@@ -187,8 +187,8 @@ public class SeatCategoryController {
                                         "price": 100.00,
                                         "availableSeats": 50,
                                         "sections": [
-                                          { "section": "A", "seatCount": 25 },
-                                          { "section": "B", "seatCount": 25 }
+                                          { "section": "A", "seatCount": 25, "imageUrl": "https://cdn.innbucks.co.zw/sections/vip-a.png" },
+                                          { "section": "B", "seatCount": 25, "imageUrl": null }
                                         ]
                                       }
                                     }

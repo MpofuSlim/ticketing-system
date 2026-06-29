@@ -51,6 +51,12 @@ class SeatCategoryServiceTest {
         return s;
     }
 
+    private SectionSeatConfigDTO section(String label, int count, String imageUrl) {
+        SectionSeatConfigDTO s = section(label, count);
+        s.setImageUrl(imageUrl);
+        return s;
+    }
+
     private CreateCategoryRequestDTO request(UUID eventId, String name, List<SectionSeatConfigDTO> sections) {
         CreateCategoryRequestDTO req = new CreateCategoryRequestDTO();
         req.setEventId(eventId);
@@ -100,6 +106,78 @@ class SeatCategoryServiceTest {
         assertEquals(2, resp.getSections().size());
         // Just created — no bookings yet, so the response reports full capacity.
         assertEquals(5, resp.getAvailableSeats());
+    }
+
+    @Test
+    void createCategory_stampsSectionImageOnEverySeat_andEchoesInResponse() {
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        SeatCategoryService service = service(catRepo, seatRepo);
+        UUID eventId = UUID.randomUUID();
+        String imgA = "https://cdn.innbucks.co.zw/sections/vip-a.png";
+
+        CreateCategoryResponseDTO resp = service.createCategory(request(eventId, "VIP",
+                List.of(section("A", 2, imgA), section("B", 1, null))));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Seat>> seatsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(seatRepo).saveAll(seatsCaptor.capture());
+        List<Seat> saved = seatsCaptor.getValue();
+        // Every seat in section A carries the image; section B's seats carry none.
+        assertTrue(saved.stream().filter(s -> s.getSectionLabel().equals("A"))
+                .allMatch(s -> imgA.equals(s.getSectionImageUrl())));
+        assertTrue(saved.stream().filter(s -> s.getSectionLabel().equals("B"))
+                .allMatch(s -> s.getSectionImageUrl() == null));
+
+        // Response echoes the per-section image from the request.
+        Map<String, String> imgBySection = resp.getSections().stream()
+                .collect(java.util.HashMap::new,
+                        (m, s) -> m.put(s.getSection(), s.getImageUrl()), java.util.HashMap::putAll);
+        assertEquals(imgA, imgBySection.get("A"));
+        assertNull(imgBySection.get("B"));
+    }
+
+    @Test
+    void createCategory_blankImageUrl_storedAsNull() {
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        SeatCategoryService service = service(catRepo, seatRepo);
+
+        service.createCategory(request(UUID.randomUUID(), "VIP", List.of(section("A", 2, "   "))));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Seat>> seatsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(seatRepo).saveAll(seatsCaptor.capture());
+        assertTrue(seatsCaptor.getValue().stream().allMatch(s -> s.getSectionImageUrl() == null),
+                "blank image URL must normalize to null, not a blank string");
+    }
+
+    @Test
+    void getCategoriesByEvent_recoversSectionImage_fromSeats() {
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        BookingServiceClient booking = mock(BookingServiceClient.class);
+        UUID eventId = UUID.randomUUID();
+        UUID catId = UUID.randomUUID();
+        SeatCategory cat = category(catId, eventId, 3, 3);
+        String imgA = "https://cdn.innbucks.co.zw/sections/a.png";
+
+        when(catRepo.findByEventIdAndDeletedFalse(eventId)).thenReturn(List.of(cat));
+        // Two A seats carry the image, one B seat carries none.
+        when(seatRepo.findByCategoryIdIn(anyList())).thenReturn(List.of(
+                Seat.builder().category(cat).sectionLabel("A").sectionImageUrl(imgA).build(),
+                Seat.builder().category(cat).sectionLabel("A").sectionImageUrl(imgA).build(),
+                Seat.builder().category(cat).sectionLabel("B").build()));
+        when(booking.fetchActiveCountsByCategories(any())).thenReturn(Optional.empty());
+
+        CreateCategoryResponseDTO dto = service(catRepo, seatRepo, booking)
+                .getCategoriesByEvent(eventId).get(0);
+
+        Map<String, String> imgBySection = dto.getSections().stream()
+                .collect(java.util.HashMap::new,
+                        (m, s) -> m.put(s.getSection(), s.getImageUrl()), java.util.HashMap::putAll);
+        assertEquals(imgA, imgBySection.get("A"));
+        assertNull(imgBySection.get("B"), "section with no image reads back null");
     }
 
     @Test

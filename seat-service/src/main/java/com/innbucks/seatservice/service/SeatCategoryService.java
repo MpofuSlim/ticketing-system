@@ -117,10 +117,14 @@ public class SeatCategoryService {
         List<Seat> seats = new ArrayList<>();
         for (SectionSeatConfigDTO sectionConfig : request.getSections()) {
             String sectionLabel = sectionConfig.getSection().trim().toUpperCase(Locale.ROOT);
+            // Optional per-section image, stamped on every seat in the section so
+            // the read paths can recover it by section. Blank → null (no image).
+            String sectionImageUrl = normalizeImageUrl(sectionConfig.getImageUrl());
             for (int num = 1; num <= sectionConfig.getSeatCount(); num++) {
                 seats.add(Seat.builder()
                         .category(category)
                         .sectionLabel(sectionLabel)
+                        .sectionImageUrl(sectionImageUrl)
                         .seatNumber(num)
                         .status(Seat.SeatStatus.AVAILABLE)
                         .build());
@@ -238,16 +242,31 @@ public class SeatCategoryService {
 
     /** Rebuild the per-section seat counts for a single category from its
      *  persisted seat rows (section label → count), preserving insertion order. */
+    /** Trim a section image URL; treat blank/empty as "no image" (null). */
+    private static String normalizeImageUrl(String imageUrl) {
+        if (imageUrl == null) {
+            return null;
+        }
+        String trimmed = imageUrl.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
     private List<SectionSeatConfigDTO> sectionsForCategory(UUID categoryId) {
         Map<String, Integer> bySection = new LinkedHashMap<>();
+        Map<String, String> imageBySection = new LinkedHashMap<>();
         for (Seat seat : seatRepository.findByCategoryIdIn(List.of(categoryId))) {
             bySection.merge(seat.getSectionLabel(), 1, Integer::sum);
+            // Same image on every seat in a section; capture the first non-null.
+            if (seat.getSectionImageUrl() != null) {
+                imageBySection.putIfAbsent(seat.getSectionLabel(), seat.getSectionImageUrl());
+            }
         }
         return bySection.entrySet().stream()
                 .map(entry -> {
                     SectionSeatConfigDTO dto = new SectionSeatConfigDTO();
                     dto.setSection(entry.getKey());
                     dto.setSeatCount(entry.getValue());
+                    dto.setImageUrl(imageBySection.get(entry.getKey()));
                     return dto;
                 })
                 .collect(Collectors.toList());
@@ -263,19 +282,28 @@ public class SeatCategoryService {
         Map<UUID, List<SectionSeatConfigDTO>> sectionsByCategory = new LinkedHashMap<>();
         if (!categoryIds.isEmpty()) {
             Map<UUID, Map<String, Integer>> grouped = new LinkedHashMap<>();
+            // Parallel to `grouped`: per category, the section's image (same on
+            // every seat in the section; first non-null wins).
+            Map<UUID, Map<String, String>> imagesByCategory = new LinkedHashMap<>();
             for (Seat seat : seatRepository.findByCategoryIdIn(categoryIds)) {
                 UUID categoryId = seat.getCategory().getId();
                 grouped.computeIfAbsent(categoryId, ignored -> new LinkedHashMap<>());
                 Map<String, Integer> sectionCounts = grouped.get(categoryId);
                 sectionCounts.put(seat.getSectionLabel(), sectionCounts.getOrDefault(seat.getSectionLabel(), 0) + 1);
+                if (seat.getSectionImageUrl() != null) {
+                    imagesByCategory.computeIfAbsent(categoryId, ignored -> new LinkedHashMap<>())
+                            .putIfAbsent(seat.getSectionLabel(), seat.getSectionImageUrl());
+                }
             }
 
             for (Map.Entry<UUID, Map<String, Integer>> entry : grouped.entrySet()) {
+                Map<String, String> images = imagesByCategory.getOrDefault(entry.getKey(), Map.of());
                 List<SectionSeatConfigDTO> sections = entry.getValue().entrySet().stream()
                         .map(sectionEntry -> {
                             SectionSeatConfigDTO dto = new SectionSeatConfigDTO();
                             dto.setSection(sectionEntry.getKey());
                             dto.setSeatCount(sectionEntry.getValue());
+                            dto.setImageUrl(images.get(sectionEntry.getKey()));
                             return dto;
                         })
                         .collect(Collectors.toList());
@@ -383,6 +411,7 @@ public class SeatCategoryService {
                     SectionSeatConfigDTO dto = new SectionSeatConfigDTO();
                     dto.setSection(section.getSection());
                     dto.setSeatCount(section.getSeatCount());
+                    dto.setImageUrl(normalizeImageUrl(section.getImageUrl()));
                     return dto;
                 })
                 .collect(Collectors.toList());

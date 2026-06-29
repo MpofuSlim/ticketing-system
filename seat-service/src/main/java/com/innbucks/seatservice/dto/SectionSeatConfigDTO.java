@@ -24,4 +24,11 @@ public class SectionSeatConfigDTO {
     @Min(value = 1, message = "Seat count must be at least 1")
     @Max(value = MAX_SEATS_PER_SECTION, message = "Seat count must be at most 100,000 per section")
     private int seatCount;
+
+    @Schema(example = "https://cdn.innbucks.co.zw/sections/vip-a.png", nullable = true,
+            description = "Optional URL of an image for this section (e.g. a seat-map thumbnail the FE "
+                    + "renders next to the section). Host the image elsewhere and pass the link; max 1024 "
+                    + "characters. Echoed back on reads.")
+    @Size(max = 1024, message = "Section image URL must be at most 1024 characters")
+    private String imageUrl;
 }
