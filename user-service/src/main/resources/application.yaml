@@ -51,6 +51,16 @@ jwt:
 national-id:
   hmac-secret: ${NATIONAL_ID_HMAC_SECRET:change-me-national-id-hmac-secret}
 
+# 2FA / TOTP — AES-GCM key for the users.mfa_secret column at rest. Base64'd
+# 32-byte value; ProductionSecretsGuard refuses to boot under prod while this
+# holds the change-me placeholder. Issuer is purely cosmetic (the label
+# authenticator apps show next to the account).
+mfa:
+  encryption-key: ${MFA_ENCRYPTION_KEY:change-me-change-me-change-me-change-me-aes}
+  issuer: ${MFA_ISSUER:InnBucks}
+  mfa-token-ttl: ${MFA_TOKEN_TTL:PT5M}
+  backup-code-count: ${MFA_BACKUP_CODE_COUNT:10}
+
 loyalty-service:
   base-url: http://loyalty-service
   connect-timeout-ms: ${LOYALTY_SERVICE_CONNECT_TIMEOUT_MS:2000}

@@ -40,6 +40,31 @@ public class AdminUserController {
     private final UserRepository userRepository;
     private final TenantProfileRepository tenantProfileRepository;
     private final UserAdminService userAdminService;
+    private final com.innbucks.userservice.service.MfaService mfaService;
+
+    @PostMapping("/{id}/mfa/reset")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @Operation(summary = "Reset a user's 2FA (lost authenticator + lost backup codes)",
+            description = """
+                    Wipes the target's TOTP secret + all unused backup codes, leaving them in the
+                    "must enrol" state. On their next login the policy will redirect them to
+                    `/auth/mfa/enroll/start`. SUPER_ADMIN only — this is the recovery path when both
+                    the authenticator app and the printed backup codes are lost.
+                    """)
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "MFA reset",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "200 OK", "message": "MFA reset", "data": null }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Caller is not SUPER_ADMIN"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "User not found")
+    })
+    public ResponseEntity<ApiResult<Void>> resetMfa(@PathVariable Long id) {
+        mfaService.adminReset(id);
+        return ResponseEntity.ok(ApiResult.ok("MFA reset", null));
+    }
 
     @GetMapping
     @PreAuthorize("hasRole('SUPER_ADMIN')")

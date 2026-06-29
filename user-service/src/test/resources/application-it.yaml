@@ -24,6 +24,11 @@ jwt:
 innbucks:
   internal-api-token: it-internal-token-it-internal-token
 
+# Valid Base64 32-byte AES-GCM key so MfaSecretCipher constructs. Test-only.
+mfa:
+  encryption-key: bWZhLXRlc3Qta2V5LTAwMDAwMDAwMDAwMDAwMDAtMzI=
+  issuer: InnBucks-IT
+
 oradian:
   base-url: http://oradian.invalid
   internal-token: it-oradian-token

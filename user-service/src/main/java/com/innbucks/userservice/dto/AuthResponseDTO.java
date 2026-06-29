@@ -43,10 +43,24 @@ public class AuthResponseDTO {
             nullable = true)
     private String email;
 
-    @Schema(description = "True when the account has MFA enabled and no OTP was supplied on this request. " +
-            "In that case, `token` is null and the client must re-submit the login including `otpCode`.",
+    @Schema(description = "True when MFA is required to complete this login. `token`/`refreshToken` are null; "
+            + "the FE prompts for the 6-digit TOTP (or a backup code) and POSTs it to /auth/login/mfa together "
+            + "with the `mfaToken` field.",
             example = "false")
     private boolean mfaRequired;
+
+    @Schema(description = "True when the user MUST enrol in MFA before proceeding (system user on web/mobile "
+            + "with no TOTP secret yet). The FE should call POST /auth/mfa/enroll/start with `mfaToken` to "
+            + "receive a QR / otpauth URI to scan, then POST /auth/mfa/enroll/complete with the first code. "
+            + "Omitted from the wire when null.",
+            nullable = true, example = "true")
+    private Boolean mfaEnrollmentRequired;
+
+    @Schema(description = "Short-lived (~5 min) signed token issued alongside mfaRequired / "
+            + "mfaEnrollmentRequired. The FE echoes it back on /auth/login/mfa or /auth/mfa/enroll/* to "
+            + "prove step-1 of login was completed. Null when no MFA challenge is in flight.",
+            nullable = true)
+    private String mfaToken;
 
     @Schema(description = "True when the user must change their password before continuing. Set after a " +
             "SUPER_ADMIN approves the account and a one-time temporary password is assigned (delivered to " +

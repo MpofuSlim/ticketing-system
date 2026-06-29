@@ -83,6 +83,51 @@ class AuthControllerIT {
         userRepository.save(approved);
     }
 
+    /**
+     * Runs an approved system user through the full WEB MFA enrolment flow and
+     * returns the final enroll/complete response body (which carries the real
+     * access + refresh tokens and the one-time backup codes). Used by tests that
+     * need a genuinely-MFA'd session rather than the USSD bypass.
+     */
+    private String enrolSystemUserOnWeb(String email) throws Exception {
+        LoginPayload login = new LoginPayload();
+        login.identifier = email;
+        login.password = KNOWN_LOGIN_PASSWORD;
+        String loginBody = mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)   // WEB by default
+                        .content(objectMapper.writeValueAsString(login)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.mfaEnrollmentRequired").value(true))
+                .andReturn().getResponse().getContentAsString();
+        String mfaToken = objectMapper.readTree(loginBody).at("/data/mfaToken").asText();
+
+        String startBody = mockMvc.perform(post("/auth/mfa/enroll/start")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(Map.of("mfaToken", mfaToken))))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        String secret = objectMapper.readTree(startBody).at("/data/secret").asText();
+        String echoedToken = objectMapper.readTree(startBody).at("/data/mfaToken").asText();
+
+        Map<String, String> complete = Map.of("mfaToken", echoedToken, "code", totpCode(secret));
+        return mockMvc.perform(post("/auth/mfa/enroll/complete")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(complete)))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+    }
+
+    /** Generates the current TOTP for a base32 secret using the same defaults
+     *  (SHA-1 / 6 digits / 30s) the server's verifier uses. */
+    private static String totpCode(String secret) {
+        try {
+            long step = new dev.samstevens.totp.time.SystemTimeProvider().getTime() / 30;
+            return new dev.samstevens.totp.code.DefaultCodeGenerator().generate(secret, step);
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to generate TOTP for test", e);
+        }
+    }
+
     private RegisterPayload baseSystemPayload(String email, String phone, String bundle) {
         RegisterPayload payload = new RegisterPayload();
         payload.firstName = "Tawanda";
@@ -111,7 +156,12 @@ class AuthControllerIT {
     }
 
     @Test
-    void login_withValidCredentials_returnsJwt() throws Exception {
+    void login_validCredentials_onMfaExemptChannel_returnsJwt() throws Exception {
+        // System users are required to do MFA on WEB/MOBILE, but USSD/WhatsApp
+        // are exempt (no TOTP surface on those rails). On an exempt channel the
+        // happy path is a single normal AuthResponseDTO with real tokens — this
+        // pins that credential->JWT contract end to end. The WEB enrolment path
+        // is covered by the two tests below.
         RegisterPayload register = baseSystemPayload("user1@example.com", "0777000001", "loyalty");
 
         mockMvc.perform(post("/auth/register")
@@ -125,6 +175,7 @@ class AuthControllerIT {
         login.password = KNOWN_LOGIN_PASSWORD;
 
         mockMvc.perform(post("/auth/login")
+                        .header("X-Auth-Channel", "USSD")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(login)))
                 .andExpect(status().isOk())
@@ -135,6 +186,52 @@ class AuthControllerIT {
                 .andExpect(jsonPath("$.data.email").value("user1@example.com"))
                 .andExpect(jsonPath("$.data.roles[0]").value("MERCHANT_ADMIN"))
                 .andExpect(jsonPath("$.data.mfaRequired").value(false));
+    }
+
+    @Test
+    void login_systemUser_onWeb_requiresMfaEnrollment() throws Exception {
+        // The new policy: a system user (any non-CUSTOMER role) on WEB/MOBILE
+        // that hasn't enrolled gets an enrolment challenge, NOT a JWT. The step-1
+        // response carries mfaEnrollmentRequired + a short-lived mfaToken and
+        // deliberately omits the access token (AuthResponseDTO is NON_NULL).
+        RegisterPayload register = baseSystemPayload("mfaweb@example.com", "0777000021", "loyalty");
+        mockMvc.perform(post("/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(register)))
+                .andExpect(status().isCreated());
+        approve("mfaweb@example.com");
+
+        LoginPayload login = new LoginPayload();
+        login.identifier = "mfaweb@example.com";
+        login.password = KNOWN_LOGIN_PASSWORD;
+
+        mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)   // no channel header -> defaults to WEB
+                        .content(objectMapper.writeValueAsString(login)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.mfaEnrollmentRequired").value(true))
+                .andExpect(jsonPath("$.data.mfaToken", not(blankOrNullString())))
+                .andExpect(jsonPath("$.data.token").doesNotExist());
+    }
+
+    @Test
+    void login_systemUser_onWeb_completesMfaEnrollment_returnsTokens() throws Exception {
+        // Full WEB two-step flow with a real, library-generated TOTP: login ->
+        // enrolment challenge -> enroll/start (secret + QR) -> enroll/complete
+        // with a live code -> real tokens + 10 one-time backup codes. This is the
+        // end-to-end test that exercises the enroll->issueToken DB path.
+        RegisterPayload register = baseSystemPayload("mfaenrol@example.com", "0777000023", "loyalty");
+        mockMvc.perform(post("/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(register)))
+                .andExpect(status().isCreated());
+        approve("mfaenrol@example.com");
+
+        String tokensBody = enrolSystemUserOnWeb("mfaenrol@example.com");
+        var data = objectMapper.readTree(tokensBody).at("/data");
+        assertThat(data.at("/token").asText()).isNotBlank();
+        assertThat(data.at("/refreshToken").asText()).isNotBlank();
+        assertThat(data.at("/backupCodes").size()).isEqualTo(10);
     }
 
     @Test
@@ -166,10 +263,14 @@ class AuthControllerIT {
                 .andExpect(status().isCreated());
         approve("user3@example.com");
 
+        // This test is about refresh-token rotation + reuse detection, not MFA,
+        // so grab the initial token pair on an MFA-exempt channel to keep the
+        // setup focused.
         LoginPayload login = new LoginPayload();
         login.identifier = "user3@example.com";
         login.password = KNOWN_LOGIN_PASSWORD;
         String loginBody = mockMvc.perform(post("/auth/login")
+                        .header("X-Auth-Channel", "USSD")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(login)))
                 .andExpect(status().isOk())
