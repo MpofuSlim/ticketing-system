@@ -61,8 +61,8 @@ public class BookingController {
     /**
      * Default tier applied to a booking when the caller's phone isn't
      * registered with user-service, or user-service is unreachable. Matches
-     * the existing minimum bookable rung (2 = max 2 seats per booking), so
-     * a guest can book up to a pair of seats without registering first. A
+     * the existing minimum bookable rung (2 = max 10 seats per booking), so
+     * a guest can book up to ten seats without registering first. A
      * registered customer with a higher real tier (3 or 4) gets their actual
      * tier whenever user-service answers, unlocking the larger caps.
      */
