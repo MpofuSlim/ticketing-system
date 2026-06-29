@@ -30,6 +30,12 @@ public class Seat {
     @Column(name = "row_label", nullable = false)
     private String sectionLabel;
 
+    // Optional per-section preview image URL. The same value is stamped on every
+    // seat in a section at creation (sections aren't first-class rows here); the
+    // read paths recover it by taking it from any seat in the section. Nullable.
+    @Column(name = "section_image_url", length = 1024)
+    private String sectionImageUrl;
+
     @Column(nullable = false)
     private Integer seatNumber;
 
