@@ -25,6 +25,14 @@
             <artifactId>spring-boot-starter-data-jpa</artifactId>
         </dependency>
 
+        <!-- Read side of the shared cross-service logout denylist (Redis).
+             user-service writes revoked-token hashes; this lets JwtFilter
+             reject a logged-out token fleet-wide. Version from the parent BOM. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-security</artifactId>

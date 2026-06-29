@@ -4,6 +4,7 @@ import com.innbucks.userservice.client.EmailNotificationClient;
 import com.innbucks.userservice.client.SmsNotificationClient;
 import com.innbucks.userservice.event.AccountLockedEvent;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
@@ -31,6 +32,12 @@ public class AccountSecurityNotificationListener {
         this.sms = sms;
     }
 
+    // @Async hops to the notificationExecutor (see AsyncConfig) so the email
+    // gateway hang we recovered from in production (Notification API HTTP 403
+    // on /api/notification/email, ~39s before responding) no longer blocks the
+    // /auth/login HTTP response thread that triggered the lockout. The listener
+    // was already AFTER_COMMIT so the durability story is unchanged.
+    @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onAccountLocked(AccountLockedEvent event) {
         String brand = event.customer() ? "InnBucks" : "SwiftInn";

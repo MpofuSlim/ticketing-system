@@ -25,6 +25,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.EnumSet;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -74,6 +75,12 @@ class ShopStaffServiceTest {
         when(userRepository.findByEmail(caller.getEmail())).thenReturn(Optional.of(caller));
     }
 
+    private User merchantAdmin(UUID merchantId) {
+        return User.builder().email("merchant@x.com")
+                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .loyaltyMerchantId(merchantId).build();
+    }
+
     private CreateShopAdminDTO shopAdminDto(UUID shopId) {
         CreateShopAdminDTO dto = new CreateShopAdminDTO();
         dto.setFirstName("Tendai");
@@ -95,10 +102,9 @@ class ShopStaffServiceTest {
 
     @Test
     void createShopAdmin_emailsCredentialsToTheNewAdmin() {
-        authenticateAs(User.builder().email("merchant@x.com")
-                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN)).build());
         UUID shopId = UUID.randomUUID();
         UUID merchantId = UUID.randomUUID();
+        authenticateAs(merchantAdmin(merchantId));
         stubShopAdminHappyPath(shopId, merchantId);
 
         UserResponseDTO result = service.createShopAdmin(shopAdminDto(shopId));
@@ -161,10 +167,10 @@ class ShopStaffServiceTest {
 
     @Test
     void createShopAdmin_whenEmailGatewayRejects_fallsBackToSms() {
-        authenticateAs(User.builder().email("merchant@x.com")
-                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN)).build());
         UUID shopId = UUID.randomUUID();
-        stubShopAdminHappyPath(shopId, UUID.randomUUID());
+        UUID merchantId = UUID.randomUUID();
+        authenticateAs(merchantAdmin(merchantId));
+        stubShopAdminHappyPath(shopId, merchantId);
         doThrow(new NotificationDeliveryException("gateway 503"))
                 .when(emailNotificationClient).sendEmail(anyString(), anyString(), anyString(), anyString());
 
@@ -184,10 +190,10 @@ class ShopStaffServiceTest {
 
     @Test
     void createShopAdmin_whenBothChannelsFail_creationStillSucceeds() {
-        authenticateAs(User.builder().email("merchant@x.com")
-                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN)).build());
         UUID shopId = UUID.randomUUID();
-        stubShopAdminHappyPath(shopId, UUID.randomUUID());
+        UUID merchantId = UUID.randomUUID();
+        authenticateAs(merchantAdmin(merchantId));
+        stubShopAdminHappyPath(shopId, merchantId);
         doThrow(new NotificationDeliveryException("email down"))
                 .when(emailNotificationClient).sendEmail(anyString(), anyString(), anyString(), anyString());
         doThrow(new NotificationDeliveryException("sms down"))
@@ -317,5 +323,67 @@ class ShopStaffServiceTest {
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
                         .isEqualTo(HttpStatus.NOT_FOUND));
+    }
+
+    // --- H2: cross-merchant scoping on the admin create / list endpoints -----
+
+    @Test
+    void createShopAdmin_rejectsShopBelongingToAnotherMerchant() {
+        UUID shopId = UUID.randomUUID();
+        UUID callerMerchant = UUID.randomUUID();
+        UUID foreignMerchant = UUID.randomUUID();
+        authenticateAs(merchantAdmin(callerMerchant));
+        // The shop resolves to a DIFFERENT merchant than the caller's.
+        when(loyaltyServiceClient.findShop(shopId)).thenReturn(Optional.of(
+                new LoyaltyServiceClient.ShopLookupResponse(
+                        shopId.toString(), foreignMerchant.toString(), "tenant-2", "ACTIVE")));
+
+        assertThatThrownBy(() -> service.createShopAdmin(shopAdminDto(shopId)))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.FORBIDDEN));
+        // No staff account is provisioned into a cross-merchant shop.
+        verify(userRepository, never()).save(any());
+        verifyNoInteractions(emailNotificationClient, smsNotificationClient);
+    }
+
+    @Test
+    void listForMerchant_rejectsForeignMerchant_andReadsNoStaff() {
+        UUID callerMerchant = UUID.randomUUID();
+        UUID foreignMerchant = UUID.randomUUID();
+        authenticateAs(merchantAdmin(callerMerchant));
+
+        assertThatThrownBy(() -> service.listForMerchant(foreignMerchant))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.FORBIDDEN));
+        verify(userRepository, never()).findByLoyaltyMerchantId(any());
+    }
+
+    @Test
+    void listForMerchant_returnsStaff_forOwnMerchant() {
+        UUID merchantId = UUID.randomUUID();
+        authenticateAs(merchantAdmin(merchantId));
+        when(userRepository.findByLoyaltyMerchantId(merchantId)).thenReturn(List.of());
+
+        assertThatCode(() -> service.listForMerchant(merchantId)).doesNotThrowAnyException();
+        verify(userRepository).findByLoyaltyMerchantId(merchantId);
+    }
+
+    @Test
+    void listForShop_rejectsShopBelongingToAnotherMerchant_andReadsNoStaff() {
+        UUID shopId = UUID.randomUUID();
+        UUID callerMerchant = UUID.randomUUID();
+        UUID foreignMerchant = UUID.randomUUID();
+        authenticateAs(merchantAdmin(callerMerchant));
+        when(loyaltyServiceClient.findShop(shopId)).thenReturn(Optional.of(
+                new LoyaltyServiceClient.ShopLookupResponse(
+                        shopId.toString(), foreignMerchant.toString(), "tenant-2", "ACTIVE")));
+
+        assertThatThrownBy(() -> service.listForShop(shopId))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.FORBIDDEN));
+        verify(userRepository, never()).findByLoyaltyShopId(any());
     }
 }

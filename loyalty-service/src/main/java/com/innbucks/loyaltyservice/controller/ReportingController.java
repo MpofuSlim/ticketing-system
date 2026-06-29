@@ -167,11 +167,26 @@ public class ReportingController {
                                     }
                                     """)
                     )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "Merchant belongs to a different tenant than the X-Tenant-Id header",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Cross-tenant", value = """
+                                    {
+                                      "code": "403 FORBIDDEN",
+                                      "message": "merchant belongs to a different tenant",
+                                      "data": null
+                                    }
+                                    """)
+                    )
             )
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Dtos.MerchantDashboard>> merchant(@PathVariable UUID id) {
-        Dtos.MerchantDashboard data = reporting.merchant(id);
+        Dtos.MerchantDashboard data = reporting.merchant(tenantContext.requireTenantId(), id);
         return ResponseEntity.ok(ApiResult.ok("Merchant dashboard retrieved successfully", data));
     }
 
@@ -378,6 +393,21 @@ public class ReportingController {
                                     }
                                     """)
                     )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "Merchant belongs to a different tenant than the X-Tenant-Id header",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Cross-tenant", value = """
+                                    {
+                                      "code": "403 FORBIDDEN",
+                                      "message": "merchant belongs to a different tenant",
+                                      "data": null
+                                    }
+                                    """)
+                    )
             )
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
@@ -419,6 +449,21 @@ public class ReportingController {
                                     }
                                     """)
                     )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "User belongs to a different tenant than the X-Tenant-Id header",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Cross-tenant", value = """
+                                    {
+                                      "code": "403 FORBIDDEN",
+                                      "message": "user belongs to a different tenant",
+                                      "data": null
+                                    }
+                                    """)
+                    )
             )
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
@@ -426,7 +471,7 @@ public class ReportingController {
             @PathVariable UUID userId,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
-        Dtos.PointsReport data = reporting.pointsForUser(userId, from, to);
+        Dtos.PointsReport data = reporting.pointsForUser(tenantContext.requireTenantId(), userId, from, to);
         return ResponseEntity.ok(ApiResult.ok("Points report retrieved successfully", data));
     }
 

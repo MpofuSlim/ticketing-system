@@ -194,6 +194,10 @@ services:
       BANK_API_KEY: ${BANK_API_KEY:-}
       BANK_API_USERNAME: ${BANK_API_USERNAME:-}
       BANK_API_PASSWORD: ${BANK_API_PASSWORD:-}
+      # Read timeout for the notify-api login (~19s real-world) and the email
+      # send. Override in cell.local.env when an upstream needs more / less
+      # headroom. Default lives in user-service/application.yaml (30000ms).
+      BANK_API_READ_TIMEOUT_MS: ${BANK_API_READ_TIMEOUT_MS:-30000}
       # 2FA — AES-GCM key for users.mfa_secret at rest. Base64'd 32-byte value;
       # must be stable (rotating it makes every existing TOTP secret undecodable).
       # Generate one with: openssl rand -base64 32

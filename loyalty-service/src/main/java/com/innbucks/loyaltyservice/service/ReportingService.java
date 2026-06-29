@@ -43,6 +43,11 @@ public class ReportingService {
     private final InvoiceRepository invoices;
     private final FraudAttemptRepository fraud;
     private final CampaignRepository campaigns;
+    // Tenant-scope guards reused from the owning services: requireMerchant /
+    // require throw CROSS_TENANT (403) when the path id belongs to another
+    // tenant, closing the reporting IDOR on /merchant, /points/merchant, /points/user.
+    private final MerchantService merchantService;
+    private final UserService userService;
 
     public ReportingService(TenantRepository tenants, MerchantRepository merchants,
                             LoyaltyUserRepository users,
@@ -50,7 +55,9 @@ public class ReportingService {
                             VoucherRepository vouchers,
                             InvoiceRepository invoices,
                             FraudAttemptRepository fraud,
-                            CampaignRepository campaigns) {
+                            CampaignRepository campaigns,
+                            MerchantService merchantService,
+                            UserService userService) {
         this.tenants = tenants;
         this.merchants = merchants;
         this.users = users;
@@ -59,6 +66,8 @@ public class ReportingService {
         this.invoices = invoices;
         this.fraud = fraud;
         this.campaigns = campaigns;
+        this.merchantService = merchantService;
+        this.userService = userService;
     }
 
     public Dtos.OperatorDashboard operator() {
@@ -116,7 +125,11 @@ public class ReportingService {
                 outstanding, expired, totalBalance, pending);
     }
 
-    public Dtos.MerchantDashboard merchant(UUID merchantId) {
+    public Dtos.MerchantDashboard merchant(UUID tenantId, UUID merchantId) {
+        // Tenant scope: reject (403 CROSS_TENANT / 404) a merchant in another
+        // tenant before aggregating any of its data. Previously absent — any
+        // MERCHANT_ADMIN/SHOP_ADMIN could read any tenant's merchant dashboard.
+        merchantService.requireMerchant(tenantId, merchantId);
         Instant from = LocalDate.now().atStartOfDay().toInstant(ZoneOffset.UTC);
         Instant to = from.plusSeconds(86_400);
         Instant since24h = Instant.now().minusSeconds(86_400);
@@ -174,6 +187,9 @@ public class ReportingService {
 
     public Dtos.PointsReport pointsForMerchant(UUID tenantId, UUID merchantId, LocalDate from, LocalDate to) {
         requireRange(from, to);
+        // Tenant scope: the tenantId was accepted but never enforced here — a
+        // member of tenant A could read tenant B's merchant points report.
+        merchantService.requireMerchant(tenantId, merchantId);
         Instant fromInstant = from.atStartOfDay().toInstant(ZoneOffset.UTC);
         Instant toInstant = to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
         BigDecimal issued = transactions.sumPointsIssued(merchantId, fromInstant, toInstant);
@@ -183,8 +199,11 @@ public class ReportingService {
                 issued.subtract(redeemed), count);
     }
 
-    public Dtos.PointsReport pointsForUser(UUID userId, LocalDate from, LocalDate to) {
+    public Dtos.PointsReport pointsForUser(UUID tenantId, UUID userId, LocalDate from, LocalDate to) {
         requireRange(from, to);
+        // Tenant scope: previously took no tenantId at all — any admin in any
+        // tenant could pull any LoyaltyUser's points statement (cross-tenant IDOR).
+        userService.require(tenantId, userId);
         Instant fromInstant = from.atStartOfDay().toInstant(ZoneOffset.UTC);
         Instant toInstant = to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
         BigDecimal issued = transactions.sumPointsIssuedByUser(userId, fromInstant, toInstant);

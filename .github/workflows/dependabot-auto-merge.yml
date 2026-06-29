@@ -14,7 +14,13 @@ jobs:
     steps:
       - name: Fetch Dependabot metadata
         id: meta
-        uses: dependabot/fetch-metadata@v2
+        # SHA-pinned (not @v2): this job runs under pull_request_target with
+        # contents:write + pull-requests:write, so a compromised mutable tag
+        # would execute with the privileged token and could self-approve/merge
+        # arbitrary PRs. Pinning to an immutable commit removes that
+        # supply-chain path. Bump the SHA + trailing version comment together
+        # when upgrading (keep it on the v2 line; v3 changes the outputs).
+        uses: dependabot/fetch-metadata@08eff52bf64351f401fb50d4972fa95b9f2c2d1b # v2.4.0
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 

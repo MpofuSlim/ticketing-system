@@ -87,7 +87,14 @@ innbucks-notify:
   username: ${BANK_API_USERNAME:}
   password: ${BANK_API_PASSWORD:}
   connect-timeout-ms: ${BANK_API_CONNECT_TIMEOUT_MS:3000}
-  read-timeout-ms: ${BANK_API_READ_TIMEOUT_MS:20000}
+  # 30s read timeout: the InnBucks notify-api login (POST /auth/third-party)
+  # measures ~19s end-to-end on a healthy response — slow but functional. An
+  # earlier 5s ceiling (PR #311) strangled every login attempt and we landed
+  # on the SMS fallback path even when the email gateway was perfectly fine.
+  # Safe to be generous here now that delivery is fully async (PR #311) — the
+  # HTTP request thread is freed at DB commit, so a long upstream login no
+  # longer blocks any FE call.
+  read-timeout-ms: ${BANK_API_READ_TIMEOUT_MS:30000}
   token-ttl: ${BANK_API_TOKEN_TTL:PT8M}
 
 whatsapp:

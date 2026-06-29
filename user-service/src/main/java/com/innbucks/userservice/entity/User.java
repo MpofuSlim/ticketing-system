@@ -118,6 +118,15 @@ public class User {
     @Column(name = "must_change_password", nullable = false)
     private boolean mustChangePassword;
 
+    // Set by CredentialDeliveryListener as soon as ANY channel (email / SMS /
+    // WhatsApp) confirms delivery of the temp password. NULL means nothing
+    // reached the user — UserAdminService.setActive treats a retried activation
+    // on that row as a real retry (re-publishes the event with a fresh temp
+    // password) instead of an idempotent no-op. UserResponseDTO exposes this
+    // so the admin UI can flag "credentials not delivered, click resend".
+    @Column(name = "credential_delivered_at")
+    private LocalDateTime credentialDeliveredAt;
+
     // Loyalty scope for shop staff. SHOP_ADMIN and SHOP_USER tokens carry these
     // as JWT claims so loyalty-service can scope shop-level operations without
     // a per-request lookup. Null for non-shop users.
