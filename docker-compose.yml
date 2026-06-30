@@ -465,6 +465,12 @@ services:
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
       LOYALTY_VOUCHER_SECRET: ${LOYALTY_VOUCHER_SECRET:?set LOYALTY_VOUCHER_SECRET in .env (see .env.example)}
       LOYALTY_QR_SECRET: ${LOYALTY_QR_SECRET:?set LOYALTY_QR_SECRET in .env (see .env.example)}
+      # Notification gateways for the guest-checkout congratulations message
+      # (SMS primary via the InnBucks core gateway, WhatsApp fallback). Same
+      # creds/URLs booking-service + payment-service receive.
+      WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-http://localhost:8089}
+      WHATSAPP_API_KEY: ${WHATSAPP_API_KEY:?set WHATSAPP_API_KEY in .env}
+      INNBUCKS_GATEWAY_URL: ${INNBUCKS_GATEWAY_URL:-http://10.0.155.69:8088}
     ports:
       - "127.0.0.1:8086:8086"
     healthcheck:
