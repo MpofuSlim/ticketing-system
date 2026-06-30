@@ -1,0 +1,52 @@
+---
+apiVersion: v1
+kind: Service
+metadata: { name: user-service, namespace: ticketing }
+spec:
+  selector: { app: user-service }
+  ports: [ { name: http, port: 8081, targetPort: 8081 } ]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: user-service, namespace: ticketing }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: user-service } }
+  template:
+    metadata: { labels: { app: user-service } }
+    spec:
+      imagePullSecrets: [ { name: ghcr } ]
+      containers:
+        - name: user-service
+          image: ghcr.io/mpofuslim/user-service:latest
+          ports: [ { containerPort: 8081 } ]
+          envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
+          env:
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0" }
+            - { name: EUREKA_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: EUREKA_USERNAME } } }
+            - { name: EUREKA_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: EUREKA_PASSWORD } } }
+            - { name: EUREKA_SERVER_URL, value: "http://$(EUREKA_USERNAME):$(EUREKA_PASSWORD)@discovery-server:8761/eureka/,http://$(EUREKA_USERNAME):$(EUREKA_PASSWORD)@discovery-server-2:8761/eureka/" }
+            - { name: EUREKA_PREFER_IP_ADDRESS, value: "false" }
+            - { name: EUREKA_INSTANCE_HOSTNAME, value: "user-service" }
+            - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/user_service" }
+            - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
+            - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
+            - { name: DB_DRIVER, value: "org.postgresql.Driver" }
+            - { name: HIBERNATE_DIALECT, value: "org.hibernate.dialect.PostgreSQLDialect" }
+            - { name: JPA_DDL_AUTO, value: "validate" }
+            - { name: FLYWAY_ENABLED, value: "true" }
+            - { name: REDIS_HOST, value: "redis" }
+            - { name: REDIS_PORT, value: "6379" }
+            - { name: JWT_EXPIRATION_MS, value: "900000" }
+            # ZW is intended for the Veengu provider, but that adapter is not built
+            # yet (CoreBankingProviderConfig only allows 'oradian' today), so this
+            # stays 'oradian' -- the only value that boots. oradian-middleware is
+            # NOT in this cluster, so tier-2 createCustomer is inert until either
+            # the Veengu adapter lands or oradian-middleware is made reachable.
+            - { name: INNBUCKS_CORE_BANKING, value: "oradian" }
+            - { name: ORADIAN_BASE_URL, value: "http://oradian-middleware:8090" }
+            - { name: BANK_API_READ_TIMEOUT_MS, value: "30000" }
+            - { name: MFA_ISSUER, value: "InnBucks" }
+          resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }
+          readinessProbe: { httpGet: { path: /actuator/health, port: 8081 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
+          livenessProbe:  { httpGet: { path: /actuator/health, port: 8081 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }

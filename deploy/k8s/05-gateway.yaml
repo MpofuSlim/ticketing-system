@@ -1,0 +1,37 @@
+# API gateway. Exposed on a NodePort so the host nginx can front it
+# (nginx proxy_pass -> 127.0.0.1:30080), terminating TLS / Cloudflare as before.
+---
+apiVersion: v1
+kind: Service
+metadata: { name: api-gateway, namespace: ticketing }
+spec:
+  type: NodePort
+  selector: { app: api-gateway }
+  ports:
+    - { name: http, port: 8080, targetPort: 8080, nodePort: 30080 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: api-gateway, namespace: ticketing }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: api-gateway } }
+  template:
+    metadata: { labels: { app: api-gateway } }
+    spec:
+      imagePullSecrets: [ { name: ghcr } ]
+      containers:
+        - name: api-gateway
+          image: ghcr.io/mpofuslim/api-gateway:latest
+          ports: [ { containerPort: 8080 }, { containerPort: 9090 } ]
+          envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
+          env:
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0" }
+            - { name: EUREKA_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: EUREKA_USERNAME } } }
+            - { name: EUREKA_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: EUREKA_PASSWORD } } }
+            - { name: EUREKA_SERVER_URL, value: "http://$(EUREKA_USERNAME):$(EUREKA_PASSWORD)@discovery-server:8761/eureka/,http://$(EUREKA_USERNAME):$(EUREKA_PASSWORD)@discovery-server-2:8761/eureka/" }
+            - { name: REDIS_HOST, value: "redis" }
+            - { name: REDIS_PORT, value: "6379" }
+          resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }
+          readinessProbe: { httpGet: { path: /actuator/health, port: 9090 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
+          livenessProbe:  { httpGet: { path: /actuator/health, port: 9090 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }

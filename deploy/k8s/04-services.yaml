@@ -1,0 +1,213 @@
+# Backend services: event, seat, booking, payment, loyalty.
+---
+apiVersion: v1
+kind: Service
+metadata: { name: event-service, namespace: ticketing }
+spec: { selector: { app: event-service }, ports: [ { port: 8082, targetPort: 8082 } ] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: event-service, namespace: ticketing }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: event-service } }
+  template:
+    metadata: { labels: { app: event-service } }
+    spec:
+      imagePullSecrets: [ { name: ghcr } ]
+      containers:
+        - name: event-service
+          image: ghcr.io/mpofuslim/event-service:latest
+          ports: [ { containerPort: 8082 } ]
+          envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
+          env:
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0" }
+            - { name: EUREKA_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: EUREKA_USERNAME } } }
+            - { name: EUREKA_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: EUREKA_PASSWORD } } }
+            - { name: EUREKA_SERVER_URL, value: "http://$(EUREKA_USERNAME):$(EUREKA_PASSWORD)@discovery-server:8761/eureka/,http://$(EUREKA_USERNAME):$(EUREKA_PASSWORD)@discovery-server-2:8761/eureka/" }
+            - { name: EUREKA_PREFER_IP_ADDRESS, value: "false" }
+            - { name: EUREKA_INSTANCE_HOSTNAME, value: "event-service" }
+            - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/event_service" }
+            - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
+            - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
+            - { name: DB_DRIVER, value: "org.postgresql.Driver" }
+            - { name: HIBERNATE_DIALECT, value: "org.hibernate.dialect.PostgreSQLDialect" }
+            - { name: JPA_DDL_AUTO, value: "validate" }
+            - { name: FLYWAY_ENABLED, value: "true" }
+            - { name: REDIS_HOST, value: "redis" }
+            - { name: REDIS_PORT, value: "6379" }
+          resources: { requests: { memory: 448Mi }, limits: { memory: 640Mi } }
+          readinessProbe: { httpGet: { path: /actuator/health, port: 8082 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
+          livenessProbe:  { httpGet: { path: /actuator/health, port: 8082 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: seat-service, namespace: ticketing }
+spec: { selector: { app: seat-service }, ports: [ { port: 8083, targetPort: 8083 } ] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: seat-service, namespace: ticketing }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: seat-service } }
+  template:
+    metadata: { labels: { app: seat-service } }
+    spec:
+      imagePullSecrets: [ { name: ghcr } ]
+      containers:
+        - name: seat-service
+          image: ghcr.io/mpofuslim/seat-service:latest
+          ports: [ { containerPort: 8083 } ]
+          envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
+          env:
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0" }
+            - { name: EUREKA_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: EUREKA_USERNAME } } }
+            - { name: EUREKA_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: EUREKA_PASSWORD } } }
+            - { name: EUREKA_SERVER_URL, value: "http://$(EUREKA_USERNAME):$(EUREKA_PASSWORD)@discovery-server:8761/eureka/,http://$(EUREKA_USERNAME):$(EUREKA_PASSWORD)@discovery-server-2:8761/eureka/" }
+            - { name: EUREKA_PREFER_IP_ADDRESS, value: "false" }
+            - { name: EUREKA_INSTANCE_HOSTNAME, value: "seat-service" }
+            - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/seat_service" }
+            - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
+            - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
+            - { name: DB_DRIVER, value: "org.postgresql.Driver" }
+            - { name: HIBERNATE_DIALECT, value: "org.hibernate.dialect.PostgreSQLDialect" }
+            - { name: JPA_DDL_AUTO, value: "validate" }
+            - { name: FLYWAY_ENABLED, value: "true" }
+            - { name: REDIS_HOST, value: "redis" }
+            - { name: REDIS_PORT, value: "6379" }
+            - { name: LOCK_STORE, value: "redis" }
+          resources: { requests: { memory: 448Mi }, limits: { memory: 640Mi } }
+          readinessProbe: { httpGet: { path: /actuator/health, port: 8083 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
+          livenessProbe:  { httpGet: { path: /actuator/health, port: 8083 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: booking-service, namespace: ticketing }
+spec: { selector: { app: booking-service }, ports: [ { port: 8084, targetPort: 8084 } ] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: booking-service, namespace: ticketing }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: booking-service } }
+  template:
+    metadata: { labels: { app: booking-service } }
+    spec:
+      imagePullSecrets: [ { name: ghcr } ]
+      containers:
+        - name: booking-service
+          image: ghcr.io/mpofuslim/booking-service:latest
+          ports: [ { containerPort: 8084 } ]
+          envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
+          env:
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0" }
+            - { name: EUREKA_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: EUREKA_USERNAME } } }
+            - { name: EUREKA_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: EUREKA_PASSWORD } } }
+            - { name: EUREKA_SERVER_URL, value: "http://$(EUREKA_USERNAME):$(EUREKA_PASSWORD)@discovery-server:8761/eureka/,http://$(EUREKA_USERNAME):$(EUREKA_PASSWORD)@discovery-server-2:8761/eureka/" }
+            - { name: EUREKA_PREFER_IP_ADDRESS, value: "false" }
+            - { name: EUREKA_INSTANCE_HOSTNAME, value: "booking-service" }
+            - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/booking_service" }
+            - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
+            - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
+            - { name: DB_DRIVER, value: "org.postgresql.Driver" }
+            - { name: HIBERNATE_DIALECT, value: "org.hibernate.dialect.PostgreSQLDialect" }
+            - { name: JPA_DDL_AUTO, value: "validate" }
+            - { name: FLYWAY_ENABLED, value: "true" }
+            - { name: REDIS_HOST, value: "redis" }
+            - { name: REDIS_PORT, value: "6379" }
+            - { name: IDEMPOTENCY_STORE, value: "redis" }
+            - { name: KAFKA_BOOTSTRAP_SERVERS, value: "kafka:9092" }
+            - { name: TICKETS_PUBLIC_BASE_URL, value: "https://dtx.innbucks.co.zw" }
+            - { name: INVOICE_DEFAULT_COMMISSION_RATE, value: "10.0" }
+            - { name: INVOICE_VAT_RATE, value: "15.0" }
+            - { name: INVOICE_DEFAULT_BILLING_CYCLE, value: "MONTHLY" }
+            - { name: INVOICE_DUE_DAYS, value: "14" }
+            - { name: INVOICE_SCHEDULER_ENABLED, value: "true" }
+          resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }
+          readinessProbe: { httpGet: { path: /actuator/health, port: 8084 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
+          livenessProbe:  { httpGet: { path: /actuator/health, port: 8084 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: payment-service, namespace: ticketing }
+spec: { selector: { app: payment-service }, ports: [ { port: 8085, targetPort: 8085 } ] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: payment-service, namespace: ticketing }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: payment-service } }
+  template:
+    metadata: { labels: { app: payment-service } }
+    spec:
+      imagePullSecrets: [ { name: ghcr } ]
+      containers:
+        - name: payment-service
+          image: ghcr.io/mpofuslim/payment-service:latest
+          ports: [ { containerPort: 8085 } ]
+          envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
+          env:
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0" }
+            - { name: EUREKA_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: EUREKA_USERNAME } } }
+            - { name: EUREKA_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: EUREKA_PASSWORD } } }
+            - { name: EUREKA_SERVER_URL, value: "http://$(EUREKA_USERNAME):$(EUREKA_PASSWORD)@discovery-server:8761/eureka/,http://$(EUREKA_USERNAME):$(EUREKA_PASSWORD)@discovery-server-2:8761/eureka/" }
+            - { name: EUREKA_PREFER_IP_ADDRESS, value: "false" }
+            - { name: EUREKA_INSTANCE_HOSTNAME, value: "payment-service" }
+            - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/payment_service" }
+            - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
+            - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
+            - { name: DB_DRIVER, value: "org.postgresql.Driver" }
+            - { name: JPA_DDL_AUTO, value: "validate" }
+            - { name: REDIS_HOST, value: "redis" }
+            - { name: REDIS_PORT, value: "6379" }
+            - { name: IDEMPOTENCY_STORE, value: "redis" }
+            # Oradian is not in this cluster (ZW); this URL is inert until the
+            # Veengu adapter lands or oradian-middleware is made reachable.
+            - { name: ORADIAN_MIDDLEWARE_URL, value: "http://oradian-middleware:8090" }
+            - { name: PAYMENTS_INNBUCKS_ENABLED, value: "true" }
+          resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }
+          readinessProbe: { httpGet: { path: /actuator/health, port: 8085 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
+          livenessProbe:  { httpGet: { path: /actuator/health, port: 8085 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: loyalty-service, namespace: ticketing }
+spec: { selector: { app: loyalty-service }, ports: [ { port: 8086, targetPort: 8086 } ] }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: loyalty-service, namespace: ticketing }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: loyalty-service } }
+  template:
+    metadata: { labels: { app: loyalty-service } }
+    spec:
+      imagePullSecrets: [ { name: ghcr } ]
+      containers:
+        - name: loyalty-service
+          image: ghcr.io/mpofuslim/loyalty-service:latest
+          ports: [ { containerPort: 8086 } ]
+          envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
+          env:
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0" }
+            - { name: EUREKA_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: EUREKA_USERNAME } } }
+            - { name: EUREKA_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: EUREKA_PASSWORD } } }
+            - { name: EUREKA_SERVER_URL, value: "http://$(EUREKA_USERNAME):$(EUREKA_PASSWORD)@discovery-server:8761/eureka/,http://$(EUREKA_USERNAME):$(EUREKA_PASSWORD)@discovery-server-2:8761/eureka/" }
+            - { name: EUREKA_PREFER_IP_ADDRESS, value: "false" }
+            - { name: EUREKA_INSTANCE_HOSTNAME, value: "loyalty-service" }
+            - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/loyalty_service" }
+            - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
+            - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
+            - { name: DB_DRIVER, value: "org.postgresql.Driver" }
+            - { name: HIBERNATE_DIALECT, value: "org.hibernate.dialect.PostgreSQLDialect" }
+            - { name: JPA_DDL_AUTO, value: "validate" }
+            - { name: FLYWAY_ENABLED, value: "true" }
+            - { name: REDIS_HOST, value: "redis" }
+            - { name: REDIS_PORT, value: "6379" }
+          resources: { requests: { memory: 448Mi }, limits: { memory: 640Mi } }
+          readinessProbe: { httpGet: { path: /actuator/health, port: 8086 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
+          livenessProbe:  { httpGet: { path: /actuator/health, port: 8086 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
