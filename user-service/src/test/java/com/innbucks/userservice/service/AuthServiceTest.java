@@ -997,4 +997,292 @@ class AuthServiceTest {
         // (3) Every refresh-token family for the user is revoked
         verify(refreshRepo).revokeAllForUser(eq(7L), any());
     }
+
+    // ------------------------------------------------------------------------
+    // "Remember this device" — trusted-device 2FA bypass
+    // ------------------------------------------------------------------------
+
+    /** A system user (non-CUSTOMER → MFA required on WEB) that is enrolled with a secret. */
+    private static User mfaSystemUser() {
+        return User.builder()
+                .id(55L)
+                .email("ops@innbucks.co.zw")
+                .password("hashed")
+                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .defaultServices(new LinkedHashSet<>(List.of("loyalty")))
+                .active(true)
+                .mfaEnabled(true)
+                .mfaSecret("JBSWY3DPEHPK3PXP")
+                .build();
+    }
+
+    /**
+     * Wire the MFA collaborators so {@code login} actually reaches the MFA gate,
+     * plus an explicit {@link DeviceTrustService} so the trusted-device skip can
+     * be exercised. Mirrors how the production context field-injects these.
+     */
+    private static void wireMfa(AuthService svc, com.innbucks.userservice.security.MfaPolicy policy,
+                                com.innbucks.userservice.security.MfaTokenService tokenService,
+                                MfaService mfaService, DeviceTrustService deviceTrustService) {
+        org.springframework.test.util.ReflectionTestUtils.setField(svc, "mfaPolicy", policy);
+        org.springframework.test.util.ReflectionTestUtils.setField(svc, "mfaTokenService", tokenService);
+        org.springframework.test.util.ReflectionTestUtils.setField(svc, "mfaService", mfaService);
+        org.springframework.test.util.ReflectionTestUtils.setField(svc, "deviceTrustService", deviceTrustService);
+    }
+
+    @Test
+    void login_trustedDevice_skipsMfaChallenge_andIssuesFullToken() {
+        UserRepository userRepo = mock(UserRepository.class);
+        CustomerProfileRepository customerRepo = mock(CustomerProfileRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        RefreshTokenService refreshTokenService = mock(RefreshTokenService.class);
+
+        User user = mfaSystemUser();
+        when(userRepo.findByEmail("ops@innbucks.co.zw")).thenReturn(Optional.of(user));
+        when(encoder.matches("pw", "hashed")).thenReturn(true);
+        when(refreshTokenService.issueNewFamily(any(), any())).thenReturn("refresh");
+        when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean())).thenReturn("tok");
+
+        com.innbucks.userservice.security.MfaPolicy policy =
+                new com.innbucks.userservice.security.MfaPolicy(); // real: system user on WEB → challenge
+        com.innbucks.userservice.security.MfaTokenService tokenService =
+                mock(com.innbucks.userservice.security.MfaTokenService.class);
+        DeviceTrustService trust = mock(DeviceTrustService.class);
+        when(trust.isTrusted(55L, "trusted-dev", "good-trust-token")).thenReturn(true);
+
+        AuthService svc = withLockoutConfig(new AuthService(userRepo, mock(TenantProfileRepository.class),
+                customerRepo, encoder, jwt, mock(TokenRevocationService.class),
+                refreshTokenService, mock(RefreshTokenRepository.class), mock(AuditService.class)));
+        wireMfa(svc, policy, tokenService, mock(MfaService.class), trust);
+
+        LoginRequestDTO req = new LoginRequestDTO();
+        req.setIdentifier("ops@innbucks.co.zw");
+        req.setPassword("pw");
+
+        AuthResponseDTO resp = svc.login(req, "trusted-dev", "good-trust-token",
+                com.innbucks.userservice.security.AuthChannel.WEB, AuditContext.none());
+
+        // Full token issued, NOT an MFA challenge.
+        assertEquals("tok", resp.getToken());
+        assertFalse(resp.isMfaRequired());
+        assertNull(resp.getMfaToken());
+        // No step-1 mfaToken was minted — the challenge was skipped entirely.
+        verify(tokenService, never()).issue(anyLong(), any());
+        verify(refreshTokenService).issueNewFamily(eq(user), eq("trusted-dev"));
+    }
+
+    @Test
+    void login_wrongTrustToken_stillReturnsMfaChallenge() {
+        UserRepository userRepo = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+
+        User user = mfaSystemUser();
+        when(userRepo.findByEmail("ops@innbucks.co.zw")).thenReturn(Optional.of(user));
+        when(encoder.matches("pw", "hashed")).thenReturn(true);
+
+        com.innbucks.userservice.security.MfaPolicy policy =
+                new com.innbucks.userservice.security.MfaPolicy();
+        com.innbucks.userservice.security.MfaTokenService tokenService =
+                mock(com.innbucks.userservice.security.MfaTokenService.class);
+        when(tokenService.issue(eq(55L),
+                eq(com.innbucks.userservice.security.MfaTokenService.Purpose.LOGIN_MFA)))
+                .thenReturn("mfa-step1");
+        DeviceTrustService trust = mock(DeviceTrustService.class);
+        // Wrong / expired / unknown token → isTrusted returns false (not an error).
+        when(trust.isTrusted(anyLong(), any(), any())).thenReturn(false);
+
+        AuthService svc = withLockoutConfig(new AuthService(userRepo, mock(TenantProfileRepository.class),
+                mock(CustomerProfileRepository.class), encoder, jwt, mock(TokenRevocationService.class),
+                mock(RefreshTokenService.class), mock(RefreshTokenRepository.class), mock(AuditService.class)));
+        wireMfa(svc, policy, tokenService, mock(MfaService.class), trust);
+
+        LoginRequestDTO req = new LoginRequestDTO();
+        req.setIdentifier("ops@innbucks.co.zw");
+        req.setPassword("pw");
+
+        AuthResponseDTO resp = svc.login(req, "some-dev", "wrong-token",
+                com.innbucks.userservice.security.AuthChannel.WEB, AuditContext.none());
+
+        // Falls through to the normal MFA challenge.
+        assertTrue(resp.isMfaRequired());
+        assertEquals("mfa-step1", resp.getMfaToken());
+        assertNull(resp.getToken());
+    }
+
+    @Test
+    void login_noTrustTokenPresented_returnsMfaChallenge_withoutConsultingTrustService() {
+        UserRepository userRepo = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+
+        User user = mfaSystemUser();
+        when(userRepo.findByEmail("ops@innbucks.co.zw")).thenReturn(Optional.of(user));
+        when(encoder.matches("pw", "hashed")).thenReturn(true);
+
+        com.innbucks.userservice.security.MfaPolicy policy =
+                new com.innbucks.userservice.security.MfaPolicy();
+        com.innbucks.userservice.security.MfaTokenService tokenService =
+                mock(com.innbucks.userservice.security.MfaTokenService.class);
+        when(tokenService.issue(eq(55L), any())).thenReturn("mfa-step1");
+        DeviceTrustService trust = mock(DeviceTrustService.class);
+
+        AuthService svc = withLockoutConfig(new AuthService(userRepo, mock(TenantProfileRepository.class),
+                mock(CustomerProfileRepository.class), encoder, jwt, mock(TokenRevocationService.class),
+                mock(RefreshTokenService.class), mock(RefreshTokenRepository.class), mock(AuditService.class)));
+        wireMfa(svc, policy, tokenService, mock(MfaService.class), trust);
+
+        LoginRequestDTO req = new LoginRequestDTO();
+        req.setIdentifier("ops@innbucks.co.zw");
+        req.setPassword("pw");
+
+        // deviceId present but NO trust token → challenge, and isTrusted never called.
+        AuthResponseDTO resp = svc.login(req, "some-dev", null,
+                com.innbucks.userservice.security.AuthChannel.WEB, AuditContext.none());
+
+        assertTrue(resp.isMfaRequired());
+        verify(trust, never()).isTrusted(anyLong(), any(), any());
+    }
+
+    @Test
+    void completeLoginWithMfa_rememberDeviceTrue_mintsTrust_andReturnsRawToken() {
+        UserRepository userRepo = mock(UserRepository.class);
+        CustomerProfileRepository customerRepo = mock(CustomerProfileRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        RefreshTokenService refreshTokenService = mock(RefreshTokenService.class);
+
+        User user = mfaSystemUser();
+        when(userRepo.findById(55L)).thenReturn(Optional.of(user));
+        when(refreshTokenService.issueNewFamily(any(), any())).thenReturn("refresh");
+        when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean())).thenReturn("tok");
+
+        com.innbucks.userservice.security.MfaTokenService tokenService =
+                mock(com.innbucks.userservice.security.MfaTokenService.class);
+        when(tokenService.verify("step1",
+                com.innbucks.userservice.security.MfaTokenService.Purpose.LOGIN_MFA)).thenReturn(55L);
+        MfaService mfaService = mock(MfaService.class);
+        when(mfaService.verifyForLogin(user, "472938")).thenReturn(true);
+        DeviceTrustService trust = mock(DeviceTrustService.class);
+        java.time.LocalDateTime until = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).plusDays(30);
+        when(trust.trustDevice(user, "my-dev"))
+                .thenReturn(new DeviceTrustService.TrustGrant("RAW-TRUST-TOKEN", until));
+
+        AuthService svc = withLockoutConfig(new AuthService(userRepo, mock(TenantProfileRepository.class),
+                customerRepo, encoder, jwt, mock(TokenRevocationService.class),
+                refreshTokenService, mock(RefreshTokenRepository.class), mock(AuditService.class)));
+        wireMfa(svc, new com.innbucks.userservice.security.MfaPolicy(), tokenService, mfaService, trust);
+
+        AuthResponseDTO resp = svc.completeLoginWithMfa("step1", "472938", "my-dev", true, AuditContext.none());
+
+        assertEquals("tok", resp.getToken());
+        // The RAW token is surfaced once, with its expiry.
+        assertEquals("RAW-TRUST-TOKEN", resp.getDeviceTrustToken());
+        assertEquals(until, resp.getDeviceTrustExpiresAt());
+        verify(trust).trustDevice(user, "my-dev");
+    }
+
+    @Test
+    void completeLoginWithMfa_rememberDeviceFalse_doesNotMintTrust() {
+        UserRepository userRepo = mock(UserRepository.class);
+        CustomerProfileRepository customerRepo = mock(CustomerProfileRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        RefreshTokenService refreshTokenService = mock(RefreshTokenService.class);
+
+        User user = mfaSystemUser();
+        when(userRepo.findById(55L)).thenReturn(Optional.of(user));
+        when(refreshTokenService.issueNewFamily(any(), any())).thenReturn("refresh");
+        when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean())).thenReturn("tok");
+
+        com.innbucks.userservice.security.MfaTokenService tokenService =
+                mock(com.innbucks.userservice.security.MfaTokenService.class);
+        when(tokenService.verify("step1",
+                com.innbucks.userservice.security.MfaTokenService.Purpose.LOGIN_MFA)).thenReturn(55L);
+        MfaService mfaService = mock(MfaService.class);
+        when(mfaService.verifyForLogin(user, "472938")).thenReturn(true);
+        DeviceTrustService trust = mock(DeviceTrustService.class);
+
+        AuthService svc = withLockoutConfig(new AuthService(userRepo, mock(TenantProfileRepository.class),
+                customerRepo, encoder, jwt, mock(TokenRevocationService.class),
+                refreshTokenService, mock(RefreshTokenRepository.class), mock(AuditService.class)));
+        wireMfa(svc, new com.innbucks.userservice.security.MfaPolicy(), tokenService, mfaService, trust);
+
+        AuthResponseDTO resp = svc.completeLoginWithMfa("step1", "472938", "my-dev", false, AuditContext.none());
+
+        assertEquals("tok", resp.getToken());
+        assertNull(resp.getDeviceTrustToken());
+        assertNull(resp.getDeviceTrustExpiresAt());
+        verify(trust, never()).trustDevice(any(), any());
+    }
+
+    @Test
+    void completeLoginWithMfa_rememberDeviceTrue_butNoDeviceId_doesNotMintTrust() {
+        UserRepository userRepo = mock(UserRepository.class);
+        CustomerProfileRepository customerRepo = mock(CustomerProfileRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        RefreshTokenService refreshTokenService = mock(RefreshTokenService.class);
+
+        User user = mfaSystemUser();
+        when(userRepo.findById(55L)).thenReturn(Optional.of(user));
+        when(refreshTokenService.issueNewFamily(any(), any())).thenReturn("refresh");
+        when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean())).thenReturn("tok");
+
+        com.innbucks.userservice.security.MfaTokenService tokenService =
+                mock(com.innbucks.userservice.security.MfaTokenService.class);
+        when(tokenService.verify("step1",
+                com.innbucks.userservice.security.MfaTokenService.Purpose.LOGIN_MFA)).thenReturn(55L);
+        MfaService mfaService = mock(MfaService.class);
+        when(mfaService.verifyForLogin(user, "472938")).thenReturn(true);
+        DeviceTrustService trust = mock(DeviceTrustService.class);
+
+        AuthService svc = withLockoutConfig(new AuthService(userRepo, mock(TenantProfileRepository.class),
+                customerRepo, encoder, jwt, mock(TokenRevocationService.class),
+                refreshTokenService, mock(RefreshTokenRepository.class), mock(AuditService.class)));
+        wireMfa(svc, new com.innbucks.userservice.security.MfaPolicy(), tokenService, mfaService, trust);
+
+        // rememberDevice=true but deviceId blank → can't scope trust, so none minted.
+        AuthResponseDTO resp = svc.completeLoginWithMfa("step1", "472938", "  ", true, AuditContext.none());
+
+        assertNull(resp.getDeviceTrustToken());
+        verify(trust, never()).trustDevice(any(), any());
+    }
+
+    @Test
+    void changePassword_success_clearsDeviceTrust() {
+        UserRepository userRepo = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        User user = User.builder()
+                .id(7L).email("alice@x.co").password("hashed-current")
+                .tokenVersion(3L)
+                .roles(EnumSet.of(User.Role.CUSTOMER)).active(true).build();
+        when(userRepo.findByEmail("alice@x.co")).thenReturn(Optional.of(user));
+        when(userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(encoder.matches("current", "hashed-current")).thenReturn(true);
+        when(encoder.matches("new-pw", "hashed-current")).thenReturn(false);
+        when(encoder.encode("new-pw")).thenReturn("hashed-new");
+
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.isTokenValid(anyString())).thenReturn(true);
+        when(jwt.extractEmail(anyString())).thenReturn("alice@x.co");
+        TokenRevocationService rev = mock(TokenRevocationService.class);
+        when(rev.isRevoked(anyString())).thenReturn(false);
+        DeviceTrustService trust = mock(DeviceTrustService.class);
+
+        AuthService svc = withLockoutConfig(new AuthService(userRepo, mock(TenantProfileRepository.class),
+                mock(CustomerProfileRepository.class), encoder, jwt, rev,
+                mock(RefreshTokenService.class), mock(RefreshTokenRepository.class), mock(AuditService.class)));
+        org.springframework.test.util.ReflectionTestUtils.setField(svc, "deviceTrustService", trust);
+
+        svc.changePassword("the-access-token", changeReq("current", "new-pw"), AuditContext.none());
+
+        // Password change must wipe any standing trusted-device 2FA bypass.
+        verify(trust).clearTrustForUser(7L);
+    }
 }

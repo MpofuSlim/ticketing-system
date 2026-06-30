@@ -142,6 +142,13 @@ public class AuthController {
                     **Using the token:** send it on every authenticated request as `Authorization: Bearer <token>`.
                     To pick up a new tier after the customer upgrades (e.g. tier 2 → tier 3), log in again to receive
                     a fresh token — the old token keeps its original tier claim until it expires.
+
+                    **Remembered device (skip 2FA):** if 2FA would otherwise be required but this device was
+                    previously trusted, send the `X-Device-Trust-Token` header (the `deviceTrustToken` returned by
+                    a prior `/auth/login/mfa` with `rememberDevice=true`) together with the same `X-Device-Id`. When
+                    the token matches and hasn't expired, the 2FA challenge is skipped and a full token is returned
+                    directly (no `mfaRequired`). A missing / wrong / expired trust token is harmless — the normal
+                    2FA challenge is returned instead.
                     """)
             @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
@@ -217,6 +224,7 @@ public class AuthController {
             HttpServletRequest httpRequest,
             @Valid @RequestBody LoginRequestDTO request,
             @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+            @RequestHeader(value = "X-Device-Trust-Token", required = false) String deviceTrustToken,
             @RequestHeader(value = "X-Auth-Channel", required = false) String authChannel) {
         // Affinity check FIRST — drop wrong-cell calls before the Redis rate
         // limiter hit. Email identifiers fall through (we can't resolve a
@@ -225,9 +233,10 @@ public class AuthController {
         loginRateLimiter.checkLogin(request.getIdentifier(), clientIp(httpRequest));
         com.innbucks.userservice.security.AuthChannel channel =
                 com.innbucks.userservice.security.AuthChannel.parseOrDefault(authChannel);
-        log.info("Received login request identifier={} hasDeviceId={} channel={}",
-                request.getIdentifier(), deviceId != null && !deviceId.isBlank(), channel);
-        AuthResponseDTO response = authService.login(request, deviceId, channel, auditContext(httpRequest));
+        log.info("Received login request identifier={} hasDeviceId={} hasTrustToken={} channel={}",
+                request.getIdentifier(), deviceId != null && !deviceId.isBlank(),
+                deviceTrustToken != null && !deviceTrustToken.isBlank(), channel);
+        AuthResponseDTO response = authService.login(request, deviceId, deviceTrustToken, channel, auditContext(httpRequest));
         if (Boolean.TRUE.equals(response.getMfaEnrollmentRequired())) {
             return ResponseEntity.ok(ApiResult.ok("Enrol in 2FA to continue", response));
         }
@@ -248,6 +257,13 @@ public class AuthController {
 
                     The mfaToken is single-purpose and short-lived (~5 minutes). If it has expired the FE
                     must restart from `/auth/login`.
+
+                    **Remember this device:** set `rememberDevice=true` in the body AND send the `X-Device-Id`
+                    header. The response then carries a one-time `deviceTrustToken` (+ `deviceTrustExpiresAt`).
+                    Store it and send it on future logins via the `X-Device-Trust-Token` header (with the same
+                    `X-Device-Id`) to skip the 2FA challenge for up to the configured number of days (default 30).
+                    The trust token is shown ONCE and is cleared automatically when the password is changed or
+                    MFA is disabled/reset.
                     """)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
@@ -269,7 +285,8 @@ public class AuthController {
             @Valid @RequestBody MfaVerifyRequestDTO request,
             @RequestHeader(value = "X-Device-Id", required = false) String deviceId) {
         AuthResponseDTO response = authService.completeLoginWithMfa(
-                request.getMfaToken(), request.getCode(), deviceId, auditContext(httpRequest));
+                request.getMfaToken(), request.getCode(), deviceId,
+                request.isRememberDevice(), auditContext(httpRequest));
         return ResponseEntity.ok(ApiResult.ok("Login successful", response));
     }
 
