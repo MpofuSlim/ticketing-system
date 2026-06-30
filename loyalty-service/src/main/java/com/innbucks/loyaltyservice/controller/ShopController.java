@@ -45,11 +45,14 @@ public class ShopController {
     private final ShopService shops;
     private final TenantContext tenantContext;
     private final ShopCheckoutService shopCheckout;
+    private final com.innbucks.loyaltyservice.integration.GuestCheckoutNotifier guestCheckoutNotifier;
 
-    public ShopController(ShopService shops, TenantContext tenantContext, ShopCheckoutService shopCheckout) {
+    public ShopController(ShopService shops, TenantContext tenantContext, ShopCheckoutService shopCheckout,
+                          com.innbucks.loyaltyservice.integration.GuestCheckoutNotifier guestCheckoutNotifier) {
         this.shops = shops;
         this.tenantContext = tenantContext;
         this.shopCheckout = shopCheckout;
+        this.guestCheckoutNotifier = guestCheckoutNotifier;
     }
 
     @PostMapping
@@ -547,6 +550,15 @@ public class ShopController {
         Dtos.GuestShopCheckoutResponse data = new Dtos.GuestShopCheckoutResponse(
                 r.shopId(), r.merchantId(), r.loyaltyUserId(),
                 r.cashAmount(), r.pointsEarned(), r.walletBalanceAfter(), r.purchaseTransactionId());
+        // Best-effort congratulations to the walk-in customer (SMS primary, WhatsApp
+        // fallback). @Async + self-contained best-effort — never delays or fails the
+        // 201, but guard defensively so even a bean-proxy hiccup can't break checkout.
+        try {
+            guestCheckoutNotifier.notifyPointsEarned(
+                    shop.name(), req.phoneNumber(), r.pointsEarned(), r.walletBalanceAfter());
+        } catch (RuntimeException e) {
+            log.warn("Failed to dispatch guest-checkout notification: {}", e.getMessage());
+        }
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Guest checkout completed successfully", data));
     }
