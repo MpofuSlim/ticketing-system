@@ -78,6 +78,19 @@ public class ShopService {
         return toResponse(requireShop(tenantId, shopId));
     }
 
+    /**
+     * Loads a shop by id WITHOUT a tenant scope. Used by the public
+     * guest-checkout endpoint (TODO(demo)) where an anonymous caller has no
+     * tenant membership to scope by — the shop carries its own tenantId and
+     * merchantId, which the downstream checkout resolves from the shop. Uses the
+     * same {@link #toResponse(Shop)} mapper as {@link #get(UUID, UUID)}.
+     */
+    @Transactional(readOnly = true)
+    public Dtos.ShopResponse getById(UUID shopId) {
+        Shop s = shops.findById(shopId).orElseThrow(() -> LoyaltyException.notFound("shop"));
+        return toResponse(s);
+    }
+
     public Dtos.ShopResponse update(UUID tenantId, UUID shopId, Dtos.ShopRequest req) {
         Shop s = requireShop(tenantId, shopId);
         s.setName(req.name());
