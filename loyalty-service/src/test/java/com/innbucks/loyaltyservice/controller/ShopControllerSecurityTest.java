@@ -211,4 +211,33 @@ class ShopControllerSecurityTest extends ControllerSecurityTestBase {
         verify(shopCheckoutService).checkout(
                 eq(shopId), eq("+263771234567"), any(), eq(BigDecimal.ZERO), startsWith("SHOP-"));
     }
+
+    @Test
+    void merchant_admin_guest_checkout_needs_no_body_merchant_id() throws Exception {
+        // MERCHANT_ADMIN carries no merchantId claim. With the field gone from the
+        // request, the merchant is taken from the shop and the caller is scoped purely
+        // by tenant membership — so a tenant member checks out without a 403.
+        UUID tenantId = newTenant("shop-guest-ma");
+        joinTenant(tenantId, "admin@test.local");
+        UUID merchantId = UUID.randomUUID();
+        UUID shopId = UUID.randomUUID();
+        UUID loyaltyUserId = UUID.randomUUID();
+
+        when(shopService.get(eq(tenantId), eq(shopId)))
+                .thenReturn(new Dtos.ShopResponse(shopId, tenantId, merchantId,
+                        "Pizza Inn Westgate", "addr", Shop.Status.ACTIVE, Instant.now()));
+        when(shopCheckoutService.checkout(eq(shopId), eq("+263771234567"), any(), eq(BigDecimal.ZERO), any()))
+                .thenReturn(new ShopCheckoutService.Result(shopId, merchantId, tenantId, loyaltyUserId,
+                        new BigDecimal("10.00"), BigDecimal.ZERO, new BigDecimal("10.0000"),
+                        new BigDecimal("10.0000"), UUID.randomUUID(), null));
+
+        String admin = jwt("admin@test.local", "MERCHANT_ADMIN");
+        mockMvc.perform(post("/loyalty/shops/{shopId}/guest-checkout", shopId)
+                        .header("Authorization", bearer(admin))
+                        .header("X-Tenant-Id", tenantId.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_GUEST_BODY))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.merchantId").value(merchantId.toString()));
+    }
 }
