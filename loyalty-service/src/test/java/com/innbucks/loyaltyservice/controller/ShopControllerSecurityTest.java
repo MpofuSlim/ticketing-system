@@ -1,16 +1,26 @@
 package com.innbucks.loyaltyservice.controller;
 
+import com.innbucks.loyaltyservice.dto.Dtos;
+import com.innbucks.loyaltyservice.entity.Shop;
+import com.innbucks.loyaltyservice.service.ShopCheckoutService;
 import com.innbucks.loyaltyservice.service.ShopService;
 import com.innbucks.loyaltyservice.testsupport.ControllerSecurityTestBase;
+import com.innbucks.loyaltyservice.testsupport.TestJwtFactory;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
+import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.UUID;
 
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -21,9 +31,16 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class ShopControllerSecurityTest extends ControllerSecurityTestBase {
 
     @MockitoBean ShopService shopService;
+    @MockitoBean ShopCheckoutService shopCheckoutService;
 
     private static final String VALID_SHOP_BODY = """
             {"merchantId":"b4c0d2e3-2345-6789-abcd-ef0123456789","name":"Avondale"}
+            """;
+
+    // SHOP_ADMIN/SHOP_USER carry merchantId in the JWT, so the guest-checkout
+    // body never needs one — just the walk-in customer's phone + the cash paid.
+    private static final String VALID_GUEST_BODY = """
+            {"phoneNumber":"+263771234567","cashAmount":10.00}
             """;
 
     @Test
@@ -97,5 +114,94 @@ class ShopControllerSecurityTest extends ControllerSecurityTestBase {
                         .header("Authorization", bearer(stranger))
                         .header("X-Tenant-Id", otherTenant.toString()))
                 .andExpect(status().isForbidden());
+    }
+
+    // --- Guest checkout (earn for an unregistered customer) ---------------------
+
+    @Test
+    void guest_checkout_without_token_returns_401() throws Exception {
+        mockMvc.perform(post("/loyalty/shops/{shopId}/guest-checkout", UUID.randomUUID())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_GUEST_BODY))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void customer_cannot_guest_checkout() throws Exception {
+        // A point-minting endpoint must never be reachable by a customer token —
+        // that's the fraud vector the merchant-authenticated model exists to close.
+        String customerToken = jwt("customer@test.local", "CUSTOMER");
+        mockMvc.perform(post("/loyalty/shops/{shopId}/guest-checkout", UUID.randomUUID())
+                        .header("Authorization", bearer(customerToken))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_GUEST_BODY))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void guest_checkout_without_tenant_header_returns_400() throws Exception {
+        String admin = jwt("admin@test.local", "MERCHANT_ADMIN");
+        mockMvc.perform(post("/loyalty/shops/{shopId}/guest-checkout", UUID.randomUUID())
+                        .header("Authorization", bearer(admin))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_GUEST_BODY))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void guest_checkout_for_shop_under_other_merchant_returns_403() throws Exception {
+        // The shop belongs to a DIFFERENT merchant than the caller's JWT scope, so
+        // even a fully-authenticated shopkeeper can't earn through someone else's shop.
+        UUID tenantId = newTenant("shop-guest-cross");
+        joinTenant(tenantId, "cashier@test.local");
+        UUID callerMerchant = UUID.randomUUID();
+        UUID otherMerchant = UUID.randomUUID();
+        UUID shopId = UUID.randomUUID();
+
+        when(shopService.get(eq(tenantId), eq(shopId)))
+                .thenReturn(new Dtos.ShopResponse(shopId, tenantId, otherMerchant,
+                        "Someone Else's Shop", "addr", Shop.Status.ACTIVE, Instant.now()));
+
+        String cashier = TestJwtFactory.shopAdmin("cashier@test.local", callerMerchant, shopId, jwtSecret);
+        mockMvc.perform(post("/loyalty/shops/{shopId}/guest-checkout", shopId)
+                        .header("Authorization", bearer(cashier))
+                        .header("X-Tenant-Id", tenantId.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_GUEST_BODY))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value("SHOP_NOT_OWNED"));
+    }
+
+    @Test
+    void shop_admin_guest_checkout_earns_points_returns_201() throws Exception {
+        UUID tenantId = newTenant("shop-guest-ok");
+        joinTenant(tenantId, "cashier@test.local");
+        UUID merchantId = UUID.randomUUID();
+        UUID shopId = UUID.randomUUID();
+        UUID loyaltyUserId = UUID.randomUUID();
+        UUID purchaseTxnId = UUID.randomUUID();
+
+        when(shopService.get(eq(tenantId), eq(shopId)))
+                .thenReturn(new Dtos.ShopResponse(shopId, tenantId, merchantId,
+                        "Pizza Inn Avondale", "addr", Shop.Status.ACTIVE, Instant.now()));
+        // Cash-only: the controller MUST pass ZERO points so the guest earns but
+        // never redeems — eq(BigDecimal.ZERO) pins that contract.
+        when(shopCheckoutService.checkout(eq(shopId), eq("+263771234567"), any(), eq(BigDecimal.ZERO), any()))
+                .thenReturn(new ShopCheckoutService.Result(shopId, merchantId, tenantId, loyaltyUserId,
+                        new BigDecimal("10.00"), BigDecimal.ZERO, new BigDecimal("10.0000"),
+                        new BigDecimal("10.0000"), purchaseTxnId, null));
+
+        String cashier = TestJwtFactory.shopAdmin("cashier@test.local", merchantId, shopId, jwtSecret);
+        mockMvc.perform(post("/loyalty/shops/{shopId}/guest-checkout", shopId)
+                        .header("Authorization", bearer(cashier))
+                        .header("X-Tenant-Id", tenantId.toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(VALID_GUEST_BODY))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.data.loyaltyUserId").value(loyaltyUserId.toString()))
+                .andExpect(jsonPath("$.data.merchantId").value(merchantId.toString()))
+                // pointsEarned is a BigDecimal -> JSON number; assert presence rather
+                // than an exact numeric match to avoid Double/BigDecimal matcher flakiness.
+                .andExpect(jsonPath("$.data.pointsEarned").exists());
     }
 }
