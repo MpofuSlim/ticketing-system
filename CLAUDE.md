@@ -186,6 +186,39 @@ loyalty platform landed via `claude/add-loyalty-service` (merged in #91) and
 the old H2 sibling branch was deleted — the legacy `claude/*` branch names
 are history; use `feature/*` from now on.
 
+## Deploying to the EC2 k3s cell after a merge
+
+> [!IMPORTANT]
+> **Every time a PR merges to `master`, output the exact deploy commands for the
+> service(s) whose code changed.** This is a standing expectation — don't make
+> the operator ask.
+
+The ZW cell runs on single-node **k3s** on the EC2 box (`10.0.146.246`). The
+Release workflow's `Deploy to EC2` job is broken (SSH) and is a legacy
+docker-compose deploy anyway, so **deploys are manual via `kubectl`** until that
+job is fixed or removed. After a merge, the routine on the box is:
+
+```sh
+git -C ~/ticketing-system pull
+# only matters if deploy/k8s manifests changed (harmless no-op otherwise):
+kubectl apply -f ~/ticketing-system/deploy/k8s/
+# restart ONLY the service(s) whose code changed — images are :latest with the
+# default Always pull policy, so a restart re-pulls the freshly-built image:
+kubectl -n ticketing rollout restart deployment/<service>
+kubectl -n ticketing rollout status  deployment/<service>
+```
+
+- `<service>` = the owning module(s) of the merged diff (e.g. `loyalty-service`,
+  `user-service`, `api-gateway`). Restart just those, not the whole fleet.
+- **`kubectl rollout restart` has NO `--all` flag** — it errors
+  `unknown flag: --all` and nothing restarts. To roll the whole fleet use:
+  `kubectl -n ticketing get deploy -o name | xargs kubectl -n ticketing rollout restart`
+- A restart only helps once the new image is pushed: confirm the merge commit's
+  `Build, scan, push (<service>)` job in the **Release** workflow is green (the
+  `Deploy to EC2` job failing is expected and unrelated).
+- Verify through the edge after the rollout — e.g. an unauthenticated call to a
+  secured endpoint returns `401` (new image present) rather than `404` (old).
+
 ## InnBucks Merchant API — the ticket-payment rail (2D code)
 
 **Ticket payments (`POST /payments` in payment-service) run EXCLUSIVELY on
