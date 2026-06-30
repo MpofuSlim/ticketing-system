@@ -132,10 +132,7 @@ public class Dtos {
             @Schema(example = "10.00",
                     description = "Cash the customer paid. Points are earned on this per the merchant's " +
                                   "loyalty rules. No points are redeemed — a guest can't spend.")
-            @NotNull @Positive BigDecimal cashAmount,
-            @Schema(example = "POS-20260630-0001", nullable = true,
-                    description = "Optional external reference (e.g. POS receipt id).")
-            String reference
+            @NotNull @Positive BigDecimal cashAmount
     ) {}
 
     public record GuestShopCheckoutResponse(

@@ -536,10 +536,14 @@ public class ShopController {
         if (!callerMerchantId.equals(shop.merchantId())) {
             throw LoyaltyException.forbidden("SHOP_NOT_OWNED", "shop does not belong to your merchant");
         }
+        // Reference is server-owned (per-merchant idempotency on the loyalty PURCHASE
+        // row); the POS never supplies one. Mirrors /payments/shop-checkout's
+        // "SHOP-" + UUID convention.
+        String reference = "SHOP-" + UUID.randomUUID();
         // Cash-only: pointsAmount = ZERO skips the burn/redemption leg, so a PENDING
         // (unregistered) customer earns without a spendable-balance check.
         ShopCheckoutService.Result r = shopCheckout.checkout(
-                shopId, req.phoneNumber(), req.cashAmount(), BigDecimal.ZERO, req.reference());
+                shopId, req.phoneNumber(), req.cashAmount(), BigDecimal.ZERO, reference);
         Dtos.GuestShopCheckoutResponse data = new Dtos.GuestShopCheckoutResponse(
                 r.shopId(), r.merchantId(), r.loyaltyUserId(),
                 r.cashAmount(), r.pointsEarned(), r.walletBalanceAfter(), r.purchaseTransactionId());
