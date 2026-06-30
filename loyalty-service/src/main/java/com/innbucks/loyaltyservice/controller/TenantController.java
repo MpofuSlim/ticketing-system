@@ -38,12 +38,14 @@ public class TenantController {
 
     @PostMapping
     @Operation(summary = "Register a new tenant",
-            description = "Onboards a new tenant onto the platform. The returned `id` is what every other " +
-                          "endpoint expects in the `X-Tenant-Id` header. Operator-only — no tenant header required.")
+            description = "Onboards a new tenant onto the platform AND attaches the user named by the request's " +
+                          "`id` (the user's UUID) as the tenant's first member, in one call — there is no " +
+                          "separate join step. That user can immediately pass the returned `id` in the " +
+                          "`X-Tenant-Id` header. Operator-only — no tenant header required.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
-                    description = "Tenant created",
+                    description = "Tenant created (and the supplied user attached as a member)",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
@@ -63,7 +65,7 @@ public class TenantController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "Validation failure (blank code/name or duplicate code)",
+                    description = "Validation failure (missing id, blank code/name, or duplicate code)",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = ApiResult.class),
@@ -273,60 +275,6 @@ public class TenantController {
         return ResponseEntity.ok(ApiResult.ok("Tenant activated successfully", data));
     }
 
-    @PostMapping("/{id}/join")
-    @Operation(summary = "Join a tenant",
-            description = "Adds the authenticated caller as a member of the tenant, granting them access to " +
-                          "all tenant-scoped endpoints (merchants, rules, transactions, vouchers, etc.) when " +
-                          "they pass this tenant's UUID via X-Tenant-Id. Idempotent — joining an already-" +
-                          "joined tenant returns the existing membership without error.")
-    @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "201",
-                    description = "Caller is now a member of the tenant",
-                    content = @Content(
-                            mediaType = "application/json",
-                            schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Membership created", value = """
-                                    {
-                                      "code": "201 CREATED",
-                                      "message": "Joined tenant successfully",
-                                      "data": {
-                                        "id": "8f2c6a1d-3b4e-4f78-9c0a-1b2c3d4e5f60",
-                                        "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-                                        "email": "tmpofu@simbisa.co.zw",
-                                        "joinedAt": "2026-05-08T08:14:30Z"
-                                      }
-                                    }
-                                    """)
-                    )
-            ),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "404",
-                    description = "Tenant not found",
-                    content = @Content(
-                            mediaType = "application/json",
-                            schema = @Schema(implementation = ApiResult.class),
-                            examples = @ExampleObject(name = "Not found", value = """
-                                    {
-                                      "code": "404 NOT_FOUND",
-                                      "message": "tenant not found",
-                                      "data": null
-                                    }
-                                    """)
-                    )
-            )
-    })
-    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
-    public ResponseEntity<ApiResult<Dtos.TenantMemberResponse>> join(
-            @PathVariable UUID id,
-            org.springframework.security.core.Authentication authentication) {
-        String email = authentication.getName();
-        log.info("POST /loyalty/tenants/{}/join caller={}", id, email);
-        Dtos.TenantMemberResponse data = tenantService.addMember(id, email);
-        return ResponseEntity.status(HttpStatus.CREATED)
-                .body(ApiResult.created("Joined tenant successfully", data));
-    }
-
     @GetMapping("/{id}/members")
     @Operation(summary = "List tenant members",
             description = "Returns every user with membership of this tenant. Useful for showing a tenant's " +
@@ -347,12 +295,14 @@ public class TenantController {
                                         {
                                           "id": "8f2c6a1d-3b4e-4f78-9c0a-1b2c3d4e5f60",
                                           "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-                                          "email": "tmpofu@simbisa.co.zw",
+                                          "userId": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+                                          "email": null,
                                           "joinedAt": "2026-05-08T08:14:30Z"
                                         },
                                         {
                                           "id": "9a3d7b2e-4c5f-5a89-ad1b-2c3d4e5f6071",
                                           "tenantId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                          "userId": null,
                                           "email": "ops@simbisa.co.zw",
                                           "joinedAt": "2026-05-08T09:02:15Z"
                                         }
@@ -426,8 +376,11 @@ public class TenantController {
             @PathVariable UUID id,
             org.springframework.security.core.Authentication authentication) {
         String email = authentication.getName();
-        log.info("DELETE /loyalty/tenants/{}/members/me caller={}", id, email);
-        tenantService.removeMember(id, email);
+        UUID userId = com.innbucks.loyaltyservice.security.CallerDetails.currentUserId();
+        log.info("DELETE /loyalty/tenants/{}/members/me caller={} userId={}", id, email, userId);
+        // Dual-mode removal — drop the userId-keyed row and any legacy
+        // email-keyed row so a caller who joined via either path can leave.
+        tenantService.removeMember(id, userId, email);
         return ResponseEntity.ok(ApiResult.ok("Left tenant successfully", null));
     }
 }

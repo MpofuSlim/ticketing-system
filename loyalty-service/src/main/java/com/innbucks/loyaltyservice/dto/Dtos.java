@@ -21,6 +21,11 @@ import java.util.UUID;
 public class Dtos {
 
     public record TenantRequest(
+            @Schema(example = "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                    description = "UUID of the user to attach as the tenant's first member. On registration " +
+                                  "the tenant is created AND this user is added as a member in one call — no " +
+                                  "separate join step is needed.")
+            @NotNull UUID id,
             @Schema(example = "innbucks", description = "Short unique code for the tenant (URL-safe, no spaces).")
             @NotBlank String code,
             @Schema(example = "Innbucks Financial Services")
@@ -29,7 +34,7 @@ public class Dtos {
 
     public record TenantResponse(UUID id, String code, String name, String status) {}
 
-    public record TenantMemberResponse(UUID id, UUID tenantId, String email, Instant joinedAt) {}
+    public record TenantMemberResponse(UUID id, UUID tenantId, UUID userId, String email, Instant joinedAt) {}
 
     /**
      * Per-voucher fee configuration on the merchant. {@code type} selects

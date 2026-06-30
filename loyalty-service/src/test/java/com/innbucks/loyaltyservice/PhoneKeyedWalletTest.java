@@ -196,7 +196,7 @@ class PhoneKeyedWalletTest {
                 new org.springframework.security.core.authority.SimpleGrantedAuthority("ROLE_" + role));
         var auth = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
                 phoneNumber, null, authorities);
-        auth.setDetails(new CallerDetails(null, null, phoneNumber));
+        auth.setDetails(new CallerDetails(null, null, phoneNumber, null));
         var ctx = org.springframework.security.core.context.SecurityContextHolder.createEmptyContext();
         ctx.setAuthentication(auth);
         var previous = org.springframework.security.core.context.SecurityContextHolder.getContext();

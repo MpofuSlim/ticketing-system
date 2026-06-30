@@ -70,6 +70,7 @@ public final class TestJwtFactory {
         private String phoneNumber;
         private UUID merchantId;
         private UUID shopId;
+        private UUID userId;
         // Default: token is valid for 1 hour from now.
         private long ttlMillis = 3_600_000L;
 
@@ -117,6 +118,14 @@ public final class TestJwtFactory {
             return this;
         }
 
+        /** Sets the caller's stable cross-service UUID. Emitted as the
+         *  {@code userUuid} claim — the one user-service mints and
+         *  loyalty-service keys tenant membership on. */
+        public Builder userId(UUID userId) {
+            this.userId = userId;
+            return this;
+        }
+
         /** Token issued in the past with expiry also in the past — for expired-token tests. */
         public Builder expired() {
             this.ttlMillis = -60_000L;
@@ -141,6 +150,9 @@ public final class TestJwtFactory {
             }
             if (shopId != null) {
                 builder.claim("shopId", shopId.toString());
+            }
+            if (userId != null) {
+                builder.claim("userUuid", userId.toString());
             }
             long now = System.currentTimeMillis();
             return builder

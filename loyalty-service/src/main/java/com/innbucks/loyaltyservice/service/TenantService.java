@@ -22,10 +22,13 @@ public class TenantService {
 
     private final TenantRepository tenants;
     private final TenantMemberRepository members;
+    private final org.springframework.cache.CacheManager cacheManager;
 
-    public TenantService(TenantRepository tenants, TenantMemberRepository members) {
+    public TenantService(TenantRepository tenants, TenantMemberRepository members,
+                         org.springframework.cache.CacheManager cacheManager) {
         this.tenants = tenants;
         this.members = members;
+        this.cacheManager = cacheManager;
     }
 
     public Dtos.TenantResponse create(Dtos.TenantRequest req) {
@@ -33,19 +36,23 @@ public class TenantService {
     }
 
     /**
-     * Creates a tenant. Tenants are now seed configuration created by
-     * SUPER_ADMIN; merchant admins join existing tenants via
-     * {@code POST /loyalty/tenants/{id}/join} rather than each minting their
-     * own. The {@code ownerEmail} parameter is retained as audit metadata
-     * (who provisioned this tenant) but no longer gates access — that's the
-     * job of {@link TenantMember} rows.
+     * Creates a tenant AND attaches the user named by {@code req.id()} as its
+     * first member, in one transaction. This folds the old
+     * {@code POST /loyalty/tenants/{id}/join} step into registration: the
+     * caller supplies the user's UUID and that user is granted access
+     * immediately. The {@code creatorEmail} parameter is retained as audit
+     * metadata (who provisioned this tenant) on {@code tenant.ownerEmail} but
+     * no longer gates access — that's the job of {@link TenantMember} rows.
      */
-    public Dtos.TenantResponse create(Dtos.TenantRequest req, String ownerEmail) {
+    public Dtos.TenantResponse create(Dtos.TenantRequest req, String creatorEmail) {
         Tenant t = new Tenant();
         t.setCode(req.code());
         t.setName(req.name());
-        t.setOwnerEmail(ownerEmail);
+        t.setOwnerEmail(creatorEmail);
         tenants.save(t);
+        // Attach the supplied user as the tenant's first member so they can
+        // immediately pass this tenant's id as X-Tenant-Id.
+        addMember(t.getId(), req.id());
         return toResponse(t);
     }
 
@@ -88,18 +95,20 @@ public class TenantService {
     }
 
     /**
-     * Adds the caller as a member of the tenant. Idempotent — joining an
-     * already-joined tenant returns the existing membership without error.
+     * Adds the user (by stable UUID) as a member of the tenant. Idempotent —
+     * re-adding an already-attached user returns the existing membership
+     * without error. The email column is left null; the row is keyed on
+     * {@code userId}.
      */
-    @CacheEvict(value = CacheConfig.CACHE_TENANT_MEMBERSHIP, key = "#tenantId + ':' + #email")
-    public Dtos.TenantMemberResponse addMember(UUID tenantId, String email) {
+    @CacheEvict(value = CacheConfig.CACHE_TENANT_MEMBERSHIP, key = "#tenantId + ':u:' + #userId")
+    public Dtos.TenantMemberResponse addMember(UUID tenantId, UUID userId) {
         Tenant t = tenants.findById(tenantId).orElseThrow(() -> LoyaltyException.notFound("tenant"));
-        return members.findByTenantIdAndEmail(t.getId(), email)
+        return members.findByTenantIdAndUserId(t.getId(), userId)
                 .map(TenantService::toMemberResponse)
                 .orElseGet(() -> {
                     TenantMember m = new TenantMember();
                     m.setTenantId(t.getId());
-                    m.setEmail(email);
+                    m.setUserId(userId);
                     members.save(m);
                     return toMemberResponse(m);
                 });
@@ -113,10 +122,28 @@ public class TenantService {
                 .toList();
     }
 
-    @CacheEvict(value = CacheConfig.CACHE_TENANT_MEMBERSHIP, key = "#tenantId + ':' + #email")
-    public void removeMember(UUID tenantId, String email) {
+    /**
+     * Removes the caller from the tenant. Dual-mode to mirror the membership
+     * check: deletes the {@code userId}-keyed row when a UUID is present, and
+     * always also clears any legacy email-keyed row, so a caller whose access
+     * came through either path can leave. Idempotent. Evicts both possible
+     * membership-cache keys directly (an annotation can't target two keys).
+     */
+    public void removeMember(UUID tenantId, UUID userId, String email) {
         if (!tenants.existsById(tenantId)) throw LoyaltyException.notFound("tenant");
-        members.deleteByTenantIdAndEmail(tenantId, email);
+        if (userId != null) {
+            members.deleteByTenantIdAndUserId(tenantId, userId);
+            evictMembership(tenantId + ":u:" + userId);
+        }
+        if (email != null && !email.isBlank()) {
+            members.deleteByTenantIdAndEmail(tenantId, email);
+            evictMembership(tenantId + ":" + email);
+        }
+    }
+
+    private void evictMembership(String key) {
+        var cache = cacheManager.getCache(CacheConfig.CACHE_TENANT_MEMBERSHIP);
+        if (cache != null) cache.evict(key);
     }
 
     public static Dtos.TenantResponse toResponse(Tenant t) {
@@ -124,6 +151,7 @@ public class TenantService {
     }
 
     public static Dtos.TenantMemberResponse toMemberResponse(TenantMember m) {
-        return new Dtos.TenantMemberResponse(m.getId(), m.getTenantId(), m.getEmail(), m.getJoinedAt());
+        return new Dtos.TenantMemberResponse(m.getId(), m.getTenantId(), m.getUserId(),
+                m.getEmail(), m.getJoinedAt());
     }
 }

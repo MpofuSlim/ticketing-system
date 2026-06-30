@@ -66,11 +66,22 @@ public abstract class ControllerSecurityTestBase {
         return tenantRepository.save(t).getId();
     }
 
-    /** Grants the given email membership of the tenant so {@code TenantContext} accepts them. */
+    /** Grants the given email membership of the tenant so {@code TenantContext} accepts them.
+     *  Email-keyed (userId left null) — this is the legacy-compatibility path the dual-mode
+     *  membership check must keep admitting. */
     protected void joinTenant(UUID tenantId, String email) {
         TenantMember m = new TenantMember();
         m.setTenantId(tenantId);
         m.setEmail(email);
+        tenantMemberRepository.save(m);
+    }
+
+    /** Grants the given user UUID membership of the tenant (userId-keyed, email left null)
+     *  so a token carrying that {@code userId} claim passes {@code TenantContext}. */
+    protected void joinTenantByUserId(UUID tenantId, UUID userId) {
+        TenantMember m = new TenantMember();
+        m.setTenantId(tenantId);
+        m.setUserId(userId);
         tenantMemberRepository.save(m);
     }
 

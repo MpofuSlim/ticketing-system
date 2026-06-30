@@ -41,4 +41,16 @@ public class TenantCachedLookup {
     public boolean isMember(UUID tenantId, String email) {
         return members.existsByTenantIdAndEmail(tenantId, email);
     }
+
+    /**
+     * Membership check by the caller's stable UUID. Cached in the same
+     * Caffeine cache as {@link #isMember(UUID, String)} but under a
+     * {@code ':u:'}-namespaced key so a UUID key can never collide with an
+     * email key.
+     */
+    @Cacheable(value = CacheConfig.CACHE_TENANT_MEMBERSHIP,
+            key = "#tenantId + ':u:' + #userId")
+    public boolean isMemberByUserId(UUID tenantId, UUID userId) {
+        return members.existsByTenantIdAndUserId(tenantId, userId);
+    }
 }
