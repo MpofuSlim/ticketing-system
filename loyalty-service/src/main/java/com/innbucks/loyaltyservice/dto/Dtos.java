@@ -113,6 +113,49 @@ public class Dtos {
             String error
     ) {}
 
+    // Guest (unregistered-customer) shop checkout. The shop/merchant is the
+    // authenticated caller; the customer is identified by phoneNumber alone — no
+    // account required. Cash-only EARN: a guest can RECEIVE points but cannot
+    // REDEEM until they register (loyalty auto-creates a PENDING wallet keyed to
+    // the phone, promoted to spendable on registration). merchantId follows the
+    // usual rule — from the JWT for SHOP_ADMIN/SHOP_USER, from the body for
+    // MERCHANT_ADMIN; see CallerDetails.resolveMerchantId.
+    public record GuestShopCheckoutRequest(
+            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
+                    description = "Merchant the shop belongs to. Required when the caller's JWT carries no " +
+                                  "merchantId (MERCHANT_ADMIN); ignored for SHOP_ADMIN/SHOP_USER.")
+            UUID merchantId,
+            @Schema(example = "+263771234567",
+                    description = "Guest customer's phone number (E.164). Points accrue against this phone; " +
+                                  "no registration required to earn.")
+            @NotBlank String phoneNumber,
+            @Schema(example = "10.00",
+                    description = "Cash the customer paid. Points are earned on this per the merchant's " +
+                                  "loyalty rules. No points are redeemed — a guest can't spend.")
+            @NotNull @Positive BigDecimal cashAmount,
+            @Schema(example = "POS-20260630-0001", nullable = true,
+                    description = "Optional external reference (e.g. POS receipt id).")
+            String reference
+    ) {}
+
+    public record GuestShopCheckoutResponse(
+            @Schema(example = "11111111-aaaa-bbbb-cccc-222222222222")
+            UUID shopId,
+            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789")
+            UUID merchantId,
+            @Schema(example = "99999999-8888-7777-6666-555555555555",
+                    description = "Loyalty user the points accrued to. PENDING (receive-only) until the phone registers.")
+            UUID loyaltyUserId,
+            @Schema(example = "10.00", description = "Cash amount the points were earned on.")
+            BigDecimal cashAmount,
+            @Schema(example = "10.0000", description = "Points awarded for this checkout.")
+            BigDecimal pointsEarned,
+            @Schema(example = "10.0000", description = "Customer's wallet balance after the earn.")
+            BigDecimal walletBalanceAfter,
+            @Schema(example = "7a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9", description = "Ledger transaction id for the earn.")
+            UUID purchaseTransactionId
+    ) {}
+
     // Loyalty enrolment is by phone number only — name/email/nationalId belong
     // to user-service. Loyalty validates the phone exists there before
     // creating its local LoyaltyUser projection.

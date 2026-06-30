@@ -3,7 +3,10 @@ package com.innbucks.loyaltyservice.controller;
 import com.innbucks.loyaltyservice.dto.ApiResult;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.dto.PageResponse;
+import com.innbucks.loyaltyservice.exception.LoyaltyException;
+import com.innbucks.loyaltyservice.security.CallerDetails;
 import com.innbucks.loyaltyservice.security.TenantContext;
+import com.innbucks.loyaltyservice.service.ShopCheckoutService;
 import com.innbucks.loyaltyservice.service.ShopService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -23,6 +26,7 @@ import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.UUID;
 
@@ -40,10 +44,12 @@ public class ShopController {
 
     private final ShopService shops;
     private final TenantContext tenantContext;
+    private final ShopCheckoutService shopCheckout;
 
-    public ShopController(ShopService shops, TenantContext tenantContext) {
+    public ShopController(ShopService shops, TenantContext tenantContext, ShopCheckoutService shopCheckout) {
         this.shops = shops;
         this.tenantContext = tenantContext;
+        this.shopCheckout = shopCheckout;
     }
 
     @PostMapping
@@ -460,5 +466,84 @@ public class ShopController {
     public ResponseEntity<ApiResult<List<Dtos.ShopResponse>>> listForMerchant(@PathVariable UUID merchantId) {
         List<Dtos.ShopResponse> data = shops.listForMerchant(tenantContext.requireTenantId(), merchantId);
         return ResponseEntity.ok(ApiResult.ok("Shops retrieved successfully", data));
+    }
+
+    @PostMapping("/{shopId}/guest-checkout")
+    @Operation(summary = "Guest checkout — earn points for an unregistered customer",
+            description = "Merchant-authenticated. The shop earns loyalty points on a cash amount for a " +
+                          "walk-in customer identified by phone number only — no account required. The " +
+                          "customer RECEIVES points immediately (a PENDING wallet is auto-created and keyed " +
+                          "to the phone) but cannot REDEEM until they register, at which point the accrued " +
+                          "balance becomes spendable. Cash-only: no points are burned. The caller must own " +
+                          "the shop — its merchant must match the caller's merchant scope (JWT for " +
+                          "SHOP_ADMIN/SHOP_USER, request body for MERCHANT_ADMIN). Requires X-Tenant-Id.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "201",
+                    description = "Points earned for the guest",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Earned", value = """
+                                    {
+                                      "code": "201 CREATED",
+                                      "message": "Guest checkout completed successfully",
+                                      "data": {
+                                        "shopId": "11111111-aaaa-bbbb-cccc-222222222222",
+                                        "merchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                        "loyaltyUserId": "99999999-8888-7777-6666-555555555555",
+                                        "cashAmount": 10.00,
+                                        "pointsEarned": 10.0000,
+                                        "walletBalanceAfter": 10.0000,
+                                        "purchaseTransactionId": "7a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9"
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "Validation failure (blank phoneNumber / non-positive cashAmount) or no merchant scope supplied",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Validation error", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "cashAmount: must be greater than 0",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
+                    description = "Missing or invalid bearer token"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "Caller's role can't check out, or the shop isn't under the caller's merchant",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Not your shop", value = """
+                                    {
+                                      "code": "SHOP_NOT_OWNED",
+                                      "message": "shop does not belong to your merchant",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "No shop with that id in this tenant")
+    })
+    @PreAuthorize("hasAnyRole('SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<Dtos.GuestShopCheckoutResponse>> guestCheckout(
+            @PathVariable UUID shopId,
+            @Valid @RequestBody Dtos.GuestShopCheckoutRequest req) {
+        UUID tenantId = tenantContext.requireTenantId();
+        // The shop's merchant must match the caller's merchant scope, so a merchant
+        // can only earn through its OWN shops. resolveMerchantId pulls the merchant
+        // from the JWT (SHOP_ADMIN/SHOP_USER) or the request body (MERCHANT_ADMIN).
+        UUID callerMerchantId = CallerDetails.resolveMerchantId(req.merchantId());
+        Dtos.ShopResponse shop = shops.get(tenantId, shopId);
+        if (!callerMerchantId.equals(shop.merchantId())) {
+            throw LoyaltyException.forbidden("SHOP_NOT_OWNED", "shop does not belong to your merchant");
+        }
+        // Cash-only: pointsAmount = ZERO skips the burn/redemption leg, so a PENDING
+        // (unregistered) customer earns without a spendable-balance check.
+        ShopCheckoutService.Result r = shopCheckout.checkout(
+                shopId, req.phoneNumber(), req.cashAmount(), BigDecimal.ZERO, req.reference());
+        Dtos.GuestShopCheckoutResponse data = new Dtos.GuestShopCheckoutResponse(
+                r.shopId(), r.merchantId(), r.loyaltyUserId(),
+                r.cashAmount(), r.pointsEarned(), r.walletBalanceAfter(), r.purchaseTransactionId());
+        return ResponseEntity.status(HttpStatus.CREATED)
+                .body(ApiResult.created("Guest checkout completed successfully", data));
     }
 }
