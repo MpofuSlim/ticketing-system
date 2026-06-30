@@ -4,6 +4,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.config.annotation.web.reactive.EnableWebFluxSecurity;
 import org.springframework.security.config.web.server.ServerHttpSecurity;
 import org.springframework.security.core.userdetails.MapReactiveUserDetailsService;
@@ -12,6 +15,8 @@ import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.server.SecurityWebFilterChain;
+import org.springframework.security.web.server.authentication.HttpStatusServerEntryPoint;
+import org.springframework.security.web.server.authorization.HttpStatusServerAccessDeniedHandler;
 
 import static org.springframework.security.config.Customizer.withDefaults;
 
@@ -30,11 +35,18 @@ import static org.springframework.security.config.Customizer.withDefaults;
  * adding the security starter does not change how the proxied API is secured.
  *
  * <p>Credentials come from {@code SWAGGER_USER} (default {@code admin}) and
- * {@code SWAGGER_PASSWORD}. If the password is blank the gateway behaves
- * exactly as it did before this config existed (Swagger left open) and logs a
- * loud warning — so a deploy that hasn't set the secret yet keeps working
- * rather than locking the operator out, while a deploy that sets it is
- * protected.
+ * {@code SWAGGER_PASSWORD}. Behaviour depends on the password and the active
+ * profile:
+ * <ul>
+ *   <li><b>password set</b> (any profile) — Swagger is gated behind the HTTP
+ *       Basic login.</li>
+ *   <li><b>password blank, {@code prod} profile</b> — Swagger fails
+ *       <i>closed</i>: the paths are denied and answer {@code 404}, so a prod
+ *       deploy that forgot the secret hides the docs instead of leaking them.
+ *       Set {@code SWAGGER_PASSWORD} to expose them behind the login.</li>
+ *   <li><b>password blank, non-prod</b> — Swagger is left open (dev/uat
+ *       convenience) and a loud warning is logged.</li>
+ * </ul>
  */
 @Configuration
 @EnableWebFluxSecurity
@@ -71,7 +83,7 @@ public class SwaggerSecurityConfig {
     }
 
     @Bean
-    public SecurityWebFilterChain swaggerSecurityWebFilterChain(ServerHttpSecurity http) {
+    public SecurityWebFilterChain swaggerSecurityWebFilterChain(ServerHttpSecurity http, Environment environment) {
         // CSRF off: this is a stateless API gateway, not a session/form app —
         // CSRF tokens would break the proxied POST/PUT/DELETE routes. formLogin
         // off so an unauthenticated swagger hit gets the Basic prompt, not a
@@ -87,6 +99,22 @@ public class SwaggerSecurityConfig {
                             .pathMatchers(SWAGGER_PATHS).authenticated()
                             .anyExchange().permitAll())
                     .httpBasic(withDefaults());
+        } else if (environment.acceptsProfiles(Profiles.of("prod"))) {
+            // Fail closed in prod: no password means the docs must NOT be
+            // browsable. Deny the Swagger paths and answer 404 so the docs look
+            // absent rather than advertising a gated resource. The operator opts
+            // back in by setting SWAGGER_PASSWORD.
+            log.warn("swagger.auth.password is not set under the 'prod' profile — the Swagger UI "
+                    + "at the gateway is DISABLED (returns 404). Set SWAGGER_PASSWORD to expose it "
+                    + "behind an HTTP Basic login.");
+            http
+                    .authorizeExchange(ex -> ex
+                            .pathMatchers(SWAGGER_PATHS).denyAll()
+                            .anyExchange().permitAll())
+                    .httpBasic(ServerHttpSecurity.HttpBasicSpec::disable)
+                    .exceptionHandling(ex -> ex
+                            .authenticationEntryPoint(new HttpStatusServerEntryPoint(HttpStatus.NOT_FOUND))
+                            .accessDeniedHandler(new HttpStatusServerAccessDeniedHandler(HttpStatus.NOT_FOUND)));
         } else {
             log.warn("swagger.auth.password is not set — the Swagger UI at the gateway is NOT "
                     + "password-protected. Set SWAGGER_PASSWORD (and optionally SWAGGER_USER) to "
