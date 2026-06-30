@@ -497,8 +497,9 @@ springdoc:
         url: /loyalty-service/v3/api-docs
 
 # HTTP Basic credentials guarding the Swagger UI above (see
-# SwaggerSecurityConfig). Leave the password blank to keep Swagger open
-# (a warning is logged on startup); set SWAGGER_PASSWORD to require a login.
+# SwaggerSecurityConfig). With a blank password Swagger fails closed under the
+# prod profile (disabled — returns 404) and stays open in non-prod (a warning is
+# logged); set SWAGGER_PASSWORD to require a login in any profile.
 swagger:
   auth:
     username: ${SWAGGER_USER:admin}

@@ -176,11 +176,12 @@ in the committed `cell.<iso>.env`:
 ### Recommended (boots without it, but you should set it)
 
 `SWAGGER_PASSWORD` is **not** guarded by `${VAR:?}`, so the cell boots without
-it — but then the aggregated Swagger UI at the gateway is left **open** (the
-gateway logs a loud startup warning). On any cell reachable from outside, set
-it in `cell.<iso>.local.env` so the API surface isn't browsable by anyone who
-reaches the gateway. `SWAGGER_USER` defaults to `admin`; generate a password
-with `openssl rand -base64 18`. (Step 6's secrets heredoc already does this.)
+it. Cells run the `prod` profile, so a blank password makes the gateway's
+aggregated Swagger UI **fail closed** — it's disabled and returns `404` (a loud
+startup warning is logged). Set `SWAGGER_PASSWORD` in `cell.<iso>.local.env` to
+expose the docs behind an HTTP Basic login instead. `SWAGGER_USER` defaults to
+`admin`; generate a password with `openssl rand -base64 18`. (Step 6's secrets
+heredoc already does this.)
 
 ## Published ports (reference)
 
