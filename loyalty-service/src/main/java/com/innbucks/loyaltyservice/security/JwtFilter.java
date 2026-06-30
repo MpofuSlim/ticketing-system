@@ -131,9 +131,10 @@ public class JwtFilter extends OncePerRequestFilter {
             UUID merchantId = jwtUtil.extractMerchantId(token);
             UUID shopId = jwtUtil.extractShopId(token);
             String phoneNumber = jwtUtil.extractPhoneNumber(token);
+            UUID userId = jwtUtil.extractUserId(token);
 
             var auth = new UsernamePasswordAuthenticationToken(email, null, authorities);
-            auth.setDetails(new CallerDetails(merchantId, shopId, phoneNumber));
+            auth.setDetails(new CallerDetails(merchantId, shopId, phoneNumber, userId));
             SecurityContextHolder.getContext().setAuthentication(auth);
             // TRACE, not DEBUG: this line carries the subject (email = PII) plus
             // the caller's roles on every authenticated request. Keep it off by

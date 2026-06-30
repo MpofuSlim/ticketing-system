@@ -25,8 +25,14 @@ import java.util.UUID;
  * wallet" — used by P2P transfer to verify the request's {@code fromUserId}
  * actually belongs to the authenticated principal, so a logged-in user can't
  * drain someone else's balance.
+ *
+ * <p>{@code userId} is the caller's stable cross-service UUID (JWT {@code
+ * userId} claim). It's the primary key for tenant membership — {@code
+ * TenantContext} admits a caller when this UUID matches a {@code tenant_members}
+ * row, falling back to the email (principal name) for legacy rows. Null on
+ * tokens minted before the claim landed.
  */
-public record CallerDetails(UUID merchantId, UUID shopId, String phoneNumber) {
+public record CallerDetails(UUID merchantId, UUID shopId, String phoneNumber, UUID userId) {
 
     public static UUID currentMerchantId() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
@@ -51,6 +57,16 @@ public record CallerDetails(UUID merchantId, UUID shopId, String phoneNumber) {
         if (auth == null) return null;
         Object details = auth.getDetails();
         if (details instanceof CallerDetails cd) return cd.phoneNumber();
+        return null;
+    }
+
+    /** JWT userId claim (caller's stable cross-service UUID), or {@code null}
+     *  when the token doesn't carry one (legacy tokens). */
+    public static UUID currentUserId() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null) return null;
+        Object details = auth.getDetails();
+        if (details instanceof CallerDetails cd) return cd.userId();
         return null;
     }
 

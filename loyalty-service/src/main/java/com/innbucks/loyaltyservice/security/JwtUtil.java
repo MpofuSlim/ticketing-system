@@ -71,6 +71,17 @@ public class JwtUtil {
         return extractUuidClaim(token, "shopId");
     }
 
+    /**
+     * Stable cross-service UUID of the caller, read from the {@code userUuid}
+     * claim that user-service already mints on every access token. This is the
+     * key tenant membership is checked against (see {@code TenantContext}).
+     * Returns null for tokens minted before the claim landed — those callers
+     * fall back to the email check.
+     */
+    public UUID extractUserId(String token) {
+        return extractUuidClaim(token, "userUuid");
+    }
+
     private UUID extractUuidClaim(String token, String claim) {
         String raw = getClaims(token).get(claim, String.class);
         if (raw == null || raw.isBlank()) return null;

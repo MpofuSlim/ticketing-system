@@ -24,9 +24,15 @@ import java.util.UUID;
  * {@code tenant_members}), unless they hold the SUPER_ADMIN role — SUPER_ADMIN
  * acts across every tenant on the platform without needing membership rows.
  *
- * <p>Members are added via {@code POST /loyalty/tenants/{id}/join} and removed
- * via {@code DELETE /loyalty/tenants/{id}/members/me}. This replaces the older
+ * <p>Members are attached when a tenant is registered ({@code POST
+ * /loyalty/tenants}, keyed by the user's UUID) and removed via
+ * {@code DELETE /loyalty/tenants/{id}/members/me}. This replaces the older
  * single-owner model where {@code tenant.ownerEmail} gated access.
+ *
+ * <p>The membership check is dual-mode: a caller is admitted when their JWT
+ * {@code userId} matches a {@code tenant_members} row, OR (fallback) when their
+ * email (the principal name) matches a legacy row created before membership
+ * moved to UUIDs. Either match grants access.
  */
 @Component
 @RequestScope
@@ -97,12 +103,19 @@ public class TenantContext {
         if (hasRole(authentication, "ROLE_SUPER_ADMIN")) {
             return;
         }
+        // Dual-mode membership: prefer the caller's stable UUID (JWT userId
+        // claim); fall back to the email (principal name) so legacy members
+        // whose rows predate the UUID migration — and tokens minted before the
+        // userId claim landed — still get in.
+        UUID userId = CallerDetails.currentUserId();
         String caller = authentication.getName();
-        if (!lookup.isMember(tenant.getId(), caller)) {
-            log.warn("Tenant membership check failed tenantId={} caller={}",
-                    tenant.getId(), caller);
+        boolean member = (userId != null && lookup.isMemberByUserId(tenant.getId(), userId))
+                || lookup.isMember(tenant.getId(), caller);
+        if (!member) {
+            log.warn("Tenant membership check failed tenantId={} userId={} caller={}",
+                    tenant.getId(), userId, caller);
             throw new AccessDeniedException(
-                    "You are not a member of this tenant. Call POST /loyalty/tenants/{id}/join first.");
+                    "You are not a member of this tenant.");
         }
     }
 
