@@ -224,4 +224,39 @@ class MfaServiceTest {
         assertThat(u.getMfaSecret()).isNull();
         verify(backupCodeRepository).deleteAllForUser(13L);
     }
+
+    // ---- device-trust revocation on disable / reset -------------------------
+
+    @Test
+    void disable_validCode_alsoClearsDeviceTrust() {
+        // Disabling MFA removes the second factor entirely, so any standing
+        // "remember this device" bypass must be cleared too.
+        DeviceTrustService trust = mock(DeviceTrustService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(mfaService, "deviceTrustService", trust);
+
+        User u = user(20L);
+        u.setMfaEnabled(true);
+        String secret = "JBSWY3DPEHPK3PXP";
+        u.setMfaSecret(secret);
+        when(userRepository.findById(20L)).thenReturn(Optional.of(u));
+
+        mfaService.disable(20L, totpFor(secret));
+
+        verify(trust).clearTrustForUser(20L);
+    }
+
+    @Test
+    void adminReset_alsoClearsDeviceTrust() {
+        DeviceTrustService trust = mock(DeviceTrustService.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(mfaService, "deviceTrustService", trust);
+
+        User u = user(21L);
+        u.setMfaEnabled(true);
+        u.setMfaSecret("ABC");
+        when(userRepository.findById(21L)).thenReturn(Optional.of(u));
+
+        mfaService.adminReset(21L);
+
+        verify(trust).clearTrustForUser(21L);
+    }
 }

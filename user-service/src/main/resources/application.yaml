@@ -60,6 +60,9 @@ mfa:
   issuer: ${MFA_ISSUER:InnBucks}
   mfa-token-ttl: ${MFA_TOKEN_TTL:PT5M}
   backup-code-count: ${MFA_BACKUP_CODE_COUNT:10}
+  # "Remember this device" 2FA bypass window. A trust token minted at step-2 of
+  # an MFA login skips the step-1 challenge for this many days on the same device.
+  trusted-device-days: ${MFA_TRUSTED_DEVICE_DAYS:30}
 
 loyalty-service:
   base-url: http://loyalty-service

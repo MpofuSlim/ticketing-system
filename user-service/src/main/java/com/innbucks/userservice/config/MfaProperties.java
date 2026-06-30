@@ -35,4 +35,11 @@ public class MfaProperties {
 
     /** Number of single-use backup codes minted on enrollment. */
     private int backupCodeCount = 10;
+
+    /**
+     * How many days a "remember this device" trust token skips the step-1 MFA
+     * challenge before it expires. Applied to {@code devices.mfa_trusted_until}
+     * when a user opts in at step-2 of an MFA login.
+     */
+    private int trustedDeviceDays = 30;
 }

@@ -62,6 +62,13 @@ public class MfaService {
     private final PasswordEncoder passwordEncoder;
     private final MfaProperties properties;
 
+    // Trusted-device collaborator. Field-injected (optional) rather than a
+    // constructor param so the existing MfaServiceTest construction site doesn't
+    // widen. Null in a plain unit test → disabling MFA simply doesn't clear
+    // device trust there (no Spring context, no devices to clear anyway).
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private DeviceTrustService deviceTrustService;
+
     private final SecretGenerator secretGenerator = new DefaultSecretGenerator();
     private final CodeGenerator codeGenerator = new DefaultCodeGenerator(HashingAlgorithm.SHA1);
     private final CodeVerifier codeVerifier;
@@ -208,6 +215,7 @@ public class MfaService {
         user.setMfaSecret(null);
         userRepository.save(user);
         backupCodeRepository.deleteAllForUser(userId);
+        clearDeviceTrust(userId);
         log.info("MFA disabled userId={}", userId);
     }
 
@@ -219,7 +227,20 @@ public class MfaService {
         user.setMfaSecret(null);
         userRepository.save(user);
         backupCodeRepository.deleteAllForUser(userId);
+        clearDeviceTrust(userId);
         log.info("MFA reset by admin userId={}", userId);
+    }
+
+    /**
+     * Clears any "remember this device" trust on the user's devices. Disabling
+     * or resetting MFA removes the second factor entirely, so a standing
+     * trusted-device bypass would be meaningless (and a loose end) — wipe it.
+     * No-op when the collaborator isn't wired (plain unit test).
+     */
+    private void clearDeviceTrust(Long userId) {
+        if (deviceTrustService != null) {
+            deviceTrustService.clearTrustForUser(userId);
+        }
     }
 
     // ------------------------------------------------------------------

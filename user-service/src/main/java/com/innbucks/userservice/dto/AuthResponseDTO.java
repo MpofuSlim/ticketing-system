@@ -79,4 +79,18 @@ public class AuthResponseDTO {
             example = "false",
             nullable = true)
     private Boolean verified;
+
+    @Schema(description = "One-time 'remember this device' trust token. Returned ONLY when the step-2 "
+            + "/auth/login/mfa request set `rememberDevice=true` and supplied an `X-Device-Id`. "
+            + "Store it client-side and send it on future logins via the `X-Device-Trust-Token` header "
+            + "(with the same `X-Device-Id`) to skip the 2FA challenge until `deviceTrustExpiresAt`. "
+            + "Shown ONCE — never returned again. Null on every other response.",
+            nullable = true)
+    private String deviceTrustToken;
+
+    @Schema(description = "UTC instant the `deviceTrustToken` stops skipping the 2FA challenge. "
+            + "Populated only alongside `deviceTrustToken`; null otherwise.",
+            example = "2026-07-30T10:00:00",
+            nullable = true)
+    private java.time.LocalDateTime deviceTrustExpiresAt;
 }

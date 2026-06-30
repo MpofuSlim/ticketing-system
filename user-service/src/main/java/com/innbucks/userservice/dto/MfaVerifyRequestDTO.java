@@ -21,4 +21,11 @@ public class MfaVerifyRequestDTO {
     @Schema(description = "The 6-digit TOTP code from the authenticator app, OR a 4x4-grouped backup code.",
             example = "472938")
     private String code;
+
+    @Schema(description = "Set true to trust this device. On success the response carries a one-time "
+            + "`deviceTrustToken`; send it (with the same `X-Device-Id`) on future logins via the "
+            + "`X-Device-Trust-Token` header to skip the 2FA challenge until `deviceTrustExpiresAt`. "
+            + "Requires `X-Device-Id` to be present — ignored otherwise. Defaults to false.",
+            example = "false", defaultValue = "false")
+    private boolean rememberDevice;
 }

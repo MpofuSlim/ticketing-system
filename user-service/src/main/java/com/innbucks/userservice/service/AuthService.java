@@ -47,6 +47,13 @@ public class AuthService implements ApplicationEventPublisherAware {
     private com.innbucks.userservice.security.MfaTokenService mfaTokenService;
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private MfaService mfaService;
+    // "Remember this device" trusted-device bypass. Setter-/field-injected like
+    // the other MFA collaborators so the existing AuthServiceTest construction
+    // sites don't widen. Null in a plain unit test means no trusted-device skip
+    // (and no trust minted) — i.e. every login still goes through the MFA gate,
+    // matching the pre-feature behaviour those tests assert.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private DeviceTrustService deviceTrustService;
 
     @Override
     public void setApplicationEventPublisher(ApplicationEventPublisher applicationEventPublisher) {
@@ -240,19 +247,36 @@ public class AuthService implements ApplicationEventPublisherAware {
                 com.innbucks.userservice.security.AuthChannel.WEB, auditContext);
     }
 
-    // This 4-arg method is the real transactional boundary. The 3-arg overload
-    // above delegates here by a self-invocation (which bypasses the Spring proxy),
-    // so the annotation MUST live here too — otherwise a direct caller (the
-    // controller, which always passes the channel) runs the failed-attempt /
-    // last-login writes with no active transaction and Hibernate throws
-    // InvalidDataAccessApiUsageException ("No active transaction for update or
-    // delete query"). noRollbackFor mirrors the overload so a bad-credential /
+    /**
+     * Backwards-compatible overload that carries no trusted-device token —
+     * delegates to the full 5-arg method with a null trust token (so the
+     * trusted-device skip never fires). Preserves the existing 4-arg signature
+     * that tests call.
+     */
+    public AuthResponseDTO login(LoginRequestDTO request, String deviceId,
+                                 com.innbucks.userservice.security.AuthChannel channel,
+                                 AuditContext auditContext) {
+        return login(request, deviceId, null, channel, auditContext);
+    }
+
+    // This 5-arg method is the real transactional boundary. The 3-/4-arg
+    // overloads above delegate here by a self-invocation (which bypasses the
+    // Spring proxy), so the annotation MUST live here too — otherwise a direct
+    // caller (the controller, which always passes the channel) runs the
+    // failed-attempt / last-login writes with no active transaction and Hibernate
+    // throws InvalidDataAccessApiUsageException ("No active transaction for update
+    // or delete query"). noRollbackFor mirrors the overload so a bad-credential /
     // lockout failure still commits its counter increment + audit row.
+    //
+    // deviceTrustToken is the raw X-Device-Trust-Token header (nullable). When a
+    // login that WOULD be MFA-challenged presents a matching, non-expired trust
+    // token for this (user, deviceId), the whole challenge is skipped — see the
+    // trusted-device check inside the MFA gate below.
     @Transactional(noRollbackFor = {
             InvalidCredentialsException.class,
             AccountLockedException.class
     })
-    public AuthResponseDTO login(LoginRequestDTO request, String deviceId,
+    public AuthResponseDTO login(LoginRequestDTO request, String deviceId, String deviceTrustToken,
                                  com.innbucks.userservice.security.AuthChannel channel,
                                  AuditContext auditContext) {
         java.util.Optional<User> resolved = resolveUser(request);
@@ -387,6 +411,25 @@ public class AuthService implements ApplicationEventPublisherAware {
         // opted in. mfaPolicy is null only in plain unit tests (no Spring) —
         // such tests get the pre-feature behaviour (no MFA challenge).
         if (mfaPolicy != null && mfaPolicy.shouldChallenge(user, channel)) {
+            // Trusted-device bypass — BEFORE any mfaToken is minted. If this
+            // device was "remembered" at a prior step-2 (matching, non-expired
+            // trust token presented for THIS user+device), skip the whole 2FA
+            // challenge and issue the real token. A mismatched / expired /
+            // unknown token is NOT an error — isTrusted() returns false and we
+            // fall through to the normal challenge below.
+            if (deviceTrustService != null
+                    && deviceId != null && !deviceId.isBlank()
+                    && deviceTrustToken != null && !deviceTrustToken.isBlank()
+                    && deviceTrustService.isTrusted(user.getId(), deviceId, deviceTrustToken)) {
+                log.info("MFA skipped via trusted device userId={}", user.getId());
+                auditService.recordSuccess(
+                        AuditEventType.AUTH_LOGIN_SUCCESS,
+                        String.valueOf(user.getId()), AuditService.ACTOR_TYPE_USER,
+                        String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
+                        java.util.Map.of("mfaSkippedViaTrustedDevice", true),
+                        auditContext);
+                return issueToken(user, deviceId);
+            }
             if (!user.isMfaEnabled() || user.getMfaSecret() == null) {
                 // System user on web/mobile but no secret yet → force enrolment.
                 String enrolToken = mfaTokenService.issue(user.getId(),
@@ -410,16 +453,31 @@ public class AuthService implements ApplicationEventPublisherAware {
     }
 
     /**
+     * Backwards-compatible overload — completes a step-2 MFA login WITHOUT
+     * trusting the device. Preserves the 4-arg signature existing callers use.
+     */
+    public AuthResponseDTO completeLoginWithMfa(String mfaToken, String code, String deviceId,
+                                                AuditContext auditContext) {
+        return completeLoginWithMfa(mfaToken, code, deviceId, false, auditContext);
+    }
+
+    /**
      * Step 2 of an MFA-required login: verify the TOTP / backup code carried
      * with the step-1 mfaToken, and (if it matches) mint the real access +
      * refresh tokens via {@link #issueToken}. Same authorization model as the
      * original {@code login} from here on.
+     *
+     * <p>When {@code rememberDevice} is true AND a non-blank {@code deviceId}
+     * was supplied, this also mints a one-time "remember this device" trust
+     * token (via {@link DeviceTrustService}), persists its hash against the
+     * device, and returns the RAW token + expiry on the response so the client
+     * can present it on future logins to skip the 2FA challenge.
      */
     @Transactional(noRollbackFor = {InvalidCredentialsException.class,
             MfaService.MfaException.class,
             com.innbucks.userservice.security.MfaTokenService.InvalidMfaTokenException.class})
     public AuthResponseDTO completeLoginWithMfa(String mfaToken, String code, String deviceId,
-                                                AuditContext auditContext) {
+                                                boolean rememberDevice, AuditContext auditContext) {
         if (mfaPolicy == null || mfaTokenService == null || mfaService == null) {
             // Misconfigured / unit-test path — fail closed.
             throw new MfaService.MfaException("MFA is not available");
@@ -436,13 +494,33 @@ public class AuthService implements ApplicationEventPublisherAware {
                     "mfa_code_invalid", java.util.Map.of(), auditContext);
             throw new MfaService.MfaException("That code didn't match. Try the next one your app shows.");
         }
+
+        // Mint device trust ONLY when the user opted in AND we can scope it to a
+        // device. The raw token is surfaced once on the response below; only its
+        // hash is persisted. deviceTrustService is null in plain unit tests — no
+        // trust is minted there (matches pre-feature behaviour).
+        DeviceTrustService.TrustGrant trustGrant = null;
+        boolean deviceTrusted = false;
+        if (rememberDevice && deviceId != null && !deviceId.isBlank() && deviceTrustService != null) {
+            trustGrant = deviceTrustService.trustDevice(user, deviceId);
+            deviceTrusted = true;
+        }
+
         auditService.recordSuccess(
                 AuditEventType.AUTH_LOGIN_SUCCESS,
                 String.valueOf(user.getId()), AuditService.ACTOR_TYPE_USER,
                 String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
-                java.util.Map.of("mfa", true),
+                java.util.Map.of("mfa", true, "deviceTrusted", deviceTrusted),
                 auditContext);
-        return issueToken(user, deviceId);
+
+        AuthResponseDTO response = issueToken(user, deviceId);
+        if (trustGrant != null) {
+            // Surface the RAW token once — the FE stores it and replays it via
+            // X-Device-Trust-Token on future logins. We never persist the raw form.
+            response.setDeviceTrustToken(trustGrant.rawToken());
+            response.setDeviceTrustExpiresAt(trustGrant.trustedUntil());
+        }
+        return response;
     }
 
     /**
@@ -496,6 +574,13 @@ public class AuthService implements ApplicationEventPublisherAware {
         //      the new password.
         tokenRevocationService.revoke(token);
         refreshTokenRepository.revokeAllForUser(user.getId(), Instant.now());
+        // Security hygiene: a password change must not leave a standing 2FA
+        // bypass behind. Clear "remember this device" trust on every device so
+        // the next login from any of them is challenged afresh. Null only in a
+        // plain unit test without a Spring context.
+        if (deviceTrustService != null) {
+            deviceTrustService.clearTrustForUser(user.getId());
+        }
         log.info("Password changed userId={} subject={}", user.getId(), subject);
         auditService.recordSuccess(
                 AuditEventType.AUTH_PASSWORD_CHANGED,
