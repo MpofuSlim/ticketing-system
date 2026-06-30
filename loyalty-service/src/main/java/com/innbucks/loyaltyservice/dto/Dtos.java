@@ -117,14 +117,10 @@ public class Dtos {
     // authenticated caller; the customer is identified by phoneNumber alone — no
     // account required. Cash-only EARN: a guest can RECEIVE points but cannot
     // REDEEM until they register (loyalty auto-creates a PENDING wallet keyed to
-    // the phone, promoted to spendable on registration). merchantId follows the
-    // usual rule — from the JWT for SHOP_ADMIN/SHOP_USER, from the body for
-    // MERCHANT_ADMIN; see CallerDetails.resolveMerchantId.
+    // the phone, promoted to spendable on registration). The merchant is derived
+    // from the shop, so it is NOT part of the request — the controller enforces
+    // ownership from the caller's JWT merchant scope instead.
     public record GuestShopCheckoutRequest(
-            @Schema(example = "b4c0d2e3-2345-6789-abcd-ef0123456789", nullable = true,
-                    description = "Merchant the shop belongs to. Required when the caller's JWT carries no " +
-                                  "merchantId (MERCHANT_ADMIN); ignored for SHOP_ADMIN/SHOP_USER.")
-            UUID merchantId,
             @Schema(example = "+263771234567",
                     description = "Guest customer's phone number (E.164). Points accrue against this phone; " +
                                   "no registration required to earn.")

@@ -477,9 +477,10 @@ public class ShopController {
                           "walk-in customer identified by phone number only — no account required. The " +
                           "customer RECEIVES points immediately (a PENDING wallet is auto-created and keyed " +
                           "to the phone) but cannot REDEEM until they register, at which point the accrued " +
-                          "balance becomes spendable. Cash-only: no points are burned. The caller must own " +
-                          "the shop — its merchant must match the caller's merchant scope (JWT for " +
-                          "SHOP_ADMIN/SHOP_USER, request body for MERCHANT_ADMIN). Requires X-Tenant-Id.")
+                          "balance becomes spendable. Cash-only: no points are burned. The merchant is " +
+                          "derived from the shop, so it is NOT in the request body. The caller must own " +
+                          "the shop: SHOP_ADMIN/SHOP_USER must carry the shop's merchant in their JWT; " +
+                          "MERCHANT_ADMIN/SUPER_ADMIN are scoped by tenant membership. Requires X-Tenant-Id.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -502,7 +503,7 @@ public class ShopController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
-                    description = "Validation failure (blank phoneNumber / non-positive cashAmount) or no merchant scope supplied",
+                    description = "Validation failure (blank phoneNumber / non-positive cashAmount)",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(name = "Validation error", value = """
                                     {
@@ -531,12 +532,14 @@ public class ShopController {
             @PathVariable UUID shopId,
             @Valid @RequestBody Dtos.GuestShopCheckoutRequest req) {
         UUID tenantId = tenantContext.requireTenantId();
-        // The shop's merchant must match the caller's merchant scope, so a merchant
-        // can only earn through its OWN shops. resolveMerchantId pulls the merchant
-        // from the JWT (SHOP_ADMIN/SHOP_USER) or the request body (MERCHANT_ADMIN).
-        UUID callerMerchantId = CallerDetails.resolveMerchantId(req.merchantId());
         Dtos.ShopResponse shop = shops.get(tenantId, shopId);
-        if (!callerMerchantId.equals(shop.merchantId())) {
+        // The merchant is taken from the SHOP itself (a shop belongs to exactly one
+        // merchant). Ownership guard: a merchant-scoped caller (SHOP_ADMIN/SHOP_USER
+        // carry merchantId in the JWT) may only earn through its OWN shops.
+        // MERCHANT_ADMIN/SUPER_ADMIN carry no merchant claim and are scoped by tenant
+        // membership (already enforced by requireTenantId()).
+        UUID callerMerchantId = CallerDetails.currentMerchantId();
+        if (callerMerchantId != null && !callerMerchantId.equals(shop.merchantId())) {
             throw LoyaltyException.forbidden("SHOP_NOT_OWNED", "shop does not belong to your merchant");
         }
         // Reference is server-owned (per-merchant idempotency on the loyalty PURCHASE
