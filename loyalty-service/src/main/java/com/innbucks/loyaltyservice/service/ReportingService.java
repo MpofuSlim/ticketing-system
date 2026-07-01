@@ -213,15 +213,27 @@ public class ReportingService {
                 issued.subtract(redeemed), count);
     }
 
-    public Dtos.PointsReport pointsForShop(UUID tenantId, UUID shopId, LocalDate from, LocalDate to) {
+    public Dtos.ShopPointsReport pointsForShop(UUID tenantId, UUID shopId, LocalDate from, LocalDate to) {
         requireRange(from, to);
         Instant fromInstant = from.atStartOfDay().toInstant(ZoneOffset.UTC);
         Instant toInstant = to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
         BigDecimal issued = transactions.sumPointsIssuedByShop(tenantId, shopId, fromInstant, toInstant);
         BigDecimal redeemed = transactions.sumPointsRedeemedByShop(tenantId, shopId, fromInstant, toInstant);
         long count = transactions.countByTenantIdAndShopIdAndCreatedAtBetween(tenantId, shopId, fromInstant, toInstant);
-        return new Dtos.PointsReport(shopId, from, to, issued, redeemed,
-                issued.subtract(redeemed), count);
+        // Per-customer breakdown: which phone earned/redeemed what at this shop,
+        // highest earners first. Rows come back as [phone, issued, redeemed, count].
+        List<Dtos.PointsByPhoneRow> byPhone = transactions
+                .pointsByPhoneForShop(tenantId, shopId, fromInstant, toInstant).stream()
+                .map(r -> {
+                    BigDecimal rowIssued = toBigDecimal(r[1]);
+                    BigDecimal rowRedeemed = toBigDecimal(r[2]);
+                    return new Dtos.PointsByPhoneRow((String) r[0], rowIssued, rowRedeemed,
+                            rowIssued.subtract(rowRedeemed), ((Number) r[3]).longValue());
+                })
+                .sorted(java.util.Comparator.comparing(Dtos.PointsByPhoneRow::pointsIssued).reversed())
+                .toList();
+        return new Dtos.ShopPointsReport(shopId, from, to, issued, redeemed,
+                issued.subtract(redeemed), count, byPhone);
     }
 
     public List<Dtos.PointsByTypeRow> pointsByType(UUID tenantId, UUID merchantId,
