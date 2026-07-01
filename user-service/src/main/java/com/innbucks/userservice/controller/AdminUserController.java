@@ -90,18 +90,43 @@ public class AdminUserController {
                             examples = @ExampleObject(value = """
                                     {
                                       "code": "200 OK",
-                                      "message": "Users retrieved",
+                                      "message": "Users (system, no customers) retrieved",
                                       "data": [
                                         {
-                                          "id": 1,
-                                          "firstName": "Alice",
+                                          "id": 9,
+                                          "firstName": "Rumbi",
                                           "lastName": "Moyo",
-                                          "email": "alice@innbucks.co.zw",
-                                          "phoneNumber": "+263771234567",
+                                          "email": "rumbi@showtime.co.zw",
+                                          "phoneNumber": "+263772999000",
                                           "roles": ["EVENT_ORGANIZER"],
                                           "defaultServices": ["ticketing"],
-                                          "active": false,
-                                          "createdAt": "2026-01-15T10:30:00"
+                                          "active": true,
+                                          "createdAt": "2026-02-12T11:30:00",
+                                          "business": true,
+                                          "businessDetails": {
+                                            "businessName": "Showtime Events",
+                                            "businessAddress": "5 Leopold Takawira St, Bulawayo",
+                                            "businessEmail": "hello@showtime.co.zw",
+                                            "businessPhoneNumber": "+263292987654",
+                                            "registrationNumber": "CR-2025-04412",
+                                            "bpoNumber": "BPO-39007",
+                                            "totalEvents": 37,
+                                            "rating": 4.6
+                                          }
+                                        },
+                                        {
+                                          "id": 14,
+                                          "firstName": "Farai",
+                                          "lastName": "Dube",
+                                          "email": "farai@acme-merch.co.zw",
+                                          "phoneNumber": "+263773111222",
+                                          "roles": ["SHOP_ADMIN"],
+                                          "defaultServices": ["loyalty"],
+                                          "active": true,
+                                          "createdAt": "2026-02-14T08:00:00",
+                                          "business": false,
+                                          "loyaltyMerchantId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
+                                          "loyaltyShopId": "11111111-aaaa-bbbb-cccc-222222222222"
                                         }
                                       ]
                                     }
@@ -126,9 +151,23 @@ public class AdminUserController {
         // cell has 1 SUPER_ADMIN row (BOOTSTRAP_ADMIN_PASSWORD-seeded), so
         // adding a 3rd exclusion variant of the repository query isn't worth
         // the surface — the row count makes the filter free.
-        List<UserResponseDTO> body = users.stream()
+        List<User> visible = users.stream()
                 .filter(u -> !u.hasRole(User.Role.SUPER_ADMIN))
-                .map(UserResponseDTO::from)
+                .collect(Collectors.toList());
+
+        // Batch-load tenant profiles so business accounts carry their business
+        // details here too (not just on GET /admin/users/merchants), without an
+        // N+1 query per user. Same pattern as listMerchants; from(u, null)
+        // leaves businessDetails null for personal accounts.
+        Map<Long, TenantProfile> profilesByUserId = visible.isEmpty()
+                ? Map.of()
+                : tenantProfileRepository
+                        .findByUserIdIn(visible.stream().map(User::getId).collect(Collectors.toList()))
+                        .stream()
+                        .collect(Collectors.toMap(p -> p.getUser().getId(), p -> p));
+
+        List<UserResponseDTO> body = visible.stream()
+                .map(u -> UserResponseDTO.from(u, profilesByUserId.get(u.getId())))
                 .collect(Collectors.toList());
 
         String activeLabel = active == null ? "Users"
