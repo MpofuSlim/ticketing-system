@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Value;
 import java.util.UUID;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -139,5 +140,32 @@ class InternalMerchantLookupControllerSecurityTest extends ControllerSecurityTes
                         .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
                         .content("{\"shopId\":\"" + UUID.randomUUID() + "\",\"phoneNumber\":\"0712345678\"}"))
                 .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void ids_by_admin_without_internal_token_returns_401() throws Exception {
+        mockMvc.perform(get("/loyalty/internal/merchants/ids-by-admin")
+                        .param("email", "anyone@test.local"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void ids_by_admin_with_correct_token_and_blank_email_returns_400() throws Exception {
+        mockMvc.perform(get("/loyalty/internal/merchants/ids-by-admin")
+                        .header("X-Internal-Token", internalToken)
+                        .param("email", ""))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void ids_by_admin_with_correct_token_and_unknown_email_returns_200_emptyList() throws Exception {
+        // Unlike /by-admin (404 on miss), the list endpoint returns 200 with an
+        // empty merchantIds array so the caller treats "owns nothing" uniformly.
+        mockMvc.perform(get("/loyalty/internal/merchants/ids-by-admin")
+                        .header("X-Internal-Token", internalToken)
+                        .param("email", "nobody-here@test.local"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.merchantIds").isArray())
+                .andExpect(jsonPath("$.merchantIds").isEmpty());
     }
 }

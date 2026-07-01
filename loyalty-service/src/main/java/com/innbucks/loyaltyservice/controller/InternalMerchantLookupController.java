@@ -87,6 +87,27 @@ public class InternalMerchantLookupController {
         return ResponseEntity.ok(Map.of("merchantId", merchantId));
     }
 
+    @GetMapping("/merchants/ids-by-admin")
+    @Operation(summary = "(S2S) List every merchantId an admin owns",
+            description = "Returns the ids of ALL merchants whose adminEmail matches the query " +
+                          "(case-insensitive). Used by user-service to authorize a MERCHANT_ADMIN " +
+                          "over shop-staff endpoints — a MERCHANT_ADMIN's JWT carries no merchantId, " +
+                          "and they may run more than one merchant, so the whole set is needed.")
+    public ResponseEntity<?> idsByAdminEmail(@RequestHeader(value = "X-Internal-Token", required = false) String token,
+                                             @RequestParam("email") String email) {
+        if (!authorized(token)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        if (email == null || email.isBlank()) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(Map.of("error", "email is required"));
+        }
+        java.util.List<UUID> merchantIds = merchants.findByAdminEmailIgnoreCase(email.trim()).stream()
+                .map(Merchant::getId)
+                .toList();
+        log.debug("Internal lookup resolved adminEmail={} -> {} merchant(s)", email, merchantIds.size());
+        return ResponseEntity.ok(Map.of("merchantIds", merchantIds));
+    }
+
     @GetMapping("/shops/{id}")
     @Operation(summary = "(S2S) Resolve a shop by id",
             description = "Returns the shop's tenantId + merchantId + status. Used by user-service " +
