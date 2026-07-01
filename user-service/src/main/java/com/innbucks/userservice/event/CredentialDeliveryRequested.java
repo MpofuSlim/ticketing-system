@@ -1,8 +1,9 @@
 package com.innbucks.userservice.event;
 
 /**
- * Published by {@code UserAdminService} after a freshly-generated temporary
- * password has been persisted (approval or admin reset). The listener
+ * Published by {@code UserAdminService} (SUPER_ADMIN approval / password reset)
+ * and {@code ShopStaffService} (shop-staff onboarding / reset) after a
+ * freshly-generated temporary password has been persisted. The listener
  * ({@code CredentialDeliveryListener}) hears it post-commit, off the HTTP
  * request thread, and runs the email / SMS / WhatsApp fallback chain.
  *
@@ -23,6 +24,10 @@ public record CredentialDeliveryRequested(
         /** SUPER_ADMIN approved the account (first activation). */
         APPROVAL,
         /** SUPER_ADMIN reset the temporary password for an existing account. */
-        RESET
+        RESET,
+        /** A new shop-staff account was created and provisioned with credentials
+         *  (MERCHANT_ADMIN creating a SHOP_ADMIN, or SHOP_ADMIN creating a
+         *  SHOP_USER) — "welcome, your account is ready". */
+        ONBOARDING
     }
 }

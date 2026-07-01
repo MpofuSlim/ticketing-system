@@ -1,12 +1,10 @@
 package com.innbucks.userservice.service;
 
-import com.innbucks.userservice.client.EmailNotificationClient;
-import com.innbucks.userservice.client.NotificationDeliveryException;
-import com.innbucks.userservice.client.SmsNotificationClient;
 import com.innbucks.userservice.dto.CreateShopAdminDTO;
 import com.innbucks.userservice.dto.CreateShopUserDTO;
 import com.innbucks.userservice.dto.UserResponseDTO;
 import com.innbucks.userservice.entity.User;
+import com.innbucks.userservice.event.CredentialDeliveryRequested;
 import com.innbucks.userservice.integration.LoyaltyServiceClient;
 import com.innbucks.userservice.repository.UserRepository;
 import org.junit.jupiter.api.AfterEach;
@@ -17,6 +15,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -54,8 +53,7 @@ class ShopStaffServiceTest {
     @Mock private UserRepository userRepository;
     @Mock private PasswordEncoder passwordEncoder;
     @Mock private LoyaltyServiceClient loyaltyServiceClient;
-    @Mock private EmailNotificationClient emailNotificationClient;
-    @Mock private SmsNotificationClient smsNotificationClient;
+    @Mock private ApplicationEventPublisher eventPublisher;
 
     @InjectMocks private ShopStaffService service;
 
@@ -101,47 +99,40 @@ class ShopStaffServiceTest {
     }
 
     @Test
-    void createShopAdmin_emailsCredentialsToTheNewAdmin() {
+    void createShopAdmin_publishesOnboardingEvent_offTheRequestThread() {
         UUID shopId = UUID.randomUUID();
         UUID merchantId = UUID.randomUUID();
         authenticateAs(merchantAdmin(merchantId));
         stubShopAdminHappyPath(shopId, merchantId);
 
         UserResponseDTO result = service.createShopAdmin(shopAdminDto(shopId));
-
         assertThat(result).isNotNull();
 
-        ArgumentCaptor<String> to = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<String> ref = ArgumentCaptor.forClass(String.class);
-        verify(emailNotificationClient).sendEmail(to.capture(), subject.capture(), body.capture(), ref.capture());
-
-        // The temp password is now a per-user random value (not the old shared
-        // #Pass123). Capture what was hashed and assert the SAME value reaches
-        // the email body.
+        // The temp password is a per-user random value (not the old shared
+        // #Pass123). Capture what was hashed and assert the SAME value is carried
+        // on the delivery event.
         ArgumentCaptor<String> pw = ArgumentCaptor.forClass(String.class);
         verify(passwordEncoder).encode(pw.capture());
         String generated = pw.getValue();
         assertThat(generated).isNotEqualTo("#Pass123")
-                // 2 groups of 5 (10 password chars + 1 hyphen). Exact alphabet
-                // pinned in TemporaryPasswordGeneratorTest.
                 .matches("[A-Za-z0-9]{5}-[A-Za-z0-9]{5}");
 
-        assertThat(to.getValue()).isEqualTo("tendai@shop.co.zw");
-        assertThat(subject.getValue()).contains("Welcome to SwiftInn");
-        assertThat(body.getValue())
-                .contains("Shop Administrator")
-                .contains("Tendai")
-                .contains(generated);
-        assertThat(ref.getValue()).startsWith("STAFF-ONBOARD-");
-
-        // Email succeeded → SMS fallback must not fire.
-        verifyNoInteractions(smsNotificationClient);
+        // Credentials are delivered off-thread by the async CredentialDeliveryListener
+        // (email -> SMS -> WhatsApp), so the create response never blocks on the
+        // notification gateway — the service only publishes the event.
+        ArgumentCaptor<CredentialDeliveryRequested> ev =
+                ArgumentCaptor.forClass(CredentialDeliveryRequested.class);
+        verify(eventPublisher).publishEvent(ev.capture());
+        CredentialDeliveryRequested e = ev.getValue();
+        assertThat(e.reason()).isEqualTo(CredentialDeliveryRequested.Reason.ONBOARDING);
+        assertThat(e.email()).isEqualTo("tendai@shop.co.zw");
+        assertThat(e.firstName()).isEqualTo("Tendai");
+        assertThat(e.phoneNumber()).isEqualTo("+263771234567");
+        assertThat(e.tempPassword()).isEqualTo(generated);
     }
 
     @Test
-    void createShopUser_emailsCredentialsWithShopUserRoleLabel() {
+    void createShopUser_publishesOnboardingEvent() {
         UUID shopId = UUID.randomUUID();
         UUID merchantId = UUID.randomUUID();
         authenticateAs(User.builder().email("shopadmin@x.com")
@@ -159,49 +150,11 @@ class ShopStaffServiceTest {
 
         service.createShopUser(dto);
 
-        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
-        verify(emailNotificationClient).sendEmail(eq("rufaro@shop.co.zw"), anyString(), body.capture(), anyString());
-        assertThat(body.getValue()).contains("Shop User");
-        verifyNoInteractions(smsNotificationClient);
-    }
-
-    @Test
-    void createShopAdmin_whenEmailGatewayRejects_fallsBackToSms() {
-        UUID shopId = UUID.randomUUID();
-        UUID merchantId = UUID.randomUUID();
-        authenticateAs(merchantAdmin(merchantId));
-        stubShopAdminHappyPath(shopId, merchantId);
-        doThrow(new NotificationDeliveryException("gateway 503"))
-                .when(emailNotificationClient).sendEmail(anyString(), anyString(), anyString(), anyString());
-
-        UserResponseDTO result = service.createShopAdmin(shopAdminDto(shopId));
-
-        assertThat(result).isNotNull();
-        ArgumentCaptor<String> pw = ArgumentCaptor.forClass(String.class);
-        verify(passwordEncoder).encode(pw.capture());
-        String generated = pw.getValue();
-
-        ArgumentCaptor<String> msg = ArgumentCaptor.forClass(String.class);
-        ArgumentCaptor<String> ref = ArgumentCaptor.forClass(String.class);
-        verify(smsNotificationClient).sendSms(eq("+263771234567"), msg.capture(), ref.capture());
-        assertThat(msg.getValue()).contains(generated);
-        assertThat(ref.getValue()).startsWith("STAFF-ONBOARD-");
-    }
-
-    @Test
-    void createShopAdmin_whenBothChannelsFail_creationStillSucceeds() {
-        UUID shopId = UUID.randomUUID();
-        UUID merchantId = UUID.randomUUID();
-        authenticateAs(merchantAdmin(merchantId));
-        stubShopAdminHappyPath(shopId, merchantId);
-        doThrow(new NotificationDeliveryException("email down"))
-                .when(emailNotificationClient).sendEmail(anyString(), anyString(), anyString(), anyString());
-        doThrow(new NotificationDeliveryException("sms down"))
-                .when(smsNotificationClient).sendSms(anyString(), anyString(), anyString());
-
-        // Best-effort: a total notification outage must NOT fail the creation.
-        assertThatCode(() -> service.createShopAdmin(shopAdminDto(shopId))).doesNotThrowAnyException();
-        verify(userRepository).save(any(User.class));
+        ArgumentCaptor<CredentialDeliveryRequested> ev =
+                ArgumentCaptor.forClass(CredentialDeliveryRequested.class);
+        verify(eventPublisher).publishEvent(ev.capture());
+        assertThat(ev.getValue().reason()).isEqualTo(CredentialDeliveryRequested.Reason.ONBOARDING);
+        assertThat(ev.getValue().email()).isEqualTo("rufaro@shop.co.zw");
     }
 
     private User shopUser(UUID userUuid, UUID merchantId, UUID shopId) {
@@ -243,7 +196,11 @@ class ShopStaffServiceTest {
         assertThat(result.getUserUuid()).isEqualTo(targetUuid);
         assertThat(target.getPassword()).isEqualTo("NEW_HASH");
         assertThat(target.isMustChangePassword()).isTrue();
-        verify(emailNotificationClient).sendEmail(eq("rufaro@pizza.co.zw"), any(), any(), any());
+        ArgumentCaptor<CredentialDeliveryRequested> ev =
+                ArgumentCaptor.forClass(CredentialDeliveryRequested.class);
+        verify(eventPublisher).publishEvent(ev.capture());
+        assertThat(ev.getValue().reason()).isEqualTo(CredentialDeliveryRequested.Reason.RESET);
+        assertThat(ev.getValue().email()).isEqualTo("rufaro@pizza.co.zw");
     }
 
     @Test
@@ -263,7 +220,11 @@ class ShopStaffServiceTest {
         UserResponseDTO result = service.resetTemporaryPassword(targetUuid);
 
         assertThat(result.getUserUuid()).isEqualTo(targetUuid);
-        verify(emailNotificationClient).sendEmail(eq("tendai@pizza.co.zw"), any(), any(), any());
+        ArgumentCaptor<CredentialDeliveryRequested> ev =
+                ArgumentCaptor.forClass(CredentialDeliveryRequested.class);
+        verify(eventPublisher).publishEvent(ev.capture());
+        assertThat(ev.getValue().reason()).isEqualTo(CredentialDeliveryRequested.Reason.RESET);
+        assertThat(ev.getValue().email()).isEqualTo("tendai@pizza.co.zw");
     }
 
     @Test
@@ -285,7 +246,7 @@ class ShopStaffServiceTest {
                 .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
                         .isEqualTo(HttpStatus.NOT_FOUND));
         verify(passwordEncoder, never()).encode(any());
-        verify(emailNotificationClient, never()).sendEmail(any(), any(), any(), any());
+        verify(eventPublisher, never()).publishEvent(any());
     }
 
     @Test
@@ -344,7 +305,7 @@ class ShopStaffServiceTest {
                         .isEqualTo(HttpStatus.FORBIDDEN));
         // No staff account is provisioned into a cross-merchant shop.
         verify(userRepository, never()).save(any());
-        verifyNoInteractions(emailNotificationClient, smsNotificationClient);
+        verifyNoInteractions(eventPublisher);
     }
 
     @Test

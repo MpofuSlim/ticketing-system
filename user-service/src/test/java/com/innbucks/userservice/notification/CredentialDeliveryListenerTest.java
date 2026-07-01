@@ -90,6 +90,17 @@ class CredentialDeliveryListenerTest {
         assertThat(counter("email_sent", "reset")).isEqualTo(1.0);
     }
 
+    @Test
+    void onboarding_event_usesStaffOnboardRefAndWelcomeCopy() {
+        listener.onCredentialDeliveryRequested(
+                event("a@b.com", "+263771234567", CredentialDeliveryRequested.Reason.ONBOARDING));
+
+        verify(email).sendEmail(eq("a@b.com"), contains("Welcome to SwiftInn"),
+                contains("TEMP-abc-12345"), eq("STAFF-ONBOARD-42"));
+        verify(userAdmin).markCredentialDelivered(42L);
+        assertThat(counter("email_sent", "onboarding")).isEqualTo(1.0);
+    }
+
     // -- fallback chain -------------------------------------------------------
 
     @Test
