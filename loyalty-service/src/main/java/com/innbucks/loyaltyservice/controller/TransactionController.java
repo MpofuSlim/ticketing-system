@@ -560,8 +560,10 @@ public class TransactionController {
     })
     @PreAuthorize("hasAnyRole('CUSTOMER','SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<Map<String, Object>>> redeem(@Valid @RequestBody Dtos.RedemptionRequest req) {
+        // enforceCallerOwnership=true: a CUSTOMER may only redeem their own
+        // wallet (admins may act on behalf). The S2S callers use the 3-arg form.
         var result = redemptionService.redeemPoints(tenantContext.requireTenantId(),
-                CallerDetails.resolveMerchantId(req.merchantId()), req);
+                CallerDetails.resolveMerchantId(req.merchantId()), req, true);
         Map<String, Object> data = Map.of(
                 "status", "OK",
                 "transactionId", result.transactionId(),

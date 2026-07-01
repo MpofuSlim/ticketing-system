@@ -208,8 +208,9 @@ public class BookingController {
         if (userEmail != null && userEmail.isBlank()) {
             userEmail = null;
         }
-        log.info("POST /bookings userEmail={} tier={} phoneNumber={} eventId={} seats={}",
-                userEmail, tier, MsisdnMasking.mask(phoneNumber), request.getEventId(), request.getSeats().size());
+        log.info("POST /bookings userEmailDomain={} tier={} phoneNumber={} eventId={} seats={}",
+                userEmail == null ? "" : userEmail.replaceAll("(?s)^.*@", ""),
+                tier, MsisdnMasking.mask(phoneNumber), request.getEventId(), request.getSeats().size());
         BookingResponseDTO created = bookingService.createBooking(userEmail, tier, phoneNumber, request);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Booking created successfully", created));

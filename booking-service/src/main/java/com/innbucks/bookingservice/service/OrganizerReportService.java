@@ -231,10 +231,17 @@ public class OrganizerReportService {
         return nz(v).setScale(2, RoundingMode.HALF_UP);
     }
 
-    /** Minimal CSV cell escaping: quote when the value contains a comma/quote/newline. */
+    /**
+     * Minimal CSV cell escaping: neutralise spreadsheet formula injection (a
+     * leading = + - @ / tab / CR is executed as a formula by Excel/Sheets), then
+     * quote when the value contains a comma/quote/newline.
+     */
     private static String csv(Object value) {
         if (value == null) return "";
         String s = String.valueOf(value);
+        if (!s.isEmpty() && "=+-@\t\r".indexOf(s.charAt(0)) >= 0) {
+            s = "'" + s;
+        }
         if (s.contains(",") || s.contains("\"") || s.contains("\n") || s.contains("\r")) {
             return '"' + s.replace("\"", "\"\"") + '"';
         }

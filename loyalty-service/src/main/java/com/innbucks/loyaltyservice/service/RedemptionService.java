@@ -47,10 +47,25 @@ public class RedemptionService {
      * balance plus the ledger transaction id for receipts/reconciliation.
      */
     public RedemptionResult redeemPoints(UUID tenantId, UUID merchantId, Dtos.RedemptionRequest req) {
+        // S2S / internal callers (shop-checkout, ticketing) carry no JWT and are
+        // trusted via the internal-token boundary, so they don't enforce caller
+        // ownership. The public /loyalty/redeem endpoint passes true (below).
+        return redeemPoints(tenantId, merchantId, req, false);
+    }
+
+    public RedemptionResult redeemPoints(UUID tenantId, UUID merchantId, Dtos.RedemptionRequest req,
+                                         boolean enforceCallerOwnership) {
         if (req.points() == null || req.points().signum() <= 0) {
             throw LoyaltyException.badRequest("BAD_AMOUNT", "Please enter an amount greater than zero.");
         }
         var u = users.require(tenantId, req.userId());
+        // A JWT caller (CUSTOMER) may only redeem their OWN balance; admins may
+        // act on behalf. Without this a logged-in customer could burn — or, via
+        // the idempotent-replay branch below, read the balance of — ANY user by
+        // passing that user's id.
+        if (enforceCallerOwnership) {
+            users.requireCallerOwnsOrIsAdmin(u);
+        }
         // PENDING (not yet registered) users may accrue but not spend.
         users.requireSpendable(u);
         var m = merchants.requireMerchant(tenantId, merchantId);
