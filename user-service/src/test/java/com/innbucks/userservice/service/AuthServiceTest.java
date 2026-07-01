@@ -449,8 +449,11 @@ class AuthServiceTest {
     void login_withWrongPassword_throws() {
         UserRepository userRepo = mock(UserRepository.class);
         PasswordEncoder encoder = mock(PasswordEncoder.class);
+        // Active + approved account (i.e. a normal loggable user) so the flow
+        // reaches the password check — an unapproved account would short-circuit
+        // to the pending-approval branch instead.
         User user = User.builder().email("u@example.com").password("hashed")
-                .roles(EnumSet.of(User.Role.CUSTOMER)).build();
+                .roles(EnumSet.of(User.Role.CUSTOMER)).active(true).approved(true).build();
         when(userRepo.findByEmail("u@example.com")).thenReturn(Optional.of(user));
         when(encoder.matches(any(), any())).thenReturn(false);
 
@@ -467,9 +470,13 @@ class AuthServiceTest {
     void login_withInactiveAccount_throws() {
         UserRepository userRepo = mock(UserRepository.class);
         PasswordEncoder encoder = mock(PasswordEncoder.class);
+        // Deactivated = previously approved (approved=true) then switched off
+        // (active=false). Distinct from a never-approved pending account: this
+        // one has a real password and must fall through to the not-active check
+        // after the password matches, NOT the pending-approval branch.
         User user = User.builder().email("u@example.com").password("hashed")
                 .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
-                .active(false).build();
+                .active(false).approved(true).build();
         when(userRepo.findByEmail("u@example.com")).thenReturn(Optional.of(user));
         when(encoder.matches(any(), any())).thenReturn(true);
 
@@ -480,6 +487,31 @@ class AuthServiceTest {
                 encoder, mock(JwtUtil.class));
         RuntimeException ex = assertThrows(RuntimeException.class, () -> service.login(req, null, com.innbucks.userservice.service.AuditContext.none()));
         assertTrue(ex.getMessage().toLowerCase().contains("not active"));
+    }
+
+    @Test
+    void login_pendingApprovalAccount_throwsPendingApproval_withoutCheckingPassword() {
+        UserRepository userRepo = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        // Registered via /auth/register: inactive + unapproved, carrying only an
+        // unusable placeholder password. Login must surface "pending approval",
+        // NOT the generic "Invalid credentials" — and must never even reach the
+        // password check (a pending account has no real password to match).
+        User user = User.builder().id(42L).email("pending@example.com").password("placeholder-hash")
+                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .active(false).approved(false).build();
+        when(userRepo.findByEmail("pending@example.com")).thenReturn(Optional.of(user));
+
+        LoginRequestDTO req = new LoginRequestDTO();
+        req.setIdentifier("pending@example.com"); req.setPassword("anything-they-type");
+
+        AuthService service = newService(userRepo, mock(TenantProfileRepository.class),
+                encoder, mock(JwtUtil.class));
+        AuthService.AccountPendingApprovalException ex = assertThrows(
+                AuthService.AccountPendingApprovalException.class,
+                () -> service.login(req, null, com.innbucks.userservice.service.AuditContext.none()));
+        assertTrue(ex.getMessage().toLowerCase().contains("pending approval"));
+        verify(encoder, never()).matches(any(), any());
     }
 
     @Test

@@ -310,6 +310,11 @@ public class OtpService {
                     .roles(EnumSet.of(User.Role.CUSTOMER))
                     .mfaEnabled(false)
                     .active(true)
+                    // Customers self-onboard via OTP — there is no SUPER_ADMIN
+                    // approval step, so they are approved by definition. Set it
+                    // explicitly so login's pending-approval check (!active &&
+                    // !approved) never mistakes a customer for a pending signup.
+                    .approved(true)
                     .homeCountry(homeCountry)
                     .build();
             userRepository.save(user);

@@ -306,6 +306,11 @@ public class ShopStaffService {
                 // Grants the loyalty bundle's microservices (loyalty + payments) on the JWT.
                 .defaultServices(new LinkedHashSet<>(List.of(Services.LOYALTY)))
                 .active(true)
+                // Created by a MERCHANT_ADMIN / SHOP_ADMIN — no SUPER_ADMIN
+                // approval step, so they are approved on creation. Set it
+                // explicitly so login's pending-approval check never treats shop
+                // staff as a pending registration.
+                .approved(true)
                 .loyaltyMerchantId(merchantId)
                 .loyaltyShopId(shopId)
                 .build();
