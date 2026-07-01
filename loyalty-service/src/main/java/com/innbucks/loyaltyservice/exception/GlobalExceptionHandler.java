@@ -3,12 +3,14 @@ package com.innbucks.loyaltyservice.exception;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.time.Instant;
 import java.util.Map;
@@ -99,6 +101,39 @@ public class GlobalExceptionHandler {
                 "status", status.value(),
                 "code", status.name(),
                 "message", reason
+        ));
+    }
+
+    /**
+     * Malformed / unreadable request body — bad JSON, or a value that can't map
+     * to the target type (e.g. a non-UUID string for a UUID field). A CLIENT
+     * error, so 400 — not the 500 the Exception catch-all below would otherwise
+     * produce. The raw Jackson cause can leak internal type details, so we log
+     * it and return a clean generic message.
+     */
+    @ExceptionHandler(HttpMessageNotReadableException.class)
+    public ResponseEntity<Map<String, Object>> handle(HttpMessageNotReadableException ex) {
+        log.warn("Malformed request body: {}", ex.getMostSpecificCause().getMessage());
+        return ResponseEntity.badRequest().body(Map.of(
+                "timestamp", Instant.now().toString(),
+                "status", 400,
+                "code", "BAD_REQUEST",
+                "message", "Malformed or unreadable request body."
+        ));
+    }
+
+    /**
+     * No route matched the request path (e.g. a removed or mistyped endpoint).
+     * Spring raises NoResourceFoundException; without this it hits the Exception
+     * catch-all and surfaces as a 500. A missing route is a client error → 404.
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<Map<String, Object>> handle(NoResourceFoundException ex) {
+        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
+                "timestamp", Instant.now().toString(),
+                "status", 404,
+                "code", "NOT_FOUND",
+                "message", "The requested resource was not found."
         ));
     }
 

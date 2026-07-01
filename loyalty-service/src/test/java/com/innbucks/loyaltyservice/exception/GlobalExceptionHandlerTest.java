@@ -58,4 +58,35 @@ class GlobalExceptionHandlerTest {
         org.junit.jupiter.api.Assertions.assertFalse(msg.contains("Lettuce") || msg.contains("connection pool"),
                 "500 body must not leak the internal exception detail");
     }
+
+    @Test
+    void malformedBody_returns400_notSwallowedByCatchAll() {
+        // The real prod case: a non-UUID string for a UUID field. A bad request
+        // body is a client error → 400, not the catch-all 500.
+        var ex = new org.springframework.http.converter.HttpMessageNotReadableException(
+                "JSON parse error",
+                new RuntimeException("UUID has to be represented by standard 36-char representation"),
+                (org.springframework.http.HttpInputMessage) null);
+        ResponseEntity<Map<String, Object>> resp = handler.handle(ex);
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
+        assertNotNull(resp.getBody());
+        assertEquals(400, resp.getBody().get("status"));
+        assertEquals("BAD_REQUEST", resp.getBody().get("code"));
+        // The raw Jackson parse detail must not leak to the client.
+        String msg = String.valueOf(resp.getBody().get("message"));
+        org.junit.jupiter.api.Assertions.assertFalse(msg.contains("36-char"),
+                "400 body must not leak the raw Jackson parse detail");
+    }
+
+    @Test
+    void unmappedRoute_returns404_notSwallowedByCatchAll() {
+        // The handler returns a static 404 regardless of the exception's contents,
+        // so a mock avoids coupling to the Spring-version-specific constructor.
+        var ex = org.mockito.Mockito.mock(org.springframework.web.servlet.resource.NoResourceFoundException.class);
+        ResponseEntity<Map<String, Object>> resp = handler.handle(ex);
+        assertEquals(HttpStatus.NOT_FOUND, resp.getStatusCode());
+        assertNotNull(resp.getBody());
+        assertEquals(404, resp.getBody().get("status"));
+        assertEquals("NOT_FOUND", resp.getBody().get("code"));
+    }
 }
