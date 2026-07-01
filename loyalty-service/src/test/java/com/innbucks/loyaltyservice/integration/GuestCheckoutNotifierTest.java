@@ -106,7 +106,7 @@ class GuestCheckoutNotifierTest {
         org.assertj.core.api.Assertions.assertThat(message)
                 .contains("Pizza Inn Avondale")
                 .contains("loyalty points")
-                .contains("Register/Sign In on InnBucks")
+                .contains("Register/Sign in on the InnBucks App")
                 // points formatted with trailing zeros stripped: 10.5000 -> 10.5, 25.0000 -> 25
                 .contains("10.5")
                 .contains("25");

@@ -10,7 +10,7 @@ import java.math.BigDecimal;
 /**
  * Sends a short congratulations message to a walk-in customer after a successful
  * guest shop-checkout: thanks for shopping, points earned, total points, and a
- * CTA to register on InnBucks to redeem them.
+ * CTA to register on the InnBucks App to redeem them.
  *
  * <p>Delivery is SMS-primary, WhatsApp-fallback (try SMS; only if SMS fails,
  * try WhatsApp) and runs on the {@code notificationExecutor} pool via
@@ -67,7 +67,7 @@ public class GuestCheckoutNotifier {
         String shop = (shopName == null || shopName.isBlank()) ? DEFAULT_SHOP_NAME : shopName;
         return "Thanks for shopping at " + shop + "! You earned " + fmt(pointsEarned)
                 + " loyalty points (total: " + fmt(totalPoints)
-                + "). Register/Sign In on InnBucks to redeem them.";
+                + "). Register/Sign in on the InnBucks App to redeem them.";
     }
 
     private String fmt(BigDecimal b) {
