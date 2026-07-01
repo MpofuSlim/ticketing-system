@@ -23,16 +23,19 @@ public class RedemptionService {
     private final WalletService walletService;
     private final LoyaltyTransactionRepository transactions;
     private final LoyaltyMetrics metrics;
+    private final com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier;
 
     public RedemptionService(UserService users, MerchantService merchants,
                              WalletService walletService,
                              LoyaltyTransactionRepository transactions,
-                             LoyaltyMetrics metrics) {
+                             LoyaltyMetrics metrics,
+                             com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier) {
         this.users = users;
         this.merchants = merchants;
         this.walletService = walletService;
         this.transactions = transactions;
         this.metrics = metrics;
+        this.memberNotifier = memberNotifier;
     }
 
     /**
@@ -119,6 +122,9 @@ public class RedemptionService {
         BigDecimal balance = walletService.apply(w.getId(), req.points().negate(), t.getId(),
                 "redeem:" + (t.getReference() == null ? "n/a" : t.getReference()), tenantId);
         metrics.addPointsRedeemed(req.points());
+        // Spend confirmation. The idempotent-replay branch above returns before
+        // here, so a retried redemption never fires a second alert.
+        memberNotifier.notifyPointsRedeemed(u.getPhoneNumber(), req.points(), balance);
         return new RedemptionResult(t.getId(), balance);
     }
 }

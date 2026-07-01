@@ -21,14 +21,17 @@ public class TransferService {
     private final WalletService walletService;
     private final LoyaltyTransactionRepository transactions;
     private final MerchantRepository merchants;
+    private final com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier;
 
     public TransferService(UserService users, WalletService walletService,
                            LoyaltyTransactionRepository transactions,
-                           MerchantRepository merchants) {
+                           MerchantRepository merchants,
+                           com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier) {
         this.users = users;
         this.walletService = walletService;
         this.transactions = transactions;
         this.merchants = merchants;
+        this.memberNotifier = memberNotifier;
     }
 
     public BigDecimal transfer(UUID tenantId, Dtos.TransferRequest req) {
@@ -101,7 +104,12 @@ public class TransferService {
             walletService.apply(to.getId(), req.points(), credit.getId(), "transfer-in", tenantId);
             walletService.apply(from.getId(), req.points().negate(), debit.getId(), "transfer-out", tenantId);
         }
-        return walletService.totalBalance(sender.getPhoneNumber());
+        BigDecimal senderBalance = walletService.totalBalance(sender.getPhoneNumber());
+        // Confirm to the sender and tell the recipient they received points.
+        memberNotifier.notifyTransferSent(sender.getPhoneNumber(), req.points(), senderBalance);
+        memberNotifier.notifyTransferReceived(recipient.getPhoneNumber(), req.points(),
+                walletService.totalBalance(recipient.getPhoneNumber()));
+        return senderBalance;
     }
 
 }

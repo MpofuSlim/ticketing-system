@@ -50,6 +50,7 @@ public class InternalMerchantLookupController {
     private final UserService userService;
     private final ShopCheckoutService shopCheckoutService;
     private final TicketingLoyaltyService ticketingLoyaltyService;
+    private final com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier;
     private final String expectedToken;
 
     public InternalMerchantLookupController(MerchantRepository merchants,
@@ -57,12 +58,14 @@ public class InternalMerchantLookupController {
                                             UserService userService,
                                             ShopCheckoutService shopCheckoutService,
                                             TicketingLoyaltyService ticketingLoyaltyService,
+                                            com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier,
                                             @Value("${innbucks.internal-api-token:}") String expectedToken) {
         this.merchants = merchants;
         this.shops = shops;
         this.userService = userService;
         this.shopCheckoutService = shopCheckoutService;
         this.ticketingLoyaltyService = ticketingLoyaltyService;
+        this.memberNotifier = memberNotifier;
         this.expectedToken = expectedToken;
     }
 
@@ -155,6 +158,12 @@ public class InternalMerchantLookupController {
         }
         int promoted = userService.promoteByPhone(phone);
         log.info("Promoted {} PENDING LoyaltyUser(s) for phone={}", promoted, MsisdnMasking.mask(phone));
+        // Tell the customer their accrued points are now spendable. Best-effort,
+        // and only when something actually flipped (idempotent replays are silent).
+        // Fired here (post-commit of promoteByPhone) rather than inside the service.
+        if (promoted > 0) {
+            memberNotifier.notifyPointsUnlocked(phone);
+        }
         return ResponseEntity.ok(Map.of("phoneNumber", phone, "promoted", promoted));
     }
 
