@@ -1,9 +1,8 @@
 package com.innbucks.userservice.service;
 
-import com.innbucks.userservice.client.EmailNotificationClient;
-import com.innbucks.userservice.client.SmsNotificationClient;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.event.CredentialDeliveryRequested;
+import com.innbucks.userservice.event.UserDeactivatedEvent;
 import com.innbucks.userservice.exception.NotFoundException;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.util.TemporaryPasswordGenerator;
@@ -48,11 +47,6 @@ public class UserAdminService {
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
-    // Deactivation still notifies inline today (separate code path, same root
-    // cause to fix in a follow-up). Credential delivery moved off this class —
-    // those clients are now consumed by CredentialDeliveryListener.
-    private final SmsNotificationClient smsNotificationClient;
-    private final EmailNotificationClient emailNotificationClient;
     private final AuditService auditService;
     private final ApplicationEventPublisher eventPublisher;
 
@@ -136,7 +130,12 @@ public class UserAdminService {
             publishCredentialDelivery(saved, tempPassword,
                     CredentialDeliveryRequested.Reason.APPROVAL);
         } else if (!active) {
-            notifyDeactivation(saved);
+            // Off-thread (AFTER_COMMIT + @Async listener) so a slow notification
+            // gateway can't stall — or time out — the deactivate response after
+            // the row has committed. Mirrors the credential-delivery path.
+            eventPublisher.publishEvent(new UserDeactivatedEvent(
+                    saved.getId(), saved.getFirstName(), saved.getEmail(),
+                    saved.getPhoneNumber(), saved.hasRole(User.Role.CUSTOMER)));
         }
         return saved;
     }
@@ -157,51 +156,6 @@ public class UserAdminService {
             userRepository.save(u);
         }, () -> log.warn("markCredentialDelivered: user vanished between event publish "
                 + "and listener callback userId={}", userId));
-    }
-
-    /**
-     * Tell a user their account was deactivated (they can no longer sign in).
-     * Best-effort email -> SMS, branded by audience (InnBucks for customers,
-     * SwiftInn for system users). A delivery failure never affects the
-     * already-committed deactivation. Not sent on the SUPER_ADMIN path (guarded
-     * earlier) or on (re)activation.
-     *
-     * <p>TODO: this still runs synchronously inside the @Transactional method;
-     * a slow email gateway here will reproduce the same FE-timeout symptom on
-     * the deactivate endpoint. Pending follow-up to extract into its own
-     * event + @Async listener (same pattern as CredentialDeliveryListener).
-     */
-    private void notifyDeactivation(User user) {
-        String brand = user.hasRole(User.Role.CUSTOMER) ? "InnBucks" : "SwiftInn";
-        String ref = "ACCOUNT-DEACTIVATED-" + user.getId();
-        String subject = "Your " + brand + " account has been deactivated";
-        String name = (user.getFirstName() != null && !user.getFirstName().isBlank())
-                ? user.getFirstName() : "there";
-        String message = "Hi " + name + ",\n\n"
-                + "Your " + brand + " account has been deactivated and you can no longer sign in. "
-                + "If you believe this was a mistake, please contact your administrator.\n\n"
-                + "— The " + brand + " Team";
-
-        String email = user.getEmail();
-        if (email != null && !email.isBlank()) {
-            try {
-                emailNotificationClient.sendEmail(email, subject, message, ref);
-                log.info("Deactivation email sent userId={}", user.getId());
-                return;
-            } catch (RuntimeException ex) {
-                log.warn("Deactivation email failed userId={}, trying SMS: {}", user.getId(), ex.getMessage());
-            }
-        }
-        String phone = user.getPhoneNumber();
-        if (phone != null && !phone.isBlank()) {
-            try {
-                smsNotificationClient.sendSms(phone, message, ref);
-                log.info("Deactivation SMS sent userId={}", user.getId());
-            } catch (RuntimeException ex) {
-                log.warn("Deactivation notification failed on all channels userId={} "
-                        + "(account still deactivated): {}", user.getId(), ex.getMessage());
-            }
-        }
     }
 
     /**

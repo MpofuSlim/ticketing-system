@@ -5,6 +5,7 @@ import com.innbucks.userservice.client.NotificationDeliveryException;
 import com.innbucks.userservice.client.SmsNotificationClient;
 import com.innbucks.userservice.event.AccountLockedEvent;
 import com.innbucks.userservice.event.AccountSecurityAlertEvent;
+import com.innbucks.userservice.event.UserDeactivatedEvent;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -132,5 +133,29 @@ class AccountSecurityNotificationListenerTest {
                 AccountSecurityAlertEvent.Type.PASSWORD_CHANGED)))
                 .doesNotThrowAnyException();
         verify(sms).sendSms(eq("+263771234567"), anyString(), anyString());
+    }
+
+    // ------------------------------------------------------------------
+    // onUserDeactivated (account deactivated notice)
+    // ------------------------------------------------------------------
+
+    @Test
+    void deactivation_emailPrimary_brandAwareForSystemUser() {
+        listener.onUserDeactivated(
+                new UserDeactivatedEvent(9L, "Tariro", "a@b.com", "+263771234567", false));
+
+        verify(email).sendEmail(eq("a@b.com"), contains("deactivated"), contains("SwiftInn"),
+                startsWith("ACCOUNT-DEACTIVATED-"));
+        // Email succeeded → SMS fallback must not fire.
+        verify(sms, never()).sendSms(anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void deactivation_customer_usesInnBucksBrand_smsFallbackWhenNoEmail() {
+        listener.onUserDeactivated(
+                new UserDeactivatedEvent(10L, "Rudo", null, "+263772222222", true));
+
+        verify(sms).sendSms(eq("+263772222222"), contains("InnBucks"), startsWith("ACCOUNT-DEACTIVATED-"));
+        verify(email, never()).sendEmail(anyString(), anyString(), anyString(), anyString());
     }
 }
