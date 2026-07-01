@@ -1,5 +1,7 @@
 package com.innbucks.userservice.controller;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.innbucks.userservice.dto.UserResponseDTO;
 import com.innbucks.userservice.entity.TenantProfile;
 import com.innbucks.userservice.entity.User;
@@ -159,6 +161,77 @@ class AdminUserControllerTest {
 
         assertThat(result.getResponse().getContentAsString())
                 .contains("customer-optin@example.com");
+    }
+
+    @Test
+    @WithMockUser(roles = "SUPER_ADMIN")
+    void listUsers_surfacesBusinessDetailsForBusinessAccounts() throws Exception {
+        // Regression: GET /admin/users used to map with the no-profile overload
+        // (UserResponseDTO::from), so a business account's tenant profile never
+        // reached the response even though the field existed. It must now carry
+        // businessDetails just like GET /admin/users/merchants — while a
+        // non-business staff account (no profile) still omits the block.
+        User organizer = User.builder()
+                .firstName("Rumbi").lastName("Moyo")
+                .email("rumbi-listusers@showtime.co.zw").phoneNumber("+263772999000")
+                .password(passwordEncoder.encode("Password123"))
+                .roles(EnumSet.of(User.Role.EVENT_ORGANIZER))
+                .defaultServices(new LinkedHashSet<>(List.of("ticketing")))
+                .active(true)
+                .business(true)
+                .build();
+        userRepository.save(organizer);
+
+        TenantProfile profile = TenantProfile.builder()
+                .user(organizer)
+                .businessName("Showtime Events")
+                .businessAddress("5 Leopold Takawira St, Bulawayo")
+                .businessEmail("hello@showtime.co.zw")
+                .businessPhoneNumber("+263292987654")
+                .registrationNumber("CR-2025-04412")
+                .bpoNumber("BPO-39007")
+                .build();
+        tenantProfileRepository.save(profile);
+
+        // Non-business staff: no tenant profile, so businessDetails is omitted.
+        User shopAdmin = User.builder()
+                .firstName("Farai").lastName("Dube")
+                .email("farai-listusers@example.com").phoneNumber("+263773111222")
+                .password(passwordEncoder.encode("Password123"))
+                .roles(EnumSet.of(User.Role.SHOP_ADMIN))
+                .active(true)
+                .build();
+        userRepository.save(shopAdmin);
+
+        String body = mockMvc.perform(get("/admin/users")
+                        .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+
+        // Locate the two seeded rows by email so the assertions are robust
+        // against any other rows the shared test context has accumulated.
+        JsonNode data = new ObjectMapper().readTree(body).get("data");
+        JsonNode businessRow = null, staffRow = null;
+        for (JsonNode n : data) {
+            String email = n.path("email").asText();
+            if ("rumbi-listusers@showtime.co.zw".equals(email)) businessRow = n;
+            if ("farai-listusers@example.com".equals(email)) staffRow = n;
+        }
+        assertThat(businessRow).as("business account listed").isNotNull();
+        assertThat(staffRow).as("staff account listed").isNotNull();
+
+        // The business account carries its tenant profile...
+        assertThat(businessRow.path("business").asBoolean()).isTrue();
+        assertThat(businessRow.has("businessDetails")).isTrue();
+        assertThat(businessRow.path("businessDetails").path("businessName").asText())
+                .isEqualTo("Showtime Events");
+        assertThat(businessRow.path("businessDetails").path("registrationNumber").asText())
+                .isEqualTo("CR-2025-04412");
+        assertThat(businessRow.path("businessDetails").path("bpoNumber").asText())
+                .isEqualTo("BPO-39007");
+
+        // ...the staff account has none (@JsonInclude(NON_NULL) omits the block).
+        assertThat(staffRow.has("businessDetails")).isFalse();
     }
 
     @Test
