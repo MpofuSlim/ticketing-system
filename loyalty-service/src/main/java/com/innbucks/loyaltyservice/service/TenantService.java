@@ -67,14 +67,24 @@ public class TenantService {
     }
 
     /**
-     * Tenants the caller is a member of. Replaces the legacy "tenants I own"
-     * lookup — a user can now belong to multiple tenants.
+     * Tenants the caller is a member of, resolved DUAL-MODE to mirror the
+     * membership check: by the caller's stable {@code userId} (UUID-keyed rows —
+     * e.g. a user attached at tenant registration, whose email column is null)
+     * OR their {@code email} (legacy rows). Deduped by tenant. Without the
+     * userId arm, users attached via the UUID flow never saw their tenant here
+     * even though they could already use it via X-Tenant-Id.
      */
     @Transactional(readOnly = true)
-    public List<Dtos.TenantResponse> findMine(String email) {
-        List<TenantMember> rows = members.findByEmail(email);
-        return rows.stream()
-                .map(m -> tenants.findById(m.getTenantId()).orElse(null))
+    public List<Dtos.TenantResponse> findMine(UUID userId, String email) {
+        java.util.LinkedHashSet<UUID> tenantIds = new java.util.LinkedHashSet<>();
+        if (userId != null) {
+            members.findByUserId(userId).forEach(m -> tenantIds.add(m.getTenantId()));
+        }
+        if (email != null && !email.isBlank()) {
+            members.findByEmail(email).forEach(m -> tenantIds.add(m.getTenantId()));
+        }
+        return tenantIds.stream()
+                .map(id -> tenants.findById(id).orElse(null))
                 .filter(java.util.Objects::nonNull)
                 .map(TenantService::toResponse)
                 .toList();

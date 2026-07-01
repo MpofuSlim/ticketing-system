@@ -140,11 +140,11 @@ public class TenantController {
     }
 
     @GetMapping("/me")
-    @Operation(summary = "List tenants owned by the current caller",
-            description = "Returns every tenant whose ownerEmail matches the authenticated principal's email. " +
-                          "Use this right after login to discover which tenant UUIDs you can pass as " +
-                          "X-Tenant-Id on subsequent calls. Most users own exactly one tenant; the response " +
-                          "is a list to support edge cases where one operator manages several brands.")
+    @Operation(summary = "List tenants the current caller belongs to",
+            description = "Returns every tenant the authenticated caller is a MEMBER of — matched by their " +
+                          "user UUID (the id they were attached with at tenant registration) or, for legacy " +
+                          "rows, their email. Use this right after login to discover which tenant UUIDs you " +
+                          "can pass as X-Tenant-Id. The response is a list — a user can belong to several tenants.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -172,9 +172,10 @@ public class TenantController {
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','EVENT_ORGANIZER','SUPER_ADMIN')")
     public ResponseEntity<ApiResult<java.util.List<Dtos.TenantResponse>>> mine(
             org.springframework.security.core.Authentication authentication) {
-        String ownerEmail = authentication.getName();
-        log.info("GET /loyalty/tenants/me ownerEmail={}", ownerEmail);
-        java.util.List<Dtos.TenantResponse> data = tenantService.findMine(ownerEmail);
+        UUID callerId = com.innbucks.loyaltyservice.security.CallerDetails.currentUserId();
+        String email = authentication.getName();
+        log.info("GET /loyalty/tenants/me userId={} email={}", callerId, email);
+        java.util.List<Dtos.TenantResponse> data = tenantService.findMine(callerId, email);
         return ResponseEntity.ok(ApiResult.ok("Tenants retrieved successfully", data));
     }
 

@@ -138,6 +138,39 @@ class TenantControllerSecurityTest extends ControllerSecurityTestBase {
                 .andExpect(status().isForbidden());
     }
 
+    // --- GET /loyalty/tenants/me — dual-mode (userId OR email) listing ----------
+
+    @Test
+    void tenants_me_lists_tenant_attached_by_user_uuid() throws Exception {
+        // Regression: a user attached via the UUID flow (email column null) must
+        // appear in /tenants/me. Before the dual-mode fix, findMine queried by
+        // email only, so a UUID-attached member saw an empty list even though the
+        // membership existed and worked via X-Tenant-Id.
+        UUID tenantId = newTenant("me-uuid");
+        UUID userId = UUID.randomUUID();
+        joinTenantByUserId(tenantId, userId);
+
+        String token = TestJwtFactory.builder("me-uuid@test.local")
+                .role("MERCHANT_ADMIN").userId(userId).sign(jwtSecret);
+        mockMvc.perform(get("/loyalty/tenants/me")
+                        .header("Authorization", bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].id").value(tenantId.toString()));
+    }
+
+    @Test
+    void tenants_me_lists_legacy_email_member_via_fallback() throws Exception {
+        // The email arm still works for legacy rows / tokens without a userId.
+        UUID tenantId = newTenant("me-email");
+        joinTenant(tenantId, "me-legacy@test.local");
+
+        String token = jwt("me-legacy@test.local", "MERCHANT_ADMIN"); // no userId claim
+        mockMvc.perform(get("/loyalty/tenants/me")
+                        .header("Authorization", bearer(token)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data[0].id").value(tenantId.toString()));
+    }
+
     // --- The join endpoint is gone ---------------------------------------------
     // No HTTP-status assertion for the removed POST /loyalty/tenants/{id}/join:
     // this service's GlobalExceptionHandler has a catch-all @ExceptionHandler(
