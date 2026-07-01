@@ -51,9 +51,17 @@ public class TenantService {
      * no longer gates access — that's the job of {@link TenantMember} rows.
      */
     public Dtos.TenantResponse create(Dtos.TenantRequest req, String creatorEmail) {
+        String name = req.name() == null ? null : req.name().trim();
+        // Control measure: no two tenants may share a name (case-insensitive).
+        // Service-level guard (not a DB unique index) so it doesn't fail to
+        // deploy against any pre-existing duplicate rows.
+        if (name != null && tenants.existsByNameIgnoreCase(name)) {
+            throw LoyaltyException.conflict("TENANT_NAME_TAKEN",
+                    "A tenant named \"" + name + "\" already exists.");
+        }
         Tenant t = new Tenant();
         t.setCode(req.code());
-        t.setName(req.name());
+        t.setName(name);
         t.setOwnerEmail(creatorEmail);
         tenants.save(t);
         // Attach the supplied user as the tenant's first member so they can

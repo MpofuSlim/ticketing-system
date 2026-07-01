@@ -77,6 +77,21 @@ public class TenantController {
                                     }
                                     """)
                     )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "409",
+                    description = "A tenant with this name already exists",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Duplicate name", value = """
+                                    {
+                                      "code": "TENANT_NAME_TAKEN",
+                                      "message": "A tenant with that name already exists.",
+                                      "data": null
+                                    }
+                                    """)
+                    )
             )
     })
     @PreAuthorize("hasRole('SUPER_ADMIN')")

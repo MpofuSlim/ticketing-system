@@ -91,6 +91,28 @@ class TenantControllerSecurityTest extends ControllerSecurityTestBase {
                 .andExpect(status().isForbidden());
     }
 
+    @Test
+    void create_duplicate_name_returns_409() throws Exception {
+        String superAdmin = TestJwtFactory.superAdmin(jwtSecret);
+        String suffix = UUID.randomUUID().toString().substring(0, 8);
+        String name = "Zuva Petroleum " + suffix;
+        String first = """
+                {"id":"%s","code":"z1-%s","name":"%s"}
+                """.formatted(UUID.randomUUID(), suffix, name);
+        mockMvc.perform(post("/loyalty/tenants").header("Authorization", bearer(superAdmin))
+                        .contentType(MediaType.APPLICATION_JSON).content(first))
+                .andExpect(status().isCreated());
+
+        // Same name (case-insensitive), different id + code → rejected, not a 2nd tenant.
+        String dup = """
+                {"id":"%s","code":"z2-%s","name":"%s"}
+                """.formatted(UUID.randomUUID(), suffix, name.toUpperCase());
+        mockMvc.perform(post("/loyalty/tenants").header("Authorization", bearer(superAdmin))
+                        .contentType(MediaType.APPLICATION_JSON).content(dup))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("TENANT_NAME_TAKEN"));
+    }
+
     // --- Dual-mode membership check --------------------------------------------
 
     @Test
