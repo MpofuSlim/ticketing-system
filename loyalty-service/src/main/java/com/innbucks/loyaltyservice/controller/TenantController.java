@@ -107,8 +107,9 @@ public class TenantController {
 
     @GetMapping
     @Operation(summary = "List all tenants",
-            description = "Returns every tenant on the platform. Intended for operator dashboards. " +
-                          "Operator-only — no tenant header required.")
+            description = "Returns every customer tenant on the platform. Intended for operator dashboards. " +
+                          "The platform-internal ticketing container tenant (loyalty infrastructure for " +
+                          "event-organizer merchants) is excluded. Operator-only — no tenant header required.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",

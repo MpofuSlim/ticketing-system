@@ -83,12 +83,18 @@ public class TenantService {
 
     @Transactional(readOnly = true)
     public List<Dtos.TenantResponse> list() {
-        return tenants.findAll().stream().map(TenantService::toResponse).toList();
+        // Hide the platform-internal ticketing container tenant from operator
+        // listings — it's infrastructure, not a real customer tenant.
+        return tenants.findByIdNot(TicketingLoyaltyService.TICKETING_TENANT_ID).stream()
+                .map(TenantService::toResponse).toList();
     }
 
     @Transactional(readOnly = true)
     public Page<Dtos.TenantResponse> list(Pageable pageable) {
-        return tenants.findAll(pageable).map(TenantService::toResponse);
+        // Hide the platform-internal ticketing container tenant from operator
+        // listings — excluded at the query level so pagination totals are correct.
+        return tenants.findByIdNot(TicketingLoyaltyService.TICKETING_TENANT_ID, pageable)
+                .map(TenantService::toResponse);
     }
 
     /**
@@ -109,6 +115,9 @@ public class TenantService {
             members.findByEmail(email).forEach(m -> tenantIds.add(m.getTenantId()));
         }
         return tenantIds.stream()
+                // Never surface the platform-internal ticketing container tenant,
+                // even if a membership row somehow points at it.
+                .filter(id -> !TicketingLoyaltyService.TICKETING_TENANT_ID.equals(id))
                 .map(id -> tenants.findById(id).orElse(null))
                 .filter(java.util.Objects::nonNull)
                 .map(TenantService::toResponse)

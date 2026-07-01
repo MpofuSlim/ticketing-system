@@ -17,4 +17,12 @@ public interface TenantRepository extends JpaRepository<Tenant, UUID> {
     List<Tenant> findAllByOwnerEmail(String ownerEmail);
 
     Page<Tenant> findAllByOwnerEmail(String ownerEmail, Pageable pageable);
+
+    // Operator listings exclude the platform-internal ticketing container tenant
+    // (seeded with a fixed id by V23) so it never shows up in the admin "Loyalty
+    // Tenants" view. Excluded at the query level so pagination totals stay
+    // accurate. See TicketingLoyaltyService.TICKETING_TENANT_ID.
+    Page<Tenant> findByIdNot(UUID id, Pageable pageable);
+
+    List<Tenant> findByIdNot(UUID id);
 }
