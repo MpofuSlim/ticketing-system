@@ -204,6 +204,22 @@ public class ReportingService {
         // Tenant scope: previously took no tenantId at all — any admin in any
         // tenant could pull any LoyaltyUser's points statement (cross-tenant IDOR).
         userService.require(tenantId, userId);
+        return pointsForResolvedUser(userId, from, to);
+    }
+
+    /**
+     * Same per-user points statement, resolved by phone number instead of the
+     * LoyaltyUser UUID — the phone is the identifier the SuperApp / CS agent
+     * actually has. Tenant-scoped by {@link UserService#requireByPhone}: a phone
+     * outside this tenant is a 404, not a cross-tenant read.
+     */
+    public Dtos.PointsReport pointsForUserByPhone(UUID tenantId, String phone, LocalDate from, LocalDate to) {
+        requireRange(from, to);
+        var u = userService.requireByPhone(tenantId, phone);
+        return pointsForResolvedUser(u.getId(), from, to);
+    }
+
+    private Dtos.PointsReport pointsForResolvedUser(UUID userId, LocalDate from, LocalDate to) {
         Instant fromInstant = from.atStartOfDay().toInstant(ZoneOffset.UTC);
         Instant toInstant = to.plusDays(1).atStartOfDay().toInstant(ZoneOffset.UTC);
         BigDecimal issued = transactions.sumPointsIssuedByUser(userId, fromInstant, toInstant);
