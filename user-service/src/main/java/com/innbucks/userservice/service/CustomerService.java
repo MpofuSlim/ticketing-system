@@ -14,6 +14,10 @@ import com.innbucks.userservice.repository.CustomerProfileRepository;
 import com.innbucks.userservice.repository.DeviceRepository;
 import com.innbucks.userservice.repository.PendingRegistrationRepository;
 import com.innbucks.userservice.repository.UserRepository;
+import com.innbucks.userservice.security.ConsumedKycTokenStore;
+import com.innbucks.userservice.security.KycVerificationTokenException;
+import com.innbucks.userservice.security.KycVerificationTokenService;
+import com.innbucks.userservice.security.VerifiedKycToken;
 import com.innbucks.userservice.util.MsisdnCountryResolver;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -49,6 +53,12 @@ public class CustomerService {
     // value still goes to core-banking straight off the request — only the
     // stored copy is HMAC'd.
     private final com.innbucks.userservice.security.NationalIdHasher nationalIdHasher;
+    // Proof-of-phone-ownership gate for the tier-2/3/4 upgrade endpoints. The
+    // token is minted by /auth/otp/verify (caller proved the phone via OTP) and
+    // bound to that MSISDN; tier upgrades derive the phone from it, never from
+    // the request body/param. Single-use is enforced at tier 4 via the store.
+    private final KycVerificationTokenService kycVerificationTokenService;
+    private final ConsumedKycTokenStore consumedKycTokenStore;
 
     /** Deployment country fallback for MSISDNs whose dialling prefix isn't an
      *  InnBucks-market entry (rare; foreign numbers). Set via INNBUCKS_COUNTRY
@@ -98,8 +108,13 @@ public class CustomerService {
     }
 
     @Transactional
-    public CustomerRegistrationResponseDTO registerTier2(CustomerTier2RegisterDTO request) {
-        CustomerProfile profile = loadProfile(request.getMsisdn(), 1);
+    public CustomerRegistrationResponseDTO registerTier2(CustomerTier2RegisterDTO request, String verificationToken) {
+        // Gate: require a valid OTP-issued verification token bound to this
+        // phone. Without this the endpoint trusted the body-supplied msisdn with
+        // no proof of ownership — unauthenticated KYC/account takeover.
+        VerifiedKycToken verified = kycVerificationTokenService.verify(verificationToken);
+        requirePhoneMatch(verified, request.getMsisdn());
+        CustomerProfile profile = loadProfile(verified.phoneNumber(), 1);
 
         // Compose a canonical fullName from the three structured fields. The
         // profile still keeps it as a denormalised column so ID-matching and
@@ -190,8 +205,11 @@ public class CustomerService {
     }
 
     @Transactional
-    public CustomerRegistrationResponseDTO registerTier3(String phoneNumber, CustomerTier3RegisterDTO request) {
-        CustomerProfile profile = loadProfile(phoneNumber, 2);
+    public CustomerRegistrationResponseDTO registerTier3(String phoneNumber, CustomerTier3RegisterDTO request,
+                                                         String verificationToken) {
+        VerifiedKycToken verified = kycVerificationTokenService.verify(verificationToken);
+        requirePhoneMatch(verified, phoneNumber);
+        CustomerProfile profile = loadProfile(verified.phoneNumber(), 2);
 
         profile.setBiometricsReference(request.getBiometricsReference());
         profile.setRegistrationTier(3);
@@ -216,8 +234,17 @@ public class CustomerService {
     }
 
     @Transactional
-    public CustomerRegistrationResponseDTO registerTier4(String phoneNumber, CustomerTier4RegisterDTO request) {
-        CustomerProfile profile = loadProfile(phoneNumber, 3);
+    public CustomerRegistrationResponseDTO registerTier4(String phoneNumber, CustomerTier4RegisterDTO request,
+                                                         String verificationToken) {
+        VerifiedKycToken verified = kycVerificationTokenService.verify(verificationToken);
+        requirePhoneMatch(verified, phoneNumber);
+        CustomerProfile profile = loadProfile(verified.phoneNumber(), 3);
+
+        // Single-use: burn the token on this terminal, irreversible "verified"
+        // flip so a captured token can't replay it. Inside the same
+        // @Transactional as the flip below, so consume + verified commit
+        // atomically (and a rollback frees the jti for a genuine retry).
+        consumedKycTokenStore.consume(verified.jti(), verified.expiresAt());
 
         profile.setIdDocumentPath(request.getIdDocumentPath());
         profile.setProofOfResidencePath(request.getProofOfResidencePath());
@@ -355,6 +382,21 @@ public class CustomerService {
                         .build())
                 .clientCustomFields(request.getClientCustomFields())
                 .build();
+    }
+
+    /**
+     * Binds the upgrade to the OTP-verified phone. The phone in the verification
+     * token (proven by OTP) is authoritative; a request that targets a different
+     * phone — e.g. an attacker pairing their own valid token with a victim's
+     * MSISDN — is rejected. Checks the token subject against the tier-2 body
+     * msisdn / tier-3,4 phoneNumber param.
+     */
+    private void requirePhoneMatch(VerifiedKycToken verified, String requestedPhone) {
+        if (requestedPhone == null || !requestedPhone.equals(verified.phoneNumber())) {
+            throw new KycVerificationTokenException(
+                    KycVerificationTokenException.Reason.PHONE_MISMATCH,
+                    "verification token is not valid for the requested phone number");
+        }
     }
 
     private CustomerProfile loadProfile(String phoneNumber, int requiredCurrentTier) {

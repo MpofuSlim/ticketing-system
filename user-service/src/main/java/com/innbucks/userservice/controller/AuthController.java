@@ -5,6 +5,7 @@ import com.innbucks.userservice.client.DepositAccount;
 import com.innbucks.userservice.util.MsisdnMasking;
 import com.innbucks.userservice.dto.*;
 import com.innbucks.userservice.security.JwtUtil;
+import com.innbucks.userservice.security.KycVerificationTokenService;
 import com.innbucks.userservice.service.AuditContext;
 import com.innbucks.userservice.service.AuditEventType;
 import com.innbucks.userservice.service.AuditService;
@@ -49,6 +50,7 @@ public class AuthController {
     private final OtpService otpService;
     private final CellAffinityChecker cellAffinityChecker;
     private final JwtUtil jwtUtil;
+    private final KycVerificationTokenService kycVerificationTokenService;
     private final LoginRateLimiter loginRateLimiter;
     private final AuditService auditService;
     private final PasswordResetService passwordResetService;
@@ -763,8 +765,9 @@ public class AuthController {
                                     """)))
     })
     public ResponseEntity<ApiResult<CustomerRegistrationResponseDTO>> customerTier2(
+            @RequestHeader(name = "X-Verification-Token", required = false) String verificationToken,
             @Valid @RequestBody CustomerTier2RegisterDTO request) {
-        CustomerRegistrationResponseDTO response = customerService.registerTier2(request);
+        CustomerRegistrationResponseDTO response = customerService.registerTier2(request, verificationToken);
         return ResponseEntity.ok(ApiResult.ok("Customer tier 2 registration successful", response));
     }
 
@@ -790,8 +793,9 @@ public class AuthController {
                             """))))
     public ResponseEntity<ApiResult<CustomerRegistrationResponseDTO>> customerTier3(
             @RequestParam("phoneNumber") String phoneNumber,
+            @RequestHeader(name = "X-Verification-Token", required = false) String verificationToken,
             @Valid @RequestBody CustomerTier3RegisterDTO request) {
-        CustomerRegistrationResponseDTO response = customerService.registerTier3(phoneNumber, request);
+        CustomerRegistrationResponseDTO response = customerService.registerTier3(phoneNumber, request, verificationToken);
         return ResponseEntity.ok(ApiResult.ok("Customer tier 3 registration successful", response));
     }
 
@@ -816,8 +820,9 @@ public class AuthController {
                             """))))
     public ResponseEntity<ApiResult<CustomerRegistrationResponseDTO>> customerTier4(
             @RequestParam("phoneNumber") String phoneNumber,
+            @RequestHeader(name = "X-Verification-Token", required = false) String verificationToken,
             @Valid @RequestBody CustomerTier4RegisterDTO request) {
-        CustomerRegistrationResponseDTO response = customerService.registerTier4(phoneNumber, request);
+        CustomerRegistrationResponseDTO response = customerService.registerTier4(phoneNumber, request, verificationToken);
         return ResponseEntity.ok(ApiResult.ok("Customer verification complete", response));
     }
 
@@ -1045,21 +1050,36 @@ public class AuthController {
                                     {
                                       "code": "200 OK",
                                       "message": "OTP verified",
-                                      "data": null
+                                      "data": {
+                                        "phoneNumber": "+263771234567",
+                                        "verified": true,
+                                        "verificationToken": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIrMjYzNzcxMjM0NTY3In0...",
+                                        "verificationTokenExpiresInSeconds": 900
+                                      }
                                     }
                                     """)
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "OTP invalid or expired")
     })
-    public ResponseEntity<ApiResult<Void>> verifyOtp(@Valid @RequestBody OtpVerifyDTO request) {
+    public ResponseEntity<ApiResult<OtpVerifyResponseDTO>> verifyOtp(@Valid @RequestBody OtpVerifyDTO request) {
         log.info("OTP verify phone={}", MsisdnMasking.mask(request.getPhoneNumber()));
         boolean ok = otpService.verifyOtp(request.getPhoneNumber(), request.getCode());
         if (!ok) {
             return ResponseEntity.badRequest()
                     .body(ApiResult.error(HttpStatus.BAD_REQUEST, "Invalid or expired OTP"));
         }
-        return ResponseEntity.ok(ApiResult.ok("OTP verified", null));
+        // Mint the single-use, phone-bound verification token the customer must
+        // present on tier-2/3/4 KYC upgrade — proof they just controlled this
+        // phone. Additive to the response: callers not doing KYC upgrade ignore it.
+        String verificationToken = kycVerificationTokenService.issue(request.getPhoneNumber());
+        OtpVerifyResponseDTO data = OtpVerifyResponseDTO.builder()
+                .phoneNumber(request.getPhoneNumber())
+                .verified(true)
+                .verificationToken(verificationToken)
+                .verificationTokenExpiresInSeconds(KycVerificationTokenService.TOKEN_TTL.toSeconds())
+                .build();
+        return ResponseEntity.ok(ApiResult.ok("OTP verified", data));
     }
 
     @PostMapping("/forgot-password")
