@@ -248,7 +248,8 @@ public class AuthController {
         com.innbucks.userservice.security.AuthChannel channel =
                 com.innbucks.userservice.security.AuthChannel.parseOrDefault(authChannel);
         log.info("Received login request identifier={} hasDeviceId={} hasTrustToken={} channel={}",
-                request.getIdentifier(), deviceId != null && !deviceId.isBlank(),
+                com.innbucks.userservice.util.MsisdnMasking.mask(request.getIdentifier()),
+                deviceId != null && !deviceId.isBlank(),
                 deviceTrustToken != null && !deviceTrustToken.isBlank(), channel);
         AuthResponseDTO response = authService.login(request, deviceId, deviceTrustToken, channel, auditContext(httpRequest));
         if (Boolean.TRUE.equals(response.getMfaEnrollmentRequired())) {

@@ -358,6 +358,14 @@ public class ReportingService {
     private static String csvField(Object o) {
         if (o == null) return "";
         String s = o.toString();
+        // Neutralise spreadsheet formula injection: a cell beginning with
+        // = + - @ (or a tab/CR) is executed as a formula by Excel/Sheets, so an
+        // attacker-controlled value (e.g. a transaction `reference`) could run
+        // =HYPERLINK/DDE when an operator opens the export. Prefix a single quote
+        // so it renders as literal text. See OWASP "CSV Injection".
+        if (!s.isEmpty() && "=+-@\t\r".indexOf(s.charAt(0)) >= 0) {
+            s = "'" + s;
+        }
         // Quote whenever the field contains a structural character so a
         // comma in a reference (e.g. "POS-001,batch-A") doesn't shred the
         // row, and inline quotes are escaped per RFC 4180 (`"` -> `""`).

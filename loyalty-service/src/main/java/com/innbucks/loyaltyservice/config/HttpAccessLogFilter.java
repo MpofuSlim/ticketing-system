@@ -57,7 +57,10 @@ public class HttpAccessLogFilter {
                 long start = System.currentTimeMillis();
                 String method = request.getMethod();
                 String query = request.getQueryString();
-                String fullPath = query == null ? path : path + "?" + query;
+                String fullPath = query == null ? path
+                        : path + "?" + query.replaceAll(
+                                "(?i)(msisdn|phoneNumber|phone|identifier|nationalId|national_id|pin|password|otp|token)=[^&]*",
+                                "$1=***");
                 log.info(">> {} {}", method, fullPath);
 
                 if (!bodies) {
