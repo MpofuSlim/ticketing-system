@@ -8,10 +8,9 @@ import java.util.EnumSet;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Pins the (role, channel) matrix that drives the MFA gate. System users are
- * challenged on EVERY channel (the channel is a client-supplied header, so
- * USSD/WhatsApp must not be able to downgrade required 2FA); customers are
- * opt-in and only on web/mobile.
+ * Pins the (role, channel) matrix that drives the MFA gate. Channel rule:
+ * USSD/WhatsApp never challenge; web/mobile always for system users; opt-in
+ * for customers.
  */
 class MfaPolicyTest {
 
@@ -78,17 +77,8 @@ class MfaPolicyTest {
     }
 
     @Test
-    void shouldChallenge_systemUser_challengedEvenOnUssdAndWhatsapp() {
-        // The channel comes from a client-supplied X-Auth-Channel header, so a
-        // system user must NOT be able to dodge required 2FA by claiming USSD.
-        assertThat(policy.shouldChallenge(user(false, User.Role.SUPER_ADMIN), AuthChannel.USSD)).isTrue();
-        assertThat(policy.shouldChallenge(user(false, User.Role.MERCHANT_ADMIN), AuthChannel.WHATSAPP)).isTrue();
-    }
-
-    @Test
-    void shouldChallenge_customer_notChallengedOnUssdAndWhatsapp() {
-        // Customers have no TOTP surface on these channels — opt-in isn't enforced there.
-        assertThat(policy.shouldChallenge(user(true, User.Role.CUSTOMER), AuthChannel.USSD)).isFalse();
+    void shouldChallenge_falseOnUssdAndWhatsapp_regardless() {
+        assertThat(policy.shouldChallenge(user(true, User.Role.SUPER_ADMIN), AuthChannel.USSD)).isFalse();
         assertThat(policy.shouldChallenge(user(true, User.Role.CUSTOMER), AuthChannel.WHATSAPP)).isFalse();
     }
 

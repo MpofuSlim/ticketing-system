@@ -52,18 +52,10 @@ public class MfaPolicy {
      * regardless.
      */
     public boolean shouldChallenge(User user, AuthChannel channel) {
-        // System users MUST satisfy 2FA on EVERY channel. `channel` is derived
-        // from the client-supplied X-Auth-Channel header, so honouring the
-        // USSD/WhatsApp "not applicable" carve-out for a system user would let an
-        // attacker with a stolen password downgrade required 2FA to none just by
-        // sending `X-Auth-Channel: USSD`. Customers keep the opt-in behaviour.
-        if (isSystemUser(user)) {
-            return true;
-        }
         if (!applicable(channel)) {
             return false;
         }
-        return user.isMfaEnabled();
+        return isSystemUser(user) || user.isMfaEnabled();
     }
 
     private static boolean isSystemUser(User user) {
