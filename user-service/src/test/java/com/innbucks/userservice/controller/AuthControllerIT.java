@@ -242,6 +242,10 @@ class AuthControllerIT {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(register)))
                 .andExpect(status().isCreated());
+        // Approve first: a freshly-registered account is pending approval and now
+        // returns 403 (account_pending_approval), so it must be activated before
+        // this test can exercise the wrong-password -> 400 path.
+        approve("user2@example.com");
 
         LoginPayload login = new LoginPayload();
         login.identifier = "user2@example.com";
@@ -252,6 +256,30 @@ class AuthControllerIT {
                         .content(objectMapper.writeValueAsString(login)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message", containsString("Invalid credentials")));
+    }
+
+    @Test
+    void login_pendingApproval_returns403_notInvalidCredentials() throws Exception {
+        // A system user who has registered but not yet been approved by a
+        // SUPER_ADMIN must be told they're pending — NOT given the generic
+        // "Invalid credentials", which is what the placeholder password would
+        // otherwise produce.
+        RegisterPayload register = baseSystemPayload("pendingapproval@example.com", "0777000042", "loyalty");
+        mockMvc.perform(post("/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(register)))
+                .andExpect(status().isCreated());
+
+        LoginPayload login = new LoginPayload();
+        login.identifier = "pendingapproval@example.com";
+        login.password = "whatever-they-type";
+
+        mockMvc.perform(post("/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(login)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.data.errorCode").value("account_pending_approval"))
+                .andExpect(jsonPath("$.message", containsString("pending approval")));
     }
 
     @Test

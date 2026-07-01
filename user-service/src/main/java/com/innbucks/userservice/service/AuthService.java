@@ -137,6 +137,23 @@ public class AuthService implements ApplicationEventPublisherAware {
     }
 
     /**
+     * Raised by {@link #login} when the resolved account has been registered
+     * but never approved (first-activated) by a SUPER_ADMIN. Such an account
+     * carries only an unusable placeholder password, so a login attempt would
+     * otherwise fail the password check and surface the generic
+     * "Invalid credentials" — misleading for someone who has simply not been
+     * approved yet. The exception's message is a typed constant, safe to
+     * passthrough. The handler maps it to 403 with a distinct
+     * {@code account_pending_approval} error code so the FE can route the user
+     * to a "pending approval" screen rather than a "wrong password" one.
+     */
+    public static class AccountPendingApprovalException extends RuntimeException {
+        public AccountPendingApprovalException() {
+            super("Your account is pending approval. You'll be able to sign in once an administrator approves it.");
+        }
+    }
+
+    /**
      * Thrown by {@link #changePassword(String, ChangePasswordRequestDTO,
      * AuditContext)} when the request can't be processed. The {@link #message}
      * is user-facing and safe to forward verbatim — every constructor argument
@@ -294,6 +311,28 @@ public class AuthService implements ApplicationEventPublisherAware {
             throw new InvalidCredentialsException();
         }
         User user = resolved.get();
+
+        // Registered-but-not-yet-approved accounts (created via /auth/register)
+        // land inactive + unapproved with an unusable placeholder password, so a
+        // login attempt would otherwise fail the password check below and return
+        // the generic "Invalid credentials" — misleading for someone who is simply
+        // waiting on a SUPER_ADMIN to approve them. Surface the real reason up
+        // front instead. This MUST run before the password check because a pending
+        // account has no real password to match. Every other account type is
+        // created already-approved (OtpService / TeamMemberService /
+        // ShopStaffService) and pre-existing rows are back-filled by V26, so
+        // "inactive AND unapproved" is uniquely a still-pending registration — a
+        // deactivated (previously-approved) account keeps approved=true and falls
+        // through to the not-active check further down.
+        if (!user.isActive() && !user.isApproved()) {
+            log.info("Login rejected — account pending approval userId={}", user.getId());
+            auditService.recordFailure(
+                    AuditEventType.AUTH_LOGIN_FAILURE,
+                    null, AuditService.ACTOR_TYPE_ANONYMOUS,
+                    String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
+                    "account_pending_approval", null, auditContext);
+            throw new AccountPendingApprovalException();
+        }
 
         Instant now = Instant.now();
 

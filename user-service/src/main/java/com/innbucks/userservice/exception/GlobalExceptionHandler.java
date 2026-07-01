@@ -130,6 +130,24 @@ public class GlobalExceptionHandler {
                 .body(ApiResult.error(HttpStatus.BAD_REQUEST, ex.getMessage()));
     }
 
+    // Login attempt against a registered-but-not-yet-approved account. Distinct
+    // from InvalidCredentials (which is deliberately vague to avoid account
+    // enumeration): "pending approval" is a state the user is entitled to know
+    // about — they registered and are waiting on a SUPER_ADMIN. 403 (not 400)
+    // because the credentials aren't the problem: the account is understood but
+    // not yet permitted to sign in. The `account_pending_approval` error code
+    // lets the FE route to a "pending approval" screen. The message is a typed
+    // constant from AuthService — safe to passthrough.
+    @ExceptionHandler(AuthService.AccountPendingApprovalException.class)
+    public ResponseEntity<ApiResult<Map<String, String>>> handlePendingApproval(
+            AuthService.AccountPendingApprovalException ex) {
+        log.info("Login rejected — account pending approval");
+        Map<String, String> data = new LinkedHashMap<>();
+        data.put("errorCode", "account_pending_approval");
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ApiResult.of(HttpStatus.FORBIDDEN, ex.getMessage(), data));
+    }
+
     // Refresh-token reuse: a previously-rotated-out token was replayed, so
     // the whole family was revoked. The message ("Refresh token reuse
     // detected; family revoked") is a typed constant from RefreshTokenService

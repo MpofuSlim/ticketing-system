@@ -189,6 +189,20 @@ public class AuthController {
                                             """)
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid credentials or missing identifier"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "Account has been registered but not yet approved by a SUPER_ADMIN. " +
+                            "Returned instead of a generic 400 so the caller knows the credentials " +
+                            "aren't the problem — the account simply isn't activated yet. The " +
+                            "`errorCode` is `account_pending_approval` so the FE can route to a " +
+                            "\"pending approval\" screen rather than a \"wrong password\" one.",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Account pending approval", value = """
+                                    {
+                                      "code": "403 FORBIDDEN",
+                                      "message": "Your account is pending approval. You'll be able to sign in once an administrator approves it.",
+                                      "data": { "errorCode": "account_pending_approval" }
+                                    }
+                                    """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "423",
                     description = "Account locked due to too many consecutive failed login attempts " +
                             "(default 7). The `lockedUntil` ISO-8601 timestamp tells the FE when " +
