@@ -69,6 +69,21 @@ public class MfaService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private DeviceTrustService deviceTrustService;
 
+    // Field-injected (optional), same reasoning as deviceTrustService — keeps the
+    // constructor and any plain unit test from widening. Null in a no-Spring test
+    // → no security alert is fired.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private org.springframework.context.ApplicationEventPublisher eventPublisher;
+
+    private void publishSecurityAlert(User user, com.innbucks.userservice.event.AccountSecurityAlertEvent.Type type) {
+        if (eventPublisher == null) {
+            return;
+        }
+        eventPublisher.publishEvent(new com.innbucks.userservice.event.AccountSecurityAlertEvent(
+                user.getId(), user.getFirstName(), user.getEmail(), user.getPhoneNumber(),
+                user.hasRole(User.Role.CUSTOMER), type));
+    }
+
     private final SecretGenerator secretGenerator = new DefaultSecretGenerator();
     private final CodeGenerator codeGenerator = new DefaultCodeGenerator(HashingAlgorithm.SHA1);
     private final CodeVerifier codeVerifier;
@@ -155,6 +170,7 @@ public class MfaService {
                     .build());
         }
         log.info("MFA enrolment completed userId={} backupCodes={}", userId, plaintext.size());
+        publishSecurityAlert(user, com.innbucks.userservice.event.AccountSecurityAlertEvent.Type.MFA_ENABLED);
         return plaintext;
     }
 
@@ -217,6 +233,7 @@ public class MfaService {
         backupCodeRepository.deleteAllForUser(userId);
         clearDeviceTrust(userId);
         log.info("MFA disabled userId={}", userId);
+        publishSecurityAlert(user, com.innbucks.userservice.event.AccountSecurityAlertEvent.Type.MFA_DISABLED);
     }
 
     /** SUPER_ADMIN recovery: wipe a user's MFA so they can re-enrol on next login. */
@@ -229,6 +246,7 @@ public class MfaService {
         backupCodeRepository.deleteAllForUser(userId);
         clearDeviceTrust(userId);
         log.info("MFA reset by admin userId={}", userId);
+        publishSecurityAlert(user, com.innbucks.userservice.event.AccountSecurityAlertEvent.Type.MFA_DISABLED);
     }
 
     /**

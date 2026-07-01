@@ -43,6 +43,7 @@ public class PasswordResetService {
     private final PasswordEncoder passwordEncoder;
     private final RefreshTokenRepository refreshTokenRepository;
     private final AuditService auditService;
+    private final org.springframework.context.ApplicationEventPublisher eventPublisher;
 
     /** Step 1 — send the reset OTP to whichever channel the identifier names. Silent no-op for unknown users. */
     @Transactional
@@ -103,6 +104,12 @@ public class PasswordResetService {
                 String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
                 null, auditContext);
         log.info("Password reset via OTP userId={} via={}", user.getId(), id.email() ? "email" : "phone");
+        // Security alert (email + SMS): if it wasn't them, a leaked OTP just
+        // changed their password and they must act.
+        eventPublisher.publishEvent(new com.innbucks.userservice.event.AccountSecurityAlertEvent(
+                user.getId(), user.getFirstName(), user.getEmail(), user.getPhoneNumber(),
+                user.hasRole(User.Role.CUSTOMER),
+                com.innbucks.userservice.event.AccountSecurityAlertEvent.Type.PASSWORD_RESET));
     }
 
     /** Pick the identifier to use: email if present, else phone. Neither → 400. */

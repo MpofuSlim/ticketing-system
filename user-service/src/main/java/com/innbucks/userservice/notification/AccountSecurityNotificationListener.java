@@ -3,6 +3,7 @@ package com.innbucks.userservice.notification;
 import com.innbucks.userservice.client.EmailNotificationClient;
 import com.innbucks.userservice.client.SmsNotificationClient;
 import com.innbucks.userservice.event.AccountLockedEvent;
+import com.innbucks.userservice.event.AccountSecurityAlertEvent;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
@@ -63,6 +64,56 @@ public class AccountSecurityNotificationListener {
                         event.userId(), ex.getMessage());
             }
         }
+    }
+
+    /**
+     * "Something security-sensitive changed on your account" alert — password
+     * changed/reset, MFA on/off. Same both-channels, best-effort, brand-aware
+     * treatment as the lockout alert, for the same reason: the user must hear
+     * about it wherever we can reach them.
+     */
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onSecurityAlert(AccountSecurityAlertEvent event) {
+        String brand = event.customer() ? "InnBucks" : "SwiftInn";
+        String ref = "SECURITY-" + event.type() + "-" + event.userId();
+        String subject = brand + " account security alert";
+        String message = buildSecurityMessage(brand, event);
+
+        if (event.email() != null && !event.email().isBlank()) {
+            try {
+                email.sendEmail(event.email(), subject, message, ref);
+                log.info("Security-alert email sent userId={} type={}", event.userId(), event.type());
+            } catch (RuntimeException ex) {
+                log.warn("Security-alert email failed userId={} type={}: {}",
+                        event.userId(), event.type(), ex.getMessage());
+            }
+        }
+        if (event.phoneNumber() != null && !event.phoneNumber().isBlank()) {
+            try {
+                sms.sendSms(event.phoneNumber(), message, ref);
+                log.info("Security-alert SMS sent userId={} type={}", event.userId(), event.type());
+            } catch (RuntimeException ex) {
+                log.warn("Security-alert SMS failed userId={} type={}: {}",
+                        event.userId(), event.type(), ex.getMessage());
+            }
+        }
+    }
+
+    private String buildSecurityMessage(String brand, AccountSecurityAlertEvent event) {
+        String name = (event.firstName() != null && !event.firstName().isBlank()) ? event.firstName() : "there";
+        String line = switch (event.type()) {
+            case PASSWORD_CHANGED -> "the password on your " + brand + " account was just changed.";
+            case PASSWORD_RESET   -> "your " + brand + " account password was just reset.";
+            case MFA_ENABLED      -> "two-factor authentication was just turned ON for your " + brand + " account.";
+            case MFA_DISABLED     -> "two-factor authentication was just turned OFF for your " + brand + " account.";
+        };
+        String tail = event.type() == AccountSecurityAlertEvent.Type.MFA_ENABLED
+                ? "If this was you, no action is needed."
+                : "If this wasn't you, reset your password immediately and contact support.";
+        return "Hi " + name + ",\n\n"
+                + "For your security, " + line + " " + tail + "\n\n"
+                + "— The " + brand + " Team";
     }
 
     private String buildMessage(String brand, AccountLockedEvent event) {

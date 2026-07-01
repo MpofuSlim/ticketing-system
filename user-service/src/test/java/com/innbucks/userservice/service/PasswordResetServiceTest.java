@@ -27,6 +27,7 @@ class PasswordResetServiceTest {
     private PasswordEncoder passwordEncoder;
     private RefreshTokenRepository refreshTokenRepository;
     private AuditService auditService;
+    private org.springframework.context.ApplicationEventPublisher eventPublisher;
     private PasswordResetService service;
 
     private static final String PHONE = "+263771234567";
@@ -39,8 +40,9 @@ class PasswordResetServiceTest {
         passwordEncoder = mock(PasswordEncoder.class);
         refreshTokenRepository = mock(RefreshTokenRepository.class);
         auditService = mock(AuditService.class);
+        eventPublisher = mock(org.springframework.context.ApplicationEventPublisher.class);
         service = new PasswordResetService(otpService, userRepository, passwordEncoder,
-                refreshTokenRepository, auditService);
+                refreshTokenRepository, auditService, eventPublisher);
     }
 
     // ---- requestReset --------------------------------------------------------
