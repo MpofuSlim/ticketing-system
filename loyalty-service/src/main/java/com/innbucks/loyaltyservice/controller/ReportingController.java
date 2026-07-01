@@ -476,11 +476,12 @@ public class ReportingController {
     }
 
     @GetMapping("/points/shop/{shopId}")
-    @Operation(summary = "Points report (per shop, period-bounded)",
-            description = "Sum of points issued / redeemed at this outlet between `from` and `to`. Only " +
-                          "transactions stamped with `shopId` count — that's the ones produced by the " +
-                          "ShopCheckout flow with a SHOP_USER cashier on the JWT. Used by the per-outlet " +
-                          "leaderboard on the merchant dashboard.")
+    @Operation(summary = "Points report (per shop, period-bounded, with per-customer breakdown)",
+            description = "Points issued / redeemed at this outlet between `from` and `to`, PLUS a " +
+                          "`byPhone` breakdown of points per customer phone number (highest earners " +
+                          "first). Only transactions stamped with `shopId` count — the ones produced by " +
+                          "the shop-checkout / guest-checkout flow. Used by the per-outlet leaderboard " +
+                          "on the merchant dashboard.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -499,7 +500,23 @@ public class ReportingController {
                                         "pointsIssued": 18240.0000,
                                         "pointsRedeemed": 5320.0000,
                                         "netPoints": 12920.0000,
-                                        "transactionCount": 312
+                                        "transactionCount": 312,
+                                        "byPhone": [
+                                          {
+                                            "phoneNumber": "+263772222222",
+                                            "pointsIssued": 12000.0000,
+                                            "pointsRedeemed": 3200.0000,
+                                            "netPoints": 8800.0000,
+                                            "transactionCount": 190
+                                          },
+                                          {
+                                            "phoneNumber": "+263771111111",
+                                            "pointsIssued": 6240.0000,
+                                            "pointsRedeemed": 2120.0000,
+                                            "netPoints": 4120.0000,
+                                            "transactionCount": 122
+                                          }
+                                        ]
                                       }
                                     }
                                     """)
@@ -507,11 +524,11 @@ public class ReportingController {
             )
     })
     @PreAuthorize("hasAnyRole('SHOP_USER','SHOP_ADMIN','MERCHANT_ADMIN','SUPER_ADMIN')")
-    public ResponseEntity<ApiResult<Dtos.PointsReport>> pointsForShop(
+    public ResponseEntity<ApiResult<Dtos.ShopPointsReport>> pointsForShop(
             @PathVariable UUID shopId,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
-        Dtos.PointsReport data = reporting.pointsForShop(
+        Dtos.ShopPointsReport data = reporting.pointsForShop(
                 tenantContext.requireTenantId(), shopId, from, to);
         return ResponseEntity.ok(ApiResult.ok("Points report retrieved successfully", data));
     }

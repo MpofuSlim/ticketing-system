@@ -1,5 +1,6 @@
 package com.innbucks.loyaltyservice.service;
 
+import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.CampaignRepository;
 import com.innbucks.loyaltyservice.repository.FraudAttemptRepository;
@@ -13,6 +14,7 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -103,5 +105,36 @@ class ReportingServiceTest {
         assertNotNull(report);
         verify(merchantService).requireMerchant(TENANT_A, MERCHANT_B);
         verify(transactions).sumPointsIssued(eq(MERCHANT_B), any(), any());
+    }
+
+    @Test
+    void pointsForShop_includesPerPhoneBreakdown_sortedByIssuedDesc_withNet() {
+        UUID shopId = UUID.fromString("44444444-4444-4444-4444-444444444444");
+        when(transactions.sumPointsIssuedByShop(eq(TENANT_A), eq(shopId), any(), any()))
+                .thenReturn(new BigDecimal("30"));
+        when(transactions.sumPointsRedeemedByShop(eq(TENANT_A), eq(shopId), any(), any()))
+                .thenReturn(new BigDecimal("5"));
+        when(transactions.countByTenantIdAndShopIdAndCreatedAtBetween(eq(TENANT_A), eq(shopId), any(), any()))
+                .thenReturn(3L);
+        // Smaller earner returned first to prove the service sorts by issued desc.
+        when(transactions.pointsByPhoneForShop(eq(TENANT_A), eq(shopId), any(), any()))
+                .thenReturn(List.of(
+                        new Object[]{"+263771111111", new BigDecimal("10"), new BigDecimal("0"), 1L},
+                        new Object[]{"+263772222222", new BigDecimal("20"), new BigDecimal("5"), 2L}));
+
+        Dtos.ShopPointsReport report = reporting.pointsForShop(TENANT_A, shopId, FROM, TO);
+
+        assertEquals(shopId, report.subjectId());
+        assertEquals(0, report.pointsIssued().compareTo(new BigDecimal("30")));
+        assertEquals(0, report.netPoints().compareTo(new BigDecimal("25")));
+        assertEquals(3L, report.transactionCount());
+
+        assertEquals(2, report.byPhone().size());
+        Dtos.PointsByPhoneRow top = report.byPhone().get(0);
+        assertEquals("+263772222222", top.phoneNumber());          // highest earner first
+        assertEquals(0, top.pointsIssued().compareTo(new BigDecimal("20")));
+        assertEquals(0, top.netPoints().compareTo(new BigDecimal("15")));
+        assertEquals(2L, top.transactionCount());
+        assertEquals("+263771111111", report.byPhone().get(1).phoneNumber());
     }
 }

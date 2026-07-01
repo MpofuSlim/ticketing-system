@@ -511,6 +511,44 @@ public class Dtos {
             BigDecimal pointsRedeemed
     ) {}
 
+    /** One customer's points at a shop — a row of the per-shop report breakdown. */
+    public record PointsByPhoneRow(
+            @Schema(example = "+263771234567", description = "Customer phone number the points accrued to.")
+            String phoneNumber,
+            @Schema(example = "1200.0000")
+            BigDecimal pointsIssued,
+            @Schema(example = "300.0000")
+            BigDecimal pointsRedeemed,
+            @Schema(example = "900.0000", description = "pointsIssued - pointsRedeemed for this customer at this shop.")
+            BigDecimal netPoints,
+            @Schema(example = "14", description = "Number of POSTED transactions for this customer at the shop.")
+            long transactionCount
+    ) {}
+
+    /**
+     * Per-shop points report: period totals PLUS a per-customer (phone)
+     * breakdown. Produced by the per-shop endpoint only; the merchant/user
+     * reports keep the flat {@link PointsReport}.
+     */
+    public record ShopPointsReport(
+            @Schema(example = "c7d8e9f0-1234-5678-90ab-cdef12345678", description = "Shop UUID.")
+            UUID subjectId,
+            @Schema(example = "2026-05-01")
+            LocalDate from,
+            @Schema(example = "2026-05-31")
+            LocalDate to,
+            @Schema(example = "18240.0000")
+            BigDecimal pointsIssued,
+            @Schema(example = "5320.0000")
+            BigDecimal pointsRedeemed,
+            @Schema(example = "12920.0000", description = "pointsIssued - pointsRedeemed across the shop.")
+            BigDecimal netPoints,
+            @Schema(example = "312", description = "Number of POSTED transactions at the shop.")
+            long transactionCount,
+            @Schema(description = "Per-customer breakdown, sorted by pointsIssued descending.")
+            java.util.List<PointsByPhoneRow> byPhone
+    ) {}
+
     /** One bucket of the daily time-series. */
     public record PointsTimeSeriesPoint(
             @Schema(example = "2026-05-04T00:00:00Z",

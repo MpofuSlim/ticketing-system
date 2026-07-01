@@ -106,6 +106,29 @@ public interface LoyaltyTransactionRepository extends JpaRepository<LoyaltyTrans
                                        @Param("to") Instant to);
 
     /**
+     * Per-customer (phone) points breakdown for a shop over a period. Transactions
+     * store the customer's {@code userId}, not their phone, so this theta-joins to
+     * {@code LoyaltyUser}. Row shape: [String phoneNumber, BigDecimal issued,
+     * BigDecimal redeemed, long count]. Ordering is left to the caller.
+     */
+    @Query("""
+        SELECT u.phoneNumber,
+               COALESCE(SUM(CASE WHEN t.pointsDelta > 0 THEN t.pointsDelta ELSE 0 END), 0),
+               COALESCE(SUM(CASE WHEN t.pointsDelta < 0 THEN -t.pointsDelta ELSE 0 END), 0),
+               COUNT(t)
+        FROM LoyaltyTransaction t, LoyaltyUser u
+        WHERE u.id = t.userId
+          AND t.tenantId = :tenantId AND t.shopId = :shopId
+          AND t.createdAt >= :from AND t.createdAt < :to
+          AND t.status = com.innbucks.loyaltyservice.entity.LoyaltyTransaction.Status.POSTED
+        GROUP BY u.phoneNumber
+        """)
+    List<Object[]> pointsByPhoneForShop(@Param("tenantId") UUID tenantId,
+                                        @Param("shopId") UUID shopId,
+                                        @Param("from") Instant from,
+                                        @Param("to") Instant to);
+
+    /**
      * Net points originated by a tenant (issued minus redeemed), all-time, from
      * the ledger. Wallets are global per customer now, so per-tenant outstanding
      * can no longer come from wallet balances — it's derived here from the
