@@ -44,6 +44,21 @@ public class TransactionService {
     }
 
     public Dtos.TransactionResponse post(UUID tenantId, UUID merchantId, Dtos.TransactionRequest req) {
+        // JWT-gated callers (SHOP_USER / SHOP_ADMIN): attribute the transaction to
+        // the shop on the caller's token. Server-side callers that resolved the
+        // shop from a trusted path param use the overload below.
+        return post(tenantId, merchantId, req,
+                com.innbucks.loyaltyservice.security.CallerDetails.currentShopId());
+    }
+
+    /**
+     * Post a transaction with an explicitly-resolved {@code shopId} rather than
+     * reading it from the caller's JWT. Used by server-side flows (guest / shop
+     * checkout) that resolve the shop themselves and carry no JWT — without this
+     * their transactions land with a null shop and never show up in the per-shop
+     * points report.
+     */
+    public Dtos.TransactionResponse post(UUID tenantId, UUID merchantId, Dtos.TransactionRequest req, UUID shopId) {
         Merchant m = merchants.requireMerchant(tenantId, merchantId);
         if (m.getStatus() != Merchant.Status.ACTIVE) {
             throw LoyaltyException.badRequest("MERCHANT_INACTIVE", "This merchant isn't accepting points right now.");
@@ -78,10 +93,12 @@ public class TransactionService {
         LoyaltyTransaction t = new LoyaltyTransaction();
         t.setTenantId(tenantId);
         t.setMerchantId(m.getId());
-        // shopId is stamped from the caller's JWT — present only for
-        // SHOP_USER / SHOP_ADMIN tokens. Outlet-scoped reporting (the
-        // /loyalty/transactions/my-shop endpoint) keys off this column.
-        t.setShopId(com.innbucks.loyaltyservice.security.CallerDetails.currentShopId());
+        // shopId attributes the transaction to an outlet: from the caller's JWT
+        // (SHOP_USER / SHOP_ADMIN) via the public endpoint, or resolved
+        // server-side for guest / shop checkout. Outlet-scoped reporting (the
+        // per-shop points report and the /loyalty/transactions/my-shop feed)
+        // keys off this column, so a null here hides the transaction from them.
+        t.setShopId(shopId);
         t.setUserId(u.getId());
         t.setType(req.type());
         t.setAmount(req.amount());

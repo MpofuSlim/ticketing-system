@@ -108,7 +108,11 @@ public class ShopCheckoutService {
             Dtos.TransactionRequest earn = new Dtos.TransactionRequest(
                     merchantId, null, phoneNumber, TransactionType.PURCHASE,
                     cashAmount, m.getCurrency(), reference);
-            Dtos.TransactionResponse earnResp = transactionService.post(tenantId, merchantId, earn);
+            // Attribute the earn to THIS shop. Guest / shop checkout has no JWT
+            // for TransactionService to read the shop from, so pass the shopId we
+            // already resolved — otherwise the transaction lands with a null shop
+            // and the per-shop points report shows nothing.
+            Dtos.TransactionResponse earnResp = transactionService.post(tenantId, merchantId, earn, shopId);
             pointsEarned = earnResp.pointsDelta() == null ? BigDecimal.ZERO : earnResp.pointsDelta();
             purchaseTxnId = earnResp.id();
             balance = earnResp.balanceAfter() == null ? balance : earnResp.balanceAfter();
