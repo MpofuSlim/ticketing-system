@@ -1,17 +1,17 @@
 package com.innbucks.userservice.service;
 
-import com.innbucks.userservice.client.EmailNotificationClient;
-import com.innbucks.userservice.client.SmsNotificationClient;
 import com.innbucks.userservice.dto.CreateShopAdminDTO;
 import com.innbucks.userservice.dto.CreateShopUserDTO;
 import com.innbucks.userservice.dto.UserResponseDTO;
 import com.innbucks.userservice.entity.User;
+import com.innbucks.userservice.event.CredentialDeliveryRequested;
 import com.innbucks.userservice.integration.LoyaltyServiceClient;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.util.TemporaryPasswordGenerator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -49,8 +49,7 @@ public class ShopStaffService {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final LoyaltyServiceClient loyaltyServiceClient;
-    private final EmailNotificationClient emailNotificationClient;
-    private final SmsNotificationClient smsNotificationClient;
+    private final ApplicationEventPublisher eventPublisher;
 
     /** Deployment country pin (ISO 3166-1 alpha-2). Shop staff are anchored
      *  to this cell — home_country is the deployment country, not derived
@@ -82,7 +81,14 @@ public class ShopStaffService {
         userRepository.save(staff);
         log.info("Created SHOP_ADMIN userId={} email={} shopId={} merchantId={} by={}",
                 staff.getId(), staff.getEmail(), req.getShopId(), merchantId, caller.getEmail());
-        notifyOnboarding(staff, tempPassword);
+        // Deliver credentials OFF the request thread (email -> SMS -> WhatsApp,
+        // best-effort, AFTER_COMMIT) via the same pipeline UserAdminService uses.
+        // The old inline send blocked the response on the notification gateway
+        // (~30s email read timeout), so a slow/hung gateway timed out the client
+        // even though the account had already committed.
+        eventPublisher.publishEvent(new CredentialDeliveryRequested(
+                staff.getId(), staff.getFirstName(), staff.getEmail(), staff.getPhoneNumber(),
+                tempPassword, CredentialDeliveryRequested.Reason.ONBOARDING));
         return UserResponseDTO.from(staff);
     }
 
@@ -105,7 +111,9 @@ public class ShopStaffService {
         userRepository.save(staff);
         log.info("Created SHOP_USER userId={} email={} shopId={} by={}",
                 staff.getId(), staff.getEmail(), callerShopId, caller.getEmail());
-        notifyOnboarding(staff, tempPassword);
+        eventPublisher.publishEvent(new CredentialDeliveryRequested(
+                staff.getId(), staff.getFirstName(), staff.getEmail(), staff.getPhoneNumber(),
+                tempPassword, CredentialDeliveryRequested.Reason.ONBOARDING));
         return UserResponseDTO.from(staff);
     }
 
@@ -214,7 +222,11 @@ public class ShopStaffService {
                 target.hasRole(User.Role.SHOP_ADMIN) ? "SHOP_ADMIN" : "SHOP_USER",
                 caller.getEmail());
 
-        notifyPasswordReset(target, tempPassword);
+        // Off-thread delivery (same event pipeline as onboarding) so a hung
+        // gateway can't stall the reset response after the password is rotated.
+        eventPublisher.publishEvent(new CredentialDeliveryRequested(
+                target.getId(), target.getFirstName(), target.getEmail(), target.getPhoneNumber(),
+                tempPassword, CredentialDeliveryRequested.Reason.RESET));
         return UserResponseDTO.from(target);
     }
 
@@ -248,55 +260,6 @@ public class ShopStaffService {
         return false;
     }
 
-    private void notifyPasswordReset(User staff, String tempPassword) {
-        String roleLabel = staff.hasRole(User.Role.SHOP_ADMIN) ? "Shop Administrator" : "Shop User";
-        String email = staff.getEmail();
-        String ref = "STAFF-RESET-" + staff.getId() + "-" + System.currentTimeMillis();
-        if (email != null && !email.isBlank()) {
-            try {
-                emailNotificationClient.sendEmail(
-                        email,
-                        "Your SwiftInn " + roleLabel + " password has been reset",
-                        buildResetText(staff.getFirstName(), email, roleLabel, tempPassword),
-                        ref);
-                log.info("Password-reset email sent userId={} role={}", staff.getId(), roleLabel);
-                return;
-            } catch (RuntimeException ex) {
-                log.warn("Password-reset email failed userId={}, trying SMS: {}",
-                        staff.getId(), ex.getMessage());
-            }
-        }
-        String phone = staff.getPhoneNumber();
-        if (phone == null || phone.isBlank()) {
-            log.warn("Password-reset has no email or phone target userId={} (password still rotated)",
-                    staff.getId());
-            return;
-        }
-        String account = (email != null && !email.isBlank()) ? " (" + email + ")" : "";
-        String sms = "Your SwiftInn account" + account
-                + " password has been reset. New temporary password: " + tempPassword
-                + ". Log in and change it immediately.";
-        try {
-            smsNotificationClient.sendSms(phone, sms, ref);
-            log.info("Password-reset SMS sent userId={}", staff.getId());
-        } catch (RuntimeException ex) {
-            log.warn("Password-reset notification failed on all channels userId={} " +
-                    "(password still rotated): {}", staff.getId(), ex.getMessage());
-        }
-    }
-
-    private String buildResetText(String firstName, String email, String roleLabel, String tempPassword) {
-        String name = (firstName != null && !firstName.isBlank()) ? firstName : "there";
-        return "Hi " + name + ",\n\n"
-                + "Your SwiftInn " + roleLabel + " password has been reset.\n\n"
-                + "Use these credentials to sign in:\n"
-                + "Username: " + email + "\n"
-                + "New temporary password: " + tempPassword + "\n\n"
-                + "For your security, please log in and change your password immediately. "
-                + "If you didn't request this reset, contact your administrator.\n\n"
-                + "— The SwiftInn Team";
-    }
-
     private User buildStaff(String firstName, String middleName, String lastName,
                             String email, String phone,
                             User.Role role, UUID merchantId, UUID shopId, String tempPassword) {
@@ -328,70 +291,6 @@ public class ShopStaffService {
                 .loyaltyMerchantId(merchantId)
                 .loyaltyShopId(shopId)
                 .build();
-    }
-
-    /**
-     * Deliver the new staff member their onboarding credentials. Best-effort: a
-     * delivery failure must NOT block creation — the account is already
-     * persisted and usable. Email is the primary channel (staff always onboard
-     * with an email address, and credentials belong in an inbox rather than an
-     * SMS); SMS is the fallback when the email gateway rejects the message or no
-     * address is on file. Mirrors {@code UserAdminService#notifyApproval}. Never
-     * logs the temporary password.
-     */
-    private void notifyOnboarding(User staff, String tempPassword) {
-        String roleLabel = staff.hasRole(User.Role.SHOP_ADMIN) ? "Shop Administrator" : "Shop User";
-        String email = staff.getEmail();
-        if (email != null && !email.isBlank()) {
-            try {
-                emailNotificationClient.sendEmail(
-                        email,
-                        "Welcome to SwiftInn — your account is ready",
-                        buildOnboardingText(staff.getFirstName(), email, roleLabel, tempPassword),
-                        "STAFF-ONBOARD-" + staff.getId());
-                log.info("Onboarding email sent userId={} role={}", staff.getId(), roleLabel);
-                return;
-            } catch (RuntimeException emailEx) {
-                log.warn("Onboarding email failed userId={}, trying SMS: {}",
-                        staff.getId(), emailEx.getMessage());
-            }
-        } else {
-            log.warn("New staff has no email; trying SMS for onboarding userId={}", staff.getId());
-        }
-
-        String phone = staff.getPhoneNumber();
-        if (phone == null || phone.isBlank()) {
-            log.warn("New staff has no email or phone; skipping onboarding notification userId={}",
-                    staff.getId());
-            return;
-        }
-        String account = (email != null && !email.isBlank()) ? " (" + email + ")" : "";
-        String sms = "Welcome to SwiftInn. Your account" + account + " is ready. Temporary password: "
-                + tempPassword + ". Log in and change it immediately.";
-        try {
-            smsNotificationClient.sendSms(phone, sms, "STAFF-ONBOARD-" + staff.getId());
-            log.info("Onboarding SMS sent userId={}", staff.getId());
-        } catch (RuntimeException smsEx) {
-            log.warn("Onboarding notification failed userId={} (account still created): {}",
-                    staff.getId(), smsEx.getMessage());
-        }
-    }
-
-    /**
-     * Renders the onboarding email body. Dynamic values are HTML-escaped so a
-     * name or address containing markup can't break (or inject into) the
-     * message. The temporary password is a freshly-generated random value
-     * (server-side, not caller-supplied) — escaped regardless as defence in depth.
-     */
-    private String buildOnboardingText(String firstName, String email, String roleLabel, String tempPassword) {
-        String name = (firstName != null && !firstName.isBlank()) ? firstName : "there";
-        return "Hi " + name + ",\n\n"
-                + "A SwiftInn account has been created for you as a " + roleLabel + ".\n\n"
-                + "Use these credentials to sign in:\n"
-                + "Username: " + email + "\n"
-                + "Temporary password: " + tempPassword + "\n\n"
-                + "For your security, please log in and change your password immediately.\n\n"
-                + "— The SwiftInn Team";
     }
 
     private User requireCaller() {

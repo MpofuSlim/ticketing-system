@@ -127,28 +127,38 @@ public class CredentialDeliveryListener {
     }
 
     private static String refPrefix(CredentialDeliveryRequested.Reason reason) {
-        return reason == CredentialDeliveryRequested.Reason.APPROVAL ? "APPROVAL-" : "PWRESET-";
+        return switch (reason) {
+            case APPROVAL -> "APPROVAL-";
+            case RESET -> "PWRESET-";
+            case ONBOARDING -> "STAFF-ONBOARD-";
+        };
     }
 
     private static String subjectFor(CredentialDeliveryRequested.Reason reason) {
-        return reason == CredentialDeliveryRequested.Reason.APPROVAL
-                ? "Your SwiftInn account has been approved"
-                : "Your SwiftInn temporary password has been reset";
+        return switch (reason) {
+            case APPROVAL -> "Your SwiftInn account has been approved";
+            case RESET -> "Your SwiftInn temporary password has been reset";
+            case ONBOARDING -> "Welcome to SwiftInn — your account is ready";
+        };
     }
 
     private static String introFor(CredentialDeliveryRequested.Reason reason) {
-        return reason == CredentialDeliveryRequested.Reason.APPROVAL
-                ? "Good news — your SwiftInn account has been approved and is now active."
-                : "Your SwiftInn temporary password has been reset by an administrator.";
+        return switch (reason) {
+            case APPROVAL -> "Good news — your SwiftInn account has been approved and is now active.";
+            case RESET -> "Your SwiftInn temporary password has been reset by an administrator.";
+            case ONBOARDING -> "A SwiftInn account has been created for you and is ready to use.";
+        };
     }
 
     private static String buildSmsBody(CredentialDeliveryRequested.Reason reason, String tempPassword) {
-        if (reason == CredentialDeliveryRequested.Reason.APPROVAL) {
-            return "Your SwiftInn account has been approved. Your temporary password is "
+        return switch (reason) {
+            case APPROVAL -> "Your SwiftInn account has been approved. Your temporary password is "
                     + tempPassword + ". Please log in and change it immediately.";
-        }
-        return "Your SwiftInn temporary password has been reset to "
-                + tempPassword + ". Please log in and change it immediately.";
+            case RESET -> "Your SwiftInn temporary password has been reset to "
+                    + tempPassword + ". Please log in and change it immediately.";
+            case ONBOARDING -> "Welcome to SwiftInn. Your account is ready. Your temporary password is "
+                    + tempPassword + ". Please log in and change it immediately.";
+        };
     }
 
     /** Identical to the prior {@code UserAdminService.buildCredentialText} body
