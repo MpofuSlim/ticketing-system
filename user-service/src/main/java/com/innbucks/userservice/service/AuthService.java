@@ -69,6 +69,15 @@ public class AuthService implements ApplicationEventPublisherAware {
                 user.hasRole(User.Role.CUSTOMER), lockedUntil));
     }
 
+    private void publishSecurityAlert(User user, com.innbucks.userservice.event.AccountSecurityAlertEvent.Type type) {
+        if (eventPublisher == null) {
+            return; // plain unit test without a Spring context
+        }
+        eventPublisher.publishEvent(new com.innbucks.userservice.event.AccountSecurityAlertEvent(
+                user.getId(), user.getFirstName(), user.getEmail(), user.getPhoneNumber(),
+                user.hasRole(User.Role.CUSTOMER), type));
+    }
+
     private final UserRepository userRepository;
     private final TenantProfileRepository tenantProfileRepository;
     private final CustomerProfileRepository customerProfileRepository;
@@ -626,6 +635,8 @@ public class AuthService implements ApplicationEventPublisherAware {
                 String.valueOf(user.getId()), AuditService.ACTOR_TYPE_USER,
                 String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
                 null, auditContext);
+        // Security alert (email + SMS): a password change is a takeover tripwire.
+        publishSecurityAlert(user, com.innbucks.userservice.event.AccountSecurityAlertEvent.Type.PASSWORD_CHANGED);
     }
 
     /**
