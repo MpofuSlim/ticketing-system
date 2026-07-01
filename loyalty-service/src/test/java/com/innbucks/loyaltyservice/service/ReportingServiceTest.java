@@ -1,6 +1,7 @@
 package com.innbucks.loyaltyservice.service;
 
 import com.innbucks.loyaltyservice.dto.Dtos;
+import com.innbucks.loyaltyservice.entity.LoyaltyUser;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.CampaignRepository;
 import com.innbucks.loyaltyservice.repository.FraudAttemptRepository;
@@ -105,6 +106,41 @@ class ReportingServiceTest {
         assertNotNull(report);
         verify(merchantService).requireMerchant(TENANT_A, MERCHANT_B);
         verify(transactions).sumPointsIssued(eq(MERCHANT_B), any(), any());
+    }
+
+    @Test
+    void pointsForUserByPhone_resolvesByPhone_andReturnsReport_keyedByResolvedUserId() {
+        String phone = "+263771234567";
+        LoyaltyUser u = new LoyaltyUser();
+        u.setId(USER_B);
+        u.setTenantId(TENANT_A);
+        u.setPhoneNumber(phone);
+        when(userService.requireByPhone(TENANT_A, phone)).thenReturn(u);
+        when(transactions.sumPointsIssuedByUser(eq(USER_B), any(), any())).thenReturn(new BigDecimal("1240"));
+        when(transactions.sumPointsRedeemedByUser(eq(USER_B), any(), any())).thenReturn(new BigDecimal("500"));
+        when(transactions.countByUserIdAndCreatedAtBetween(eq(USER_B), any(), any())).thenReturn(18L);
+
+        Dtos.PointsReport report = reporting.pointsForUserByPhone(TENANT_A, phone, FROM, TO);
+
+        // Resolved by phone, but the statement is keyed by (and reports) the LoyaltyUser UUID.
+        assertEquals(USER_B, report.subjectId());
+        assertEquals(0, report.netPoints().compareTo(new BigDecimal("740")));
+        assertEquals(18L, report.transactionCount());
+        verify(userService).requireByPhone(TENANT_A, phone);
+        verify(userService, never()).require(any(), any());
+    }
+
+    @Test
+    void pointsForUserByPhone_unknownPhone_throwsNotFound_andReadsNoData() {
+        String phone = "+263770000000";
+        when(userService.requireByPhone(TENANT_A, phone))
+                .thenThrow(LoyaltyException.notFound("user"));
+
+        assertThrows(LoyaltyException.class,
+                () -> reporting.pointsForUserByPhone(TENANT_A, phone, FROM, TO));
+
+        verify(transactions, never()).sumPointsIssuedByUser(any(), any(), any());
+        verify(transactions, never()).countByUserIdAndCreatedAtBetween(any(), any(), any());
     }
 
     @Test

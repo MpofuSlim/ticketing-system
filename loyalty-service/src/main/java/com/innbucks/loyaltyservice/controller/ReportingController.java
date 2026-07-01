@@ -299,6 +299,97 @@ public class ReportingController {
         return ResponseEntity.ok(ApiResult.ok("User dashboard retrieved successfully", data));
     }
 
+    @GetMapping("/user/phone/{phone}")
+    @Operation(summary = "SuperApp user dashboard (by phone number)",
+            description = "Identical to GET /reports/user/{id}, but resolved by the customer's phone " +
+                          "number instead of the LoyaltyUser UUID — the phone is the stable identifier " +
+                          "the SuperApp or a CS agent actually has. Pass the stored E.164 form " +
+                          "(e.g. +263771234567; URL-encode the leading + as %2B if your client requires " +
+                          "it). Tenant-scoped: only a customer that belongs to the X-Tenant-Id is " +
+                          "resolvable, so a phone that exists only under another tenant returns 404 " +
+                          "(it does not reveal cross-tenant existence). Returns the same payload — note " +
+                          "the response `userId` is still the LoyaltyUser UUID.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "User dashboard",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "User dashboard", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "User dashboard retrieved successfully",
+                                      "data": {
+                                        "userId": "d2c8f0a1-0123-4567-1234-567890123456",
+                                        "totalPoints": 5300.0000,
+                                        "wallets": [
+                                          {
+                                            "id": "w1a2b3c4-d5e6-f708-1929-3a4b5c6d7e8f",
+                                            "userId": "d2c8f0a1-0123-4567-1234-567890123456",
+                                            "label": "Main",
+                                            "type": "STANDARD",
+                                            "pocket": "MAIN",
+                                            "balance": 4800.0000,
+                                            "lockedUntil": null
+                                          }
+                                        ],
+                                        "activeVouchers": [],
+                                        "recentTransactions": [
+                                          {
+                                            "id": "11111111-2222-3333-4444-555555555555",
+                                            "type": "PURCHASE",
+                                            "amount": 100.00,
+                                            "pointsDelta": 100.0000,
+                                            "balanceAfter": 5100.0000,
+                                            "ruleId": "d6e2f4a5-4567-8901-bcde-f01234567890",
+                                            "campaignId": null,
+                                            "reference": "POS-20260504-0001",
+                                            "createdAt": "2026-05-04T11:00:00Z"
+                                          }
+                                        ]
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "Blank phone number",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Blank phone", value = """
+                                    {
+                                      "code": "BAD_PHONE",
+                                      "message": "Please provide a phone number.",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "No customer with that phone number in this tenant",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not found", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "user not found",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
+    })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<Dtos.UserDashboard>> userByPhone(@PathVariable String phone) {
+        Dtos.UserDashboard data = superApp.dashboardByPhone(tenantContext.requireTenantId(), phone);
+        return ResponseEntity.ok(ApiResult.ok("User dashboard retrieved successfully", data));
+    }
+
     @GetMapping("/transactions/mix")
     @Operation(summary = "Transaction mix (counts per type)",
             description = "Returns a map of `TransactionType -> count` for the (optional) merchant within " +
@@ -472,6 +563,77 @@ public class ReportingController {
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
         Dtos.PointsReport data = reporting.pointsForUser(tenantContext.requireTenantId(), userId, from, to);
+        return ResponseEntity.ok(ApiResult.ok("Points report retrieved successfully", data));
+    }
+
+    @GetMapping("/points/user/phone/{phone}")
+    @Operation(summary = "Points report (per user, by phone number, period-bounded)",
+            description = "Identical to GET /reports/points/user/{userId}, but resolved by the customer's " +
+                          "phone number instead of the LoyaltyUser UUID. Pass the stored E.164 form " +
+                          "(e.g. +263771234567; URL-encode the leading + as %2B if your client requires " +
+                          "it). Tenant-scoped: a phone that exists only under another tenant returns 404. " +
+                          "The response `subjectId` is still the resolved LoyaltyUser UUID.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Points report",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Points report", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Points report retrieved successfully",
+                                      "data": {
+                                        "subjectId": "d2c8f0a1-0123-4567-1234-567890123456",
+                                        "from": "2026-05-01",
+                                        "to": "2026-05-31",
+                                        "pointsIssued": 1240.0000,
+                                        "pointsRedeemed": 500.0000,
+                                        "netPoints": 740.0000,
+                                        "transactionCount": 18
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "Blank phone number or missing/inverted date range",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Blank phone", value = """
+                                    {
+                                      "code": "BAD_PHONE",
+                                      "message": "Please provide a phone number.",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "404",
+                    description = "No customer with that phone number in this tenant",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Not found", value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "user not found",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
+    })
+    @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
+    public ResponseEntity<ApiResult<Dtos.PointsReport>> pointsForUserByPhone(
+            @PathVariable String phone,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
+        Dtos.PointsReport data = reporting.pointsForUserByPhone(tenantContext.requireTenantId(), phone, from, to);
         return ResponseEntity.ok(ApiResult.ok("Points report retrieved successfully", data));
     }
 
