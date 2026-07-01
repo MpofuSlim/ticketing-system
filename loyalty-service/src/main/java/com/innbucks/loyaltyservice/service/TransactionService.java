@@ -28,27 +28,42 @@ public class TransactionService {
     private final WalletService walletService;
     private final RulesEngine rulesEngine;
     private final com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics;
+    private final com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier;
 
     public TransactionService(LoyaltyTransactionRepository transactions,
                               UserService users,
                               MerchantService merchants,
                               WalletService walletService,
                               RulesEngine rulesEngine,
-                              com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics) {
+                              com.innbucks.loyaltyservice.config.LoyaltyMetrics metrics,
+                              com.innbucks.loyaltyservice.integration.MemberActivityNotifier memberNotifier) {
         this.transactions = transactions;
         this.users = users;
         this.merchants = merchants;
         this.walletService = walletService;
         this.rulesEngine = rulesEngine;
         this.metrics = metrics;
+        this.memberNotifier = memberNotifier;
     }
 
     public Dtos.TransactionResponse post(UUID tenantId, UUID merchantId, Dtos.TransactionRequest req) {
         // JWT-gated callers (SHOP_USER / SHOP_ADMIN): attribute the transaction to
         // the shop on the caller's token. Server-side callers that resolved the
         // shop from a trusted path param use the overload below.
-        return post(tenantId, merchantId, req,
+        Dtos.TransactionResponse resp = post(tenantId, merchantId, req,
                 com.innbucks.loyaltyservice.security.CallerDetails.currentShopId());
+        // Earn alert for the registered customer. Fires only on this (3-arg)
+        // entry — the public /loyalty/transactions endpoint plus the QR and
+        // ticketing accrual flows — NOT the 4-arg overload the guest /
+        // shop-checkout path calls (that path already notifies via
+        // GuestCheckoutNotifier, so routing earn here avoids double-texting).
+        if (resp.pointsDelta() != null && resp.pointsDelta().signum() > 0) {
+            String phone = (req.assigneePhone() != null && !req.assigneePhone().isBlank())
+                    ? req.assigneePhone()
+                    : users.require(tenantId, req.userId()).getPhoneNumber();
+            memberNotifier.notifyPointsEarned(phone, resp.pointsDelta(), resp.balanceAfter());
+        }
+        return resp;
     }
 
     /**
@@ -205,6 +220,8 @@ public class TransactionService {
         BigDecimal balance = walletService.apply(w.getId(), points, t.getId(),
                 "adjust:" + (reason == null ? "n/a" : reason), tenantId);
         metrics.incTransactionPosted("ADJUSTMENT");
+        // Unexpected balance changes are worth surfacing (credit or debit).
+        memberNotifier.notifyPointsAdjusted(u.getPhoneNumber(), points, balance);
         return toResponse(t, balance);
     }
 
