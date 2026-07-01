@@ -1,12 +1,10 @@
 package com.innbucks.userservice.service;
 
-import com.innbucks.userservice.client.EmailNotificationClient;
-import com.innbucks.userservice.client.SmsNotificationClient;
-import com.innbucks.userservice.client.WhatsAppNotificationClient;
 import com.innbucks.userservice.dto.CreateTeamMemberDTO;
 import com.innbucks.userservice.dto.UserResponseDTO;
 import com.innbucks.userservice.entity.TeamMemberEventAssignment;
 import com.innbucks.userservice.entity.User;
+import com.innbucks.userservice.event.CredentialDeliveryRequested;
 import com.innbucks.userservice.repository.RefreshTokenRepository;
 import com.innbucks.userservice.repository.TeamMemberEventAssignmentRepository;
 import com.innbucks.userservice.repository.UserRepository;
@@ -15,6 +13,7 @@ import com.innbucks.userservice.util.TemporaryPasswordGenerator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
@@ -29,7 +28,6 @@ import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
 
 /**
  * Onboards EVENT_ORGANIZER team members (gate-staff / scanner operators).
@@ -56,9 +54,7 @@ public class TeamMemberService {
     private final RefreshTokenRepository refreshTokenRepository;
     private final TeamMemberEventAssignmentRepository assignmentRepository;
     private final PasswordEncoder passwordEncoder;
-    private final EmailNotificationClient emailNotificationClient;
-    private final SmsNotificationClient smsNotificationClient;
-    private final WhatsAppNotificationClient whatsAppNotificationClient;
+    private final ApplicationEventPublisher eventPublisher;
 
     /** Deployment country pin. Team members are anchored to this cell — see
      *  {@link ShopStaffService#deploymentCountry} for the reasoning. */
@@ -102,7 +98,13 @@ public class TeamMemberService {
         userRepository.save(member);
         log.info("Created TEAM_MEMBER userId={} userUuid={} organizerUuid={} by={}",
                 member.getId(), member.getUserUuid(), organizerUuid, caller.getEmail());
-        notifyOnboarding(member, tempPassword);
+        // Deliver credentials OFF the request thread via the shared async
+        // CredentialDeliveryListener (email -> SMS -> WhatsApp, AFTER_COMMIT,
+        // best-effort). The old path blocked the request thread on
+        // CompletableFuture.join(), so a slow gateway stalled the create response.
+        eventPublisher.publishEvent(new CredentialDeliveryRequested(
+                member.getId(), member.getFirstName(), member.getEmail(), member.getPhoneNumber(),
+                tempPassword, CredentialDeliveryRequested.Reason.ONBOARDING));
         return UserResponseDTO.from(member);
     }
 
@@ -199,7 +201,9 @@ public class TeamMemberService {
         log.info("Reset TEAM_MEMBER temp password userUuid={} by={}",
                 member.getUserUuid(), callerLogTag());
 
-        notifyPasswordReset(member, tempPassword);
+        eventPublisher.publishEvent(new CredentialDeliveryRequested(
+                member.getId(), member.getFirstName(), member.getEmail(), member.getPhoneNumber(),
+                tempPassword, CredentialDeliveryRequested.Reason.RESET));
         return UserResponseDTO.from(member);
     }
 
@@ -369,138 +373,6 @@ public class TeamMemberService {
                     "JWT organizerUuid does not match caller — please log in again");
         }
         return caller;
-    }
-
-    /**
-     * Multi-channel credential delivery for a freshly-onboarded team member.
-     *
-     * <p>Fires <b>email AND WhatsApp in parallel</b> (the two zero-marginal-cost
-     * channels) and only falls back to <b>SMS</b> when BOTH fail. The rationale:
-     * deliverability for gate-staff onboarding can't depend on a single
-     * provider (Gmail spam-flagging the InnBucks domain, a WhatsApp gateway
-     * rotation), but we don't want to spend on SMS when at least one free
-     * channel succeeded. Worst case: 1 email + 1 WhatsApp + 1 SMS. Best case:
-     * 1 email + 1 WhatsApp, no SMS.
-     *
-     * <p>Best-effort: a delivery failure on EVERY channel logs loudly but never
-     * rolls the account back — the temporary password can be re-issued via a
-     * separate reset flow if needed. Never logs the password itself.
-     *
-     * <p>The two parallel calls run on the common ForkJoin pool — the call
-     * volume is low (organizer onboards staff manually, not at scale) and each
-     * call already has a 10s read timeout inside its gateway client, so no
-     * dedicated executor is warranted.
-     */
-    private void notifyOnboarding(User member, String tempPassword) {
-        deliverCredentials(member, tempPassword,
-                "Welcome to SwiftInn — your team-member account is ready",
-                buildOnboardingPlainText(member.getEmail(), tempPassword),
-                "TEAM-ONBOARD-" + member.getId(),
-                "Onboarding");
-    }
-
-    /** Reset variant of {@link #notifyOnboarding}. Same multi-channel dispatch,
-     *  different wording so the recipient understands this is a re-issue. */
-    private void notifyPasswordReset(User member, String tempPassword) {
-        deliverCredentials(member, tempPassword,
-                "Your SwiftInn team-member password has been reset",
-                buildResetPlainText(member.getEmail(), tempPassword),
-                "TEAM-RESET-" + member.getId() + "-" + System.currentTimeMillis(),
-                "Password reset");
-    }
-
-    /**
-     * Generic credential dispatcher used by both onboarding and password-reset.
-     * Fires <b>email AND WhatsApp in parallel</b> and only falls back to
-     * <b>SMS</b> when BOTH fail. Best-effort: a triple failure logs loudly but
-     * never rolls back the underlying state change (account creation / password
-     * update); the password can always be re-issued. Never logs the password.
-     *
-     * <p>The two parallel calls run on the common ForkJoin pool — call volume
-     * is low (manual organizer ops) and each gateway client enforces a 10s
-     * read timeout, so no dedicated executor is warranted.
-     */
-    private void deliverCredentials(User member, String tempPassword,
-                                    String subject, String body,
-                                    String ref, String logTag) {
-        String phone = member.getPhoneNumber();
-
-        CompletableFuture<Boolean> emailFuture = CompletableFuture.supplyAsync(
-                () -> trySendEmail(member, subject, body, ref, logTag));
-        CompletableFuture<Boolean> whatsappFuture = CompletableFuture.supplyAsync(
-                () -> trySendWhatsapp(member, phone, body, logTag));
-
-        CompletableFuture.allOf(emailFuture, whatsappFuture).join();
-        boolean emailOk = emailFuture.join();
-        boolean whatsappOk = whatsappFuture.join();
-
-        if (emailOk || whatsappOk) {
-            log.info("{} delivered userId={} email={} whatsapp={}",
-                    logTag, member.getId(), emailOk, whatsappOk);
-            return;
-        }
-        if (phone == null || phone.isBlank()) {
-            log.warn("{} email + WhatsApp both failed and no phone on file " +
-                    "(state change still committed) userId={}", logTag, member.getId());
-            return;
-        }
-        try {
-            smsNotificationClient.sendSms(phone, body, ref);
-            log.info("{} SMS fallback delivered userId={}", logTag, member.getId());
-        } catch (RuntimeException smsEx) {
-            log.warn("{} failed on all channels (email, WhatsApp, SMS); state change still " +
-                    "committed userId={} smsError={}",
-                    logTag, member.getId(), smsEx.getMessage());
-        }
-    }
-
-    /** Returns true iff the email was accepted by the gateway. Skipped (false)
-     *  when the member has no email on file; that's reported once via the
-     *  aggregate log line, not here. */
-    private boolean trySendEmail(User member, String subject, String body,
-                                 String ref, String logTag) {
-        String email = member.getEmail();
-        if (email == null || email.isBlank()) {
-            return false;
-        }
-        try {
-            emailNotificationClient.sendEmail(email, subject, body, ref);
-            return true;
-        } catch (RuntimeException ex) {
-            log.warn("{} email failed userId={} reason={}", logTag, member.getId(), ex.getMessage());
-            return false;
-        }
-    }
-
-    /** Returns true iff WhatsApp accepted the message. Skipped (false) when
-     *  the member has no phone on file. */
-    private boolean trySendWhatsapp(User member, String phone, String plainBody, String logTag) {
-        if (phone == null || phone.isBlank()) {
-            return false;
-        }
-        try {
-            whatsAppNotificationClient.sendCustomNotification(phone, plainBody);
-            return true;
-        } catch (RuntimeException ex) {
-            log.warn("{} WhatsApp failed userId={} reason={}", logTag, member.getId(), ex.getMessage());
-            return false;
-        }
-    }
-
-    /** Single SMS / WhatsApp body — same wording on both, kept short so SMS
-     *  segments don't multiply needlessly. */
-    private String buildOnboardingPlainText(String email, String tempPassword) {
-        String account = (email != null && !email.isBlank()) ? " (" + email + ")" : "";
-        return "Welcome to SwiftInn. Your team-member account" + account
-                + " is ready. Temporary password: " + tempPassword
-                + ". Log in and change it immediately.";
-    }
-
-    private String buildResetPlainText(String email, String tempPassword) {
-        String account = (email != null && !email.isBlank()) ? " (" + email + ")" : "";
-        return "Your SwiftInn team-member password" + account
-                + " has been reset. New temporary password: " + tempPassword
-                + ". Log in and change it immediately. If you didn't request this, contact your organizer.";
     }
 
     private ResponseStatusException badRequest(String msg) {

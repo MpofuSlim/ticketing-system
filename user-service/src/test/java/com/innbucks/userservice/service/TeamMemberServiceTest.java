@@ -1,13 +1,10 @@
 package com.innbucks.userservice.service;
 
-import com.innbucks.userservice.client.EmailNotificationClient;
-import com.innbucks.userservice.client.SmsNotificationClient;
-import com.innbucks.userservice.client.WhatsAppNotificationClient;
-import com.innbucks.userservice.client.NotificationDeliveryException;
 import com.innbucks.userservice.dto.CreateTeamMemberDTO;
 import com.innbucks.userservice.dto.UserResponseDTO;
 import com.innbucks.userservice.entity.TeamMemberEventAssignment;
 import com.innbucks.userservice.entity.User;
+import com.innbucks.userservice.event.CredentialDeliveryRequested;
 import com.innbucks.userservice.repository.RefreshTokenRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import org.junit.jupiter.api.AfterEach;
@@ -18,6 +15,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -64,9 +62,7 @@ class TeamMemberServiceTest {
     @Mock private RefreshTokenRepository refreshTokenRepository;
     @Mock private com.innbucks.userservice.repository.TeamMemberEventAssignmentRepository assignmentRepository;
     @Mock private PasswordEncoder passwordEncoder;
-    @Mock private EmailNotificationClient emailNotificationClient;
-    @Mock private SmsNotificationClient smsNotificationClient;
-    @Mock private WhatsAppNotificationClient whatsAppNotificationClient;
+    @Mock private ApplicationEventPublisher eventPublisher;
 
     @InjectMocks private TeamMemberService service;
 
@@ -425,76 +421,21 @@ class TeamMemberServiceTest {
     }
 
     @Test
-    void create_deliversCredentialsToBothEmailAndWhatsapp_andDoesNotFallBackToSms() {
-        // Both free channels succeed in parallel — SMS must NOT be touched.
-        // This is the steady-state path and pins the "no double-spend on SMS"
-        // contract.
+    void create_publishesOnboardingEvent_offTheRequestThread() {
+        // Credentials are delivered off-thread by the async CredentialDeliveryListener
+        // (email -> SMS -> WhatsApp, best-effort); the service only publishes the
+        // event, so a slow gateway can't stall the create response. The channel
+        // fallback chain is the listener's concern (see CredentialDeliveryListenerTest).
         primeCreateHappyPath();
 
         service.createTeamMember(createDto());
 
-        verify(emailNotificationClient).sendEmail(eq("tariro@harare-arena.co.zw"),
-                any(), any(), any());
-        verify(whatsAppNotificationClient).sendCustomNotification(eq("+263773456789"), any());
-        verify(smsNotificationClient, never()).sendSms(any(), any(), any());
-    }
-
-    @Test
-    void create_emailFailsWhatsappSucceeds_stillSkipsSmsFallback() {
-        // Single-channel success is enough — SMS is reserved for the BOTH-failed
-        // case so we don't pay for redundant delivery whenever Gmail/SES
-        // throttles us briefly.
-        primeCreateHappyPath();
-        doThrow(new NotificationDeliveryException("gateway 502"))
-                .when(emailNotificationClient).sendEmail(any(), any(), any(), any());
-
-        service.createTeamMember(createDto());
-
-        verify(whatsAppNotificationClient).sendCustomNotification(any(), any());
-        verify(smsNotificationClient, never()).sendSms(any(), any(), any());
-    }
-
-    @Test
-    void create_whatsappFailsEmailSucceeds_stillSkipsSmsFallback() {
-        primeCreateHappyPath();
-        doThrow(new NotificationDeliveryException("WA unreachable"))
-                .when(whatsAppNotificationClient).sendCustomNotification(any(), any());
-
-        service.createTeamMember(createDto());
-
-        verify(emailNotificationClient).sendEmail(any(), any(), any(), any());
-        verify(smsNotificationClient, never()).sendSms(any(), any(), any());
-    }
-
-    @Test
-    void create_bothEmailAndWhatsappFail_fallsBackToSms() {
-        // The "buy SMS only when truly needed" branch.
-        primeCreateHappyPath();
-        doThrow(new NotificationDeliveryException("gateway 502"))
-                .when(emailNotificationClient).sendEmail(any(), any(), any(), any());
-        doThrow(new NotificationDeliveryException("WA unreachable"))
-                .when(whatsAppNotificationClient).sendCustomNotification(any(), any());
-
-        service.createTeamMember(createDto());
-
-        verify(smsNotificationClient).sendSms(eq("+263773456789"), any(), any());
-    }
-
-    @Test
-    void create_allThreeChannelsFail_doesNotRollBackTheAccount() {
-        // Best-effort delivery: a triple failure must still leave the row
-        // created. The organizer can resend creds via a future reset flow.
-        primeCreateHappyPath();
-        doThrow(new NotificationDeliveryException("email down"))
-                .when(emailNotificationClient).sendEmail(any(), any(), any(), any());
-        doThrow(new NotificationDeliveryException("WA down"))
-                .when(whatsAppNotificationClient).sendCustomNotification(any(), any());
-        doThrow(new NotificationDeliveryException("SMS down"))
-                .when(smsNotificationClient).sendSms(any(), any(), any());
-
-        // Must not throw — the existing save() captor confirms the row was persisted.
-        service.createTeamMember(createDto());
-
+        ArgumentCaptor<CredentialDeliveryRequested> ev =
+                ArgumentCaptor.forClass(CredentialDeliveryRequested.class);
+        verify(eventPublisher).publishEvent(ev.capture());
+        assertThat(ev.getValue().reason()).isEqualTo(CredentialDeliveryRequested.Reason.ONBOARDING);
+        assertThat(ev.getValue().email()).isEqualTo("tariro@harare-arena.co.zw");
+        assertThat(ev.getValue().phoneNumber()).isEqualTo("+263773456789");
         verify(userRepository).save(any(User.class));
     }
 
@@ -515,12 +456,12 @@ class TeamMemberServiceTest {
         assertThat(result.getUserUuid()).isEqualTo(memberUuid);
         assertThat(member.getPassword()).isEqualTo("NEW_HASH");
         assertThat(member.isMustChangePassword()).isTrue();
-        // Reset MUST re-deliver via the multi-channel pipeline — at least one
-        // free channel was attempted; SMS was NOT (both succeeded by default).
-        verify(emailNotificationClient).sendEmail(eq("tariro@harare-arena.co.zw"),
-                any(), any(), any());
-        verify(whatsAppNotificationClient).sendCustomNotification(eq("+263773456789"), any());
-        verify(smsNotificationClient, never()).sendSms(any(), any(), any());
+        // Reset re-delivers off-thread via the same async event pipeline.
+        ArgumentCaptor<CredentialDeliveryRequested> ev =
+                ArgumentCaptor.forClass(CredentialDeliveryRequested.class);
+        verify(eventPublisher).publishEvent(ev.capture());
+        assertThat(ev.getValue().reason()).isEqualTo(CredentialDeliveryRequested.Reason.RESET);
+        assertThat(ev.getValue().email()).isEqualTo("tariro@harare-arena.co.zw");
     }
 
     @Test
@@ -539,26 +480,6 @@ class TeamMemberServiceTest {
         // Crucially: no password write on a foreign member.
         verify(userRepository, never()).save(any(User.class));
         verify(passwordEncoder, never()).encode(any());
-    }
-
-    @Test
-    void resetTemporaryPassword_emailAndWhatsappFail_fallsBackToSms() {
-        // The reset path MUST reuse the same SMS-fallback contract as create.
-        UUID organizerUuid = UUID.randomUUID();
-        UUID memberUuid = UUID.randomUUID();
-        User member = teamMember(memberUuid, organizerUuid);
-        authenticateAs(organizer(organizerUuid));
-        when(userRepository.findByUserUuid(memberUuid)).thenReturn(Optional.of(member));
-        when(passwordEncoder.encode(any())).thenReturn("NEW_HASH");
-        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
-        doThrow(new NotificationDeliveryException("email down"))
-                .when(emailNotificationClient).sendEmail(any(), any(), any(), any());
-        doThrow(new NotificationDeliveryException("WA down"))
-                .when(whatsAppNotificationClient).sendCustomNotification(any(), any());
-
-        service.resetTemporaryPassword(memberUuid);
-
-        verify(smsNotificationClient).sendSms(eq("+263773456789"), any(), any());
     }
 
     @Test
