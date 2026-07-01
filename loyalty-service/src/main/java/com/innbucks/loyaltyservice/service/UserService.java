@@ -170,6 +170,23 @@ public class UserService {
     }
 
     /**
+     * Resolve a LoyaltyUser by phone number within the caller's tenant. The
+     * lookup is tenant-scoped by construction (the {@code uk_user_tenant_phone}
+     * unique key), so — unlike {@link #require(UUID, UUID)} — there's no
+     * cross-tenant branch: a phone that exists only under another tenant simply
+     * returns empty → 404, which also avoids revealing that the number exists
+     * elsewhere on the platform. Phone must be the stored E.164 form
+     * (e.g. {@code +263771234567}); we trim but do not otherwise normalise.
+     */
+    public LoyaltyUser requireByPhone(UUID tenantId, String phoneNumber) {
+        if (phoneNumber == null || phoneNumber.isBlank()) {
+            throw LoyaltyException.badRequest("BAD_PHONE", "Please provide a phone number.");
+        }
+        return users.findByTenantIdAndPhoneNumber(tenantId, phoneNumber.trim())
+                .orElseThrow(() -> LoyaltyException.notFound("user"));
+    }
+
+    /**
      * Called by user-service via the {@code /loyalty/internal/users/promote}
      * webhook the moment a phone completes registration. Flips every
      * {@link LoyaltyUser.Status#PENDING} row matching that phone — across all
