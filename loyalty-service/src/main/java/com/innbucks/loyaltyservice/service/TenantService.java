@@ -5,6 +5,7 @@ import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.Tenant;
 import com.innbucks.loyaltyservice.entity.TenantMember;
 import com.innbucks.loyaltyservice.exception.LoyaltyException;
+import com.innbucks.loyaltyservice.integration.TenantMemberNotifier;
 import com.innbucks.loyaltyservice.repository.TenantMemberRepository;
 import com.innbucks.loyaltyservice.repository.TenantRepository;
 import org.springframework.cache.annotation.CacheEvict;
@@ -20,15 +21,20 @@ import java.util.UUID;
 @Transactional
 public class TenantService {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(TenantService.class);
+
     private final TenantRepository tenants;
     private final TenantMemberRepository members;
     private final org.springframework.cache.CacheManager cacheManager;
+    private final TenantMemberNotifier tenantMemberNotifier;
 
     public TenantService(TenantRepository tenants, TenantMemberRepository members,
-                         org.springframework.cache.CacheManager cacheManager) {
+                         org.springframework.cache.CacheManager cacheManager,
+                         TenantMemberNotifier tenantMemberNotifier) {
         this.tenants = tenants;
         this.members = members;
         this.cacheManager = cacheManager;
+        this.tenantMemberNotifier = tenantMemberNotifier;
     }
 
     public Dtos.TenantResponse create(Dtos.TenantRequest req) {
@@ -53,6 +59,17 @@ public class TenantService {
         // Attach the supplied user as the tenant's first member so they can
         // immediately pass this tenant's id as X-Tenant-Id.
         addMember(t.getId(), req.id());
+        // Best-effort "you've been added to {tenant}" ping (WhatsApp → SMS).
+        // @Async on its own thread, so it runs AFTER this txn commits and can
+        // never delay or fail the 201. The notifier already swallows every
+        // failure; the defensive try/catch here only guards the (unexpected)
+        // case of the async hand-off itself throwing synchronously.
+        try {
+            tenantMemberNotifier.notifyAddedToTenant(req.id(), t.getName());
+        } catch (RuntimeException e) {
+            log.warn("Failed to dispatch tenant-attach notification for tenant={} userId={}: {}",
+                    t.getId(), req.id(), e.toString());
+        }
         return toResponse(t);
     }
 

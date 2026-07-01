@@ -139,4 +139,56 @@ public class UserServiceClient {
             throw new IllegalStateException("user-service unavailable: " + e.getMessage(), e);
         }
     }
+
+    /**
+     * Resolves a user's contact details (phone / email / first name) by their
+     * stable {@code user_uuid} via user-service's
+     * {@code GET /users/internal/{userUuid}/contact}. Authenticated with the
+     * shared {@code X-Internal-Token} (mirrors {@link #assignedMerchantIds()}).
+     *
+     * <p>Unlike {@code assignedMerchantIds()}, this is <strong>best-effort</strong>:
+     * the sole caller is the tenant-attach notifier, where a missing contact
+     * just means "skip the you've-been-added ping". Any non-2xx (404 unknown
+     * user, 401 misconfigured token), unreachable user-service, blank token, or
+     * parse failure returns {@link Optional#empty()} and logs a warning — it
+     * never throws, so it can never fail or delay the tenant-create 201.
+     */
+    public Optional<UserContact> getUserContact(UUID userUuid) {
+        if (userUuid == null) {
+            return Optional.empty();
+        }
+        if (internalToken == null || internalToken.isBlank()) {
+            log.warn("innbucks.internal-api-token not configured; skipping user-service contact lookup for {}", userUuid);
+            return Optional.empty();
+        }
+        try {
+            String body = restClient.get()
+                    .uri("/users/internal/{userUuid}/contact", userUuid)
+                    .header("X-Internal-Token", internalToken)
+                    .retrieve()
+                    .body(String.class);
+            if (body == null) {
+                return Optional.empty();
+            }
+            UserServiceApiResult<UserContact> envelope = objectMapper.readValue(
+                    body, new TypeReference<UserServiceApiResult<UserContact>>() {});
+            if (envelope == null || envelope.data() == null) {
+                return Optional.empty();
+            }
+            return Optional.of(envelope.data());
+        } catch (Exception e) {
+            // Best-effort: RestClient throws RuntimeException on any non-2xx or
+            // connectivity failure; ObjectMapper throws on a parse failure. The
+            // notifier treats them all the same — no contact, skip the ping.
+            log.warn("user-service contact lookup failed userUuid={} cause={}", userUuid, e.toString());
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Loyalty-side projection of user-service's {@code UserContact} DTO. Trimmed
+     * to only what the tenant-attach notifier consumes; unknown JSON fields fall
+     * through as ignored.
+     */
+    public record UserContact(UUID userUuid, String phoneNumber, String email, String firstName) {}
 }
