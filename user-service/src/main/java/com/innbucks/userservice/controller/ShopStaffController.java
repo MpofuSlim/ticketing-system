@@ -168,11 +168,14 @@ public class ShopStaffController {
     }
 
     @GetMapping("/mine")
-    @PreAuthorize("hasRole('SHOP_ADMIN')")
+    @PreAuthorize("hasAnyRole('SHOP_ADMIN','MERCHANT_ADMIN')")
     @Operation(
-            summary = "List staff at the caller's shop",
-            description = "Returns every user (SHOP_ADMINs and SHOP_USERs) attached to the caller's " +
-                          "shop. SHOP_ADMINs use this to see who they manage."
+            summary = "List the caller's shop staff",
+            description = "Returns the shop staff the caller manages. For a **SHOP_ADMIN** this is " +
+                          "every user (SHOP_ADMINs and SHOP_USERs) at their own shop. For a " +
+                          "**MERCHANT_ADMIN** this is every SHOP_ADMIN and SHOP_USER across all shops " +
+                          "of every merchant they administer (resolved by their admin email), so a " +
+                          "merchant admin gets one 'my staff' view without needing a merchantId."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(

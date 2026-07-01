@@ -12,6 +12,8 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -74,6 +76,43 @@ public class LoyaltyServiceClient {
     }
 
     /**
+     * Resolve every merchantId a MERCHANT_ADMIN owns, by their admin email.
+     * A MERCHANT_ADMIN's JWT / User row carries no merchantId, so ShopStaffService
+     * uses this to authorize the shop-staff endpoints — a merchant admin may run
+     * more than one merchant, so the whole set is returned. Best-effort: returns
+     * an empty list on any failure (missing token, 4xx, network) so the caller
+     * surfaces a clean 403 rather than a 500 on a downstream blip.
+     */
+    public List<UUID> merchantIdsForAdmin(String email) {
+        if (email == null || email.isBlank()) return List.of();
+        if (internalToken == null || internalToken.isBlank()) {
+            log.warn("Skipping loyalty merchant lookup; INTERNAL_API_TOKEN is not configured");
+            return List.of();
+        }
+        try {
+            MerchantIdsResponse body = http.get()
+                    .uri("/loyalty/internal/merchants/ids-by-admin?email={email}", email)
+                    .header("X-Internal-Token", internalToken)
+                    .retrieve()
+                    .onStatus(HttpStatusCode::is4xxClientError, (req, res) -> {})
+                    .body(MerchantIdsResponse.class);
+            if (body == null || body.merchantIds() == null) return List.of();
+            List<UUID> ids = new ArrayList<>();
+            for (String id : body.merchantIds()) {
+                try {
+                    ids.add(UUID.fromString(id));
+                } catch (IllegalArgumentException ignored) {
+                    // Skip any malformed id rather than fail the whole lookup.
+                }
+            }
+            return ids;
+        } catch (Exception ex) {
+            log.warn("Loyalty merchant lookup failed adminEmail={} error={}", email, ex.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
      * Fire-and-log promote webhook: tells loyalty-service that a phone has
      * completed registration so every PENDING LoyaltyUser row matching that
      * phone — across every tenant — flips to ACTIVE. Idempotent on the
@@ -114,4 +153,7 @@ public class LoyaltyServiceClient {
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record ShopLookupResponse(String shopId, String merchantId, String tenantId, String status) {}
+
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public record MerchantIdsResponse(List<String> merchantIds) {}
 }

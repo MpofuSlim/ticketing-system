@@ -112,6 +112,21 @@ public class ShopStaffService {
     @Transactional(readOnly = true)
     public List<UserResponseDTO> listForCallerShop() {
         User caller = requireCaller();
+        // MERCHANT_ADMIN: "my staff" spans every shop under every merchant they
+        // administer. Their JWT/row carries no shop (or merchant) scope, so
+        // resolve their merchants from loyalty-service and return the full
+        // headcount across them. Empty set => they own nothing yet => empty list.
+        if (caller.hasRole(User.Role.MERCHANT_ADMIN)) {
+            java.util.Set<UUID> merchantIds = resolveCallerMerchantIds(caller);
+            if (merchantIds.isEmpty()) {
+                return List.of();
+            }
+            return merchantIds.stream()
+                    .flatMap(mid -> userRepository.findByLoyaltyMerchantId(mid).stream())
+                    .map(UserResponseDTO::from)
+                    .toList();
+        }
+        // SHOP_ADMIN (and any other shop-scoped caller): staff at their own shop.
         UUID shopId = caller.getLoyaltyShopId();
         if (shopId == null) {
             throw badRequest("Caller is not scoped to a shop");
@@ -145,11 +160,10 @@ public class ShopStaffService {
     @Transactional(readOnly = true)
     public List<UserResponseDTO> listForMerchant(UUID merchantId) {
         User caller = requireCaller();
-        // Scope to the caller's own merchant: a MERCHANT_ADMIN may only list the
-        // headcount of THEIR merchant, not enumerate any merchant's staff PII by
-        // id -> 403 for a foreign merchantId.
-        UUID callerMerchant = caller.getLoyaltyMerchantId();
-        if (callerMerchant == null || !callerMerchant.equals(merchantId)) {
+        // Scope to the caller's own merchant(s): a MERCHANT_ADMIN may only list
+        // the headcount of a merchant THEY administer, not enumerate any
+        // merchant's staff PII by id -> 403 for a merchant they don't own.
+        if (!resolveCallerMerchantIds(caller).contains(merchantId)) {
             throw forbidden("Merchant does not belong to your account");
         }
         return userRepository.findByLoyaltyMerchantId(merchantId).stream()
@@ -390,19 +404,45 @@ public class ShopStaffService {
     }
 
     /**
-     * A MERCHANT_ADMIN may only act on shops belonging to their OWN merchant.
-     * Compares the resolved shop's {@code merchantId} against the caller's
-     * {@code loyaltyMerchantId}; on mismatch — or a caller with no merchant
-     * scope — throws 403, which is exactly the response the controller's Swagger
-     * already advertises ("Shop does not belong to your merchant") but the code
-     * never enforced.
+     * A MERCHANT_ADMIN may only act on shops belonging to a merchant THEY
+     * administer. Resolves the caller's merchant set (see
+     * {@link #resolveCallerMerchantIds}) and requires the shop's merchantId to be
+     * in it; otherwise 403 "Shop does not belong to your merchant".
      */
     private void requireCallerOwnsShop(User caller, String shopMerchantId) {
-        UUID callerMerchant = caller.getLoyaltyMerchantId();
-        if (callerMerchant == null || shopMerchantId == null
-                || !callerMerchant.toString().equals(shopMerchantId)) {
+        if (shopMerchantId == null || shopMerchantId.isBlank()) {
             throw forbidden("Shop does not belong to your merchant");
         }
+        UUID shopMerchant;
+        try {
+            shopMerchant = UUID.fromString(shopMerchantId);
+        } catch (IllegalArgumentException e) {
+            throw forbidden("Shop does not belong to your merchant");
+        }
+        if (!resolveCallerMerchantIds(caller).contains(shopMerchant)) {
+            throw forbidden("Shop does not belong to your merchant");
+        }
+    }
+
+    /**
+     * The set of merchants a caller administers. A MERCHANT_ADMIN carries no
+     * merchantId on their JWT or User row (they may run several merchants), so we
+     * resolve the set from loyalty-service by their admin email — the same
+     * binding loyalty stamps on every merchant at creation
+     * ({@code merchant.adminEmail}). Any {@code loyaltyMerchantId} on the row
+     * (defensive; normally only shop staff carry one) is folded in too. An empty
+     * set means the caller owns nothing, so every ownership check fails closed.
+     */
+    private java.util.Set<UUID> resolveCallerMerchantIds(User caller) {
+        java.util.Set<UUID> ids = new java.util.LinkedHashSet<>();
+        if (caller.getLoyaltyMerchantId() != null) {
+            ids.add(caller.getLoyaltyMerchantId());
+        }
+        String email = caller.getEmail();
+        if (email != null && !email.isBlank()) {
+            ids.addAll(loyaltyServiceClient.merchantIdsForAdmin(email));
+        }
+        return ids;
     }
 
     private ResponseStatusException badRequest(String msg) {

@@ -386,4 +386,106 @@ class ShopStaffServiceTest {
                         .isEqualTo(HttpStatus.FORBIDDEN));
         verify(userRepository, never()).findByLoyaltyShopId(any());
     }
+
+    // --- Merchant-admin authority resolved by admin email (the actual fix) ----
+    // Production shape: a MERCHANT_ADMIN carries NO loyaltyMerchantId on their
+    // JWT or User row — their merchant(s) are resolved from loyalty-service by
+    // admin email. Before the fix, every one of these returned 403 because the
+    // code read the (always-null) caller.getLoyaltyMerchantId().
+
+    private User merchantAdminNoBinding(String email) {
+        return User.builder().email(email)
+                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .build();
+    }
+
+    @Test
+    void listForShop_merchantAdminWithoutLocalBinding_resolvesMerchantByEmail_allowsOwnShop() {
+        UUID shopId = UUID.randomUUID();
+        UUID merchantId = UUID.randomUUID();
+        authenticateAs(merchantAdminNoBinding("merchant@x.com"));
+        when(loyaltyServiceClient.merchantIdsForAdmin("merchant@x.com"))
+                .thenReturn(List.of(merchantId));
+        when(loyaltyServiceClient.findShop(shopId)).thenReturn(Optional.of(
+                new LoyaltyServiceClient.ShopLookupResponse(
+                        shopId.toString(), merchantId.toString(), "tenant-1", "ACTIVE")));
+        when(userRepository.findByLoyaltyShopId(shopId)).thenReturn(List.of());
+
+        assertThatCode(() -> service.listForShop(shopId)).doesNotThrowAnyException();
+        verify(userRepository).findByLoyaltyShopId(shopId);
+    }
+
+    @Test
+    void listForShop_merchantAdminWithoutLocalBinding_foreignShop_forbidden() {
+        UUID shopId = UUID.randomUUID();
+        UUID ownedMerchant = UUID.randomUUID();
+        UUID foreignMerchant = UUID.randomUUID();
+        authenticateAs(merchantAdminNoBinding("merchant@x.com"));
+        when(loyaltyServiceClient.merchantIdsForAdmin("merchant@x.com"))
+                .thenReturn(List.of(ownedMerchant));
+        when(loyaltyServiceClient.findShop(shopId)).thenReturn(Optional.of(
+                new LoyaltyServiceClient.ShopLookupResponse(
+                        shopId.toString(), foreignMerchant.toString(), "tenant-2", "ACTIVE")));
+
+        assertThatThrownBy(() -> service.listForShop(shopId))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.FORBIDDEN));
+        verify(userRepository, never()).findByLoyaltyShopId(any());
+    }
+
+    @Test
+    void listForMerchant_merchantAdminWithoutLocalBinding_resolvesOwnershipByEmail() {
+        UUID merchantId = UUID.randomUUID();
+        authenticateAs(merchantAdminNoBinding("merchant@x.com"));
+        when(loyaltyServiceClient.merchantIdsForAdmin("merchant@x.com"))
+                .thenReturn(List.of(merchantId));
+        when(userRepository.findByLoyaltyMerchantId(merchantId)).thenReturn(List.of());
+
+        assertThatCode(() -> service.listForMerchant(merchantId)).doesNotThrowAnyException();
+        verify(userRepository).findByLoyaltyMerchantId(merchantId);
+    }
+
+    @Test
+    void listForCallerShop_merchantAdmin_returnsStaffAcrossAllTheirMerchants() {
+        UUID m1 = UUID.randomUUID();
+        UUID m2 = UUID.randomUUID();
+        authenticateAs(merchantAdminNoBinding("merchant@x.com"));
+        when(loyaltyServiceClient.merchantIdsForAdmin("merchant@x.com"))
+                .thenReturn(List.of(m1, m2));
+        when(userRepository.findByLoyaltyMerchantId(m1))
+                .thenReturn(List.of(shopAdminTarget(UUID.randomUUID(), m1, UUID.randomUUID())));
+        when(userRepository.findByLoyaltyMerchantId(m2))
+                .thenReturn(List.of(shopUser(UUID.randomUUID(), m2, UUID.randomUUID())));
+
+        List<UserResponseDTO> staff = service.listForCallerShop();
+
+        assertThat(staff).hasSize(2);
+        verify(userRepository, never()).findByLoyaltyShopId(any());
+    }
+
+    @Test
+    void listForCallerShop_merchantAdminOwningNothing_returnsEmpty() {
+        authenticateAs(merchantAdminNoBinding("merchant@x.com"));
+        when(loyaltyServiceClient.merchantIdsForAdmin("merchant@x.com")).thenReturn(List.of());
+
+        assertThat(service.listForCallerShop()).isEmpty();
+        verify(userRepository, never()).findByLoyaltyMerchantId(any());
+        verify(userRepository, never()).findByLoyaltyShopId(any());
+    }
+
+    @Test
+    void listForCallerShop_shopAdmin_stillReturnsOwnShopStaff() {
+        UUID shopId = UUID.randomUUID();
+        authenticateAs(User.builder().email("shopadmin@x.com")
+                .roles(EnumSet.of(User.Role.SHOP_ADMIN))
+                .loyaltyShopId(shopId).build());
+        when(userRepository.findByLoyaltyShopId(shopId))
+                .thenReturn(List.of(shopUser(UUID.randomUUID(), UUID.randomUUID(), shopId)));
+
+        List<UserResponseDTO> staff = service.listForCallerShop();
+
+        assertThat(staff).hasSize(1);
+        verify(loyaltyServiceClient, never()).merchantIdsForAdmin(any());
+    }
 }
