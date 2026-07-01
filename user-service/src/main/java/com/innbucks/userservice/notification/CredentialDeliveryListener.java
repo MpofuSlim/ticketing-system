@@ -138,7 +138,12 @@ public class CredentialDeliveryListener {
         return switch (reason) {
             case APPROVAL -> "Your SwiftInn account has been approved";
             case RESET -> "Your SwiftInn temporary password has been reset";
-            case ONBOARDING -> "Welcome to SwiftInn — your account is ready";
+            // ASCII only: a non-ASCII em-dash here produced a malformed MIME
+            // Subject header at the notification gateway (subjects need RFC-2047
+            // encoding; the gateway sent it raw), so the onboarding email was
+            // rejected while the ASCII approval/reset subjects went through. The
+            // body can keep UTF-8 punctuation — only the Subject header is strict.
+            case ONBOARDING -> "Welcome to SwiftInn, your account is ready";
         };
     }
 
