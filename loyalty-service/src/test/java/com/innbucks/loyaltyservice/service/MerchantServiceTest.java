@@ -3,6 +3,7 @@ package com.innbucks.loyaltyservice.service;
 import com.innbucks.loyaltyservice.client.UserServiceClient;
 import com.innbucks.loyaltyservice.dto.Dtos;
 import com.innbucks.loyaltyservice.entity.Merchant;
+import com.innbucks.loyaltyservice.exception.LoyaltyException;
 import com.innbucks.loyaltyservice.repository.MerchantRepository;
 import org.junit.jupiter.api.Test;
 import org.springframework.data.domain.Page;
@@ -233,5 +234,60 @@ class MerchantServiceTest {
         Dtos.MerchantResponse resp = svc.create(UUID.randomUUID(), usd);
 
         assertThat(resp.currency()).isEqualTo("USD");
+    }
+
+    // --- Duplicate-name guard (per tenant, case-insensitive) ------------------
+
+    @Test
+    void create_firstMerchantWithName_succeeds() {
+        MerchantRepository repo = mock(MerchantRepository.class);
+        UUID tenantId = UUID.randomUUID();
+        when(repo.existsByTenantIdAndNameIgnoreCase(tenantId, "Cafe A")).thenReturn(false);
+        when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
+        MerchantService svc = newService(repo);
+
+        Dtos.MerchantResponse resp = svc.create(tenantId, req(null, null));
+
+        assertThat(resp.name()).isEqualTo("Cafe A");
+        verify(repo).save(any(Merchant.class));
+    }
+
+    @Test
+    void create_duplicateNameDifferentCase_throwsConflict() {
+        MerchantRepository repo = mock(MerchantRepository.class);
+        UUID tenantId = UUID.randomUUID();
+        // The IgnoreCase finder is what the DB would answer for a name that
+        // already exists in any casing; simulate the hit.
+        when(repo.existsByTenantIdAndNameIgnoreCase(tenantId, "cafe a")).thenReturn(true);
+        MerchantService svc = newService(repo);
+
+        Dtos.MerchantRequest sameNameLowerCase = new Dtos.MerchantRequest(
+                "cafe a", "F&B", "USD", Merchant.BillingCycle.MONTHLY, null, null);
+
+        assertThatThrownBy(() -> svc.create(tenantId, sameNameLowerCase))
+                .isInstanceOf(LoyaltyException.class)
+                .satisfies(e -> {
+                    LoyaltyException le = (LoyaltyException) e;
+                    assertThat(le.getStatus()).isEqualTo(org.springframework.http.HttpStatus.CONFLICT);
+                    assertThat(le.getCode()).isEqualTo("MERCHANT_NAME_TAKEN");
+                });
+        verify(repo, never()).save(any(Merchant.class));
+    }
+
+    @Test
+    void create_trimsNameBeforeDuplicateCheckAndPersist() {
+        MerchantRepository repo = mock(MerchantRepository.class);
+        UUID tenantId = UUID.randomUUID();
+        when(repo.existsByTenantIdAndNameIgnoreCase(tenantId, "Cafe A")).thenReturn(false);
+        when(repo.save(any(Merchant.class))).thenAnswer(inv -> inv.getArgument(0));
+        MerchantService svc = newService(repo);
+
+        Dtos.MerchantRequest padded = new Dtos.MerchantRequest(
+                "  Cafe A  ", "F&B", "USD", Merchant.BillingCycle.MONTHLY, null, null);
+        Dtos.MerchantResponse resp = svc.create(tenantId, padded);
+
+        // Existence is checked against the trimmed name, and the trimmed name is persisted.
+        verify(repo).existsByTenantIdAndNameIgnoreCase(tenantId, "Cafe A");
+        assertThat(resp.name()).isEqualTo("Cafe A");
     }
 }

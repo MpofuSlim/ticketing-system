@@ -34,9 +34,16 @@ public class MerchantService {
     }
 
     public Dtos.MerchantResponse create(UUID tenantId, Dtos.MerchantRequest req) {
+        // Duplicate-name guard: a tenant can't have two merchants with the same
+        // name (case-insensitive). Trim first so " Cafe" and "Cafe" collide.
+        String name = req.name() == null ? "" : req.name().trim();
+        if (merchants.existsByTenantIdAndNameIgnoreCase(tenantId, name)) {
+            throw LoyaltyException.conflict("MERCHANT_NAME_TAKEN",
+                    "A merchant with that name already exists.");
+        }
         Merchant m = new Merchant();
         m.setTenantId(tenantId);
-        m.setName(req.name());
+        m.setName(name);
         m.setCategory(req.category());
         // Default to this cell's currency (ZW=USD, KE=KES) — was a hardcoded
         // "USD" entity default that mislabelled every KE merchant.

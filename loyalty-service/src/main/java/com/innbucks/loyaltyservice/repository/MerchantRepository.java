@@ -30,4 +30,11 @@ public interface MerchantRepository extends JpaRepository<Merchant, UUID> {
     // The ticketing bridge maps an event organizer (user_uuid) to one merchant.
     // Unique when set (uk_merchant_organizer), so at most one row matches.
     Optional<Merchant> findByOrganizerUuid(UUID organizerUuid);
+
+    // Duplicate-name guard for POST /loyalty/merchants. Merchant names are unique
+    // per tenant (case-insensitive), so a tenant can't onboard two merchants with
+    // the same display name; different tenants may reuse a name. Enforced at the
+    // service level (409 MERCHANT_NAME_TAKEN) rather than a DB unique index because
+    // existing rows may already hold duplicates.
+    boolean existsByTenantIdAndNameIgnoreCase(UUID tenantId, String name);
 }

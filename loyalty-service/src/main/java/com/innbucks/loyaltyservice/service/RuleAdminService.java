@@ -75,10 +75,22 @@ public class RuleAdminService {
         if (req.endsAt().isBefore(req.startsAt())) {
             throw LoyaltyException.badRequest("BAD_DATES", "endsAt must be after startsAt");
         }
+        // Duplicate-name guard: campaign names are unique per (tenant, merchant),
+        // case-insensitive. Trim first. A null merchantId is a tenant-wide campaign
+        // whose name is only unique among other tenant-wide campaigns — the IsNull
+        // finder keeps that scope separate from any merchant's namespace.
+        String name = req.name() == null ? "" : req.name().trim();
+        boolean nameTaken = merchantId == null
+                ? campaigns.existsByTenantIdAndMerchantIdIsNullAndNameIgnoreCase(tenantId, name)
+                : campaigns.existsByTenantIdAndMerchantIdAndNameIgnoreCase(tenantId, merchantId, name);
+        if (nameTaken) {
+            throw LoyaltyException.conflict("CAMPAIGN_NAME_TAKEN",
+                    "A campaign with that name already exists.");
+        }
         Campaign c = new Campaign();
         c.setTenantId(tenantId);
         c.setMerchantId(merchantId);
-        c.setName(req.name());
+        c.setName(name);
         c.setMultiplier(req.multiplier());
         c.setTransactionType(req.transactionType());
         c.setStartsAt(req.startsAt());

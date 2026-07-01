@@ -13,4 +13,12 @@ public interface ShopRepository extends JpaRepository<Shop, UUID> {
     Page<Shop> findByTenantId(UUID tenantId, Pageable pageable);
     List<Shop> findByTenantIdAndMerchantId(UUID tenantId, UUID merchantId);
     Page<Shop> findByTenantIdAndMerchantId(UUID tenantId, UUID merchantId, Pageable pageable);
+
+    // Duplicate-name guard for POST /loyalty/shops and the CSV bulk-upload. Shop
+    // names are unique per merchant (case-insensitive) — two outlets under the same
+    // merchant can't share a display name; different merchants may reuse one.
+    // Enforced at the service level (409 SHOP_NAME_TAKEN / a failed bulk row)
+    // rather than a DB unique index because existing rows may already hold
+    // duplicates.
+    boolean existsByMerchantIdAndNameIgnoreCase(UUID merchantId, String name);
 }

@@ -102,6 +102,21 @@ public class ShopController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "404",
                     description = "Merchant not found in this tenant"
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "409",
+                    description = "A shop with that name already exists under this merchant (case-insensitive)",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Name taken", value = """
+                                    {
+                                      "code": "SHOP_NAME_TAKEN",
+                                      "message": "A shop with that name already exists for this merchant.",
+                                      "data": null
+                                    }
+                                    """)
+                    )
             )
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")
@@ -119,6 +134,10 @@ public class ShopController {
                           "does not block rows 1-6. The response lists every failed row with the " +
                           "reason so the operator can correct the source spreadsheet and re-upload " +
                           "only the affected rows.\n\n" +
+                          "**Duplicate names are skipped, not inserted.** A row whose name (case-insensitive) " +
+                          "already exists for the merchant, or duplicates an earlier row in the same file, " +
+                          "is reported as a failure with reason `duplicate shop name` — the first occurrence " +
+                          "wins and no duplicate shop is created.\n\n" +
                           "**CSV format:** required header row with a `name` column (case-insensitive); " +
                           "an optional `address` column is recognised if present. Extra columns are " +
                           "ignored. Quoted fields support embedded commas (e.g. " +
@@ -136,14 +155,19 @@ public class ShopController {
                                       "code": "200 OK",
                                       "message": "Bulk shop upload processed",
                                       "data": {
-                                        "processed": 3,
+                                        "processed": 4,
                                         "created": 2,
-                                        "failed": 1,
+                                        "failed": 2,
                                         "failures": [
                                           {
                                             "row": 3,
                                             "name": null,
                                             "error": "name is required"
+                                          },
+                                          {
+                                            "row": 4,
+                                            "name": "Pizza Inn Avondale",
+                                            "error": "duplicate shop name"
                                           }
                                         ]
                                       }

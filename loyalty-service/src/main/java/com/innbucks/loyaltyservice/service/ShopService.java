@@ -49,10 +49,18 @@ public class ShopService {
     public Dtos.ShopResponse create(UUID tenantId, Dtos.ShopRequest req) {
         Merchant m = merchants.requireMerchant(tenantId, req.merchantId());
 
+        // Duplicate-name guard: a merchant can't have two shops with the same
+        // name (case-insensitive). Trim first so " Avondale" and "Avondale" collide.
+        String name = req.name() == null ? "" : req.name().trim();
+        if (shops.existsByMerchantIdAndNameIgnoreCase(m.getId(), name)) {
+            throw LoyaltyException.conflict("SHOP_NAME_TAKEN",
+                    "A shop with that name already exists for this merchant.");
+        }
+
         Shop s = new Shop();
         s.setTenantId(tenantId);
         s.setMerchantId(m.getId());
-        s.setName(req.name());
+        s.setName(name);
         s.setAddress(req.address());
         shops.save(s);
         return toResponse(s);
@@ -170,6 +178,10 @@ public class ShopService {
 
         int created = 0;
         List<Dtos.BulkShopRowFailure> failures = new ArrayList<>();
+        // Names already accepted in THIS file, lower-cased — so two rows with the
+        // same name (any casing) don't both insert; the first wins and later ones
+        // are marked as failed rather than creating a duplicate.
+        java.util.Set<String> seenNames = new java.util.HashSet<>();
         for (int i = 1; i < rows.size(); i++) {
             // 1-based row number for human display: header is row 1, first
             // data row is row 2. Matches how spreadsheet apps number rows.
@@ -181,6 +193,16 @@ public class ShopService {
 
             if (name.isBlank()) {
                 failures.add(new Dtos.BulkShopRowFailure(rowNumber, null, "name is required"));
+                continue;
+            }
+
+            // Duplicate-name guard, mirroring the single-create path: reject a row
+            // whose name duplicates another row already accepted in this file OR an
+            // existing shop under the merchant (both case-insensitive). No insert —
+            // the row is reported as a failure so the operator can fix the source.
+            if (!seenNames.add(name.toLowerCase())
+                    || shops.existsByMerchantIdAndNameIgnoreCase(m.getId(), name)) {
+                failures.add(new Dtos.BulkShopRowFailure(rowNumber, name, "duplicate shop name"));
                 continue;
             }
 
