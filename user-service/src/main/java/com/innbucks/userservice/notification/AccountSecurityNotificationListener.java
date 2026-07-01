@@ -4,6 +4,7 @@ import com.innbucks.userservice.client.EmailNotificationClient;
 import com.innbucks.userservice.client.SmsNotificationClient;
 import com.innbucks.userservice.event.AccountLockedEvent;
 import com.innbucks.userservice.event.AccountSecurityAlertEvent;
+import com.innbucks.userservice.event.UserDeactivatedEvent;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
@@ -96,6 +97,46 @@ public class AccountSecurityNotificationListener {
             } catch (RuntimeException ex) {
                 log.warn("Security-alert SMS failed userId={} type={}: {}",
                         event.userId(), event.type(), ex.getMessage());
+            }
+        }
+    }
+
+    /**
+     * "Your account was deactivated" notice. Email-primary, SMS-fallback
+     * (mirrors the prior inline behaviour) — a deactivation notice isn't as
+     * urgent as a lockout, so one delivered channel is enough. Best-effort; a
+     * failure never affects the already-committed deactivation.
+     */
+    @Async
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
+    public void onUserDeactivated(UserDeactivatedEvent event) {
+        String brand = event.customer() ? "InnBucks" : "SwiftInn";
+        String ref = "ACCOUNT-DEACTIVATED-" + event.userId();
+        String subject = "Your " + brand + " account has been deactivated";
+        String name = (event.firstName() != null && !event.firstName().isBlank())
+                ? event.firstName() : "there";
+        String message = "Hi " + name + ",\n\n"
+                + "Your " + brand + " account has been deactivated and you can no longer sign in. "
+                + "If you believe this was a mistake, please contact your administrator.\n\n"
+                + "— The " + brand + " Team";
+
+        if (event.email() != null && !event.email().isBlank()) {
+            try {
+                email.sendEmail(event.email(), subject, message, ref);
+                log.info("Deactivation email sent userId={}", event.userId());
+                return;
+            } catch (RuntimeException ex) {
+                log.warn("Deactivation email failed userId={}, trying SMS: {}",
+                        event.userId(), ex.getMessage());
+            }
+        }
+        if (event.phoneNumber() != null && !event.phoneNumber().isBlank()) {
+            try {
+                sms.sendSms(event.phoneNumber(), message, ref);
+                log.info("Deactivation SMS sent userId={}", event.userId());
+            } catch (RuntimeException ex) {
+                log.warn("Deactivation notification failed on all channels userId={} "
+                        + "(account still deactivated): {}", event.userId(), ex.getMessage());
             }
         }
     }

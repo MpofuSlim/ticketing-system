@@ -1,9 +1,8 @@
 package com.innbucks.userservice.service;
 
-import com.innbucks.userservice.client.EmailNotificationClient;
-import com.innbucks.userservice.client.SmsNotificationClient;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.event.CredentialDeliveryRequested;
+import com.innbucks.userservice.event.UserDeactivatedEvent;
 import com.innbucks.userservice.exception.NotFoundException;
 import com.innbucks.userservice.repository.UserRepository;
 import org.junit.jupiter.api.Test;
@@ -42,12 +41,10 @@ class UserAdminServiceTest {
     private static class Fixture {
         final UserRepository userRepo = mock(UserRepository.class);
         final PasswordEncoder encoder = mock(PasswordEncoder.class);
-        final SmsNotificationClient sms = mock(SmsNotificationClient.class);
-        final EmailNotificationClient email = mock(EmailNotificationClient.class);
         final AuditService audit = mock(AuditService.class);
         final ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
         final UserAdminService service = new UserAdminService(
-                userRepo, encoder, sms, email, audit, publisher);
+                userRepo, encoder, audit, publisher);
     }
 
     /** Capture the plaintext handed to encode() — it's the generated temp password. */
@@ -95,10 +92,6 @@ class UserAdminServiceTest {
         assertEquals("+263771234567", ev.phoneNumber());
         assertEquals(generated, ev.tempPassword());
         assertEquals(CredentialDeliveryRequested.Reason.APPROVAL, ev.reason());
-
-        // No inline notification calls — that lived in this class before the
-        // refactor; the listener owns delivery now.
-        verifyNoInteractions(f.email, f.sms);
     }
 
     @Test
@@ -219,9 +212,10 @@ class UserAdminServiceTest {
     // -- Deactivation (still inline, with TODO marker) -----------------------
 
     @Test
-    void deactivation_notifiesByEmail_swiftInnBrandForSystemUser() {
+    void deactivation_publishesUserDeactivatedEvent_offTheRequestThread() {
         Fixture f = new Fixture();
         User user = User.builder().id(12L).email("staff@acme.co.zw").firstName("Tendai")
+                .phoneNumber("+263771234567")
                 .roles(java.util.EnumSet.of(User.Role.SHOP_ADMIN))
                 .active(true).approved(true).password("pw").build();
         when(f.userRepo.findById(12L)).thenReturn(Optional.of(user));
@@ -229,10 +223,14 @@ class UserAdminServiceTest {
 
         f.service.setActive(12L, false);
 
-        verify(f.email).sendEmail(eq("staff@acme.co.zw"), contains("deactivated"),
-                contains("SwiftInn"), startsWith("ACCOUNT-DEACTIVATED-"));
-        // Deactivation must never publish a credential-delivery event.
-        verifyNoInteractions(f.publisher);
+        // Delivered off-thread now: the service publishes a UserDeactivatedEvent
+        // (handled by AccountSecurityNotificationListener) instead of calling the
+        // email gateway inline, so the deactivate response never blocks on it.
+        ArgumentCaptor<UserDeactivatedEvent> ev = ArgumentCaptor.forClass(UserDeactivatedEvent.class);
+        verify(f.publisher).publishEvent(ev.capture());
+        assertEquals(12L, ev.getValue().userId());
+        assertEquals("staff@acme.co.zw", ev.getValue().email());
+        assertFalse(ev.getValue().customer());   // SHOP_ADMIN => system user => SwiftInn brand
     }
 
     @Test
@@ -247,7 +245,8 @@ class UserAdminServiceTest {
         assertFalse(result.isActive());
         assertEquals("pw", result.getPassword());
         verify(f.encoder, never()).encode(any());
-        verifyNoInteractions(f.publisher);
+        // Deactivation publishes the async notice; the password is untouched.
+        verify(f.publisher).publishEvent(any(UserDeactivatedEvent.class));
     }
 
     // -- Reset temp password (admin recovery) --------------------------------
