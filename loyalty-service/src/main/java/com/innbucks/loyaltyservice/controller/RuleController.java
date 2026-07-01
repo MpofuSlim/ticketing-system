@@ -284,6 +284,21 @@ public class RuleController {
                                     }
                                     """)
                     )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "409",
+                    description = "A campaign with that name already exists for this (tenant, merchant) scope (case-insensitive)",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Name taken", value = """
+                                    {
+                                      "code": "CAMPAIGN_NAME_TAKEN",
+                                      "message": "A campaign with that name already exists.",
+                                      "data": null
+                                    }
+                                    """)
+                    )
             )
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")

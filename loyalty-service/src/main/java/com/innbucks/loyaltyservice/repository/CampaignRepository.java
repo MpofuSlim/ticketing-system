@@ -31,4 +31,13 @@ public interface CampaignRepository extends JpaRepository<Campaign, UUID> {
     List<Campaign> findByTenantId(UUID tenantId);
 
     Page<Campaign> findByTenantId(UUID tenantId, Pageable pageable);
+
+    // Duplicate-name guard for POST /loyalty/rules/campaigns. Campaign names are
+    // unique per (tenant, merchant) case-insensitively. merchantId may be null
+    // (tenant-wide campaign) — a derived IsNull query keeps that scope separate, so
+    // a null-merchant name is only unique among other null-merchant campaigns for
+    // the same tenant. Enforced at the service level (409 CAMPAIGN_NAME_TAKEN)
+    // rather than a DB unique index because existing rows may already hold duplicates.
+    boolean existsByTenantIdAndMerchantIdAndNameIgnoreCase(UUID tenantId, UUID merchantId, String name);
+    boolean existsByTenantIdAndMerchantIdIsNullAndNameIgnoreCase(UUID tenantId, String name);
 }

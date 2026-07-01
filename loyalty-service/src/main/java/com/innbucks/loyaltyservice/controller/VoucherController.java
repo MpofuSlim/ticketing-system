@@ -101,6 +101,21 @@ public class VoucherController {
                                     }
                                     """)
                     )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "409",
+                    description = "A voucher template with that name already exists for this (tenant, merchant) scope (case-insensitive)",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Name taken", value = """
+                                    {
+                                      "code": "VOUCHER_TEMPLATE_NAME_TAKEN",
+                                      "message": "A voucher template with that name already exists.",
+                                      "data": null
+                                    }
+                                    """)
+                    )
             )
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")

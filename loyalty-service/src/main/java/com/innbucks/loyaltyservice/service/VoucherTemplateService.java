@@ -29,12 +29,24 @@ public class VoucherTemplateService {
         if (req.valueType() == VoucherTemplate.ValueType.FREE_ITEM && (req.freeItemSku() == null || req.freeItemSku().isBlank())) {
             throw LoyaltyException.badRequest("MISSING_SKU", "FREE_ITEM vouchers require freeItemSku");
         }
+        // Duplicate-name guard: template names are unique per (tenant, merchant),
+        // case-insensitive. Trim first. A null merchantId is a tenant-wide template
+        // whose name is only unique among other tenant-wide templates — the IsNull
+        // finder keeps that scope separate from any merchant's namespace.
+        String name = req.name() == null ? "" : req.name().trim();
+        boolean nameTaken = merchantId == null
+                ? templates.existsByTenantIdAndMerchantIdIsNullAndNameIgnoreCase(tenantId, name)
+                : templates.existsByTenantIdAndMerchantIdAndNameIgnoreCase(tenantId, merchantId, name);
+        if (nameTaken) {
+            throw LoyaltyException.conflict("VOUCHER_TEMPLATE_NAME_TAKEN",
+                    "A voucher template with that name already exists.");
+        }
         // AMOUNT / PERCENT value-types no longer require a value here —
         // each issuance picks its own face value at IssueVoucherRequest time.
         VoucherTemplate t = new VoucherTemplate();
         t.setTenantId(tenantId);
         t.setMerchantId(merchantId);
-        t.setName(req.name());
+        t.setName(name);
         t.setType(req.type());
         t.setValueType(req.valueType());
         // Inherit the merchant's currency when the template doesn't override it

@@ -101,6 +101,21 @@ public class MerchantController {
                                     }
                                     """)
                     )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "409",
+                    description = "A merchant with that name already exists in this tenant (case-insensitive)",
+                    content = @Content(
+                            mediaType = "application/json",
+                            schema = @Schema(implementation = ApiResult.class),
+                            examples = @ExampleObject(name = "Name taken", value = """
+                                    {
+                                      "code": "MERCHANT_NAME_TAKEN",
+                                      "message": "A merchant with that name already exists.",
+                                      "data": null
+                                    }
+                                    """)
+                    )
             )
     })
     @PreAuthorize("hasAnyRole('MERCHANT_ADMIN','SHOP_ADMIN','SUPER_ADMIN')")
