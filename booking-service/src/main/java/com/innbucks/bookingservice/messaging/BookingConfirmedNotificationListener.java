@@ -60,6 +60,13 @@ public class BookingConfirmedNotificationListener {
     /** Event-title fallback when event-service can't be reached (cosmetic only). */
     private static final String EVENT_NAME_FALLBACK = "your event";
 
+    /** Public base URL of the customer-facing e-ticket page (env
+     *  TICKETS_PUBLIC_BASE_URL). Lets the confirmation email carry a durable link
+     *  to the scannable QR e-ticket(s), so the ticket is reachable even when the
+     *  WhatsApp gateway is down. Blank -> the email omits the link. */
+    @org.springframework.beans.factory.annotation.Value("${innbucks.tickets.public-base-url:}")
+    private String publicBaseUrl;
+
     public BookingConfirmedNotificationListener(
             BookingRepository bookingRepository,
             WhatsAppNotificationClient whatsApp,
@@ -223,11 +230,39 @@ public class BookingConfirmedNotificationListener {
             }
             sb.append('\n');
         }
-        sb.append("\nYour scannable e-ticket")
-                .append(items.size() == 1 ? " has" : "s have")
-                .append(" been sent to your WhatsApp — present the QR at the gate.\n\n")
-                .append("— The InnBucks Team");
+        boolean many = items.size() != 1;
+        sb.append('\n');
+        // The scannable QR is delivered over WhatsApp, but the WhatsApp gateway
+        // can be down — so ALWAYS put a durable e-ticket link in the email too,
+        // making email a self-sufficient way to reach the QR at the gate.
+        String link = eTicketUrl(booking);
+        if (link != null) {
+            sb.append("View your scannable e-ticket").append(many ? "s" : "")
+                    .append(": ").append(link).append('\n');
+        }
+        if (booking.getPhoneNumber() != null && !booking.getPhoneNumber().isBlank()) {
+            sb.append("Your QR e-ticket").append(many ? "s have" : " has")
+                    .append(" also been sent to your WhatsApp.\n");
+        }
+        sb.append("Present the QR at the gate.\n\n— The InnBucks Team");
         return sb.toString();
+    }
+
+    /**
+     * Absolute URL of the customer-facing e-ticket page
+     * ({@code /bookings/{id}/tickets} — public, CONFIRMED-only, renders every
+     * ticket's scannable QR) for the confirmation email. Returns null when no
+     * public base URL is configured, so the email simply omits the link rather
+     * than emitting a broken relative one.
+     */
+    private String eTicketUrl(Booking booking) {
+        if (publicBaseUrl == null || publicBaseUrl.isBlank()) {
+            return null;
+        }
+        String base = publicBaseUrl.endsWith("/")
+                ? publicBaseUrl.substring(0, publicBaseUrl.length() - 1)
+                : publicBaseUrl;
+        return base + "/bookings/" + booking.getId() + "/tickets";
     }
 
     /**

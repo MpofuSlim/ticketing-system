@@ -108,6 +108,30 @@ class BookingConfirmedNotificationListenerTest {
         verify(m.wa(), never()).sendCustomNotification(anyString(), anyString());
     }
 
+    // ---- Email carries the durable e-ticket link; WhatsApp QR still always sends ----
+
+    @Test
+    void confirmationEmail_includesPublicETicketLink_andStillSendsWhatsAppQr() {
+        Mocks m = mocks();
+        org.springframework.test.util.ReflectionTestUtils.setField(
+                m.listener(), "publicBaseUrl", "https://tickets.innbucks.co.zw");
+        Booking b = bookingFixture("+263771234567", "rufaro@example.com", 2);
+        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+
+        m.listener().onBookingConfirmed(eventFor(b));
+
+        ArgumentCaptor<String> message = ArgumentCaptor.forClass(String.class);
+        verify(m.email()).sendEmail(eq("rufaro@example.com"), anyString(), message.capture(), anyString());
+        // A durable link to the e-ticket page is in the email, so the QR is
+        // reachable even when the WhatsApp gateway is down. The email still notes
+        // the WhatsApp copy too.
+        assertThat(message.getValue())
+                .contains("https://tickets.innbucks.co.zw/bookings/" + b.getId() + "/tickets")
+                .contains("WhatsApp");
+        // The WhatsApp QR is STILL sent (always), one per ticket — unchanged.
+        verify(m.wa(), times(2)).sendEventQrCode(eq("+263771234567"), anyString(), anyString());
+    }
+
     // ---- eventName: single-line noun phrase, NO newlines (WhatsApp 63021) ----
 
     @Test
