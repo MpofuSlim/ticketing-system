@@ -9,10 +9,10 @@ import org.springframework.web.client.RestClient;
 import java.time.Duration;
 
 /**
- * RestClient for the InnBucks public notification API (email). Distinct from
- * {@code innbucksGatewayRestClient} (the host-resident core-gateway adapter,
- * still used for SMS) — this one targets the public API Gateway with bearer +
- * X-Api-Key auth handled in {@code EmailNotificationClient}.
+ * RestClient for the InnBucks public notification API — email AND SMS. Targets
+ * the public API Gateway with bearer + X-Api-Key auth handled in
+ * {@code EmailNotificationClient} ({@code POST /api/notification/email} and
+ * {@code POST /api/notification/sms}).
  */
 @Configuration
 @EnableConfigurationProperties(InnbucksNotifyProperties.class)
