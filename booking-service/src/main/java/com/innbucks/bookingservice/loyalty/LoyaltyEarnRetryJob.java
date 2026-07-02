@@ -75,26 +75,12 @@ public class LoyaltyEarnRetryJob {
             lockAtMostFor = "PT5M",
             lockAtLeastFor = "PT30S")
     public void drain() {
-        LoyaltyServiceClient loyalty = loyaltyClientProvider.getIfAvailable();
-        if (loyalty == null) {
-            log.debug("LoyaltyServiceClient not available; skipping retry drain");
-            return;
-        }
-        List<LoyaltyEarnRetry> due = repository.findDue(LocalDateTime.now(ZoneOffset.UTC), PageRequest.of(0, batchSize));
-        if (due.isEmpty()) {
-            log.debug("No loyalty_earn_retry rows due");
-            return;
-        }
-        log.info("Draining {} loyalty_earn_retry rows (batch limit {})", due.size(), batchSize);
-        for (LoyaltyEarnRetry row : due) {
-            try {
-                retryService.attempt(row, loyalty, maxAttempts);
-            } catch (Exception ex) {
-                // attempt() is itself @Transactional and catches its own
-                // exceptions; this is the last-resort guard so one stuck row
-                // can't take down the batch.
-                log.error("Unexpected error draining loyalty_earn_retry row id={}", row.getId(), ex);
-            }
-        }
+        // DISABLED: booking is decoupled from loyalty — ticket purchases no
+        // longer earn points, so nothing new is enqueued, and any pre-existing
+        // loyalty_earn_retry rows must NOT be credited (crediting them would
+        // award points on past ticket bookings, which is exactly what the
+        // decouple removes). Left as a no-op (rather than deleted) so the table
+        // + scheduler wiring can be cleanly retired in a follow-up.
+        log.debug("loyalty earn-retry drain is disabled (booking is decoupled from loyalty)");
     }
 }

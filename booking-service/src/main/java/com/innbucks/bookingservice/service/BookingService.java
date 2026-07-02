@@ -843,101 +843,21 @@ public class BookingService {
         return toDTO(booking);
     }
 
-    // Validates the points/cash split against the tenant's loyalty rule and
-    // (if everything checks out) calls redeem then earn on loyalty-service.
-    // No-op when:
-    //   - the loyalty client isn't wired (unit tests),
-    //   - the booking has no tenantUserUuid (event-service was down at create),
-    //   - both pointsToUse and cashAmount cover the full total via cash only
-    //     AND the rule isn't reachable.
+    // Loyalty is DECOUPLED from booking (product decision): a ticket purchase
+    // NEVER earns loyalty points and can NOT be paid for with points. Points
+    // accrue ONLY via shop-checkout / guest-shop-checkout in loyalty-service.
+    //
+    // This used to validate a points/cash split and call redeem+earn on
+    // loyalty-service (which is what awarded points — and fired the "points
+    // earned" WhatsApp notification — on every ticket purchase). All of that
+    // linkage is removed. The only remaining job is to reject an attempt to pay
+    // with points, so a booking is never confirmed for points that were never
+    // actually redeemed (which would hand out a ticket for nothing).
     private void applyLoyalty(Booking booking, BigDecimal pointsToUse, BigDecimal cashAmount) {
-        LoyaltyServiceClient loyalty = loyaltyClientProvider == null ? null : loyaltyClientProvider.getIfAvailable();
-        if (loyalty == null) {
-            log.debug("Loyalty client unavailable; skipping loyalty for bookingId={}", booking.getId());
-            return;
+        if (pointsToUse != null && pointsToUse.signum() > 0) {
+            throw new BadRequestException("Paying for tickets with loyalty points isn't available.");
         }
-        UUID organizerUuid = booking.getTenantUserUuid();
-        String phone = booking.getPhoneNumber();
-        boolean wantsRedeem = pointsToUse.signum() > 0;
-
-        // Identity + attribution are required for any loyalty op. Missing organizer
-        // (event-service was down at create) or phone (guest / no JWT claim):
-        // redeem fails clearly so the customer isn't silently charged full cash,
-        // while earn just skips — never fail a paid booking only to credit points.
-        if (organizerUuid == null) {
-            if (wantsRedeem) throw new BadRequestException("Loyalty points can't be used on this booking.");
-            log.debug("No organizer on booking; skipping loyalty earn for bookingId={}", booking.getId());
-            return;
-        }
-        if (phone == null || phone.isBlank()) {
-            if (wantsRedeem) throw new BadRequestException("A phone number is required to pay with points.");
-            log.debug("No phone on booking; skipping loyalty earn for bookingId={}", booking.getId());
-            return;
-        }
-
-        LoyaltyRuleResponse rule = fetchRule(loyalty, organizerUuid);
-        if (rule == null) {
-            if (wantsRedeem) {
-                throw new DependencyUnavailableException("Loyalty rule unavailable; cannot redeem points right now");
-            }
-            log.debug("Loyalty rule unavailable; skipping earn for bookingId={}", booking.getId());
-            return;
-        }
-
-        // Cross-check the math: pointsToUse / redeemRate + cashAmount ≈ totalAmount
-        BigDecimal pointsAsCash = pointsToUse.signum() == 0
-                ? BigDecimal.ZERO
-                : pointsToUse.divide(rule.getRedeemRate(), 4, RoundingMode.HALF_UP);
-        BigDecimal reconstructedTotal = pointsAsCash.add(cashAmount);
-        BigDecimal diff = reconstructedTotal.subtract(booking.getTotalAmount()).abs();
-        if (diff.compareTo(SPLIT_TOLERANCE) > 0) {
-            throw new BadRequestException(String.format(
-                    "Your payment doesn't add up to the booking total (points worth %s + cash %s = %s, expected %s). Please adjust and try again.",
-                    pointsAsCash, cashAmount, reconstructedTotal, booking.getTotalAmount()));
-        }
-
-        String reference = booking.getId().toString();
-        if (wantsRedeem) {
-            try {
-                loyalty.redeem(LoyaltyRedeemRequest.builder()
-                        .organizerUuid(organizerUuid)
-                        .phoneNumber(phone)
-                        .points(pointsToUse)
-                        .reference(reference)
-                        .build(), loyaltyInternalToken);
-            } catch (LoyaltyServiceUnavailableException ex) {
-                // Loyalty down / circuit open — surface a clean, retryable 503
-                // (redeem is idempotent on the booking reference) instead of the
-                // raw 500 an unhandled RuntimeException would produce.
-                throw new DependencyUnavailableException(ex.getMessage());
-            }
-        }
-        // Earn ONLY on the cash portion. Best-effort: a failure is queued to
-        // loyalty_earn_retry (inside this confirm transaction, so a rolled-back
-        // confirm leaves no stray row) and drained later — we never fail a paid
-        // booking just because we couldn't credit points.
-        if (cashAmount.signum() > 0) {
-            try {
-                loyalty.earn(LoyaltyEarnRequest.builder()
-                        .organizerUuid(organizerUuid)
-                        .phoneNumber(phone)
-                        .cashAmount(cashAmount)
-                        .reference(reference)
-                        .build(), loyaltyInternalToken);
-            } catch (Exception ex) {
-                loyaltyEarnRetryService.enqueue(
-                        booking.getId(), organizerUuid, phone, cashAmount, reference, ex);
-            }
-        }
-    }
-
-    private LoyaltyRuleResponse fetchRule(LoyaltyServiceClient loyalty, UUID organizerUuid) {
-        try {
-            return loyalty.getRule(organizerUuid, loyaltyInternalToken);
-        } catch (Exception ex) {
-            log.warn("Failed to fetch loyalty rule organizerUuid={} reason={}", organizerUuid, ex.getMessage());
-            return null;
-        }
+        // Cash-only: no loyalty earn on ticket purchases. Nothing to do.
     }
 
     private void consumeEventAvailability(Booking booking) {
