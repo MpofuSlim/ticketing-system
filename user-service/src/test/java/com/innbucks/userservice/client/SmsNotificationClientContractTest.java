@@ -1,200 +1,177 @@
 package com.innbucks.userservice.client;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.github.tomakehurst.wiremock.WireMockServer;
-import com.innbucks.userservice.config.InnbucksGatewayProperties;
+import com.github.tomakehurst.wiremock.stubbing.Scenario;
+import com.innbucks.userservice.config.InnbucksNotifyProperties;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
-
-import java.time.Duration;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * Contract test: pins {@link SmsNotificationClient}'s behaviour against each
- * response shape the {@code innbucks-core-gateway} adapter has actually been
- * observed to return. This is the audit-#10 template — it exists so that any
- * change in the adapter's wire contract (status code, path, body parsing)
- * fails the build at PR time rather than at 2am in prod.
+ * Contract test for {@link SmsNotificationClient} against the InnBucks public
+ * notification API — the SAME authenticated gateway email uses:
+ * {@code POST /auth/third-party} for the bearer, then
+ * {@code POST /api/notification/sms} with {@code X-Api-Key} + Bearer and body
+ * {@code {message, reference, destinationMsisdn}}.
  *
- * <p>WireMock stands in for the adapter; the {@link SmsNotificationClient}'s
- * real {@code RestClient} is wired to point at the WireMock port. Every
- * stub in this class corresponds to a response we've SEEN from the live
- * gateway during this milestone (200 SUBMITTED on a healthy messenger;
- * 502 with the rejection wrapper when messenger returned 500 because
- * RabbitMQ was down; 503 when messenger-interface wasn't in the Eureka
- * registry yet). Recording them as code prevents silent regression if the
- * adapter's error envelope is ever reshaped.
- *
- * <p>Pure JUnit + WireMock, no Spring context — keeps the test fast (~1s
- * per case) and surgical to the wire contract.
+ * <p>Previously SMS posted to the unauthenticated {@code innbucks-core-gateway}
+ * {@code /notifications/sms} with {@code {destination, senderId}}; this pins the
+ * new authed wire shape so a regression back to the old (broken) contract fails
+ * the build. SMS delegates to {@link EmailNotificationClient}, so the client is
+ * built the same way the email contract test builds it.
  */
 class SmsNotificationClientContractTest {
 
+    private static final String LOGIN = "/auth/third-party";
+    private static final String SMS = "/api/notification/sms";
+    private static final String API_KEY = "test-api-key";
+
     private static WireMockServer wireMock;
-    private static SmsNotificationClient client;
 
     @BeforeAll
-    static void startWireMockAndWireClient() {
+    static void start() {
         wireMock = new WireMockServer(wireMockConfig().dynamicPort());
         wireMock.start();
-
-        // Build the SmsNotificationClient with the same RestClient shape the
-        // prod InnbucksGatewayClientConfig produces, just pointed at WireMock.
-        // Mirrors prod wiring so the test exercises the real serialisation
-        // path; only the host:port differs.
-        InnbucksGatewayProperties props = new InnbucksGatewayProperties();
-        props.setBaseUrl("http://localhost:" + wireMock.port());
-        props.setConnectTimeoutMs(500);
-        props.setReadTimeoutMs(2000);
-
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofMillis(props.getConnectTimeoutMs()));
-        factory.setReadTimeout(Duration.ofMillis(props.getReadTimeoutMs()));
-        RestClient restClient = RestClient.builder()
-                .baseUrl(props.getBaseUrl())
-                .requestFactory(factory)
-                .build();
-        client = new SmsNotificationClient(restClient);
     }
 
     @AfterAll
-    static void stopWireMock() {
-        if (wireMock != null) wireMock.stop();
+    static void stop() {
+        if (wireMock != null) {
+            wireMock.stop();
+        }
     }
 
     @AfterEach
-    void resetStubs() {
+    void reset() {
         wireMock.resetAll();
     }
 
+    private static SmsNotificationClient client(int port) {
+        InnbucksNotifyProperties props = new InnbucksNotifyProperties();
+        props.setBaseUrl("http://localhost:" + port);
+        props.setApiKey(API_KEY);
+        props.setUsername("test-user");
+        props.setPassword("test-pass");
+        EmailNotificationClient notificationApi = new EmailNotificationClient(
+                RestClient.builder().baseUrl("http://localhost:" + port).build(),
+                props, new ObjectMapper());
+        return new SmsNotificationClient(notificationApi);
+    }
+
     @Test
-    @DisplayName("happy path: adapter returns 200 → client returns normally")
-    void sendSms_happyPath_doesNotThrow() {
-        // Recorded shape from the milestone-2 messenger smoke test:
-        //   { "reference": "smoke-2", "status": "SUBMITTED" }
-        wireMock.stubFor(post(urlEqualTo("/notifications/sms"))
-                .willReturn(aResponse()
-                        .withStatus(200)
-                        .withHeader("Content-Type", "application/json")
-                        .withBody("{\"reference\":\"r1\",\"status\":\"SUBMITTED\"}")));
+    @DisplayName("happy path: logs in then posts {message,reference,destinationMsisdn} with X-Api-Key + Bearer")
+    void sendSms_postsDocumentedShape() {
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).willReturn(okJson("{\"accessToken\":\"tok-abc\"}")));
+        wireMock.stubFor(post(urlEqualTo(SMS)).willReturn(aResponse().withStatus(200)));
 
-        // Should complete without throwing — the client uses .toBodilessEntity()
-        // so a 2xx with any body shape is treated as success.
-        client.sendSms("+263782606983", "InnBucks OTP 123456", "r1");
+        client(wireMock.port()).sendSms("+263782606983", "InnBucks OTP 123456", "OTP-1");
 
-        // Verify wire-level contract: correct path, JSON body shape, required fields.
-        wireMock.verify(postRequestedFor(urlEqualTo("/notifications/sms"))
-                .withHeader("Content-Type", equalTo("application/json"))
-                .withRequestBody(matchingJsonPath("$.destination", equalTo("+263782606983")))
+        wireMock.verify(postRequestedFor(urlEqualTo(LOGIN))
+                .withHeader("X-Api-Key", equalTo(API_KEY))
+                .withRequestBody(matchingJsonPath("$.username", equalTo("test-user")))
+                .withRequestBody(matchingJsonPath("$.password", equalTo("test-pass"))));
+        wireMock.verify(postRequestedFor(urlEqualTo(SMS))
+                .withHeader("X-Api-Key", equalTo(API_KEY))
+                .withHeader("Authorization", equalTo("Bearer tok-abc"))
+                .withHeader("Accept", containing("application/json"))
                 .withRequestBody(matchingJsonPath("$.message", equalTo("InnBucks OTP 123456")))
-                .withRequestBody(matchingJsonPath("$.reference", equalTo("r1")))
-                .withRequestBody(matchingJsonPath("$.senderId", equalTo("INNBUCKS"))));
+                .withRequestBody(matchingJsonPath("$.destinationMsisdn", equalTo("+263782606983")))
+                .withRequestBody(matchingJsonPath("$.reference", equalTo("OTP-1"))));
     }
 
     @Test
-    @DisplayName("adapter returns 502 (messenger rejected): throws NotificationDeliveryException with status")
-    void sendSms_adapterReturns502_throwsWithRejectionDetail() {
-        // The shape the adapter returns when messenger-interface itself answered
-        // with a non-2xx. From SmsController#body(): { reference, status:FAILED, error }.
-        // Recorded from the live "RabbitMQ down → messenger returned 500" scenario.
-        wireMock.stubFor(post(urlEqualTo("/notifications/sms"))
-                .willReturn(aResponse()
-                        .withStatus(502)
-                        .withHeader("Content-Type", "application/json")
-                        .withBody("{\"reference\":\"r2\",\"status\":\"FAILED\","
-                                + "\"error\":\"messenger-interface rejected: HTTP 500\"}")));
+    @DisplayName("blank recipient/message: guarded before any network call")
+    void blankInputs_neverHitTheWire() {
+        SmsNotificationClient client = client(wireMock.port());
+        assertThatThrownBy(() -> client.sendSms(" ", "m", "r"))
+                .isInstanceOf(NotificationDeliveryException.class);
+        assertThatThrownBy(() -> client.sendSms("+263782606983", " ", "r"))
+                .isInstanceOf(NotificationDeliveryException.class);
+        wireMock.verify(0, postRequestedFor(urlEqualTo(LOGIN)));
+        wireMock.verify(0, postRequestedFor(urlEqualTo(SMS)));
+    }
 
-        assertThatThrownBy(() -> client.sendSms("+263782606983", "msg", "r2"))
+    @Test
+    @DisplayName("blank reference: auto-fills TKT-SMS-<uuid>")
+    void blankReference_autoFilled() {
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).willReturn(okJson("{\"accessToken\":\"tok-abc\"}")));
+        wireMock.stubFor(post(urlEqualTo(SMS)).willReturn(aResponse().withStatus(200)));
+
+        client(wireMock.port()).sendSms("+263782606983", "msg", null);
+
+        wireMock.verify(postRequestedFor(urlEqualTo(SMS))
+                .withRequestBody(matchingJsonPath("$.reference", matching("TKT-SMS-[0-9a-f-]{36}"))));
+    }
+
+    @Test
+    @DisplayName("401 on SMS: refresh token and replay once, then succeed")
+    void unauthorized_refreshesAndReplays() {
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).willReturn(okJson("{\"accessToken\":\"tok-abc\"}")));
+        wireMock.stubFor(post(urlEqualTo(SMS)).inScenario("auth")
+                .whenScenarioStateIs(Scenario.STARTED)
+                .willReturn(aResponse().withStatus(401))
+                .willSetStateTo("retried"));
+        wireMock.stubFor(post(urlEqualTo(SMS)).inScenario("auth")
+                .whenScenarioStateIs("retried")
+                .willReturn(aResponse().withStatus(200)));
+
+        assertThatCode(() -> client(wireMock.port()).sendSms("+263782606983", "m", "r"))
+                .doesNotThrowAnyException();
+
+        wireMock.verify(2, postRequestedFor(urlEqualTo(SMS)));
+        wireMock.verify(2, postRequestedFor(urlEqualTo(LOGIN)));
+    }
+
+    @Test
+    @DisplayName("persistent 401: refresh once then give up with NotificationDeliveryException")
+    void unauthorizedTwice_throws() {
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).willReturn(okJson("{\"accessToken\":\"tok-abc\"}")));
+        wireMock.stubFor(post(urlEqualTo(SMS)).willReturn(aResponse().withStatus(401)));
+
+        assertThatThrownBy(() -> client(wireMock.port()).sendSms("+263782606983", "m", "r"))
                 .isInstanceOf(NotificationDeliveryException.class)
-                .hasMessageContaining("HTTP 502");
+                .hasMessageContaining("401");
     }
 
     @Test
-    @DisplayName("adapter returns 503 (messenger unreachable): throws NotificationDeliveryException")
-    void sendSms_adapterReturns503_throwsAsRejection() {
-        // The shape when messenger-interface isn't in Eureka / circuit open.
-        wireMock.stubFor(post(urlEqualTo("/notifications/sms"))
-                .willReturn(aResponse()
-                        .withStatus(503)
-                        .withHeader("Content-Type", "application/json")
-                        .withBody("{\"reference\":\"r3\",\"status\":\"FAILED\","
-                                + "\"error\":\"messenger-interface unreachable\"}")));
+    @DisplayName("login rejected (401): NotificationDeliveryException, SMS never attempted")
+    void loginRejected_throws() {
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).willReturn(aResponse().withStatus(401)));
 
-        assertThatThrownBy(() -> client.sendSms("+263782606983", "msg", "r3"))
+        assertThatThrownBy(() -> client(wireMock.port()).sendSms("+263782606983", "m", "r"))
                 .isInstanceOf(NotificationDeliveryException.class)
-                .hasMessageContaining("HTTP 503");
+                .hasMessageContaining("login failed");
+        wireMock.verify(0, postRequestedFor(urlEqualTo(SMS)));
     }
 
     @Test
-    @DisplayName("adapter unreachable (connection refused): throws NotificationDeliveryException")
-    void sendSms_adapterUnreachable_throwsWithUnreachableMessage() throws Exception {
-        // Point a SEPARATE client at a known-closed port (open + immediately
-        // close a server socket to grab a free port number, then the OS will
-        // refuse any subsequent connect). Keeps the shared WireMock untouched
-        // so other tests stay green regardless of execution order.
+    @DisplayName("500 on SMS (non-401): NotificationDeliveryException")
+    void serverError_throws() {
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).willReturn(okJson("{\"accessToken\":\"tok-abc\"}")));
+        wireMock.stubFor(post(urlEqualTo(SMS)).willReturn(aResponse().withStatus(500)));
+
+        assertThatThrownBy(() -> client(wireMock.port()).sendSms("+263782606983", "m", "r"))
+                .isInstanceOf(NotificationDeliveryException.class)
+                .hasMessageContaining("500");
+    }
+
+    @Test
+    @DisplayName("connect refused: NotificationDeliveryException (separate dead-port client)")
+    void connectRefused_throws() throws Exception {
         int closedPort;
         try (java.net.ServerSocket s = new java.net.ServerSocket(0)) {
             closedPort = s.getLocalPort();
-        } // socket closed -> port is unbound -> connect attempts get RST
-
-        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
-        factory.setConnectTimeout(Duration.ofMillis(500));
-        factory.setReadTimeout(Duration.ofMillis(500));
-        RestClient deadClient = RestClient.builder()
-                .baseUrl("http://localhost:" + closedPort)
-                .requestFactory(factory)
-                .build();
-        SmsNotificationClient unreachableClient = new SmsNotificationClient(deadClient);
-
-        assertThatThrownBy(() -> unreachableClient.sendSms("+263782606983", "msg", "r4"))
-                .isInstanceOf(NotificationDeliveryException.class)
-                .hasMessageContaining("unreachable");
-    }
-
-    @Test
-    @DisplayName("blank destination is rejected client-side; no HTTP call is made")
-    void sendSms_blankDestination_rejectedBeforeNetwork() {
-        wireMock.stubFor(post(urlEqualTo("/notifications/sms"))
-                .willReturn(aResponse().withStatus(200)));
-
-        assertThatThrownBy(() -> client.sendSms("", "msg", "r5"))
-                .isInstanceOf(NotificationDeliveryException.class)
-                .hasMessageContaining("recipient is blank");
-
-        // No request should have hit WireMock — guard-rails before the wire call.
-        wireMock.verify(0, postRequestedFor(urlEqualTo("/notifications/sms")));
-    }
-
-    @Test
-    @DisplayName("blank message is rejected client-side; no HTTP call is made")
-    void sendSms_blankMessage_rejectedBeforeNetwork() {
-        assertThatThrownBy(() -> client.sendSms("+263782606983", "  ", "r6"))
-                .isInstanceOf(NotificationDeliveryException.class)
-                .hasMessageContaining("message is blank");
-        wireMock.verify(0, postRequestedFor(urlEqualTo("/notifications/sms")));
-    }
-
-    @Test
-    @DisplayName("null reference is replaced with a TKT-SMS-<uuid> reference on the wire")
-    void sendSms_nullReference_isAutoGenerated() {
-        wireMock.stubFor(post(urlEqualTo("/notifications/sms"))
-                .willReturn(aResponse().withStatus(200)));
-
-        client.sendSms("+263782606983", "msg", null);
-
-        // Reference must always be present on the wire so messenger can dedupe
-        // and the adapter has an idempotency key. Auto-generated format:
-        // TKT-SMS-<uuid>.
-        wireMock.verify(postRequestedFor(urlEqualTo("/notifications/sms"))
-                .withRequestBody(matchingJsonPath("$.reference",
-                        matching("TKT-SMS-[0-9a-f-]{36}"))));
+        }
+        assertThatThrownBy(() -> client(closedPort).sendSms("+263782606983", "m", "r"))
+                .isInstanceOf(NotificationDeliveryException.class);
     }
 }
