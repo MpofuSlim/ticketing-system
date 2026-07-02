@@ -698,6 +698,35 @@ class BookingServiceTest {
     }
 
     @Test
+    void confirmBooking_rejectsPayingWithPoints_loyaltyDecoupled() {
+        // Booking is decoupled from loyalty: a ticket can't be paid for with
+        // points (and never earns points). A confirm that tries to burn points is
+        // rejected so we don't hand out a ticket for points that were never
+        // redeemed. The booking stays PENDING — nothing is saved.
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+
+        UUID id = UUID.randomUUID();
+        Booking booking = Booking.builder().id(id).userEmail("u@example.com")
+                .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN)
+                .expiresAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).plusMinutes(5))
+                .build();
+        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+
+        ConfirmBookingRequestDTO req = ConfirmBookingRequestDTO.builder()
+                .pointsToUse(new BigDecimal("100"))
+                .build();
+
+        RuntimeException ex = assertThrows(RuntimeException.class,
+                () -> service.confirmBooking(id, req));
+        assertTrue(ex.getMessage().contains("Paying for tickets with loyalty points isn't available"),
+                "actual: " + ex.getMessage());
+        assertEquals(Booking.BookingStatus.PENDING, booking.getStatus());
+        verify(bookingRepo, never()).save(any());
+    }
+
+    @Test
     void cancelBooking_clearsExpiresAtSoExpirationSchedulerSkipsIt() {
         BookingRepository bookingRepo = mock(BookingRepository.class);
         BookingService service = newService(bookingRepo,
