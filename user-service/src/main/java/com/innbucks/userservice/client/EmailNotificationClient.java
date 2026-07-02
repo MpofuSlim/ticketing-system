@@ -18,9 +18,10 @@ import java.util.UUID;
 import java.util.function.Function;
 
 /**
- * Sends a single plain-text email through the InnBucks public notification API:
- * {@code POST /api/notification/email} on the same API Gateway the payment rail
- * uses. Auth mirrors {@code payment-service}'s {@code InnbucksApiClient}: an
+ * Sends plain-text email AND SMS through the InnBucks public notification API:
+ * {@code POST /api/notification/email} and {@code POST /api/notification/sms} on
+ * the same API Gateway the payment rail uses. Auth mirrors
+ * {@code payment-service}'s {@code InnbucksApiClient}: an
  * {@code X-Api-Key} header plus a bearer token obtained from
  * {@code POST /auth/third-party} (cached until its JWT {@code exp}, refreshed
  * once on a 401).
@@ -38,6 +39,7 @@ public class EmailNotificationClient {
 
     private static final String LOGIN_PATH = "/auth/third-party";
     private static final String EMAIL_PATH = "/api/notification/email";
+    private static final String SMS_PATH = "/api/notification/sms";
     private static final String API_KEY_HEADER = "X-Api-Key";
 
     private final RestClient restClient;
@@ -111,6 +113,63 @@ public class EmailNotificationClient {
             }
         });
         log.info("Email notification accepted by notification API ref={}", ref);
+    }
+
+    /**
+     * Send a plain-text SMS to a single MSISDN through the same authenticated
+     * notification API as {@link #sendEmail} ({@code POST /api/notification/sms},
+     * body {@code {message, reference, destinationMsisdn}}). Never logs the
+     * message (may carry an OTP / password) or the MSISDN.
+     *
+     * @throws NotificationDeliveryException on blank input, missing config, an
+     *         upstream rejection, or a connectivity failure.
+     */
+    public void sendSms(String to, String message, String reference) {
+        if (to == null || to.isBlank()) {
+            throw new NotificationDeliveryException("SMS recipient is blank");
+        }
+        if (message == null || message.isBlank()) {
+            throw new NotificationDeliveryException("SMS message is blank");
+        }
+        requireConfigured();
+        String ref = (reference != null && !reference.isBlank())
+                ? reference
+                : "TKT-SMS-" + UUID.randomUUID();
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("message", message);
+        payload.put("reference", ref);
+        payload.put("destinationMsisdn", to);
+
+        withAuthRetryOn401(token -> {
+            try {
+                restClient.post()
+                        .uri(SMS_PATH)
+                        .header(API_KEY_HEADER, properties.getApiKey())
+                        .header("Authorization", "Bearer " + token)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .accept(MediaType.APPLICATION_JSON)
+                        .body(payload)
+                        .retrieve()
+                        .toBodilessEntity();
+                return null;
+            } catch (RestClientResponseException ex) {
+                if (ex.getStatusCode().value() == 401) {
+                    throw new UnauthorizedException();
+                }
+                log.warn("Notification API rejected SMS ref={} status={} body={}",
+                        ref, ex.getStatusCode(), ex.getResponseBodyAsString());
+                throw new NotificationDeliveryException(
+                        "Notification API rejected SMS: HTTP " + ex.getStatusCode().value(), ex);
+            } catch (NotificationDeliveryException ex) {
+                throw ex;
+            } catch (RuntimeException ex) {
+                log.warn("Notification API unreachable for SMS ref={} error={}", ref, ex.getMessage());
+                throw new NotificationDeliveryException(
+                        "Notification API unreachable: " + ex.getMessage(), ex);
+            }
+        });
+        log.info("SMS notification accepted by notification API ref={}", ref);
     }
 
     /** Run an authed call; on 401, force one token refresh and replay once. */
