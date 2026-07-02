@@ -15,6 +15,7 @@ import com.innbucks.userservice.repository.DeviceRepository;
 import com.innbucks.userservice.repository.PendingRegistrationRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.util.MsisdnCountryResolver;
+import com.innbucks.userservice.util.MsisdnValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -54,7 +55,7 @@ public class CustomerService {
      *  InnBucks-market entry (rare; foreign numbers). Set via INNBUCKS_COUNTRY
      *  env var; same key the rest of the service is pinned to. */
     @Value("${innbucks.country:ZW}")
-    private String deploymentCountry;
+    private String deploymentCountry = "ZW";
 
     /**
      * Tier 1 no longer creates a User or CustomerProfile. It stashes the phone + hashed password
@@ -63,34 +64,36 @@ public class CustomerService {
      */
     @Transactional
     public CustomerRegistrationResponseDTO registerTier1(CustomerTier1RegisterDTO request) {
-        log.info("Customer tier 1 registration phone={}", MsisdnMasking.mask(request.getPhoneNumber()));
-        // Step 4: use the composite (phone, home_country) check rather than
-        // phone alone, matching the new uk_users_phone_country constraint.
-        // In a single-cell deployment every existing row's home_country is
-        // ZW, so this is behaviourally identical to existsByPhoneNumber today
-        // — but the right tuple keeps reading honest for cell #2 onwards.
-        String homeCountry = MsisdnCountryResolver.resolve(request.getPhoneNumber()).orElse(deploymentCountry);
-        if (userRepository.existsByPhoneNumberAndHomeCountry(request.getPhoneNumber(), homeCountry)) {
+        // Canonicalise to E.164 up front so the pending row, the OTP challenge,
+        // and the eventual User row all key off one format (phone is the lookup
+        // key across all three) and the admin console shows one consistent shape.
+        String phone = normalizePhone(request.getPhoneNumber());
+        log.info("Customer tier 1 registration phone={}", MsisdnMasking.mask(phone));
+        // Resolve home_country from the now-canonical E.164 number (its country
+        // code is guaranteed present); fall back to this cell's country. Matches
+        // the uk_users_phone_country constraint tuple.
+        String homeCountry = MsisdnCountryResolver.resolve(phone).orElse(deploymentCountry);
+        if (userRepository.existsByPhoneNumberAndHomeCountry(phone, homeCountry)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Phone number already registered");
         }
 
         // Replace any in-flight pending registration — lets users recover from a mistyped password.
-        pendingRegistrationRepository.deleteByPhoneNumber(request.getPhoneNumber());
+        pendingRegistrationRepository.deleteByPhoneNumber(phone);
         pendingRegistrationRepository.flush();
 
         Instant now = Instant.now();
         PendingRegistration pending = PendingRegistration.builder()
-                .phoneNumber(request.getPhoneNumber())
+                .phoneNumber(phone)
                 .passwordHash(passwordEncoder.encode(request.getPassword()))
                 .createdAt(now)
                 .expiresAt(now.plus(PENDING_REGISTRATION_TTL))
                 .build();
         pendingRegistrationRepository.save(pending);
 
-        otpService.sendOtp(request.getPhoneNumber());
+        otpService.sendOtp(phone);
 
         return CustomerRegistrationResponseDTO.builder()
-                .phoneNumber(request.getPhoneNumber())
+                .phoneNumber(phone)
                 .tier(1)
                 .verified(false)
                 .nextStep("Verify your phone at /auth/otp/verify to complete account creation, then proceed to /auth/customer/register/tier2")
@@ -158,7 +161,7 @@ public class CustomerService {
         // the entire mechanism — every retry looked like a brand-new request.
         String idempotencyKey = "customer-tier-2:" + user.getId();
         CoreBankingCustomerResult coreBankingCustomer = coreBanking.createCustomer(
-                toCreateCommand(request), idempotencyKey);
+                toCreateCommand(request, user.getPhoneNumber()), idempotencyKey);
 
         // Stamp the core-banking linkage on the local profile so subsequent
         // reads (balance enquiries, account-status lookups, reconciliation
@@ -239,8 +242,9 @@ public class CustomerService {
 
     @Transactional(readOnly = true)
     public CustomerTierResponseDTO getCustomerTierByPhoneNumber(String phoneNumber) {
-        User user = userRepository.findByPhoneNumber(phoneNumber)
-                .orElseThrow(() -> new RuntimeException("Customer not found for phone " + phoneNumber));
+        String phone = normalizePhone(phoneNumber);
+        User user = userRepository.findByPhoneNumber(phone)
+                .orElseThrow(() -> new RuntimeException("Customer not found for phone " + phone));
         if (!user.hasRole(User.Role.CUSTOMER)) {
             throw new RuntimeException("User is not a customer");
         }
@@ -267,12 +271,13 @@ public class CustomerService {
      */
     @Transactional(readOnly = true)
     public List<DepositAccount> getDepositsForCustomer(String phoneNumber) {
-        User user = userRepository.findByPhoneNumber(phoneNumber)
-                .orElseThrow(() -> new RuntimeException("Customer not found for phone " + phoneNumber));
+        String phone = normalizePhone(phoneNumber);
+        User user = userRepository.findByPhoneNumber(phone)
+                .orElseThrow(() -> new RuntimeException("Customer not found for phone " + phone));
         if (!user.hasRole(User.Role.CUSTOMER)) {
             throw new RuntimeException("User is not a customer");
         }
-        return coreBanking.listDeposits(phoneNumber);
+        return coreBanking.listDeposits(phone);
     }
 
     /**
@@ -284,15 +289,16 @@ public class CustomerService {
      */
     @Transactional(readOnly = true)
     public List<CustomerSendMoneyDetail> getSendMoneyDetailsForCustomer(String phoneNumber) {
-        User user = userRepository.findByPhoneNumber(phoneNumber)
-                .orElseThrow(() -> new RuntimeException("Customer not found for phone " + phoneNumber));
+        String phone = normalizePhone(phoneNumber);
+        User user = userRepository.findByPhoneNumber(phone)
+                .orElseThrow(() -> new RuntimeException("Customer not found for phone " + phone));
         if (!user.hasRole(User.Role.CUSTOMER)) {
             throw new RuntimeException("User is not a customer");
         }
         // Capture the recipient's structured name once and stamp it onto every
         // returned account row so the sender's UI can show "Sending to: Jane M.
         // Doe" without a second lookup.
-        return coreBanking.listDeposits(phoneNumber).stream()
+        return coreBanking.listDeposits(phone).stream()
                 .map(d -> toSendMoneyDetail(d, user))
                 .toList();
     }
@@ -336,7 +342,8 @@ public class CustomerService {
      * Oradian's MALE/FEMALE-only gender enum) are enforced inside the
      * adapters, where the provider knowledge lives.
      */
-    private static CoreBankingCreateCustomerCommand toCreateCommand(CustomerTier2RegisterDTO request) {
+    private static CoreBankingCreateCustomerCommand toCreateCommand(CustomerTier2RegisterDTO request,
+                                                                    String normalizedMsisdn) {
         CustomerTier2RegisterDTO.Address addr = request.getAddress();
         return CoreBankingCreateCustomerCommand.builder()
                 .firstName(request.getFirstName())
@@ -344,7 +351,7 @@ public class CustomerService {
                 .lastName(request.getLastName())
                 .dateOfBirth(request.getDateOfBirth())
                 .gender(request.getGender().name())
-                .msisdn(request.getMsisdn())
+                .msisdn(normalizedMsisdn)
                 .nationalId(request.getNationalId())
                 .email(request.getEmail())
                 .address(CoreBankingCreateCustomerCommand.Address.builder()
@@ -357,14 +364,30 @@ public class CustomerService {
                 .build();
     }
 
+    /**
+     * Canonicalise a caller-supplied phone to E.164 ({@code +<cc><national>})
+     * against this cell's country. Every phone that enters the service — being
+     * stored OR used to look a customer up — passes through here, so writes and
+     * reads always agree on one format (phone is the lookup key). An unparseable
+     * number is rejected with 400 rather than reaching the DB or a lookup.
+     */
+    private String normalizePhone(String raw) {
+        return MsisdnValidator.normalizeToE164(raw, deploymentCountry)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Invalid phone number: " + raw));
+    }
+
     private CustomerProfile loadProfile(String phoneNumber, int requiredCurrentTier) {
+        // Normalise the lookup key to the same E.164 form registerTier1 stored,
+        // so "0772...", "772..." and "+263772..." all resolve to the one row.
+        String normalized = normalizePhone(phoneNumber);
         // Status codes stay 400 (not 404) on the "not found" branches even though
         // 404 is semantically purer — the existing IT contract
         // (AuthControllerIT.customerTier2_returns400WhenMsisdnDoesNotMatchAnyTier1)
         // pins 400, the FE branches on it, and the user's complaint was about the
         // generic MESSAGE catching this path, not the status code. The descriptive
         // reason still reaches the wire via GlobalExceptionHandler.handleResponseStatus.
-        User user = userRepository.findByPhoneNumber(phoneNumber)
+        User user = userRepository.findByPhoneNumber(normalized)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "No account found for this phone number."));
         if (!user.hasRole(User.Role.CUSTOMER)) {

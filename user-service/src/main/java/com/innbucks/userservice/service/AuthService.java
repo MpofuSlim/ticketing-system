@@ -5,6 +5,7 @@ import com.innbucks.userservice.entity.*;
 import com.innbucks.userservice.event.AccountLockedEvent;
 import com.innbucks.userservice.repository.*;
 import com.innbucks.userservice.util.MsisdnMasking;
+import com.innbucks.userservice.util.MsisdnValidator;
 import com.innbucks.userservice.security.JwtUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -99,7 +100,7 @@ public class AuthService implements ApplicationEventPublisherAware {
      *  their home_country is the deployment country — no MSISDN derivation
      *  for the staff path. Set via INNBUCKS_COUNTRY env var. */
     @Value("${innbucks.country:ZW}")
-    private String deploymentCountry;
+    private String deploymentCountry = "ZW";
 
     // SUPER_ADMIN accounts are seeded without a country, but downstream
     // services (e.g. event-service createEvent) reject a token that carries
@@ -196,8 +197,15 @@ public class AuthService implements ApplicationEventPublisherAware {
         // Step 4: use the composite (phone, home_country) check matching the
         // new uk_users_phone_country constraint. System users are anchored
         // to this cell's deployment country.
-        if (userRepository.existsByPhoneNumberAndHomeCountry(request.getPhoneNumber(), deploymentCountry)) {
-            log.warn("Registration failed, phone already registered phone={}", MsisdnMasking.mask(request.getPhoneNumber()));
+        // Canonicalise to E.164 (+<cc><national>) against this cell's country
+        // before the uniqueness check and before storing — one format
+        // everywhere, and uk_users_phone_country can't be fooled by a trunk-0
+        // or no-country-code spelling of an already-registered number.
+        String normalizedPhone = MsisdnValidator.normalizeToE164(request.getPhoneNumber(), deploymentCountry)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "Invalid phone number: " + request.getPhoneNumber()));
+        if (userRepository.existsByPhoneNumberAndHomeCountry(normalizedPhone, deploymentCountry)) {
+            log.warn("Registration failed, phone already registered phone={}", MsisdnMasking.mask(normalizedPhone));
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Phone number already registered");
         }
 
@@ -210,7 +218,7 @@ public class AuthService implements ApplicationEventPublisherAware {
                 .firstName(request.getFirstName())
                 .middleName(request.getMiddleName())
                 .lastName(request.getLastName())
-                .phoneNumber(request.getPhoneNumber())
+                .phoneNumber(normalizedPhone)
                 .email(request.getEmail())
                 .country(request.getCountry())
                 // home_country is the cell-routing key — different from the
@@ -796,9 +804,15 @@ public class AuthService implements ApplicationEventPublisherAware {
             return java.util.Optional.empty();
         }
         String trimmed = identifier.trim();
-        return trimmed.contains("@")
-                ? userRepository.findByEmail(trimmed)
-                : userRepository.findByPhoneNumber(trimmed);
+        if (trimmed.contains("@")) {
+            return userRepository.findByEmail(trimmed);
+        }
+        // Login-by-phone: normalise to the same E.164 form registration stored,
+        // so a customer typing 0772..., 772... or +263772... all resolve to
+        // their one account. Best-effort — an unparseable value falls through
+        // raw and simply won't match (invalid credentials).
+        String phone = MsisdnValidator.normalizeToE164(trimmed, deploymentCountry).orElse(trimmed);
+        return userRepository.findByPhoneNumber(phone);
     }
 
     private Set<String> parseBundles(List<String> raw) {

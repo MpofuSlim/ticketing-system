@@ -21,6 +21,16 @@
             <artifactId>spring-boot-starter-webmvc</artifactId>
         </dependency>
 
+        <!-- Phone-number normalisation: canonicalise MSISDNs to E.164
+             (+<cc><national>) before storage/lookup so every write path stores
+             one format regardless of how the caller typed the number, and
+             phone-keyed lookups (login, OTP, reset) match. Same lib + version
+             as booking-service's MsisdnValidator. -->
+        <dependency>
+            <groupId>com.googlecode.libphonenumber</groupId>
+            <artifactId>libphonenumber</artifactId>
+            <version>9.0.32</version>
+        </dependency>
 
         <!-- Database ORM -->
         <dependency>

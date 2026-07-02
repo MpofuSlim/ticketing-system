@@ -419,21 +419,24 @@ class AuthServiceTest {
         CustomerProfileRepository customerRepo = mock(CustomerProfileRepository.class);
         PasswordEncoder encoder = mock(PasswordEncoder.class);
         JwtUtil jwt = mock(JwtUtil.class);
+        // Stored in canonical E.164 (as registration now persists it).
         User user = User.builder()
                 .id(7L)
-                .phoneNumber("0777000099").password("hashed")
+                .phoneNumber("+263777000099").password("hashed")
                 .roles(EnumSet.of(User.Role.CUSTOMER))
                 .active(true).mfaEnabled(false).build();
         CustomerProfile profile = CustomerProfile.builder()
                 .user(user).registrationTier(2).verified(false).build();
-        when(userRepo.findByPhoneNumber("0777000099")).thenReturn(Optional.of(user));
+        when(userRepo.findByPhoneNumber("+263777000099")).thenReturn(Optional.of(user));
         when(customerRepo.findByUserId(7L)).thenReturn(Optional.of(profile));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
-        when(jwt.generateToken(eq("0777000099"), eq(List.of("CUSTOMER")),
-                any(), eq(2), eq(false), eq("0777000099"), isNull(), isNull(),
+        when(jwt.generateToken(eq("+263777000099"), eq(List.of("CUSTOMER")),
+                any(), eq(2), eq(false), eq("+263777000099"), isNull(), isNull(),
                 any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
+        // Customer types the national/local form — login normalises it to the
+        // stored E.164 before lookup, so it still resolves to the one account.
         req.setIdentifier("0777000099"); req.setPassword("pw");
 
         AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),

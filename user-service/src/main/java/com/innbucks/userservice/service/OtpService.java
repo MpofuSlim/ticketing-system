@@ -16,6 +16,7 @@ import com.innbucks.userservice.repository.OtpRetryAttemptRepository;
 import com.innbucks.userservice.repository.PendingRegistrationRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.util.MsisdnCountryResolver;
+import com.innbucks.userservice.util.MsisdnValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -64,6 +65,10 @@ public class OtpService {
      */
     @Transactional
     public void sendOtp(String phoneNumber) {
+        // Key the OTP + retry rows by the canonical E.164 form so verifyOtp
+        // (and the registration/materialisation that follows) resolve the same
+        // row no matter how the caller spelled the number.
+        phoneNumber = normalize(phoneNumber);
         Instant now = Instant.now();
         enforceRetryQuota(phoneNumber, now);
         String code = generateCode();
@@ -79,6 +84,7 @@ public class OtpService {
      */
     @Transactional
     public boolean verifyOtp(String phoneNumber, String code) {
+        phoneNumber = normalize(phoneNumber);
         if (consumeOtp(phoneNumber, code)) {
             finalizeVerification(phoneNumber);
             log.info("OTP verified phone={}", MsisdnMasking.mask(phoneNumber));
@@ -273,6 +279,18 @@ public class OtpService {
      * non-domestic — safer to route to WhatsApp than to claim a successful
      * SMS that the local gateway silently drops.
      */
+    /**
+     * Canonicalise a phone-channel MSISDN to E.164 against this cell's country,
+     * best-effort: an unparseable value passes through unchanged so we never
+     * throw here (the generic /auth/otp endpoints accept a number and either
+     * deliver or don't). Idempotent, so callers that already normalised (e.g.
+     * registerTier1) are unaffected. NOT applied to the reset methods — those
+     * receive an already-resolved identifier that may be an email.
+     */
+    private String normalize(String phoneNumber) {
+        return MsisdnValidator.normalizeToE164(phoneNumber, deploymentCountry).orElse(phoneNumber);
+    }
+
     private boolean isDomesticMsisdn(String phoneNumber) {
         return MsisdnCountryResolver.resolve(phoneNumber)
                 .map(c -> c.equalsIgnoreCase(deploymentCountry))

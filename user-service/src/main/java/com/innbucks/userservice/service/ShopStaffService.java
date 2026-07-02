@@ -7,6 +7,7 @@ import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.event.CredentialDeliveryRequested;
 import com.innbucks.userservice.integration.LoyaltyServiceClient;
 import com.innbucks.userservice.repository.UserRepository;
+import com.innbucks.userservice.util.MsisdnValidator;
 import com.innbucks.userservice.util.TemporaryPasswordGenerator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -55,7 +56,7 @@ public class ShopStaffService {
      *  to this cell — home_country is the deployment country, not derived
      *  from the staff member's MSISDN. Set via INNBUCKS_COUNTRY env var. */
     @Value("${innbucks.country:ZW}")
-    private String deploymentCountry;
+    private String deploymentCountry = "ZW";
 
     @Transactional
     public UserResponseDTO createShopAdmin(CreateShopAdminDTO req) {
@@ -266,9 +267,15 @@ public class ShopStaffService {
         if (userRepository.existsByEmail(email)) {
             throw badRequest("Email already registered");
         }
+        // Canonicalise to E.164 (+<cc><national>) against this cell's country
+        // BEFORE the uniqueness check and before storing, so "+263772..." and a
+        // bare "0772..."/"772..." can't slip past uk_users_phone_country as two
+        // different numbers, and the admin console shows one consistent format.
+        String normalizedPhone = MsisdnValidator.normalizeToE164(phone, deploymentCountry)
+                .orElseThrow(() -> badRequest("Invalid phone number: " + phone));
         // Step 4: composite (phone, home_country) check matching the new
         // uk_users_phone_country constraint. Staff are anchored to this cell.
-        if (userRepository.existsByPhoneNumberAndHomeCountry(phone, deploymentCountry)) {
+        if (userRepository.existsByPhoneNumberAndHomeCountry(normalizedPhone, deploymentCountry)) {
             throw badRequest("Phone number already registered");
         }
         return User.builder()
@@ -276,7 +283,7 @@ public class ShopStaffService {
                 .middleName(middleName)
                 .lastName(lastName)
                 .email(email)
-                .phoneNumber(phone)
+                .phoneNumber(normalizedPhone)
                 .homeCountry(deploymentCountry)
                 .password(passwordEncoder.encode(tempPassword))
                 .roles(EnumSet.of(role))
