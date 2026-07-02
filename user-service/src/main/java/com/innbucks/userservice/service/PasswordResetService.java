@@ -3,8 +3,10 @@ package com.innbucks.userservice.service;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.repository.RefreshTokenRepository;
 import com.innbucks.userservice.repository.UserRepository;
+import com.innbucks.userservice.util.MsisdnValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -44,6 +46,11 @@ public class PasswordResetService {
     private final RefreshTokenRepository refreshTokenRepository;
     private final AuditService auditService;
     private final org.springframework.context.ApplicationEventPublisher eventPublisher;
+
+    /** This cell's country pin — region hint for normalising a reset phone to
+     *  E.164 so the OTP key and the user lookup match what registration stored. */
+    @Value("${innbucks.country:ZW}")
+    private String deploymentCountry = "ZW";
 
     /** Step 1 — send the reset OTP to whichever channel the identifier names. Silent no-op for unknown users. */
     @Transactional
@@ -119,7 +126,12 @@ public class PasswordResetService {
             return new Identifier(emailId.get(), true);
         }
         return trimToOptional(phoneNumber)
-                .map(p -> new Identifier(p, false))
+                // Best-effort E.164 so the OTP key + user lookup match what
+                // registration stored. Unparseable → passed through raw, which
+                // simply won't resolve to a user — keeping the flow silent (no
+                // account-enumeration leak) rather than throwing.
+                .map(p -> new Identifier(
+                        MsisdnValidator.normalizeToE164(p, deploymentCountry).orElse(p), false))
                 .orElseThrow(() -> new AuthService.PasswordChangeException(
                         "Provide a phone number or email to reset your password"));
     }

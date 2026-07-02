@@ -9,6 +9,7 @@ import com.innbucks.userservice.repository.RefreshTokenRepository;
 import com.innbucks.userservice.repository.TeamMemberEventAssignmentRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.security.AuthenticatedCaller;
+import com.innbucks.userservice.util.MsisdnValidator;
 import com.innbucks.userservice.util.TemporaryPasswordGenerator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -59,7 +60,7 @@ public class TeamMemberService {
     /** Deployment country pin. Team members are anchored to this cell — see
      *  {@link ShopStaffService#deploymentCountry} for the reasoning. */
     @Value("${innbucks.country:ZW}")
-    private String deploymentCountry;
+    private String deploymentCountry = "ZW";
 
     @Transactional
     public UserResponseDTO createTeamMember(CreateTeamMemberDTO req) {
@@ -69,7 +70,11 @@ public class TeamMemberService {
         if (userRepository.existsByEmail(req.getEmail())) {
             throw badRequest("Email already registered");
         }
-        if (userRepository.existsByPhoneNumberAndHomeCountry(req.getPhoneNumber(), deploymentCountry)) {
+        // Canonicalise to E.164 against this cell's country before the
+        // uniqueness check and before storing — one format everywhere.
+        String normalizedPhone = MsisdnValidator.normalizeToE164(req.getPhoneNumber(), deploymentCountry)
+                .orElseThrow(() -> badRequest("Invalid phone number: " + req.getPhoneNumber()));
+        if (userRepository.existsByPhoneNumberAndHomeCountry(normalizedPhone, deploymentCountry)) {
             throw badRequest("Phone number already registered");
         }
 
@@ -79,7 +84,7 @@ public class TeamMemberService {
                 .middleName(req.getMiddleName())
                 .lastName(req.getLastName())
                 .email(req.getEmail())
-                .phoneNumber(req.getPhoneNumber())
+                .phoneNumber(normalizedPhone)
                 .homeCountry(deploymentCountry)
                 .password(passwordEncoder.encode(tempPassword))
                 .roles(EnumSet.of(User.Role.TEAM_MEMBER))

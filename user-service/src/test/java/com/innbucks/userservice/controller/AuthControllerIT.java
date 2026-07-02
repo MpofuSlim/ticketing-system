@@ -332,6 +332,8 @@ class AuthControllerIT {
     @Test
     void customerTier1_registersByPhoneAndPassword() throws Exception {
         Map<String, Object> req = new HashMap<>();
+        // Customer types the national form; the service canonicalises to E.164
+        // before storing, and the response echoes the stored (canonical) value.
         req.put("phoneNumber", "0777000010");
         req.put("password", "password123");
 
@@ -340,13 +342,15 @@ class AuthControllerIT {
                         .content(objectMapper.writeValueAsString(req)))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.data.tier").value(1))
-                .andExpect(jsonPath("$.data.phoneNumber").value("0777000010"))
+                .andExpect(jsonPath("$.data.phoneNumber").value("+263777000010"))
                 .andExpect(jsonPath("$.data.verified").value(false));
     }
 
     @Test
     void customerTier2_upgradesUsingMsisdnAndStructuredAddress() throws Exception {
-        String phone = "0712345678";
+        // Canonical E.164 throughout: phone is stored, OTP-keyed, and echoed in
+        // this one form, so the OTP read-back and the response assertion align.
+        String phone = "+263712345678";
 
         // Tier 1: stash pending registration + dispatch OTP.
         Map<String, Object> tier1 = new HashMap<>();
