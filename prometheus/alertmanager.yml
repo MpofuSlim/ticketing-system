@@ -1,0 +1,54 @@
+# Alertmanager routing for the ticketing cell (OWASP A09).
+#
+# Prometheus (prometheus.yml `alerting:` block) forwards firing alerts here;
+# Alertmanager dedupes, groups, and fans them out to the real channels. The
+# security rules in alerts.yaml carry severity=page (wake someone) or
+# severity=ticket (queue for working hours); this splits on that label.
+#
+# Receivers below use webhook placeholders — set the real Slack/PagerDuty/email
+# targets per cell in a gitignored override (or via ${ENV} if you template this
+# file at deploy). Do NOT commit real webhook URLs / integration keys here.
+
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: default
+  group_by: ['alertname', 'job']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    # Page-severity alerts (incl. RefreshTokenReuse, InternalTokenProbing,
+    # AuditIntegrityBroken) route to the wake-someone channel with a tighter
+    # repeat interval.
+    - matchers: [ 'severity="page"' ]
+      receiver: pager
+      group_wait: 10s
+      repeat_interval: 1h
+    # Ticket-severity alerts queue for working-hours triage.
+    - matchers: [ 'severity="ticket"' ]
+      receiver: tickets
+
+receivers:
+  - name: default
+    # Catch-all. Replace with a real integration; a bare receiver silently drops.
+    webhook_configs:
+      - url: 'http://alert-sink:9099/default'
+        send_resolved: true
+
+  - name: pager
+    webhook_configs:
+      - url: 'http://alert-sink:9099/page'
+        send_resolved: true
+
+  - name: tickets
+    webhook_configs:
+      - url: 'http://alert-sink:9099/ticket'
+        send_resolved: true
+
+# Suppress lower-severity noise for the same alertname/job while a page is firing.
+inhibit_rules:
+  - source_matchers: [ 'severity="page"' ]
+    target_matchers: [ 'severity="ticket"' ]
+    equal: [ 'alertname', 'job' ]

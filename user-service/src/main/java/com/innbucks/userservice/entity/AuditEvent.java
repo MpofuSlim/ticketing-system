@@ -63,4 +63,13 @@ public class AuditEvent {
 
     @Column(name = "metadata", columnDefinition = "TEXT")
     private String metadata;
+
+    /**
+     * OWASP A09 tamper-evidence: HMAC-SHA256 over the immutable row fields
+     * (see {@code AuditService.computeHmac}), keyed by {@code audit.hmac-secret}.
+     * Lets {@code AuditIntegrityVerifier} detect any post-hoc modification of a
+     * row by an attacker with DB write access. Null on rows written before V29.
+     */
+    @Column(name = "row_hmac", length = 64)
+    private String rowHmac;
 }

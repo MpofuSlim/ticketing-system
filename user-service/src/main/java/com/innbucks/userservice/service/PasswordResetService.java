@@ -113,7 +113,9 @@ public class PasswordResetService {
         refreshTokenRepository.revokeAllForUser(user.getId(), Instant.now());
 
         auditService.recordSuccess(
-                AuditEventType.AUTH_PASSWORD_CHANGED,
+                // A09: distinct from AUTH_PASSWORD_CHANGED (authenticated self-service
+                // change) so a spike in unauthenticated OTP resets is separable.
+                AuditEventType.AUTH_PASSWORD_RESET,
                 String.valueOf(user.getId()), AuditService.ACTOR_TYPE_USER,
                 String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
                 null, auditContext);

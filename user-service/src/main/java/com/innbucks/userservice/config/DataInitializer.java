@@ -33,6 +33,11 @@ public class DataInitializer implements CommandLineRunner {
     private final PasswordEncoder passwordEncoder;
     private final Environment environment;
 
+    // A09: audit the first-run bootstrap SUPER_ADMIN creation. Field-injected
+    // (required=false) so tests constructing this runner directly don't widen.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.innbucks.userservice.service.AuditService auditService;
+
     @Value("${BOOTSTRAP_ADMIN_EMAIL:admin@innbucks.co.zw}")
     private String adminEmail;
 
@@ -76,6 +81,14 @@ public class DataInitializer implements CommandLineRunner {
                     .build();
             userRepository.save(admin);
             log.info("Super admin '{}' seeded; must change password on first login.", adminEmail);
+            if (auditService != null) {
+                auditService.recordSuccess(
+                        com.innbucks.userservice.service.AuditEventType.BOOTSTRAP_ADMIN_CREATED,
+                        null, com.innbucks.userservice.service.AuditService.ACTOR_TYPE_SYSTEM,
+                        adminEmail, com.innbucks.userservice.service.AuditService.TARGET_TYPE_USER,
+                        java.util.Map.of("email", adminEmail),
+                        com.innbucks.userservice.service.AuditContext.none());
+            }
             return;
         }
 

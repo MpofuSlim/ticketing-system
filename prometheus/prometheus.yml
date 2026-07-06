@@ -8,6 +8,16 @@ global:
 rule_files:
   - /etc/prometheus/rules/alerts.yaml
 
+# Route firing alerts to Alertmanager. Without this block the rules in
+# alerts.yaml evaluate but page nobody (OWASP A09 — an alert that reaches no
+# receiver is not monitoring). Alertmanager fans out to the real channels
+# (see alertmanager.yml). Host/port assume Alertmanager runs alongside
+# Prometheus in the monitoring stack (compose service / k8s Service named "alertmanager").
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: [ "alertmanager:9093" ]
+
 scrape_configs:
 
   - job_name: api-gateway

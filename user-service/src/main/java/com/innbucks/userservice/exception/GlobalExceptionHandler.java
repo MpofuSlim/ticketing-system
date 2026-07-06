@@ -22,6 +22,13 @@ import java.util.Map;
 @Slf4j
 public class GlobalExceptionHandler {
 
+    // A09: field-injected (required=false) so this advice is still trivially
+    // constructable in a plain unit test; null there => the emits below skip.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.innbucks.userservice.config.SecurityMetrics securityMetrics;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.innbucks.userservice.service.AuditService auditService;
+
     // Let Spring Security's entry point / access-denied handler produce the 401/403
     // envelopes instead of being swallowed as a generic 400.
     @ExceptionHandler(AuthenticationException.class)
@@ -30,7 +37,30 @@ public class GlobalExceptionHandler {
     }
 
     @ExceptionHandler(AccessDeniedException.class)
-    public void handleAccessDenied(AccessDeniedException ex) throws AccessDeniedException {
+    public void handleAccessDenied(AccessDeniedException ex,
+                                   jakarta.servlet.http.HttpServletRequest request) throws AccessDeniedException {
+        // A09: record the forbidden attempt (metric feeds AuthzDeniedSpike; audit
+        // row gives forensics — "who probed what") BEFORE re-throwing, so Spring
+        // Security still produces the 403 envelope. Never let audit/metric failure
+        // change the 403 outcome.
+        try {
+            if (securityMetrics != null) securityMetrics.authzDenied(request.getMethod());
+            if (auditService != null) {
+                org.springframework.security.core.Authentication auth =
+                        org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+                auditService.recordFailure(
+                        com.innbucks.userservice.service.AuditEventType.AUTHZ_DENIED,
+                        auth != null ? auth.getName() : null,
+                        com.innbucks.userservice.service.AuditService.ACTOR_TYPE_USER,
+                        null, null,
+                        "access_denied",
+                        java.util.Map.of("method", request.getMethod(), "path", request.getRequestURI()),
+                        new com.innbucks.userservice.service.AuditContext(
+                                request.getRemoteAddr(), request.getHeader("User-Agent")));
+            }
+        } catch (RuntimeException ignored) {
+            // observability must never alter the security response
+        }
         throw ex;
     }
 

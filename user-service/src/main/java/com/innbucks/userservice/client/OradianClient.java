@@ -67,8 +67,13 @@ public class OradianClient {
                     idempotencyKey);
             return response;
         } catch (RestClientResponseException ex) {
-            log.warn("Oradian create failed msisdn={} idemKey={} status={} body={}",
-                    MsisdnMasking.mask(request.getMsisdn()), idempotencyKey, ex.getStatusCode(), ex.getResponseBodyAsString());
+            // A09: the upstream error body can echo submitted customer PII — keep
+            // it out of the default (WARN) log; expose it only at DEBUG for
+            // opt-in triage.
+            log.warn("Oradian create failed msisdn={} idemKey={} status={}",
+                    MsisdnMasking.mask(request.getMsisdn()), idempotencyKey, ex.getStatusCode());
+            log.debug("Oradian create failure body status={} body={}",
+                    ex.getStatusCode(), ex.getResponseBodyAsString());
             throw new OradianClientException(
                     "Oradian middleware rejected the customer create: HTTP " + ex.getStatusCode().value(), ex);
         } catch (RuntimeException ex) {
@@ -100,8 +105,12 @@ public class OradianClient {
                     MsisdnMasking.mask(msisdn), response == null ? 0 : response.size());
             return response == null ? List.of() : response;
         } catch (RestClientResponseException ex) {
-            log.warn("Oradian deposits lookup failed msisdn={} status={} body={}",
-                    MsisdnMasking.mask(msisdn), ex.getStatusCode(), ex.getResponseBodyAsString());
+            // A09: upstream error body may carry PII — WARN keeps only status,
+            // DEBUG carries the body for opt-in triage.
+            log.warn("Oradian deposits lookup failed msisdn={} status={}",
+                    MsisdnMasking.mask(msisdn), ex.getStatusCode());
+            log.debug("Oradian deposits lookup failure body status={} body={}",
+                    ex.getStatusCode(), ex.getResponseBodyAsString());
             throw new OradianClientException(
                     "Oradian middleware rejected the deposits lookup: HTTP " + ex.getStatusCode().value(), ex);
         } catch (RuntimeException ex) {

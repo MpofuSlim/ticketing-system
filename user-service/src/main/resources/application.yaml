@@ -51,6 +51,14 @@ jwt:
 national-id:
   hmac-secret: ${NATIONAL_ID_HMAC_SECRET:change-me-national-id-hmac-secret}
 
+# A09 tamper-evidence — HMAC-SHA256 key sealing every audit_events row so a
+# post-hoc DB edit is detectable (AuditIntegrityVerifier). Lives here / in env,
+# NEVER in the DB, so an attacker with only DB write access can't re-seal a
+# forged row. ProductionSecretsGuard refuses to boot under a deployment profile
+# while this holds the change-me placeholder. Generate with: openssl rand -base64 48
+audit:
+  hmac-secret: ${AUDIT_HMAC_SECRET:change-me-audit-hmac-secret}
+
 # 2FA / TOTP — AES-GCM key for the users.mfa_secret column at rest. Base64'd
 # 32-byte value; ProductionSecretsGuard refuses to boot under prod while this
 # holds the change-me placeholder. Issuer is purely cosmetic (the label
