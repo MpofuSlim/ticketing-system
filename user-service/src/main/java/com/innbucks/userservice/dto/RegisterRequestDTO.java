@@ -43,6 +43,7 @@ public class RegisterRequestDTO {
 
     @Schema(example = "Zimbabwe")
     @NotBlank(message = "Country is required")
+    @Size(max = 100, message = "Country must not exceed 100 characters")
     private String country;
 
     @Schema(example = "[\"ticketing\"]",
@@ -63,6 +64,7 @@ public class RegisterRequestDTO {
 
     @Schema(example = "123 Samora Machel Ave, Harare", nullable = true,
             description = "Physical address of the business. Required when isBusiness is true.")
+    @Size(max = 255, message = "Business address must not exceed 255 characters")
     private String businessAddress;
 
     @Schema(example = "accounts@innbucks.co.zw", nullable = true,
@@ -74,6 +76,7 @@ public class RegisterRequestDTO {
 
     @Schema(example = "12345", nullable = true,
             description = "Business BPO number. Required when isBusiness is true.")
+    @Size(max = 100, message = "BPO number must not exceed 100 characters")
     private String bpoNumber;
 
     @AssertTrue(message = "businessName is required for a business account")

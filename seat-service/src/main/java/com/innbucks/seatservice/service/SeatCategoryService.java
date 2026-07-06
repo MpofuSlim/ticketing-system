@@ -8,6 +8,7 @@ import com.innbucks.seatservice.exception.BadRequestException;
 import com.innbucks.seatservice.exception.ConflictException;
 import com.innbucks.seatservice.exception.NotFoundException;
 import com.innbucks.seatservice.repository.*;
+import com.innbucks.seatservice.util.HtmlSanitizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
@@ -103,8 +104,8 @@ public class SeatCategoryService {
 
         SeatCategory category = SeatCategory.builder()
                 .eventId(request.getEventId())
-                .name(request.getName())
-                .description(request.getDescription())
+                .name(HtmlSanitizer.stripAll(request.getName()))
+                .description(HtmlSanitizer.stripAll(request.getDescription()))
                 .price(request.getPrice())
                 .totalSeats(totalSeats)
                 .availableSeats(totalSeats)
@@ -116,7 +117,7 @@ public class SeatCategoryService {
         // Auto-generate seats with per-section capacity, e.g. A1-A5, B1-B7, C1-C8
         List<Seat> seats = new ArrayList<>();
         for (SectionSeatConfigDTO sectionConfig : request.getSections()) {
-            String sectionLabel = sectionConfig.getSection().trim().toUpperCase(Locale.ROOT);
+            String sectionLabel = HtmlSanitizer.stripAll(sectionConfig.getSection().trim().toUpperCase(Locale.ROOT));
             // Optional per-section image, stamped on every seat in the section so
             // the read paths can recover it by section. Blank → null (no image).
             String sectionImageUrl = normalizeImageUrl(sectionConfig.getImageUrl());
@@ -224,8 +225,8 @@ public class SeatCategoryService {
         log.info("Updating seat category categoryId={} eventId={} name={} requesterEmail={} isAdmin={}",
                 categoryId, category.getEventId(), request.getName(), requesterEmail, isAdmin);
 
-        category.setName(request.getName());
-        category.setDescription(request.getDescription());
+        category.setName(HtmlSanitizer.stripAll(request.getName()));
+        category.setDescription(HtmlSanitizer.stripAll(request.getDescription()));
         category.setPrice(request.getPrice());
         categoryRepository.save(category);
 

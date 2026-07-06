@@ -73,6 +73,15 @@
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
+        <!-- Jsoup: server-side HTML sanitization of user-supplied free text
+             (OWASP A03 / stored-XSS). Strips markup from customer-facing seat
+             category name/description and section labels on write paths. See
+             util/HtmlSanitizer. Version managed by the parent pom. -->
+        <dependency>
+            <groupId>org.jsoup</groupId>
+            <artifactId>jsoup</artifactId>
+        </dependency>
+
         <!-- JWT -->
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
