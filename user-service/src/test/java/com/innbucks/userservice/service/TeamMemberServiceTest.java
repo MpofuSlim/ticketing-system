@@ -63,6 +63,7 @@ class TeamMemberServiceTest {
     @Mock private com.innbucks.userservice.repository.TeamMemberEventAssignmentRepository assignmentRepository;
     @Mock private PasswordEncoder passwordEncoder;
     @Mock private ApplicationEventPublisher eventPublisher;
+    @Mock private com.innbucks.userservice.security.TokenVersionPublisher tokenVersionPublisher;
 
     @InjectMocks private TeamMemberService service;
 
@@ -240,6 +241,10 @@ class TeamMemberServiceTest {
         assertThat(result.isActive()).isFalse();
         assertThat(member.getTokenVersion()).isEqualTo(versionBefore + 1);
         verify(refreshTokenRepository).revokeAllForUser(eq(99L), any(Instant.class));
+        // A07 / CWE-613: the bumped version is mirrored to the shared Redis under
+        // the member's own userUuid (== their JWT userUuid claim) so downstream
+        // rejects their outstanding tokens immediately.
+        verify(tokenVersionPublisher).publish(memberUuid, versionBefore + 1);
     }
 
     @Test
@@ -258,6 +263,8 @@ class TeamMemberServiceTest {
         assertThat(member.getTokenVersion()).isEqualTo(versionBefore);
         verify(userRepository, never()).save(any());
         verify(refreshTokenRepository, never()).revokeAllForUser(anyLong(), any(Instant.class));
+        // No bump -> nothing published to the shared Redis.
+        verify(tokenVersionPublisher, never()).publish(any(), anyLong());
     }
 
     @Test

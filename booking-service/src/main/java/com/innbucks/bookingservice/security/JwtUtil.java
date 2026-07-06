@@ -117,6 +117,26 @@ public class JwtUtil {
         return extractUuidClaim(token, "userUuid");
     }
 
+    /**
+     * Per-user session epoch from the {@code tokenVersion} claim (OWASP A07 /
+     * CWE-613). {@link JwtFilter} compares it against the fleet-current value
+     * published to shared Redis ({@code auth:tokenver:<userUuid>}) to reject
+     * tokens superseded by a newer login / password change. Returns
+     * {@code null} when the claim is absent or unparseable — a legacy token
+     * without the claim carries no version to enforce, so the filter fails
+     * open rather than 401ing it.
+     */
+    public Long extractTokenVersion(String token) {
+        try {
+            Object raw = getClaims(token).get("tokenVersion");
+            if (raw instanceof Number n) return n.longValue();
+            if (raw == null) return null;
+            return Long.parseLong(raw.toString());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     /** Display-name claims (emitted on CUSTOMER, TEAM_MEMBER and
      *  EVENT_ORGANIZER tokens by user-service). The scan boundary uses
      *  these to render a human display name on the rejection toast;

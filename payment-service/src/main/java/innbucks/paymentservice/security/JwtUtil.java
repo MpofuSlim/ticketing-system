@@ -9,6 +9,7 @@ import org.springframework.stereotype.Component;
 
 import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
+import java.util.UUID;
 
 /**
  * Verify-only JWT helper. payment-service does not mint tokens — user-service
@@ -81,6 +82,46 @@ public class JwtUtil {
         if (claims == null) return null;
         String home = claims.get("homeCountry", String.class);
         return (home == null || home.isBlank()) ? null : home;
+    }
+
+    /**
+     * Stable cross-service identifier of the caller, read from the
+     * {@code userUuid} claim. Returns null on any failure or when the claim is
+     * absent (legacy tokens) or not a valid UUID. Used to key the shared
+     * session-supersession lookup ({@code auth:tokenver:<userUuid>}).
+     */
+    public UUID extractUserUuid(String token) {
+        Claims claims = parseOrNull(token);
+        if (claims == null) return null;
+        String raw = claims.get("userUuid", String.class);
+        if (raw == null || raw.isBlank()) return null;
+        try {
+            return UUID.fromString(raw);
+        } catch (IllegalArgumentException ex) {
+            return null;
+        }
+    }
+
+    /**
+     * Per-user session epoch from the {@code tokenVersion} claim (OWASP A07 /
+     * CWE-613). {@link JwtFilter} compares it against the fleet-current value
+     * published to shared Redis ({@code auth:tokenver:<userUuid>}) to reject
+     * tokens superseded by a newer login / password change. Returns
+     * {@code null} when the token is invalid, or the claim is absent or
+     * unparseable — a legacy token without the claim carries no version to
+     * enforce, so the filter fails open rather than 401ing it.
+     */
+    public Long extractTokenVersion(String token) {
+        Claims claims = parseOrNull(token);
+        if (claims == null) return null;
+        try {
+            Object raw = claims.get("tokenVersion");
+            if (raw instanceof Number n) return n.longValue();
+            if (raw == null) return null;
+            return Long.parseLong(raw.toString());
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /** True iff the token's signature, expiry, and structure are all valid. */
