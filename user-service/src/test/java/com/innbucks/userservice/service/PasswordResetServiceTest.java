@@ -133,7 +133,7 @@ class PasswordResetServiceTest {
         assertThat(user.getFailedLoginAttempts()).isZero();
         assertThat(user.getLockedUntil()).isNull();
         verify(refreshTokenRepository).revokeAllForUser(eq(5L), any());
-        verify(auditService).recordSuccess(eq(AuditEventType.AUTH_PASSWORD_CHANGED),
+        verify(auditService).recordSuccess(eq(AuditEventType.AUTH_PASSWORD_RESET),
                 any(), any(), any(), any(), any(), any());
         // A07 / CWE-613: the bumped version is mirrored to the shared Redis under
         // the SAME userUuid the JWT carries, so downstream honours the reset.

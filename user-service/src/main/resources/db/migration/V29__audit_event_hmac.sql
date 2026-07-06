@@ -17,6 +17,9 @@
 -- without a cross-row write lock, and is portable to the H2 test profile since
 -- it's app-side crypto with no DB features.
 --
--- CHAR(64) = hex-encoded SHA-256 (32 bytes -> 64 hex chars).
+-- VARCHAR(64) holds the hex-encoded SHA-256 (32 bytes -> 64 hex chars). Uses
+-- VARCHAR (not CHAR) to match the entity's String @Column mapping — under
+-- Hibernate ddl-auto: validate a CHAR/bpchar column trips a "wrong column type"
+-- schema-validation error, and every other audit_events column (V15) is VARCHAR.
 
-ALTER TABLE audit_events ADD COLUMN row_hmac CHAR(64);
+ALTER TABLE audit_events ADD COLUMN row_hmac VARCHAR(64);
