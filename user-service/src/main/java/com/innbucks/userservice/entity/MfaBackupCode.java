@@ -37,7 +37,10 @@ public class MfaBackupCode {
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
-    @Column(name = "code_hash", nullable = false, length = 72)
+    // 255 (was 72, sized for BCrypt) so Argon2id encoded hashes (~100 chars incl.
+    // the "{argon2}" prefix) fit — see migration V27. Matches the widened column
+    // so ddl-auto: validate passes.
+    @Column(name = "code_hash", nullable = false, length = 255)
     private String codeHash;
 
     /** Set the moment a code is consumed; NULL while unused. */
