@@ -56,6 +56,11 @@ public class EventService {
             "deleted", "active", "rejected", "createdAt", "updatedAt"
     );
 
+    // Matches the controllers' @RequestParam(defaultValue = "startDateTime").
+    // Used when sortBy arrives null/blank (e.g. an explicit "?sortBy=") so a
+    // null/blank property is never handed to Sort.by.
+    private static final String DEFAULT_SORT_FIELD = "startDateTime";
+
     private final EventRepository eventRepository;
     private final EventMapper eventMapper;
     private final SeatCategoryGateway seatCategoryGateway;
@@ -501,11 +506,15 @@ public class EventService {
     public record BannerImage(byte[] bytes, String contentType) {}
 
     // OWASP A03: validate the user-supplied sort property against the allowlist
-    // before handing it to Spring Data. A null/blank sortBy preserves the prior
-    // default-sort behavior untouched; any other value outside the allowlist is a
-    // clean 400 rather than a 500 PropertyReferenceException.
+    // before handing it to Spring Data. A null/blank sortBy falls back to the
+    // default sort field (matching the controllers' @RequestParam default); any
+    // non-blank value outside the allowlist is a clean 400 rather than a 500
+    // PropertyReferenceException (which also leaks entity field names).
     private static Sort ascendingSort(String sortBy) {
-        if (sortBy != null && !sortBy.isBlank() && !SORTABLE_FIELDS.contains(sortBy)) {
+        if (sortBy == null || sortBy.isBlank()) {
+            return Sort.by(Sort.Direction.ASC, DEFAULT_SORT_FIELD);
+        }
+        if (!SORTABLE_FIELDS.contains(sortBy)) {
             throw new BadRequestException("Invalid sort field: " + sortBy);
         }
         return Sort.by(Sort.Direction.ASC, sortBy);
