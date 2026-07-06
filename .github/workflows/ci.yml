@@ -16,23 +16,34 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege (OWASP A08 — CI/CD integrity). Without this block the job
+# inherits the repo-default token scope, which can be read/write across the
+# whole repo. The test job only needs to read source; the dependency-review
+# job opts up to pull-requests:write at the job level for its PR summary.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
 
     steps:
+      # All third-party actions are pinned to an immutable commit SHA (not a
+      # movable tag) so a hijacked/retagged release can't inject code into CI
+      # (OWASP A08). Dependabot's github-actions ecosystem bumps the SHA +
+      # trailing version comment together; keep them in lock-step on edits.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
       - name: Set up JDK
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4.8.0
         with:
           distribution: temurin
           java-version: "21"
           cache: maven
 
       - name: Cache Maven wrapper distribution
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.m2/wrapper
           key: ${{ runner.os }}-maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
@@ -82,9 +93,34 @@ jobs:
 
       - name: Upload JaCoCo HTML + XML reports
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: jacoco-coverage
           path: '**/target/site/jacoco/**'
           if-no-files-found: warn
           retention-days: 14
+
+  # Software-supply-chain SCA gate (OWASP A08). Runs only on PRs and is
+  # DIFF-SCOPED: it inspects the dependency manifest changes this PR introduces
+  # (via GitHub's dependency graph) and fails only when the PR ADDS a dependency
+  # with a known High/Critical advisory — so it can't red the existing clean
+  # baseline, it only stops NEW vulnerable deps from landing. Complements the
+  # Release workflow's Trivy image scan, which catches transitive/library CVEs
+  # in the built fat jar; this one surfaces direct-dependency advisories at PR
+  # time before an image is even built, and covers manifests with no image
+  # (e.g. innbucks-core-gateway) too.
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write   # for comment-summary-in-pr
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Dependency review
+        uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4.9.0
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure
