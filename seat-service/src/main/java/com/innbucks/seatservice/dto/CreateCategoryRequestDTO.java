@@ -23,11 +23,11 @@ public class CreateCategoryRequestDTO {
     @Schema(example = "VIP",
             description = "Display name of the category shown to customers (e.g. VIP, General Admission, VVIP).")
     @NotBlank(message = "Category name is required")
-    @Size(max = 255, message = "Category name must be at most 255 characters")
+    @Size(max = 200, message = "Category name must be at most 200 characters")
     private String name;
 
     @Schema(example = "Premium front-row seats with complimentary drink and priority access.", nullable = true)
-    @Size(max = 255, message = "Description must be at most 255 characters")
+    @Size(max = 2000, message = "Description must be at most 2000 characters")
     private String description;
 
     @Schema(example = "100.00", description = "Ticket price per seat in the event's currency. Must be greater than 0.")

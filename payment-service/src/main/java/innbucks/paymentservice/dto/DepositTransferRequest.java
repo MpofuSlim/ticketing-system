@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -46,6 +47,7 @@ public class DepositTransferRequest {
     @Schema(example = "123.00", description = "Amount as a string — matches Oradian's wire format.")
     private String amount;
 
+    @Size(max = 500, message = "notes must be at most 500 characters")
     @Schema(example = "Lunch",
             description = "Optional free-text notes from the FE. Required by Oradian's wire " +
                     "format though, so payment-service coerces a missing/null value to \"\" " +

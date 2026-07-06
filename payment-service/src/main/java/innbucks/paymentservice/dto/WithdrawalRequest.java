@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -50,6 +51,7 @@ public class WithdrawalRequest {
     private String accountID;
 
     @NotBlank(message = "paymentMethodName is required")
+    @Size(max = 200, message = "paymentMethodName must be at most 200 characters")
     @Schema(example = "Cash",
             description = "Payment method name as configured in Oradian (e.g. \"Cash\"). The valid values come " +
                     "from the deployment's Oradian configuration; the FE picker should populate them from there.")
@@ -60,6 +62,7 @@ public class WithdrawalRequest {
             description = "Withdrawal amount as a string — Oradian's wire format. Use a plain decimal like \"10.00\".")
     private String amount;
 
+    @Size(max = 500, message = "notes must be at most 500 characters")
     @Schema(example = "Cash out at agent",
             description = "Optional free-text notes from the FE. May be null or empty.")
     private String notes;

@@ -224,7 +224,7 @@ public class AuthService implements ApplicationEventPublisherAware {
                 .lastName(HtmlSanitizer.stripAll(request.getLastName()))
                 .phoneNumber(normalizedPhone)
                 .email(request.getEmail())
-                .country(request.getCountry())
+                .country(HtmlSanitizer.stripAll(request.getCountry()))
                 // home_country is the cell-routing key — different from the
                 // free-text `country` field above. Staff are rooted in the
                 // cell they were created in.
@@ -247,9 +247,9 @@ public class AuthService implements ApplicationEventPublisherAware {
                     // Strip HTML from the free-text business name before persisting
                     // (OWASP A03 / stored-XSS); surfaces on organizer/event listings.
                     .businessName(HtmlSanitizer.stripAll(request.getBusinessName()))
-                    .businessAddress(request.getBusinessAddress())
+                    .businessAddress(HtmlSanitizer.stripAll(request.getBusinessAddress()))
                     .businessEmail(request.getBusinessEmail())
-                    .bpoNumber(request.getBpoNumber())
+                    .bpoNumber(HtmlSanitizer.stripAll(request.getBpoNumber()))
                     .build();
             tenantProfileRepository.save(profile);
             log.info("Tenant profile saved userId={}", user.getId());

@@ -17,6 +17,7 @@ import innbucks.paymentservice.repository.TransactionRepository;
 import innbucks.paymentservice.security.JwtUtil;
 import innbucks.paymentservice.service.TransactionService;
 import innbucks.paymentservice.service.TransferLimitService;
+import innbucks.paymentservice.util.HtmlSanitizer;
 import innbucks.paymentservice.util.MsisdnMasking;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -362,7 +363,7 @@ public class TransfersController {
                     .sourceAccountId(request.getFromAccountId())
                     .destinationAccountId(request.getToAccountId())
                     .amount(parsedAmount)
-                    .notes(request.getNotes())
+                    .notes(HtmlSanitizer.stripAll(request.getNotes()))
                     .transactionDate(request.getTransactionDate())
                     .idempotencyKey(httpRequest.getHeader(IDEMPOTENCY_HEADER))
                     .build());
@@ -658,8 +659,8 @@ public class TransfersController {
                     .customerPhone(phoneNumber)
                     .sourceAccountId(request.getAccountID())
                     .amount(parsedAmount)
-                    .paymentMethodName(request.getPaymentMethodName())
-                    .notes(request.getNotes())
+                    .paymentMethodName(HtmlSanitizer.stripAll(request.getPaymentMethodName()))
+                    .notes(HtmlSanitizer.stripAll(request.getNotes()))
                     .transactionDate(request.getTransactionDate())
                     .transactionBranchId(request.getTransactionBranchID())
                     .idempotencyKey(httpRequest.getHeader(IDEMPOTENCY_HEADER))
