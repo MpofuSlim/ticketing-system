@@ -14,9 +14,13 @@ import com.innbucks.userservice.repository.PendingRegistrationRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.Optional;
@@ -110,6 +114,8 @@ class CustomerServiceTest {
                 .user(user)
                 .registrationTier(3) // must be at tier 3 to advance to tier 4
                 .verified(false)
+                // A01/A04: recent OTP verification — the tier2/3/4 gate requires it.
+                .phoneVerifiedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .build();
         when(userRepo.findByPhoneNumber("+263770000001")).thenReturn(Optional.of(user));
         when(profileRepo.findByUserId(42L)).thenReturn(Optional.of(profile));
@@ -175,6 +181,8 @@ class CustomerServiceTest {
         CustomerProfile profile = CustomerProfile.builder()
                 .user(user)
                 .registrationTier(1)
+                // A01/A04: recent OTP verification — the tier2/3/4 gate requires it.
+                .phoneVerifiedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .build();
         when(userRepo.findByPhoneNumber("+263770000001")).thenReturn(Optional.of(user));
         when(profileRepo.findByUserId(42L)).thenReturn(Optional.of(profile));
@@ -214,6 +222,8 @@ class CustomerServiceTest {
         CustomerProfile profile = CustomerProfile.builder()
                 .user(user)
                 .registrationTier(1)
+                // A01/A04: recent OTP verification — the tier2/3/4 gate requires it.
+                .phoneVerifiedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .build();
         when(userRepo.findByPhoneNumber("+263770000001")).thenReturn(Optional.of(user));
         when(profileRepo.findByUserId(42L)).thenReturn(Optional.of(profile));
@@ -254,6 +264,8 @@ class CustomerServiceTest {
         CustomerProfile profile = CustomerProfile.builder()
                 .user(user)
                 .registrationTier(1)
+                // A01/A04: recent OTP verification — the tier2/3/4 gate requires it.
+                .phoneVerifiedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .build();
         when(userRepo.findByPhoneNumber("+263770000099")).thenReturn(Optional.of(user));
         when(profileRepo.findByUserId(99L)).thenReturn(Optional.of(profile));
@@ -274,6 +286,40 @@ class CustomerServiceTest {
         assertEquals(keyCaptor.getAllValues().get(0), keyCaptor.getAllValues().get(1),
                 "two attempts for the same user must use the same idempotency key");
         assertEquals("customer-tier-2:99", keyCaptor.getAllValues().get(0));
+    }
+
+    @Test
+    void registerTier2_rejectsWhenPhoneNotRecentlyVerified() {
+        // A01/A04 account-takeover guard: a tier-2 upgrade for a profile whose
+        // phone was never OTP-verified (phoneVerifiedAt == null) MUST be refused
+        // with 403 — otherwise an unauthenticated attacker could overwrite a
+        // victim's email/KYC just by naming their phone in the request body. The
+        // gate fires before any core-banking mutation or local profile write.
+        UserRepository userRepo = mock(UserRepository.class);
+        CustomerProfileRepository profileRepo = mock(CustomerProfileRepository.class);
+        CoreBankingPort coreBanking = mock(CoreBankingPort.class);
+        CustomerService service = newService(userRepo, profileRepo, coreBanking);
+
+        User user = customerUser(55L, "+263770000055");
+        CustomerProfile profile = CustomerProfile.builder()
+                .user(user)
+                .registrationTier(1)
+                .phoneVerified(false) // never OTP-verified => no recency stamp
+                .build();             // phoneVerifiedAt deliberately left null
+        when(userRepo.findByPhoneNumber("+263770000055")).thenReturn(Optional.of(user));
+        when(profileRepo.findByUserId(55L)).thenReturn(Optional.of(profile));
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> service.registerTier2(tier2Request("+263770000055")));
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatusCode());
+        assertTrue(ex.getReason() != null && ex.getReason().contains("Verify your phone"),
+                "expected the phone-verification-required reason, got: " + ex.getReason());
+
+        // Gate short-circuits before the provider create and before any save,
+        // so an attacker can't advance the tier or reach core-banking.
+        verify(coreBanking, never()).createCustomer(any(), anyString());
+        verify(profileRepo, never()).save(any());
+        assertEquals(1, profile.getRegistrationTier(), "tier must not advance");
     }
 
     @Test
