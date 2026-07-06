@@ -9,6 +9,7 @@ import com.innbucks.userservice.repository.RefreshTokenRepository;
 import com.innbucks.userservice.repository.TeamMemberEventAssignmentRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.security.AuthenticatedCaller;
+import com.innbucks.userservice.security.TokenVersionPublisher;
 import com.innbucks.userservice.util.HtmlSanitizer;
 import com.innbucks.userservice.util.MsisdnValidator;
 import com.innbucks.userservice.util.TemporaryPasswordGenerator;
@@ -57,6 +58,7 @@ public class TeamMemberService {
     private final TeamMemberEventAssignmentRepository assignmentRepository;
     private final PasswordEncoder passwordEncoder;
     private final ApplicationEventPublisher eventPublisher;
+    private final TokenVersionPublisher tokenVersionPublisher;
 
     /** Deployment country pin. Team members are anchored to this cell — see
      *  {@link ShopStaffService#deploymentCountry} for the reasoning. */
@@ -157,6 +159,11 @@ public class TeamMemberService {
         // immediate revoke instead of waiting out the natural TTL.
         member.setTokenVersion(member.getTokenVersion() + 1);
         userRepository.save(member);
+        // Mirror the bumped version into the shared Redis so downstream services
+        // reject the disabled member's outstanding access tokens immediately
+        // (A07 / CWE-613), not just user-service's JwtFilter. Same userUuid the
+        // member's JWT carries; best-effort (never throws, no-ops on null uuid).
+        tokenVersionPublisher.publish(member.getUserUuid(), member.getTokenVersion());
         // Revoke every still-live refresh token so they can't /auth/refresh
         // back into a fresh access token.
         int revokedFamilies = refreshTokenRepository.revokeAllForUser(member.getId(), Instant.now());

@@ -8,6 +8,7 @@ import com.innbucks.userservice.util.HtmlSanitizer;
 import com.innbucks.userservice.util.MsisdnMasking;
 import com.innbucks.userservice.util.MsisdnValidator;
 import com.innbucks.userservice.security.JwtUtil;
+import com.innbucks.userservice.security.TokenVersionPublisher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -57,6 +58,17 @@ public class AuthService implements ApplicationEventPublisherAware {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private DeviceTrustService deviceTrustService;
 
+    // Cross-service session-supersession publisher (OWASP A07 / CWE-613).
+    // Field-injected (not a constructor arg) so the many AuthServiceTest
+    // construction sites don't have to widen — same rationale as the MFA
+    // collaborators above. Null only in a plain unit test that didn't set it,
+    // in which case publishTokenVersion(...) is a no-op: user-service's own
+    // JwtFilter still enforces token_version straight from Postgres, so a
+    // missing publisher is a downstream-visibility gap, never a local
+    // regression.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private TokenVersionPublisher tokenVersionPublisher;
+
     @Override
     public void setApplicationEventPublisher(ApplicationEventPublisher applicationEventPublisher) {
         this.eventPublisher = applicationEventPublisher;
@@ -78,6 +90,21 @@ public class AuthService implements ApplicationEventPublisherAware {
         eventPublisher.publishEvent(new com.innbucks.userservice.event.AccountSecurityAlertEvent(
                 user.getId(), user.getFirstName(), user.getEmail(), user.getPhoneNumber(),
                 user.hasRole(User.Role.CUSTOMER), type));
+    }
+
+    /**
+     * Best-effort mirror of the user's freshly-bumped {@code token_version} to
+     * the shared Redis so downstream services honour the session supersession
+     * immediately (A07 / CWE-613). Passes {@code user.getUserUuid()} — the SAME
+     * value {@link #buildResponse} stamps into the JWT {@code userUuid} claim,
+     * so the downstream lookup key lines up. No-op when the publisher isn't
+     * wired (plain unit test); the publisher itself no-ops on a null uuid and
+     * never throws, so this never affects the surrounding transaction.
+     */
+    private void publishTokenVersion(User user, long version) {
+        if (tokenVersionPublisher != null) {
+            tokenVersionPublisher.publish(user.getUserUuid(), version);
+        }
     }
 
     private final UserRepository userRepository;
@@ -454,6 +481,10 @@ public class AuthService implements ApplicationEventPublisherAware {
         user.setFailedLoginAttempts(0);
         user.setLockedUntil(null);
         userRepository.save(user);
+        // Mirror the bumped version into the shared Redis so downstream services
+        // (payment/seat/booking) reject the superseded session immediately, not
+        // just user-service's own JwtFilter. Best-effort — see publishTokenVersion.
+        publishTokenVersion(user, newVersion);
         int revokedFamilies = refreshTokenRepository.revokeAllForUser(user.getId(), Instant.now());
         log.info("Login bumped tokenVersion userId={} newVersion={} revokedRefreshTokens={}",
                 user.getId(), newVersion, revokedFamilies);
@@ -626,6 +657,9 @@ public class AuthService implements ApplicationEventPublisherAware {
         // mismatch, so this is the fleet-wide kill switch for the old JWT.
         user.setTokenVersion(user.getTokenVersion() + 1);
         userRepository.save(user);
+        // Publish the new version to the shared Redis so downstream services
+        // enforce the kill switch too (not just user-service's JwtFilter).
+        publishTokenVersion(user, user.getTokenVersion());
 
         // Force a re-login: defence-in-depth on top of the tokenVersion bump.
         //   1) Denylist the exact access token used for THIS call so the very

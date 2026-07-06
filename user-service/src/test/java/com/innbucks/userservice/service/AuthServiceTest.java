@@ -9,6 +9,7 @@ import com.innbucks.userservice.repository.RefreshTokenRepository;
 import com.innbucks.userservice.repository.TenantProfileRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.security.JwtUtil;
+import com.innbucks.userservice.security.TokenVersionPublisher;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -17,6 +18,7 @@ import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -605,6 +607,49 @@ class AuthServiceTest {
         verify(jwt).generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
                 any(), any(), any(), versionCaptor.capture(), isNull(), any(), any(), anyBoolean());
         assertEquals(8L, versionCaptor.getValue());
+    }
+
+    @Test
+    void login_bumpsTokenVersion_publishesBumpedVersionToSharedRedis() {
+        // A07 / CWE-613: the single-active-session bump must ALSO be mirrored to
+        // the shared Redis (keyed by the SAME userUuid the JWT carries) so
+        // downstream services reject the superseded session immediately, not
+        // just user-service's own JwtFilter. The published version must be the
+        // BUMPED value (8), matching the tokenVersion claim in the fresh token.
+        UserRepository userRepo = mock(UserRepository.class);
+        PasswordEncoder encoder = mock(PasswordEncoder.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        TokenVersionPublisher publisher = mock(TokenVersionPublisher.class);
+
+        UUID uuid = UUID.randomUUID();
+        User user = User.builder()
+                .id(42L)
+                .userUuid(uuid)
+                .email("u@example.com")
+                .phoneNumber("0777000042")
+                .password("hashed")
+                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .defaultServices(new LinkedHashSet<>(List.of("loyalty")))
+                .active(true)
+                .tokenVersion(7L)
+                .build();
+        when(userRepo.findByEmail("u@example.com")).thenReturn(Optional.of(user));
+        when(encoder.matches("pw", "hashed")).thenReturn(true);
+        when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+                any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean())).thenReturn("tok");
+
+        AuthService svc = newService(userRepo, mock(TenantProfileRepository.class),
+                mock(CustomerProfileRepository.class), encoder, jwt);
+        // Field-injected in production; wire the mock the same way the container would.
+        org.springframework.test.util.ReflectionTestUtils.setField(svc, "tokenVersionPublisher", publisher);
+
+        LoginRequestDTO req = new LoginRequestDTO();
+        req.setIdentifier("u@example.com"); req.setPassword("pw");
+
+        svc.login(req, null, com.innbucks.userservice.service.AuditContext.none());
+
+        // Same UUID that feeds the JWT userUuid claim; version is the bumped 8, not 7.
+        verify(publisher).publish(uuid, 8L);
     }
 
     private User aliceWithAttempts(int attempts, java.time.Instant lockedUntil) {

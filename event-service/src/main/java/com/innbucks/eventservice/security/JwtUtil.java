@@ -108,6 +108,26 @@ public class JwtUtil {
     }
 
     /**
+     * Per-user session epoch from the {@code tokenVersion} claim (OWASP A07 /
+     * CWE-613). {@link JwtFilter} compares it against the fleet-current value
+     * published to shared Redis ({@code auth:tokenver:<userUuid>}) to reject
+     * tokens superseded by a newer login / password change. Returns
+     * {@code null} when the claim is absent or unparseable — a legacy token
+     * without the claim carries no version to enforce, so the filter fails
+     * open rather than 401ing it.
+     */
+    public Long extractTokenVersion(String token) {
+        try {
+            Object raw = getClaims(token).get("tokenVersion");
+            if (raw instanceof Number n) return n.longValue();
+            if (raw == null) return null;
+            return Long.parseLong(raw.toString());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
      * True when the JWT carries the {@code mustChangePassword} claim. The
      * filter uses this to gate every authenticated request — a user who
      * hasn't rotated their temp password may not call any endpoint in this

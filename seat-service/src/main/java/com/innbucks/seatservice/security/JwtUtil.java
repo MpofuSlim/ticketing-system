@@ -116,6 +116,39 @@ public class JwtUtil {
         }
     }
 
+    /** Stable cross-service identifier of the caller (user_uuid). Null on
+     *  legacy tokens minted before user-service's V20 or on any parse failure.
+     *  Used to key the shared session-supersession lookup
+     *  ({@code auth:tokenver:<userUuid>}). */
+    public UUID extractUserUuid(String token) {
+        try {
+            String raw = getClaims(token).get("userUuid", String.class);
+            return (raw == null || raw.isBlank()) ? null : UUID.fromString(raw);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Per-user session epoch from the {@code tokenVersion} claim (OWASP A07 /
+     * CWE-613). {@link JwtFilter} compares it against the fleet-current value
+     * published to shared Redis ({@code auth:tokenver:<userUuid>}) to reject
+     * tokens superseded by a newer login / password change. Returns
+     * {@code null} when the claim is absent or unparseable — a legacy token
+     * without the claim carries no version to enforce, so the filter fails
+     * open rather than 401ing it.
+     */
+    public Long extractTokenVersion(String token) {
+        try {
+            Object raw = getClaims(token).get("tokenVersion");
+            if (raw instanceof Number n) return n.longValue();
+            if (raw == null) return null;
+            return Long.parseLong(raw.toString());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     public String extractHomeCountry(String token) {
         try {
             String home = getClaims(token).get("homeCountry", String.class);

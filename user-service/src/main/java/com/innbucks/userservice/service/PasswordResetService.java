@@ -3,6 +3,7 @@ package com.innbucks.userservice.service;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.repository.RefreshTokenRepository;
 import com.innbucks.userservice.repository.UserRepository;
+import com.innbucks.userservice.security.TokenVersionPublisher;
 import com.innbucks.userservice.util.MsisdnValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -46,6 +47,7 @@ public class PasswordResetService {
     private final RefreshTokenRepository refreshTokenRepository;
     private final AuditService auditService;
     private final org.springframework.context.ApplicationEventPublisher eventPublisher;
+    private final TokenVersionPublisher tokenVersionPublisher;
 
     /** This cell's country pin — region hint for normalising a reset phone to
      *  E.164 so the OTP key and the user lookup match what registration stored. */
@@ -100,6 +102,11 @@ public class PasswordResetService {
         user.setFailedLoginAttempts(0);
         user.setLockedUntil(null);
         userRepository.save(user);
+        // Mirror the bumped version into the shared Redis so downstream services
+        // honour the reset immediately (A07 / CWE-613), not just user-service's
+        // own JwtFilter. Same userUuid AuthService stamps into the JWT userUuid
+        // claim; best-effort (never throws, no-ops on a null uuid).
+        tokenVersionPublisher.publish(user.getUserUuid(), user.getTokenVersion());
 
         // Kill every refresh-token family — a leaked/cached refresh must not
         // outlive a password reset.

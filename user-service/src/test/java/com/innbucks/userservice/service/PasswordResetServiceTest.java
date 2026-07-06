@@ -3,12 +3,14 @@ package com.innbucks.userservice.service;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.repository.RefreshTokenRepository;
 import com.innbucks.userservice.repository.UserRepository;
+import com.innbucks.userservice.security.TokenVersionPublisher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.time.Instant;
 import java.util.Optional;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -28,6 +30,7 @@ class PasswordResetServiceTest {
     private RefreshTokenRepository refreshTokenRepository;
     private AuditService auditService;
     private org.springframework.context.ApplicationEventPublisher eventPublisher;
+    private TokenVersionPublisher tokenVersionPublisher;
     private PasswordResetService service;
 
     private static final String PHONE = "+263771234567";
@@ -41,8 +44,9 @@ class PasswordResetServiceTest {
         refreshTokenRepository = mock(RefreshTokenRepository.class);
         auditService = mock(AuditService.class);
         eventPublisher = mock(org.springframework.context.ApplicationEventPublisher.class);
+        tokenVersionPublisher = mock(TokenVersionPublisher.class);
         service = new PasswordResetService(otpService, userRepository, passwordEncoder,
-                refreshTokenRepository, auditService, eventPublisher);
+                refreshTokenRepository, auditService, eventPublisher, tokenVersionPublisher);
     }
 
     // ---- requestReset --------------------------------------------------------
@@ -111,8 +115,9 @@ class PasswordResetServiceTest {
 
     @Test
     void resetPassword_phonePath_success_setsPassword_revokes_bumps_unlocks() {
+        UUID uuid = UUID.randomUUID();
         User user = User.builder()
-                .id(5L).phoneNumber(PHONE).password("old-hash")
+                .id(5L).userUuid(uuid).phoneNumber(PHONE).password("old-hash")
                 .tokenVersion(2L).failedLoginAttempts(4)
                 .lockedUntil(Instant.now().plusSeconds(600))
                 .build();
@@ -130,6 +135,9 @@ class PasswordResetServiceTest {
         verify(refreshTokenRepository).revokeAllForUser(eq(5L), any());
         verify(auditService).recordSuccess(eq(AuditEventType.AUTH_PASSWORD_CHANGED),
                 any(), any(), any(), any(), any(), any());
+        // A07 / CWE-613: the bumped version is mirrored to the shared Redis under
+        // the SAME userUuid the JWT carries, so downstream honours the reset.
+        verify(tokenVersionPublisher).publish(uuid, 3L);
     }
 
     @Test
