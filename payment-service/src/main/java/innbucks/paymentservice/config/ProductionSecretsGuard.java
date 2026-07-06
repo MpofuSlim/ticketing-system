@@ -3,24 +3,29 @@ package innbucks.paymentservice.config;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.context.annotation.Profile;
 import org.springframework.core.env.Environment;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 
 /**
- * Refuses to boot under the {@code prod} profile when any sensitive secret
+ * Refuses to boot under a real DEPLOYMENT profile when any sensitive secret
  * still carries its {@code change-me-*} placeholder default from
- * {@code application.yaml}. Mirrors the guard in the other backend services
- * — payment-service was the outlier that could quietly boot in prod with
- * placeholders intact, defeating the rest of the secret-handling story.
+ * {@code application.yaml}, or when the HS256 signing key is too short.
+ * Mirrors the guard in the other backend services — payment-service was the
+ * outlier that could quietly boot with placeholders intact, defeating the
+ * rest of the secret-handling story.
  *
- * <p>Active only under {@code -Dspring.profiles.active=prod}, so dev/CI runs
- * against the convenient placeholder values keep working.
+ * <p>"Deployment" = any active profile other than {@code dev/test/it/local}
+ * (e.g. {@code prod}, {@code uat}, {@code staging}). An empty profile set is
+ * treated as non-deployment, so dev/CI runs against the convenient placeholder
+ * values keep working. This is stronger than gating on {@code prod} alone: a
+ * staging box, or a manifest that sets some non-prod deployment profile, is now
+ * covered too.
  */
 @Configuration
-@Profile("prod")
 @Slf4j
 public class ProductionSecretsGuard {
 
@@ -29,7 +34,7 @@ public class ProductionSecretsGuard {
     //   - oradian-middleware.internal-token (env ORADIAN_INTERNAL_TOKEN) -> talks to Oradian middleware
     //   - jwt.secret                    (env JWT_SECRET)             -> verifies bearer JWTs minted by user-service
     // All three must be set in prod. As more secrets land (Stripe API key
-    // when real payments wire in, etc.) add them here and the prod-boot
+    // when real payments wire in, etc.) add them here and the deployment-boot
     // gate widens automatically.
     private static final List<String> SECRETS_TO_CHECK = List.of(
             "innbucks.internal-api-token",
@@ -40,6 +45,13 @@ public class ProductionSecretsGuard {
 
     private static final String PLACEHOLDER_MARKER = "change-me";
 
+    // Placeholder secrets are tolerated only under these (local dev + test) profiles.
+    private static final Set<String> NON_DEPLOYMENT_PROFILES = Set.of("dev", "test", "it", "local");
+
+    // HS256 requires a >= 32-byte key (Keys.hmacShaKeyFor throws below that);
+    // fail fast at boot rather than at the first token sign.
+    private static final int MIN_JWT_SECRET_LENGTH = 32;
+
     private final Environment env;
 
     public ProductionSecretsGuard(Environment env) {
@@ -48,6 +60,15 @@ public class ProductionSecretsGuard {
 
     @PostConstruct
     void verifyNoPlaceholderSecrets() {
+        String[] active = env.getActiveProfiles();
+        boolean deployment = active.length > 0
+                && Arrays.stream(active).noneMatch(NON_DEPLOYMENT_PROFILES::contains);
+        if (!deployment) {
+            log.info("Secrets guard skipped (non-deployment profile: {})",
+                    active.length == 0 ? "<none>" : Arrays.toString(active));
+            return;
+        }
+
         List<String> offenders = new ArrayList<>();
         for (String key : SECRETS_TO_CHECK) {
             String value = env.getProperty(key);
@@ -55,15 +76,19 @@ public class ProductionSecretsGuard {
                 offenders.add(key);
             }
         }
+        String jwt = env.getProperty("jwt.secret");
+        if (jwt != null && jwt.length() < MIN_JWT_SECRET_LENGTH && !offenders.contains("jwt.secret")) {
+            offenders.add("jwt.secret (too short: needs >= " + MIN_JWT_SECRET_LENGTH + " chars)");
+        }
         if (!offenders.isEmpty()) {
             throw new IllegalStateException(
-                    "Refusing to start under 'prod' profile: the following secrets " +
-                    "still have placeholder defaults containing '" + PLACEHOLDER_MARKER +
-                    "': " + offenders + ". Override them via env vars " +
-                    "(INTERNAL_API_TOKEN, ORADIAN_INTERNAL_TOKEN, JWT_SECRET, WHATSAPP_API_KEY) before booting in production."
+                    "Refusing to start under deployment profile " + Arrays.toString(active) +
+                    ": these secrets still hold placeholder/weak values: " + offenders +
+                    ". Override them via env vars (INTERNAL_API_TOKEN, ORADIAN_INTERNAL_TOKEN, " +
+                    "JWT_SECRET, WHATSAPP_API_KEY) before deploying."
             );
         }
-        log.info("ProductionSecretsGuard verified {} secret(s); none carry placeholder defaults.",
-                SECRETS_TO_CHECK.size());
+        log.info("Secrets guard passed for profile {} ({} keys verified)",
+                Arrays.toString(active), SECRETS_TO_CHECK.size());
     }
 }

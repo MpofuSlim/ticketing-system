@@ -6,10 +6,15 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.crypto.argon2.Argon2PasswordEncoder;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.DelegatingPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+
+import java.util.HashMap;
+import java.util.Map;
 
 @Configuration
 @EnableMethodSecurity
@@ -85,6 +90,18 @@ public class SecurityConfig {
 
     @Bean
     public PasswordEncoder passwordEncoder() {
-        return new BCryptPasswordEncoder();
+        // A02: hash NEW passwords with Argon2id (OWASP-recommended), while keeping
+        // every existing hash verifiable. New hashes are stored prefixed ("{argon2}");
+        // the DelegatingPasswordEncoder routes verification by prefix, and
+        // setDefaultPasswordEncoderForMatches handles the legacy UNPREFIXED BCrypt
+        // hashes already in the DB (written by the previous new BCryptPasswordEncoder()).
+        // A legacy user transparently upgrades to Argon2id the next time their
+        // password is set/changed — so existing logins are never broken.
+        Map<String, PasswordEncoder> encoders = new HashMap<>();
+        encoders.put("argon2", Argon2PasswordEncoder.defaultsForSpringSecurity_v5_8());
+        encoders.put("bcrypt", new BCryptPasswordEncoder());
+        DelegatingPasswordEncoder delegating = new DelegatingPasswordEncoder("argon2", encoders);
+        delegating.setDefaultPasswordEncoderForMatches(new BCryptPasswordEncoder());
+        return delegating;
     }
 }
