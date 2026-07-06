@@ -48,6 +48,12 @@ public class InternalTokenAuthorizer {
     private final String expectedToken;
     private final AuditService auditService;
 
+    // A09: field-injected (not a constructor arg) so the unit tests that do
+    // `new InternalTokenAuthorizer(token, audit)` don't have to widen. Null in
+    // those tests => the metric emit below is skipped.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.innbucks.userservice.config.SecurityMetrics securityMetrics;
+
     public InternalTokenAuthorizer(
             @Value("${innbucks.internal-api-token:}") String expectedToken,
             AuditService auditService) {
@@ -81,6 +87,9 @@ public class InternalTokenAuthorizer {
     }
 
     private void recordFailure(String reason, String presented, HttpServletRequest request) {
+        // A09: export the S2S-boundary rejection as a metric so InternalTokenProbing
+        // can alert even without reading the audit table.
+        if (securityMetrics != null) securityMetrics.internalTokenFailure(reason);
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("path", request == null ? null : request.getRequestURI());
         // Length only — never the token. Useful for distinguishing a malformed

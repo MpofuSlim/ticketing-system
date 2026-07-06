@@ -84,6 +84,22 @@ public class MfaService {
                 user.hasRole(User.Role.CUSTOMER), type));
     }
 
+    // A09 audit coverage for the MFA lifecycle. Field-injected (required=false)
+    // so the existing MfaServiceTest construction site doesn't widen; null there
+    // => audit(...) is a no-op. AuditContext.none() because these run below the
+    // controller (no HTTP request threaded down); actor == target == the user.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AuditService auditService;
+
+    private void audit(AuditEventType type, Long userId) {
+        if (auditService != null) {
+            auditService.recordSuccess(type,
+                    String.valueOf(userId), AuditService.ACTOR_TYPE_USER,
+                    String.valueOf(userId), AuditService.TARGET_TYPE_USER,
+                    null, AuditContext.none());
+        }
+    }
+
     private final SecretGenerator secretGenerator = new DefaultSecretGenerator();
     private final CodeGenerator codeGenerator = new DefaultCodeGenerator(HashingAlgorithm.SHA1);
     private final CodeVerifier codeVerifier;
@@ -171,6 +187,7 @@ public class MfaService {
         }
         log.info("MFA enrolment completed userId={} backupCodes={}", userId, plaintext.size());
         publishSecurityAlert(user, com.innbucks.userservice.event.AccountSecurityAlertEvent.Type.MFA_ENABLED);
+        audit(AuditEventType.MFA_ENROLLED, userId);
         return plaintext;
     }
 
@@ -202,6 +219,7 @@ public class MfaService {
                         candidate.getId(), LocalDateTime.now(ZoneOffset.UTC));
                 if (consumed == 1) {
                     log.info("Backup code consumed userId={}", user.getId());
+                    audit(AuditEventType.MFA_BACKUP_CODE_USED, user.getId());
                     return true;
                 }
                 // Lost a race — the code was just consumed by a concurrent
@@ -234,6 +252,7 @@ public class MfaService {
         clearDeviceTrust(userId);
         log.info("MFA disabled userId={}", userId);
         publishSecurityAlert(user, com.innbucks.userservice.event.AccountSecurityAlertEvent.Type.MFA_DISABLED);
+        audit(AuditEventType.MFA_DISABLED, userId);
     }
 
     /** SUPER_ADMIN recovery: wipe a user's MFA so they can re-enrol on next login. */
@@ -247,6 +266,7 @@ public class MfaService {
         clearDeviceTrust(userId);
         log.info("MFA reset by admin userId={}", userId);
         publishSecurityAlert(user, com.innbucks.userservice.event.AccountSecurityAlertEvent.Type.MFA_DISABLED);
+        audit(AuditEventType.MFA_ADMIN_RESET, userId);
     }
 
     /**

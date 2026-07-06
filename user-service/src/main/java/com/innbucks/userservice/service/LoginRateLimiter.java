@@ -64,6 +64,12 @@ public class LoginRateLimiter {
 
     private final StringRedisTemplate redis;
 
+    // A09: rate-limit-hit counter (feeds AuthRateLimitSpike). Field-injected
+    // (required=false) so unit tests constructing this directly don't widen;
+    // null there => the emit below is skipped.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.innbucks.userservice.config.SecurityMetrics securityMetrics;
+
     /**
      * Per-instance fixed-window counters used ONLY when Redis is unreachable.
      * Keyed identically to the Redis buckets. Lives in the JVM, so with N
@@ -140,6 +146,7 @@ public class LoginRateLimiter {
             if (count > perIdentifierMax) {
                 log.warn("Auth rate limit hit kind={} dimension=identifier identifier={} count={} max={}",
                         kind, mask(identifier), count, perIdentifierMax);
+                if (securityMetrics != null) securityMetrics.rateLimited(kind);
                 throw new RateLimitedException(
                         "Too many " + kind + " attempts on this account; try again shortly",
                         (int) window.toSeconds());
@@ -151,6 +158,7 @@ public class LoginRateLimiter {
             if (count > perIpMax) {
                 log.warn("Auth rate limit hit kind={} dimension=ip ip={} count={} max={}",
                         kind, ip, count, perIpMax);
+                if (securityMetrics != null) securityMetrics.rateLimited(kind);
                 throw new RateLimitedException(
                         "Too many " + kind + " attempts from this address; try again shortly",
                         (int) window.toSeconds());

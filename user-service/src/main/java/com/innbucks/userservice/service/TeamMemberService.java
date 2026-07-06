@@ -60,6 +60,12 @@ public class TeamMemberService {
     private final ApplicationEventPublisher eventPublisher;
     private final TokenVersionPublisher tokenVersionPublisher;
 
+    // A09 audit coverage for the team-member disable action. Field-injected
+    // (required=false) so tests constructing this service don't widen; null =>
+    // the audit emit is skipped.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AuditService auditService;
+
     /** Deployment country pin. Team members are anchored to this cell — see
      *  {@link ShopStaffService#deploymentCountry} for the reasoning. */
     @Value("${innbucks.country:ZW}")
@@ -169,6 +175,13 @@ public class TeamMemberService {
         int revokedFamilies = refreshTokenRepository.revokeAllForUser(member.getId(), Instant.now());
         log.info("Disabled TEAM_MEMBER userUuid={} by={} revokedRefreshFamilies={}",
                 member.getUserUuid(), callerLogTag(), revokedFamilies);
+        if (auditService != null) {
+            auditService.recordSuccess(AuditEventType.TEAM_MEMBER_DISABLED,
+                    callerLogTag(), AuditService.ACTOR_TYPE_USER,
+                    String.valueOf(member.getUserUuid()), AuditService.TARGET_TYPE_USER,
+                    java.util.Map.of("revokedRefreshFamilies", revokedFamilies),
+                    AuditContext.none());
+        }
         return UserResponseDTO.from(member);
     }
 

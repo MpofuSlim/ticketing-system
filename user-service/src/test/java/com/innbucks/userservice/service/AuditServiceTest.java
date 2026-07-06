@@ -29,7 +29,7 @@ class AuditServiceTest {
         // we don't need real transaction semantics for these tests.
         txManager = mock(PlatformTransactionManager.class);
         when(txManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
-        service = new AuditService(repo, new ObjectMapper(), txManager);
+        service = new AuditService(repo, new ObjectMapper(), txManager, "test-audit-hmac-secret");
     }
 
     @Test

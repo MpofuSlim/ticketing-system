@@ -34,13 +34,15 @@ public class ProductionSecretsGuard {
     //   - whatsapp.api-key             (env WHATSAPP_API_KEY)         -> x-api-key for the WhatsApp notification gateway
     //   - national-id.hmac-secret      (env NATIONAL_ID_HMAC_SECRET)  -> keyed hash protecting national IDs at rest
     //   - mfa.encryption-key           (env MFA_ENCRYPTION_KEY)       -> AES-GCM key encrypting TOTP secrets at rest
+    //   - audit.hmac-secret            (env AUDIT_HMAC_SECRET)        -> keyed tamper-evidence tag on every audit_events row (A09)
     private static final List<String> SECRETS_TO_CHECK = List.of(
             "jwt.secret",
             "innbucks.internal-api-token",
             "oradian.internal-token",
             "whatsapp.api-key",
             "national-id.hmac-secret",
-            "mfa.encryption-key"
+            "mfa.encryption-key",
+            "audit.hmac-secret"
     );
 
     private static final String PLACEHOLDER_MARKER = "change-me";
@@ -86,7 +88,7 @@ public class ProductionSecretsGuard {
                     ": these secrets still hold placeholder/weak values: " + offenders +
                     ". Override them via env vars (JWT_SECRET, INTERNAL_API_TOKEN, " +
                     "ORADIAN_INTERNAL_TOKEN, WHATSAPP_API_KEY, NATIONAL_ID_HMAC_SECRET, " +
-                    "MFA_ENCRYPTION_KEY) before deploying."
+                    "MFA_ENCRYPTION_KEY, AUDIT_HMAC_SECRET) before deploying."
             );
         }
         log.info("Secrets guard passed for profile {} ({} keys verified)",

@@ -69,6 +69,18 @@ public class AuthService implements ApplicationEventPublisherAware {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private TokenVersionPublisher tokenVersionPublisher;
 
+    // A09 security-abuse counters (feed prometheus/alerts.yaml). Field-injected
+    // (not a constructor arg) so the many AuthServiceTest construction sites
+    // don't widen; null in a plain unit test => sec(...) is a no-op.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.innbucks.userservice.config.SecurityMetrics securityMetrics;
+
+    /** Null-safe security-metric emit — no-op when SecurityMetrics isn't wired
+     *  (plain unit tests). Keeps the call sites free of repeated null checks. */
+    private void sec(java.util.function.Consumer<com.innbucks.userservice.config.SecurityMetrics> op) {
+        if (securityMetrics != null) op.accept(securityMetrics);
+    }
+
     @Override
     public void setApplicationEventPublisher(ApplicationEventPublisher applicationEventPublisher) {
         this.eventPublisher = applicationEventPublisher;
@@ -358,6 +370,7 @@ public class AuthService implements ApplicationEventPublisherAware {
                     "unknown_identifier",
                     java.util.Map.of("identifier", String.valueOf(request.getIdentifier())),
                     auditContext);
+            sec(m -> m.loginFailure("unknown_identifier"));
             throw new InvalidCredentialsException();
         }
         User user = resolved.get();
@@ -381,6 +394,7 @@ public class AuthService implements ApplicationEventPublisherAware {
                     null, AuditService.ACTOR_TYPE_ANONYMOUS,
                     String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
                     "account_pending_approval", null, auditContext);
+            sec(m -> m.loginFailure("account_pending_approval"));
             throw new AccountPendingApprovalException();
         }
 
@@ -400,6 +414,7 @@ public class AuthService implements ApplicationEventPublisherAware {
                     "account_locked",
                     java.util.Map.of("lockedUntil", user.getLockedUntil().toString()),
                     auditContext);
+            sec(m -> m.loginFailure("account_locked"));
             throw new AccountLockedException(user.getLockedUntil());
         }
         // Lockout served — auto-reset so the user gets a fresh window
@@ -408,6 +423,15 @@ public class AuthService implements ApplicationEventPublisherAware {
         if (user.getLockedUntil() != null) {
             user.setFailedLoginAttempts(0);
             user.setLockedUntil(null);
+            // A09: record the auto-unlock so the lockout lifecycle is complete in
+            // the audit trail (pairs with AUTH_ACCOUNT_LOCKED).
+            auditService.recordSuccess(
+                    AuditEventType.AUTH_ACCOUNT_UNLOCKED,
+                    null, AuditService.ACTOR_TYPE_SYSTEM,
+                    String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
+                    java.util.Map.of("reason", "lockout_window_elapsed"),
+                    auditContext);
+            sec(m -> m.accountUnlocked());
         }
 
         if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
@@ -451,6 +475,10 @@ public class AuthService implements ApplicationEventPublisherAware {
                                 "durationMinutes", lockoutDurationMinutes),
                         auditContext);
             }
+            sec(m -> m.loginFailure("wrong_password"));
+            if (justLocked) {
+                sec(m -> m.accountLocked());
+            }
             // Same response shape as wrong-pw on a nonexistent account so
             // the lockout-triggering attempt doesn't become an oracle for
             // "this identifier exists". Subsequent attempts will hit the
@@ -464,6 +492,7 @@ public class AuthService implements ApplicationEventPublisherAware {
                     null, AuditService.ACTOR_TYPE_ANONYMOUS,
                     String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
                     "account_inactive", null, auditContext);
+            sec(m -> m.loginFailure("account_inactive"));
             throw new RuntimeException("Account is not active. Please contact a SUPER_ADMIN for approval.");
         }
 
@@ -585,6 +614,7 @@ public class AuthService implements ApplicationEventPublisherAware {
                     String.valueOf(user.getId()), AuditService.ACTOR_TYPE_USER,
                     String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
                     "mfa_code_invalid", java.util.Map.of(), auditContext);
+            sec(m -> { m.loginFailure("mfa_code_invalid"); m.mfaFailure(); });
             throw new MfaService.MfaException("That code didn't match. Try the next one your app shows.");
         }
 
@@ -733,6 +763,7 @@ public class AuthService implements ApplicationEventPublisherAware {
                     "refresh_token_reuse_or_device_mismatch",
                     java.util.Map.of("hasDeviceId", deviceId != null && !deviceId.isBlank()),
                     auditContext);
+            sec(m -> m.tokenReuse());
             throw ex;
         }
     }

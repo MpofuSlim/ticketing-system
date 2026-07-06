@@ -6,12 +6,18 @@ import com.innbucks.userservice.entity.AuditEvent;
 import com.innbucks.userservice.repository.AuditEventRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.nio.charset.StandardCharsets;
+import java.security.GeneralSecurityException;
 import java.time.Instant;
+import java.util.HexFormat;
 import java.util.Map;
 
 /**
@@ -59,18 +65,27 @@ public class AuditService {
 
     public static final String TARGET_TYPE_USER = "USER";
 
+    private static final String HMAC_ALGORITHM = "HmacSHA256";
+    /** Field separator for the canonical HMAC input — the ASCII Unit Separator,
+     *  which cannot appear in any of the hashed values, so field boundaries are
+     *  unambiguous (no delimiter-injection across fields). */
+    private static final char SEP = '\u001F';
+
     private final AuditEventRepository repository;
     private final ObjectMapper objectMapper;
     private final TransactionTemplate transactionTemplate;
+    private final SecretKeySpec hmacKey;
 
     public AuditService(AuditEventRepository repository,
                         ObjectMapper objectMapper,
-                        PlatformTransactionManager transactionManager) {
+                        PlatformTransactionManager transactionManager,
+                        @Value("${audit.hmac-secret:change-me-audit-hmac-secret}") String hmacSecret) {
         this.repository = repository;
         this.objectMapper = objectMapper;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.transactionTemplate.setPropagationBehavior(
                 TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.hmacKey = new SecretKeySpec(hmacSecret.getBytes(StandardCharsets.UTF_8), HMAC_ALGORITHM);
     }
 
     /**
@@ -105,6 +120,9 @@ public class AuditService {
                 .correlationId(MDC.get("correlationId"))
                 .metadata(serialiseMetadata(metadata))
                 .build();
+        // Tamper-evidence: seal the row with an HMAC over its immutable fields
+        // before it is persisted (OWASP A09). See computeHmac / AuditIntegrityVerifier.
+        event.setRowHmac(computeHmac(event));
         try {
             transactionTemplate.execute(status -> repository.save(event));
         } catch (RuntimeException ex) {
@@ -159,5 +177,42 @@ public class AuditService {
         if (value == null) return null;
         if (value.length() <= max) return value;
         return value.substring(0, max);
+    }
+
+    /**
+     * HMAC-SHA256 over the row's immutable fields, hex-encoded (OWASP A09
+     * tamper-evidence). Deterministic — the same row always yields the same tag,
+     * so {@code AuditIntegrityVerifier} can recompute and compare to detect any
+     * post-write modification. Fields are joined with the {@link #SEP} unit
+     * separator so no value can forge a boundary. Excludes {@code id}
+     * (DB-assigned) and {@code rowHmac} itself.
+     */
+    public String computeHmac(AuditEvent e) {
+        String canonical = String.valueOf(e.getOccurredAt()) + SEP
+                + nz(e.getEventType()) + SEP
+                + nz(e.getOutcome()) + SEP
+                + nz(e.getActorId()) + SEP
+                + nz(e.getActorType()) + SEP
+                + nz(e.getTargetId()) + SEP
+                + nz(e.getTargetType()) + SEP
+                + nz(e.getIpAddress()) + SEP
+                + nz(e.getUserAgent()) + SEP
+                + nz(e.getFailureReason()) + SEP
+                + nz(e.getCorrelationId()) + SEP
+                + nz(e.getMetadata());
+        try {
+            Mac mac = Mac.getInstance(HMAC_ALGORITHM);
+            mac.init(hmacKey);
+            byte[] tag = mac.doFinal(canonical.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(tag);
+        } catch (GeneralSecurityException ex) {
+            // HmacSHA256 is a JCE standard algorithm — always present. A failure
+            // here is unrecoverable and must not silently persist an unsealed row.
+            throw new IllegalStateException("Failed to compute audit HMAC", ex);
+        }
+    }
+
+    private static String nz(String v) {
+        return v == null ? "" : v;
     }
 }

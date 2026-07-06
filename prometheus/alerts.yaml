@@ -143,3 +143,91 @@ groups:
           summary: "OTLP span export failing on {{ $labels.job }}"
           description: "{{ $value | humanize }} failed span exports in the last 10m. OTLP_ENDPOINT reachable?"
           runbook: "prometheus/slo.md#otelexportfailing"
+
+  # OWASP A09 — security-abuse detection. Fed by user-service SecurityMetrics
+  # (security.* counters, exported as security_*_total). Baselines for these are
+  # ~0 in normal operation, so the thresholds are deliberately low: they're
+  # "someone is attacking" signals, not capacity signals.
+  - name: security
+    interval: 30s
+    rules:
+
+      - alert: FailedLoginSpike
+        expr: sum(rate(security_auth_login_failure_total[5m])) > 1
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Failed-login rate elevated (possible credential stuffing)"
+          description: "{{ $value | humanize }} failed logins/sec cluster-wide over 5m (sustained 10m)."
+          runbook: "prometheus/slo.md#failedloginspike"
+
+      - alert: AccountLockoutSpike
+        expr: sum(rate(security_auth_account_locked_total[5m])) > 0.2
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Accounts locking out steadily (possible brute force)"
+          description: "{{ $value | humanize }} lockouts/sec over 5m — attacker walking accounts, or a broken client."
+          runbook: "prometheus/slo.md#accountlockoutspike"
+
+      - alert: RefreshTokenReuse
+        expr: sum(increase(security_auth_token_reuse_total[10m])) > 2
+        for: 0m
+        labels:
+          severity: page
+        annotations:
+          summary: "Refresh-token replay detected"
+          description: "{{ $value | humanize }} refresh-token reuse events in 10m — a stolen/leaked token is being replayed (families were revoked)."
+          runbook: "prometheus/slo.md#refreshtokenreuse"
+
+      - alert: InternalTokenProbing
+        expr: sum(rate(security_auth_internal_token_failure_total[5m])) > 0
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "Internal S2S token failures (misconfig or probing of the trust boundary)"
+          description: "{{ $value | humanize }}/sec X-Internal-Token rejections over 5m. Expected 0 — a service is misconfigured, or someone is probing /users/internal/**."
+          runbook: "prometheus/slo.md#internaltokenprobing"
+
+      - alert: AuthRateLimitSpike
+        expr: sum(rate(security_auth_rate_limited_total[5m])) > 1
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Auth rate-limiter firing heavily (abuse/automation)"
+          description: "{{ $value | humanize }} rate-limited auth requests/sec over 5m on {{ $labels.endpoint }}."
+          runbook: "prometheus/slo.md#authratelimitspike"
+
+      - alert: MfaChallengeFailureSpike
+        expr: sum(rate(security_auth_mfa_failure_total[5m])) > 0.5
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "MFA challenge failures elevated (possible MFA brute force)"
+          description: "{{ $value | humanize }} failed MFA challenges/sec over 5m."
+          runbook: "prometheus/slo.md#mfachallengefailurespike"
+
+      - alert: AuthzDeniedSpike
+        expr: sum(rate(security_authz_denied_total[5m])) > 1
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "403 access-denied rate elevated (possible privilege probing)"
+          description: "{{ $value | humanize }} forbidden ({{ $labels.method }}) responses/sec over 5m — an authenticated principal is hitting resources it can't access."
+          runbook: "prometheus/slo.md#authzdeniedspike"
+
+      - alert: AuditIntegrityBroken
+        expr: increase(security_audit_integrity_broken_total[1h]) > 0
+        for: 0m
+        labels:
+          severity: page
+        annotations:
+          summary: "audit_events tamper detected — HMAC verification failed"
+          description: "{{ $value | humanize }} audit rows failed HMAC verification in the last hour. Someone altered the audit log, or the audit.hmac-secret rotated without a re-seal. Treat as an incident."
+          runbook: "prometheus/slo.md#auditintegritybroken"

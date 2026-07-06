@@ -1,0 +1,25 @@
+-- OWASP A09 — tamper-evidence for the append-only audit log.
+--
+-- audit_events is "append-only by convention" but nothing stopped a compromised
+-- app/DB credential from silently rewriting a row's content. This adds a
+-- keyed integrity tag: on write, AuditService computes
+--   row_hmac = HMAC-SHA256(audit.hmac-secret, canonical(row fields))
+-- over the immutable columns. The secret lives in the app config / env (guarded
+-- by ProductionSecretsGuard), NOT in the database — so an attacker with only DB
+-- write access cannot forge a matching HMAC after altering a row. The
+-- AuditIntegrityVerifier recomputes and compares, emitting
+-- security.audit.integrity.broken for any mismatch.
+--
+-- Nullable: rows written before this migration carry no HMAC and are reported
+-- as "legacy/unverifiable" (distinct from "tampered") by the verifier. Chaining
+-- across rows (deletion detection) is a deliberately separate, heavier step
+-- (needs write-path serialisation) — per-row HMAC gives content tamper-evidence
+-- without a cross-row write lock, and is portable to the H2 test profile since
+-- it's app-side crypto with no DB features.
+--
+-- VARCHAR(64) holds the hex-encoded SHA-256 (32 bytes -> 64 hex chars). Uses
+-- VARCHAR (not CHAR) to match the entity's String @Column mapping — under
+-- Hibernate ddl-auto: validate a CHAR/bpchar column trips a "wrong column type"
+-- schema-validation error, and every other audit_events column (V15) is VARCHAR.
+
+ALTER TABLE audit_events ADD COLUMN row_hmac VARCHAR(64);

@@ -72,8 +72,18 @@ public class UserServiceClient {
             );
             return Optional.ofNullable(envelope.getData());
         } catch (Exception e) {
-            log.warn("user-service tier lookup failed phoneNumber={} cause={}", phoneNumber, e.toString());
+            // OWASP A09: never log a full phone number (PII). Mask to last-4 to
+            // keep the line useful for support without exposing the MSISDN —
+            // mirrors the masking loyalty/booking's UserServiceClient already do.
+            log.warn("user-service tier lookup failed phoneNumber={} cause={}", maskPhone(phoneNumber), e.toString());
             return Optional.empty();
         }
+    }
+
+    /** Last-4 mask, e.g. "+263771234567" -> "****4567". Null/short-safe. */
+    private static String maskPhone(String phone) {
+        if (phone == null || phone.isBlank()) return "<none>";
+        String digits = phone.trim();
+        return digits.length() <= 4 ? "****" : "****" + digits.substring(digits.length() - 4);
     }
 }

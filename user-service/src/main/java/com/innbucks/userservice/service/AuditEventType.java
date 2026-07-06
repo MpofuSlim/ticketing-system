@@ -92,5 +92,32 @@ public enum AuditEventType {
      * <p>The internal-token surface is the platform's S2S trust boundary;
      * silent 401s here hide both prod misconfiguration AND active probing.
      */
-    AUTH_INTERNAL_TOKEN_FAILURE
+    AUTH_INTERNAL_TOKEN_FAILURE,
+
+    // --- A09 coverage additions -------------------------------------------
+
+    /** /auth/reset-password (forgot-password) completed. Distinct from
+     *  {@link #AUTH_PASSWORD_CHANGED} (authenticated self-service change) so a
+     *  spike in unauthenticated resets is separable from routine changes. */
+    AUTH_PASSWORD_RESET,
+    /** A locked account crossed its {@code locked_until} and was auto-unlocked
+     *  on the next attempt — the counterpart to {@link #AUTH_ACCOUNT_LOCKED}. */
+    AUTH_ACCOUNT_UNLOCKED,
+    /** A 403 forbidden — an authenticated principal was denied an action it
+     *  lacks the role/ownership for. Fired from the access-denied handler. */
+    AUTHZ_DENIED,
+
+    /** TOTP MFA enrolment completed (secret confirmed, backup codes issued). */
+    MFA_ENROLLED,
+    /** MFA disabled by the user (self-service). */
+    MFA_DISABLED,
+    /** MFA reset/cleared by an admin for another user (recovery path). */
+    MFA_ADMIN_RESET,
+    /** A single-use MFA backup recovery code was consumed at login. */
+    MFA_BACKUP_CODE_USED,
+
+    /** A TEAM_MEMBER was disabled (tokens revoked, can no longer log in). */
+    TEAM_MEMBER_DISABLED,
+    /** The first-run bootstrap SUPER_ADMIN was seeded from the env credential. */
+    BOOTSTRAP_ADMIN_CREATED
 }

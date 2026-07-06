@@ -173,6 +173,9 @@ services:
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
+      # A09 audit-log tamper-evidence HMAC key (user-service only). Boot-required
+      # under prod — ProductionSecretsGuard rejects the change-me default.
+      AUDIT_HMAC_SECRET: ${AUDIT_HMAC_SECRET:?set AUDIT_HMAC_SECRET in .env (see .env.example)}
       # Access-token TTL: 15 min (matches the application default). The FE
       # silently refreshes via the rotating refresh token, so a stolen/stale
       # access token is usable for at most 15 min instead of a full day.
