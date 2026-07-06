@@ -95,7 +95,7 @@ cd "$REPO_DIR"
 case "$CMD" in
     up)
         # Ensure the shared docker network exists for sibling stacks
-        # (e.g. innbucks-core-gateway, OradianMiddleware).
+        # (e.g. OradianMiddleware).
         docker network inspect innbucks-shared >/dev/null 2>&1 \
             || docker network create innbucks-shared
         # --no-build: pull images, don't compile locally. --wait: block until

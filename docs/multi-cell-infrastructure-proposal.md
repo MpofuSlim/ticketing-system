@@ -69,9 +69,14 @@ The ticketing-system fleet is a 7-service Spring Boot deployment:
 - `user-service`, `event-service`, `seat-service`, `booking-service`,
   `payment-service`, `loyalty-service`
 
-Plus `innbucks-core-gateway` — a standalone Spring Boot adapter that bridges
-ticketing services to InnBucks **veengu** (payments) and
-**messenger-interface** (SMS / WhatsApp / email).
+> **Note (retired):** `innbucks-core-gateway` — the standalone Spring Boot 3.2.4
+> adapter that prototyped bridging ticketing services to InnBucks **veengu**
+> (payments) and **messenger-interface** (SMS / WhatsApp / email) — was retired
+> (OWASP A06: it was an EOL, unscanned component). The services' SMS path moved
+> to the authenticated notify API. The design below still describes the target
+> integration; when it's built for real, do it as a Boot-4 reactor module, not a
+> standalone 3.2.4 jar. References to `innbucks-core-gateway` in the rest of this
+> doc describe that future adapter, not code that currently exists.
 
 **Today:** ONE deployment, on ONE EC2 instance in Zimbabwe. The mobile FE
 (`innvents.vercel.app`) hits the EC2's api-gateway; the stack talks to the

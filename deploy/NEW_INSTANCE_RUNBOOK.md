@@ -57,15 +57,13 @@ echo "<GHCR_PAT_with_read:packages>" | docker login ghcr.io -u <ghcr-owner> --pa
 
 ## 5. Point the committed cell config at this host
 
-Edit `deploy/cells/cell.<iso>.env`. The host-specific line is the
-core-gateway adapter URL:
+Edit `deploy/cells/cell.<iso>.env`.
 
-```properties
-# set to THIS host's private IP (the host-resident innbucks-core-gateway jar, :8088)
-INNBUCKS_GATEWAY_URL=http://<NEW_HOST_PRIVATE_IP>:8088
-```
+> The `innbucks-core-gateway` spike (Boot 3.2.4) was retired — nothing serves
+> :8088 in the cell anymore, so `INNBUCKS_GATEWAY_URL` is an inert placeholder
+> you can leave as-is (kept only so the existing client config resolves).
 
-Also confirm (change only if they differ for this deploy):
+Confirm (change only if they differ for this deploy):
 `IMAGE_TAG` (`latest`, or pin a `sha-<commit>` for a real release),
 `CORS_ALLOWED_ORIGINS`, and `INNBUCKS_CELLS_REGISTRY` (keep the public
 hostname if you're repointing DNS to this host rather than changing it).
