@@ -6,6 +6,7 @@ import com.innbucks.userservice.corebanking.CoreBankingPort;
 import com.innbucks.userservice.dto.CustomerRegistrationResponseDTO;
 import com.innbucks.userservice.dto.CustomerTier2RegisterDTO;
 import com.innbucks.userservice.dto.CustomerTier4RegisterDTO;
+import com.innbucks.userservice.dto.CustomerTierResponseDTO;
 import com.innbucks.userservice.entity.CustomerProfile;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.repository.CustomerProfileRepository;
@@ -320,6 +321,44 @@ class CustomerServiceTest {
         verify(coreBanking, never()).createCustomer(any(), anyString());
         verify(profileRepo, never()).save(any());
         assertEquals(1, profile.getRegistrationTier(), "tier must not advance");
+    }
+
+    @Test
+    void getCustomerTierByPhoneNumber_returnsTierProgression_withoutLeakingEmail() throws Exception {
+        // OWASP A01 information-exposure guard. GET /auth/customer/tier is PUBLIC
+        // and keyed only by a phone number so the mobile app can route the
+        // pre-login registration flow. It must return the non-sensitive tier
+        // fields ONLY — never the customer's email, or it becomes an
+        // unauthenticated phone -> email harvesting / account-existence oracle.
+        UserRepository userRepo = mock(UserRepository.class);
+        CustomerProfileRepository profileRepo = mock(CustomerProfileRepository.class);
+        CustomerService service = newService(userRepo, profileRepo);
+
+        User user = customerUser(42L, "+263770000001");
+        user.setEmail("victim@example.com"); // PII that must NOT reach an unauthenticated caller
+        CustomerProfile profile = CustomerProfile.builder()
+                .user(user)
+                .registrationTier(2)
+                .build();
+        when(userRepo.findByPhoneNumber("+263770000001")).thenReturn(Optional.of(user));
+        when(profileRepo.findByUserId(42L)).thenReturn(Optional.of(profile));
+
+        CustomerTierResponseDTO resp = service.getCustomerTierByPhoneNumber("+263770000001");
+
+        // Non-sensitive registration-funnel fields remain.
+        assertEquals("+263770000001", resp.getPhoneNumber());
+        assertEquals(2, resp.getCurrentTier());
+        assertEquals(3, resp.getNextTier());
+
+        // The response, as it goes on the wire, carries neither an "email"
+        // property nor the address value. Serialise the exact JSON the endpoint
+        // returns and assert the leak is closed. This fails the build if anyone
+        // re-adds an email field to CustomerTierResponseDTO.
+        String json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(resp);
+        assertFalse(json.toLowerCase().contains("email"),
+                "public tier response must not expose an email property: " + json);
+        assertFalse(json.contains("victim@example.com"),
+                "public tier response must not leak the customer's email: " + json);
     }
 
     @Test

@@ -279,9 +279,12 @@ public class CustomerService {
         int currentTier = profile.getRegistrationTier();
         Integer nextTier = currentTier < MAX_TIER ? currentTier + 1 : null;
 
+        // OWASP A01: this response is served by the PUBLIC GET /auth/customer/tier
+        // endpoint, so it must expose only the non-sensitive tier-progression
+        // fields — never the customer's email (that would be an unauthenticated
+        // phone -> email harvesting oracle). See CustomerTierResponseDTO.
         return CustomerTierResponseDTO.builder()
                 .phoneNumber(user.getPhoneNumber())
-                .email(user.getEmail())
                 .currentTier(currentTier)
                 .nextTier(nextTier)
                 .build();

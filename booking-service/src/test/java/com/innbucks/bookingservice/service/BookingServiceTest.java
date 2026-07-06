@@ -815,6 +815,108 @@ class BookingServiceTest {
         assertTrue(result.isEmpty());
     }
 
+    // ---- getByConfirmationNumber owner-scoping (OWASP A01 / BOLA) ----
+    // The endpoint used to be public; it now requires auth and scopes to the
+    // caller. A CUSTOMER who doesn't own the booking must get a 404
+    // (NotFoundException) — not a 403 — so a non-owner can't confirm that a
+    // given (low-entropy) confirmation number exists. Admins bypass the check.
+
+    private static Booking confirmedBooking(String email, String phone) {
+        Booking booking = Booking.builder()
+                .id(UUID.randomUUID())
+                .userEmail(email)
+                .phoneNumber(phone)
+                .confirmationNumber("INN-20260502-AB12CD")
+                .status(Booking.BookingStatus.CONFIRMED)
+                .totalAmount(new BigDecimal("100.00"))
+                .build();
+        booking.setItems(List.of(BookingItem.builder()
+                .seatId(UUID.randomUUID())
+                .categoryId(UUID.randomUUID())
+                .categoryName("VIP")
+                .rowLabel("GA")
+                .seatNumber(1)
+                .priceAtBooking(new BigDecimal("100.00"))
+                .ticketNumber("20260502-12345A")
+                .build()));
+        return booking;
+    }
+
+    @Test
+    void getByConfirmationNumber_owner_byEmail_returnsFullBookingWithQr() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+        when(bookingRepo.findByConfirmationNumber("INN-20260502-AB12CD"))
+                .thenReturn(Optional.of(confirmedBooking("alice@example.com", "+263782606983")));
+
+        BookingResponseDTO dto = service.getByConfirmationNumber(
+                "INN-20260502-AB12CD", "alice@example.com", null, false);
+
+        assertEquals("INN-20260502-AB12CD", dto.getConfirmationNumber());
+        assertEquals(1, dto.getItems().size());
+        assertTrue(dto.getItems().get(0).getQrCode().startsWith("data:image/png;base64,"),
+                "owner receives the full DTO including the scannable ticket QR");
+    }
+
+    @Test
+    void getByConfirmationNumber_owner_byPhone_returnsBooking_forGuestWithNoEmail() {
+        // Guest booking: no email on the booking, ownership proven by the phone
+        // claim. The controller passes the caller phone already in E.164.
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+        when(bookingRepo.findByConfirmationNumber("INN-20260502-AB12CD"))
+                .thenReturn(Optional.of(confirmedBooking(null, "+263782606983")));
+
+        BookingResponseDTO dto = service.getByConfirmationNumber(
+                "INN-20260502-AB12CD", null, "+263782606983", false);
+
+        assertEquals("INN-20260502-AB12CD", dto.getConfirmationNumber());
+    }
+
+    @Test
+    void getByConfirmationNumber_nonOwnerCustomer_throwsNotFound_notForbidden() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+        when(bookingRepo.findByConfirmationNumber("INN-20260502-AB12CD"))
+                .thenReturn(Optional.of(confirmedBooking("alice@example.com", "+263782606983")));
+
+        // Different email AND different phone -> not the owner. 404, so the
+        // caller can't even tell the confirmation number is real.
+        assertThrows(com.innbucks.bookingservice.exception.NotFoundException.class,
+                () -> service.getByConfirmationNumber(
+                        "INN-20260502-AB12CD", "mallory@example.com", "+263770000000", false));
+    }
+
+    @Test
+    void getByConfirmationNumber_admin_bypassesOwnership() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+        when(bookingRepo.findByConfirmationNumber("INN-20260502-AB12CD"))
+                .thenReturn(Optional.of(confirmedBooking("alice@example.com", "+263782606983")));
+
+        // Admin identity matches neither email nor phone, but isAdmin=true wins.
+        BookingResponseDTO dto = service.getByConfirmationNumber(
+                "INN-20260502-AB12CD", "support@innbucks.com", null, true);
+
+        assertEquals("INN-20260502-AB12CD", dto.getConfirmationNumber());
+    }
+
+    @Test
+    void getByConfirmationNumber_unknownNumber_throwsNotFound() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+        when(bookingRepo.findByConfirmationNumber("INN-UNKNOWN"))
+                .thenReturn(Optional.empty());
+
+        assertThrows(com.innbucks.bookingservice.exception.NotFoundException.class,
+                () -> service.getByConfirmationNumber("INN-UNKNOWN", "alice@example.com", null, false));
+    }
+
     @Test
     void createBooking_attachesPerSeatQrCodeToEachItem() {
         RequestFixture fx = request(BigDecimal.TEN, BigDecimal.TEN);
