@@ -107,8 +107,8 @@ jobs:
   # baseline, it only stops NEW vulnerable deps from landing. Complements the
   # Release workflow's Trivy image scan, which catches transitive/library CVEs
   # in the built fat jar; this one surfaces direct-dependency advisories at PR
-  # time before an image is even built, and covers manifests with no image
-  # (e.g. innbucks-core-gateway) too.
+  # time before an image is even built, and covers every dependency manifest in
+  # the repo (including any that don't produce a container image).
   dependency-review:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest

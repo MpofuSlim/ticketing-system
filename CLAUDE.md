@@ -214,11 +214,12 @@ called-out reason, not a silent revert.**
 - **PR-time SCA**: `ci.yml`'s `dependency-review` job flags any *new* High/Critical
   direct dependency a PR introduces (diff-scoped — it won't fail on the existing
   baseline). Transitive/library CVEs are caught by the Release Trivy image scan.
-- **`innbucks-core-gateway`** is an EOL Spring Boot 3.2.4 connectivity spike,
-  not a reactor module and not containerized — so CI doesn't build it and Trivy
-  doesn't scan it. It's covered by Dependabot alerts + the dependency-review gate
-  only. **Upgrade it onto the Boot-4 line or retire it before any production
-  use** — don't grow it in place on 3.2.4.
+- **`innbucks-core-gateway` was retired** (A06) — it was an EOL Spring Boot
+  3.2.4 connectivity spike, not a reactor module and not containerized, so
+  nothing built or scanned it. It has been deleted from the repo. If the
+  veengu/messenger integration it prototyped is rebuilt, do it on the Boot-4
+  line as a proper reactor module (built + Trivy-scanned + attested like the
+  rest) — do not resurrect a standalone 3.2.4 jar.
 
 Deferred (documented, not yet done): base-image **digest**-pinning in the
 Dockerfiles (would activate the already-configured Dependabot `docker`
