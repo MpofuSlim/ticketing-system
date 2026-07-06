@@ -14,6 +14,7 @@ import com.innbucks.userservice.repository.CustomerProfileRepository;
 import com.innbucks.userservice.repository.DeviceRepository;
 import com.innbucks.userservice.repository.PendingRegistrationRepository;
 import com.innbucks.userservice.repository.UserRepository;
+import com.innbucks.userservice.util.HtmlSanitizer;
 import com.innbucks.userservice.util.MsisdnCountryResolver;
 import com.innbucks.userservice.util.MsisdnValidator;
 import lombok.RequiredArgsConstructor;
@@ -104,11 +105,18 @@ public class CustomerService {
     public CustomerRegistrationResponseDTO registerTier2(CustomerTier2RegisterDTO request) {
         CustomerProfile profile = loadProfile(request.getMsisdn(), 1);
 
+        // Strip any HTML from the free-text name fields before they land on the
+        // persisted profile + user (OWASP A03 / stored-XSS). The raw request
+        // values still flow to the core-banking create below unchanged, so the
+        // outbound provider contract is preserved.
+        String firstName = HtmlSanitizer.stripAll(request.getFirstName());
+        String middleName = HtmlSanitizer.stripAll(request.getMiddleName());
+        String lastName = HtmlSanitizer.stripAll(request.getLastName());
+
         // Compose a canonical fullName from the three structured fields. The
         // profile still keeps it as a denormalised column so ID-matching and
         // downstream KYC checks have one human-readable string to work against.
-        String fullName = composeFullName(request.getFirstName(),
-                request.getMiddleName(), request.getLastName());
+        String fullName = composeFullName(firstName, middleName, lastName);
         profile.setFullName(fullName);
         // HMAC the national ID before it touches the DB — it's PII and nothing
         // reads the stored value back (the core-banking create below uses the
@@ -135,9 +143,9 @@ public class CustomerService {
         // pick them up at next login (see AuthService.issueToken — tier>=2
         // CUSTOMERS get firstName/middleName/lastName claims).
         User user = profile.getUser();
-        user.setFirstName(request.getFirstName());
-        user.setMiddleName(request.getMiddleName());
-        user.setLastName(request.getLastName());
+        user.setFirstName(firstName);
+        user.setMiddleName(middleName);
+        user.setLastName(lastName);
         user.setEmail(request.getEmail());
         userRepository.save(user);
 

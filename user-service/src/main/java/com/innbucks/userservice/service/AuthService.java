@@ -4,6 +4,7 @@ import com.innbucks.userservice.dto.*;
 import com.innbucks.userservice.entity.*;
 import com.innbucks.userservice.event.AccountLockedEvent;
 import com.innbucks.userservice.repository.*;
+import com.innbucks.userservice.util.HtmlSanitizer;
 import com.innbucks.userservice.util.MsisdnMasking;
 import com.innbucks.userservice.util.MsisdnValidator;
 import com.innbucks.userservice.security.JwtUtil;
@@ -215,9 +216,12 @@ public class AuthService implements ApplicationEventPublisherAware {
         // assigned by UserAdminService when a SUPER_ADMIN approves (first
         // activates) the account. Created inactive + unapproved by default.
         User user = User.builder()
-                .firstName(request.getFirstName())
-                .middleName(request.getMiddleName())
-                .lastName(request.getLastName())
+                // Strip any HTML from the free-text name fields before they are
+                // persisted (OWASP A03 / stored-XSS). Invisible to legitimate
+                // callers — real names carry no markup.
+                .firstName(HtmlSanitizer.stripAll(request.getFirstName()))
+                .middleName(HtmlSanitizer.stripAll(request.getMiddleName()))
+                .lastName(HtmlSanitizer.stripAll(request.getLastName()))
                 .phoneNumber(normalizedPhone)
                 .email(request.getEmail())
                 .country(request.getCountry())
@@ -240,7 +244,9 @@ public class AuthService implements ApplicationEventPublisherAware {
             log.info("Business account, creating tenant profile userId={}", user.getId());
             TenantProfile profile = TenantProfile.builder()
                     .user(user)
-                    .businessName(request.getBusinessName())
+                    // Strip HTML from the free-text business name before persisting
+                    // (OWASP A03 / stored-XSS); surfaces on organizer/event listings.
+                    .businessName(HtmlSanitizer.stripAll(request.getBusinessName()))
                     .businessAddress(request.getBusinessAddress())
                     .businessEmail(request.getBusinessEmail())
                     .bpoNumber(request.getBpoNumber())
