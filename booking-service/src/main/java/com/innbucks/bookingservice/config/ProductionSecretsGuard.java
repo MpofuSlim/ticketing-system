@@ -28,7 +28,8 @@ public class ProductionSecretsGuard {
 
     private static final List<String> SECRETS_TO_CHECK = List.of(
             "jwt.secret",
-            "innbucks.internal-api-token"
+            "innbucks.internal-api-token",
+            "whatsapp.api-key"
     );
 
     private static final String PLACEHOLDER_MARKER = "change-me";

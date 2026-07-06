@@ -1,4 +1,7 @@
 # Backend services: event, seat, booking, payment, loyalty.
+# All carry the OWASP A05 workload-hardening block (see 03-user-service.yaml for
+# the rationale): no SA token, non-root UID 10001, seccomp RuntimeDefault,
+# no-priv-escalation, read-only root fs + /tmp emptyDir, all caps dropped.
 ---
 apiVersion: v1
 kind: Service
@@ -15,10 +18,21 @@ spec:
     metadata: { labels: { app: event-service } }
     spec:
       imagePullSecrets: [ { name: ghcr } ]
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: event-service
           image: ghcr.io/mpofuslim/event-service:latest
           ports: [ { containerPort: 8082 } ]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
           envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
           env:
             - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0" }
@@ -39,6 +53,8 @@ spec:
           resources: { requests: { memory: 448Mi }, limits: { memory: 640Mi } }
           readinessProbe: { httpGet: { path: /actuator/health, port: 8082 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health, port: 8082 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
+          volumeMounts: [ { name: tmp, mountPath: /tmp } ]
+      volumes: [ { name: tmp, emptyDir: {} } ]
 ---
 apiVersion: v1
 kind: Service
@@ -55,10 +71,21 @@ spec:
     metadata: { labels: { app: seat-service } }
     spec:
       imagePullSecrets: [ { name: ghcr } ]
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: seat-service
           image: ghcr.io/mpofuslim/seat-service:latest
           ports: [ { containerPort: 8083 } ]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
           envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
           env:
             - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0" }
@@ -80,6 +107,8 @@ spec:
           resources: { requests: { memory: 448Mi }, limits: { memory: 640Mi } }
           readinessProbe: { httpGet: { path: /actuator/health, port: 8083 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health, port: 8083 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
+          volumeMounts: [ { name: tmp, mountPath: /tmp } ]
+      volumes: [ { name: tmp, emptyDir: {} } ]
 ---
 apiVersion: v1
 kind: Service
@@ -96,10 +125,21 @@ spec:
     metadata: { labels: { app: booking-service } }
     spec:
       imagePullSecrets: [ { name: ghcr } ]
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: booking-service
           image: ghcr.io/mpofuslim/booking-service:latest
           ports: [ { containerPort: 8084 } ]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
           envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
           env:
             - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0" }
@@ -128,6 +168,8 @@ spec:
           resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }
           readinessProbe: { httpGet: { path: /actuator/health, port: 8084 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health, port: 8084 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
+          volumeMounts: [ { name: tmp, mountPath: /tmp } ]
+      volumes: [ { name: tmp, emptyDir: {} } ]
 ---
 apiVersion: v1
 kind: Service
@@ -144,10 +186,21 @@ spec:
     metadata: { labels: { app: payment-service } }
     spec:
       imagePullSecrets: [ { name: ghcr } ]
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: payment-service
           image: ghcr.io/mpofuslim/payment-service:latest
           ports: [ { containerPort: 8085 } ]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
           envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
           env:
             - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0" }
@@ -171,6 +224,8 @@ spec:
           resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }
           readinessProbe: { httpGet: { path: /actuator/health, port: 8085 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health, port: 8085 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
+          volumeMounts: [ { name: tmp, mountPath: /tmp } ]
+      volumes: [ { name: tmp, emptyDir: {} } ]
 ---
 apiVersion: v1
 kind: Service
@@ -187,10 +242,21 @@ spec:
     metadata: { labels: { app: loyalty-service } }
     spec:
       imagePullSecrets: [ { name: ghcr } ]
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: loyalty-service
           image: ghcr.io/mpofuslim/loyalty-service:latest
           ports: [ { containerPort: 8086 } ]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
           envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
           env:
             - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0" }
@@ -211,3 +277,5 @@ spec:
           resources: { requests: { memory: 448Mi }, limits: { memory: 640Mi } }
           readinessProbe: { httpGet: { path: /actuator/health, port: 8086 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health, port: 8086 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
+          volumeMounts: [ { name: tmp, mountPath: /tmp } ]
+      volumes: [ { name: tmp, emptyDir: {} } ]

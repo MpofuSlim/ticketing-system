@@ -16,7 +16,9 @@ class SecurityHeadersWebFilterTest {
     @Test
     void filter_stampsAllAlwaysOnSecurityHeaders() {
         SecurityHeadersWebFilter filter = new SecurityHeadersWebFilter(
-                "DENY", "max-age=31536000; includeSubDomains", "", false);
+                "DENY", "max-age=31536000; includeSubDomains",
+                "strict-origin-when-cross-origin", "geolocation=(), camera=(), microphone=(), payment=()",
+                "", false);
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.get("/events").build());
 
@@ -27,6 +29,10 @@ class SecurityHeadersWebFilterTest {
         assertThat(headers.getFirst("X-Frame-Options")).isEqualTo("DENY");
         assertThat(headers.getFirst("Strict-Transport-Security"))
                 .isEqualTo("max-age=31536000; includeSubDomains");
+        assertThat(headers.getFirst("Referrer-Policy"))
+                .isEqualTo("strict-origin-when-cross-origin");
+        assertThat(headers.getFirst("Permissions-Policy"))
+                .isEqualTo("geolocation=(), camera=(), microphone=(), payment=()");
         // CSP is opt-in (empty) so neither header is set.
         assertThat(headers.getFirst("Content-Security-Policy")).isNull();
         assertThat(headers.getFirst("Content-Security-Policy-Report-Only")).isNull();
@@ -35,7 +41,9 @@ class SecurityHeadersWebFilterTest {
     @Test
     void filter_emitsCspInReportOnlyMode_byDefault() {
         SecurityHeadersWebFilter filter = new SecurityHeadersWebFilter(
-                "DENY", "max-age=31536000", "default-src 'self'", false);
+                "DENY", "max-age=31536000",
+                "strict-origin-when-cross-origin", "geolocation=(), camera=(), microphone=(), payment=()",
+                "default-src 'self'", false);
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.get("/events").build());
 
@@ -50,7 +58,9 @@ class SecurityHeadersWebFilterTest {
     @Test
     void filter_emitsEnforcingCsp_whenCspEnforceTrue() {
         SecurityHeadersWebFilter filter = new SecurityHeadersWebFilter(
-                "DENY", "max-age=31536000", "default-src 'self'", true);
+                "DENY", "max-age=31536000",
+                "strict-origin-when-cross-origin", "geolocation=(), camera=(), microphone=(), payment=()",
+                "default-src 'self'", true);
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.get("/events").build());
 
@@ -65,7 +75,9 @@ class SecurityHeadersWebFilterTest {
     @Test
     void filter_respectsFrameOptionsOverride() {
         SecurityHeadersWebFilter filter = new SecurityHeadersWebFilter(
-                "SAMEORIGIN", "max-age=31536000", "", false);
+                "SAMEORIGIN", "max-age=31536000",
+                "strict-origin-when-cross-origin", "geolocation=(), camera=(), microphone=(), payment=()",
+                "", false);
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.get("/events").build());
 
@@ -78,7 +90,9 @@ class SecurityHeadersWebFilterTest {
     @Test
     void filter_doesNotClobberHeaderSetByDownstream() {
         SecurityHeadersWebFilter filter = new SecurityHeadersWebFilter(
-                "DENY", "max-age=31536000", "", false);
+                "DENY", "max-age=31536000",
+                "strict-origin-when-cross-origin", "geolocation=(), camera=(), microphone=(), payment=()",
+                "", false);
         MockServerWebExchange exchange = MockServerWebExchange.from(
                 MockServerHttpRequest.get("/events").build());
         // Simulate a downstream service that explicitly emitted SAMEORIGIN

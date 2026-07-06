@@ -67,6 +67,38 @@ proxy_pass http://127.0.0.1:30080;
 sudo nginx -t && sudo nginx -s reload
 ```
 
+## 4. Network segmentation (optional, OWASP A05)
+
+`deploy/k8s/optional/06-networkpolicy.yaml` locks the namespace down to
+same-namespace ingress only (the api-gateway stays publicly reachable). It is
+**not** applied by `kubectl apply -f .` (that's non-recursive) — apply it
+deliberately and watch readiness, because health probes under a default-deny
+depend on the k3s (kube-router) NetworkPolicy controller allowing node→pod
+traffic:
+
+```sh
+kubectl apply -f optional/06-networkpolicy.yaml
+kubectl -n ticketing get pods -w          # confirm all stay Ready
+# revert instantly if any pod goes unready:
+# kubectl delete -f optional/06-networkpolicy.yaml
+```
+
+## Workload hardening (OWASP A05)
+
+Every **application** Deployment (`02`–`05`) runs with a locked-down
+`securityContext`: non-root `runAsUser: 10001`, `seccompProfile: RuntimeDefault`,
+`allowPrivilegeEscalation: false`, `readOnlyRootFilesystem: true` (with a `/tmp`
+`emptyDir` for the JVM's temp/hsperfdata), all Linux capabilities dropped, and
+`automountServiceAccountToken: false`. Rollouts are surge-safe (the old pod keeps
+serving until the new one passes its probe), so a hardening regression stalls the
+rollout rather than causing downtime.
+
+The **infra** StatefulSets (`01-infra.yaml`: postgres/redis/kafka) are left
+un-hardened for now — a StatefulSet pod is replaced in place (no surge), and the
+official images' root-then-drop entrypoints need per-image validation, so
+hardening the data tier is a deliberately-scheduled follow-up rather than an
+auto-applied change.
+
 ## Notes / gotchas
 
 - **Kafka** (`01-infra.yaml`): the `kafka` Service sets
@@ -85,9 +117,10 @@ sudo nginx -t && sudo nginx -s reload
   payment-service `ORADIAN_MIDDLEWARE_URL`) are inert until either the Veengu
   adapter lands or an `ExternalName`/Service for `oradian-middleware` is added.
   Login, MFA, browse, seat-hold and the InnBucks 2D-code payment all work.
-- **`INNBUCKS_GATEWAY_URL`** (in `cell.zw.env`) must point at *this node's*
-  host-resident core-gateway (`http://<node-private-ip>:8088`), reachable from
-  pods via the node IP.
+- **`INNBUCKS_GATEWAY_URL`** (in `cell.zw.env`) is an inert placeholder — the
+  `innbucks-core-gateway` spike it pointed at was retired (A06) and the SMS path
+  moved to the authenticated notify API. Leave the default; nothing serves
+  `:8088` in the cell today.
 - **`TICKETS_PUBLIC_BASE_URL`** is set to the public origin
   (`https://dtx.innbucks.co.zw`); Compose left it at the `localhost:8080` default.
 - Single replica per service; memory requests/limits mirror the Compose

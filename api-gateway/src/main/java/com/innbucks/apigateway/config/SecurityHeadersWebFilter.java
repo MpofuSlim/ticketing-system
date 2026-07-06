@@ -14,7 +14,7 @@ import reactor.core.publisher.Mono;
  * downstream clients (the FE in particular) get safe defaults without each
  * backend having to remember them.
  *
- * <p>Three headers are always set:
+ * <p>Five headers are always set:
  * <ul>
  *   <li>{@code X-Content-Type-Options: nosniff} — disables MIME sniffing.</li>
  *   <li>{@code X-Frame-Options: DENY} — blocks clickjacking via iframe embedding.
@@ -23,6 +23,13 @@ import reactor.core.publisher.Mono;
  *   <li>{@code Strict-Transport-Security: max-age=31536000; includeSubDomains} —
  *       harmless on plain HTTP (no-op), force-locks browsers to HTTPS once TLS
  *       is in front of the gateway.</li>
+ *   <li>{@code Referrer-Policy: strict-origin-when-cross-origin} — sends only the
+ *       origin (no path/query) on cross-origin navigations, so URLs carrying
+ *       tokens/IDs don't leak in the {@code Referer}. Override with
+ *       {@code SECURITY_HEADERS_REFERRER_POLICY}.</li>
+ *   <li>{@code Permissions-Policy: geolocation=(), camera=(), microphone=(),
+ *       payment=()} — denies these powerful browser features to all origins
+ *       (empty allowlist). Override with {@code SECURITY_HEADERS_PERMISSIONS_POLICY}.</li>
  * </ul>
  *
  * <p>Content-Security-Policy is opt-in via env var {@code SECURITY_HEADERS_CSP}.
@@ -44,16 +51,22 @@ public class SecurityHeadersWebFilter implements WebFilter, Ordered {
 
     private final String frameOptions;
     private final String hsts;
+    private final String referrerPolicy;
+    private final String permissionsPolicy;
     private final String csp;
     private final boolean cspEnforce;
 
     public SecurityHeadersWebFilter(
             @Value("${security.headers.frame-options:DENY}") String frameOptions,
             @Value("${security.headers.hsts:max-age=31536000; includeSubDomains}") String hsts,
+            @Value("${security.headers.referrer-policy:strict-origin-when-cross-origin}") String referrerPolicy,
+            @Value("${security.headers.permissions-policy:geolocation=(), camera=(), microphone=(), payment=()}") String permissionsPolicy,
             @Value("${security.headers.csp:}") String csp,
             @Value("${security.headers.csp-enforce:false}") boolean cspEnforce) {
         this.frameOptions = frameOptions;
         this.hsts = hsts;
+        this.referrerPolicy = referrerPolicy;
+        this.permissionsPolicy = permissionsPolicy;
         this.csp = csp;
         this.cspEnforce = cspEnforce;
     }
@@ -67,6 +80,8 @@ public class SecurityHeadersWebFilter implements WebFilter, Ordered {
         putIfAbsent(headers, "X-Content-Type-Options", "nosniff");
         putIfAbsent(headers, "X-Frame-Options", frameOptions);
         putIfAbsent(headers, "Strict-Transport-Security", hsts);
+        putIfAbsent(headers, "Referrer-Policy", referrerPolicy);
+        putIfAbsent(headers, "Permissions-Policy", permissionsPolicy);
         if (csp != null && !csp.isBlank()) {
             String name = cspEnforce
                     ? "Content-Security-Policy"
