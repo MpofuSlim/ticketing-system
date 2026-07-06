@@ -517,15 +517,59 @@ public class BookingService {
         return toDTO(booking);
     }
 
-    public BookingResponseDTO getByConfirmationNumber(String confirmationNumber) {
-        log.debug("Fetching booking by confirmation confirmation={}", confirmationNumber);
-        return toDTO(bookingRepository
-                .findByConfirmationNumber(confirmationNumber)
+    /**
+     * Owner-scoped lookup by confirmation number. Mirrors the ownership pattern
+     * of {@link #getBookingById(UUID, String, boolean)} but keyed by the
+     * confirmation number and fail-quiet: a CUSTOMER who does not own the
+     * booking gets a 404 ({@link NotFoundException}), NOT a 403 — the
+     * confirmation number is a low-entropy identifier printed on tickets, so a
+     * distinct "exists but forbidden" response would let a non-owner confirm
+     * that a given confirmation number is real. Admins (EVENT_ORGANIZER /
+     * SUPER_ADMIN, {@code isAdmin=true}) bypass the ownership check for support.
+     *
+     * @param callerEmail    the caller's JWT email (principal); may be null
+     * @param callerPhoneE164 the caller's JWT phone already canonicalised to
+     *                        E.164 by the controller; may be null
+     */
+    public BookingResponseDTO getByConfirmationNumber(String confirmationNumber,
+                                                      String callerEmail,
+                                                      String callerPhoneE164,
+                                                      boolean isAdmin) {
+        log.debug("Fetching booking by confirmation confirmation={} isAdmin={}",
+                confirmationNumber, isAdmin);
+        Booking booking = bookingRepository.findByConfirmationNumber(confirmationNumber)
                 .orElseThrow(() -> {
                     log.warn("Booking lookup by confirmation failed, not found confirmation={}",
                             confirmationNumber);
                     return new NotFoundException("Booking not found");
-                }));
+                });
+
+        if (!isAdmin && !ownedByCaller(booking, callerEmail, callerPhoneE164)) {
+            // 404, not 403: don't reveal that this confirmation number exists to
+            // a caller who doesn't own the booking.
+            log.warn("Booking confirmation lookup denied — caller not owner confirmation={} bookingId={}",
+                    confirmationNumber, booking.getId());
+            throw new NotFoundException("Booking not found");
+        }
+
+        return toDTO(booking);
+    }
+
+    /**
+     * True when the JWT-identified caller owns {@code booking}. Email match
+     * mirrors {@link #getBookingById(UUID, String, boolean)} (exact equals on
+     * the booking's stored userEmail). Phone match is the fallback for guest
+     * bookings that carry no email — both sides are compared in canonical E.164
+     * (the booking's phone is stored normalised at creation; the caller's is
+     * normalised by the controller before it reaches here).
+     */
+    private boolean ownedByCaller(Booking booking, String callerEmail, String callerPhoneE164) {
+        if (callerEmail != null && !callerEmail.isBlank()
+                && callerEmail.equals(booking.getUserEmail())) {
+            return true;
+        }
+        return callerPhoneE164 != null && !callerPhoneE164.isBlank()
+                && callerPhoneE164.equals(booking.getPhoneNumber());
     }
 
     /**

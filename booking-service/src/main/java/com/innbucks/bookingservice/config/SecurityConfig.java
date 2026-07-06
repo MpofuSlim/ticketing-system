@@ -35,12 +35,16 @@ public class SecurityConfig {
                         .requestMatchers("/swagger-ui.html").permitAll()
                         .requestMatchers("/v3/api-docs/**").permitAll()
                         .requestMatchers("/error").permitAll()
-                        // Confirmation lookup is public — agents scan at the gate
-                        .requestMatchers("/bookings/confirmation/**").permitAll()
+                        // NOTE: /bookings/confirmation/** and /bookings/phone/** are
+                        // deliberately NOT permitAll — both return another customer's
+                        // full PII + the scannable ticket QR keyed on a low-entropy
+                        // identifier, so they fall through to anyRequest().authenticated()
+                        // and the controller owner-scopes each to the caller's JWT
+                        // identity (OWASP A01 / BOLA fix). Do NOT re-add a permitAll here.
                         // Public booking lookup by id — same bearer-credential model as
-                        // /bookings/confirmation/** (UUID is the access token). Distinct
-                        // path from the authenticated GET /bookings/{id} above so the
-                        // access model is explicit at the URL.
+                        // the hosted ticket-QR endpoint (UUID is the access token) but a
+                        // TRIMMED, PII-free DTO. Distinct path from the authenticated
+                        // GET /bookings/{id} above so the access model is explicit at the URL.
                         .requestMatchers(HttpMethod.GET, "/bookings/public/**").permitAll()
                         // Public ticket artifacts (QR PNG + HTML view page) linked
                         // from the confirmation email/WhatsApp — opened with no app
@@ -56,11 +60,6 @@ public class SecurityConfig {
                         // permit this path; Spring's static-resource handler serves the
                         // file from the booking-service jar.
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/brand/**").permitAll()
-                        // Guest web flow: customers can book without logging
-                        // in. JWT is optional — when present, the customer's
-                        // tier is enforced by TierAccessInterceptor. When
-                        // absent, the controller treats them as a guest.
-                        .requestMatchers(HttpMethod.GET, "/bookings/phone/**").permitAll()
                         // Internal endpoint: event-service reads it to compute
                         // availableTickets on every event response.
                         .requestMatchers(HttpMethod.GET, "/bookings/active-counts").permitAll()

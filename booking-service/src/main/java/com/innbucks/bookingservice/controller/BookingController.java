@@ -523,6 +523,30 @@ public class BookingController {
                 .anyMatch(a -> role.equals(a.getAuthority()));
     }
 
+    private static boolean hasAnyRole(Authentication authentication, String... roles) {
+        for (String role : roles) {
+            if (hasRole(authentication, role)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Canonicalise a phone number to E.164 the same way createBooking does
+     * before storage, so an ownership compare and a lookup both use the stored
+     * form. Returns null for a null/blank/unparseable value (callers fail
+     * closed on null on the security path).
+     */
+    private String normalizePhone(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        return com.innbucks.bookingservice.util.MsisdnValidator
+                .normalizeToE164(raw, deploymentCountry)
+                .orElse(null);
+    }
+
     @GetMapping("/by-category/{categoryId}")
     @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(
@@ -746,12 +770,17 @@ public class BookingController {
     }
 
     @GetMapping("/confirmation/{number}")
-    @SecurityRequirements()
-    @Operation(summary = "Lookup by confirmation number", description = "Public endpoint used to verify a booking by confirmation number.")
+    @Operation(summary = "Lookup by confirmation number",
+            description = "Authenticated, owner-scoped lookup of a booking by its confirmation number. " +
+                    "A CUSTOMER may only retrieve a booking they own — the booking's email or phone must " +
+                    "match the identity on their JWT; a non-owner receives 404 (never 403), so the endpoint " +
+                    "does not confirm whether a given confirmation number exists to someone who doesn't own it. " +
+                    "EVENT_ORGANIZER / SUPER_ADMIN may look up any booking for support. Returns the full " +
+                    "booking including the scannable ticket QR / ticketNumber.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
-                    description = "Booking returned",
+                    description = "Booking returned (caller owns it, or caller is an admin)",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = BookingResponseDTO.class),
@@ -785,30 +814,46 @@ public class BookingController {
                                     """)
                     )
             ),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Confirmation number not found")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "401 UNAUTHORIZED", "message": "Invalid token", "data": null }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "Confirmation number not found, or the CUSTOMER caller does not own this booking",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "404 NOT_FOUND", "message": "Booking not found", "data": null }
+                                    """)))
     })
-    public ResponseEntity<ApiResult<BookingResponseDTO>> getByConfirmationNumber(@PathVariable String number) {
-        log.debug("GET /bookings/confirmation/{}", number);
+    public ResponseEntity<ApiResult<BookingResponseDTO>> getByConfirmationNumber(
+            @PathVariable String number,
+            Authentication authentication) {
+        String callerEmail = authentication.getName();
+        String callerPhone = normalizePhone(extractPhoneNumber(authentication));
+        boolean isAdmin = hasAnyRole(authentication, "ROLE_EVENT_ORGANIZER", "ROLE_SUPER_ADMIN");
+        log.debug("GET /bookings/confirmation/{} isAdmin={}", number, isAdmin);
         return ResponseEntity.ok(ApiResult.ok("Booking retrieved successfully",
-                bookingService.getByConfirmationNumber(number)));
+                bookingService.getByConfirmationNumber(number, callerEmail, callerPhone, isAdmin)));
     }
 
     @GetMapping("/phone/{phoneNumber}")
-    @SecurityRequirements()
     @Operation(
             summary = "Lookup bookings by phone number",
-            description = "Public endpoint. Returns the CONFIRMED bookings attached to the given phone " +
-                    "number, most recent first — i.e. the customer's paid, valid tickets. PENDING " +
-                    "(awaiting-payment) and CANCELLED bookings are excluded, so a booking only appears " +
-                    "here once payment is confirmed. Returns an empty list if no confirmed bookings " +
-                    "exist for that phone. To track an in-flight booking through payment, poll " +
-                    "GET /bookings/public/{id} instead — that endpoint surfaces the PENDING booking " +
-                    "and flips to CONFIRMED when the InnBucks code is approved."
+            description = "Authenticated, owner-scoped. Returns the CONFIRMED bookings attached to the given " +
+                    "phone number, most recent first — i.e. the customer's paid, valid tickets. A CUSTOMER may " +
+                    "only query THEIR OWN phone number: the path value (normalised to E.164) must equal the " +
+                    "phone claim on their JWT, otherwise the call is rejected with 403. EVENT_ORGANIZER / " +
+                    "SUPER_ADMIN may query any number for support. PENDING (awaiting-payment) and CANCELLED " +
+                    "bookings are excluded, so a booking only appears here once payment is confirmed. Returns " +
+                    "an empty list if no confirmed bookings exist for that phone. To track an in-flight booking " +
+                    "through payment, poll GET /bookings/public/{id} instead — that endpoint surfaces the " +
+                    "PENDING booking and flips to CONFIRMED when the InnBucks code is approved."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
-                    description = "Bookings returned (may be empty)",
+                    description = "Bookings returned (may be empty) — caller's own phone, or caller is an admin",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = BookingResponseDTO.class),
@@ -845,13 +890,48 @@ public class BookingController {
                                     }
                                     """)
                     )
-            )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "401 UNAUTHORIZED", "message": "Invalid token", "data": null }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "A CUSTOMER querying a phone number other than the one on their JWT",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
+                                    """)))
     })
     public ResponseEntity<ApiResult<List<BookingResponseDTO>>> getBookingsByPhoneNumber(
-            @PathVariable String phoneNumber) {
-        log.debug("GET /bookings/phone/{}", MsisdnMasking.mask(phoneNumber));
+            @PathVariable String phoneNumber,
+            Authentication authentication) {
+        boolean isAdmin = hasAnyRole(authentication, "ROLE_EVENT_ORGANIZER", "ROLE_SUPER_ADMIN");
+        // Canonicalise the requested number to E.164 the same way createBooking
+        // stores it, so the ownership compare and the lookup both use the stored
+        // form (a customer may enter their number in local 07... form).
+        String normalizedRequested = normalizePhone(phoneNumber);
+        if (!isAdmin) {
+            // CUSTOMER: BOLA guard — may only read bookings for the phone number
+            // on their own JWT. Compare in canonical E.164. A null on either side
+            // (unparseable path value, or a token with no phone claim) fails
+            // closed. AccessDeniedException -> 403 via the security handler.
+            String callerPhone = normalizePhone(extractPhoneNumber(authentication));
+            if (normalizedRequested == null || callerPhone == null
+                    || !normalizedRequested.equals(callerPhone)) {
+                log.warn("Phone booking lookup denied — caller phone does not match requested={}",
+                        MsisdnMasking.mask(phoneNumber));
+                throw new org.springframework.security.access.AccessDeniedException(
+                        "You can only view bookings for your own phone number.");
+            }
+        }
+        // Fall back to the raw path value only when it wasn't parseable (an admin
+        // may legitimately query an oddly-formatted stored number); a CUSTOMER
+        // never reaches here without a valid, matching normalizedRequested.
+        String lookupPhone = normalizedRequested != null ? normalizedRequested : phoneNumber;
+        log.debug("GET /bookings/phone/{} isAdmin={}", MsisdnMasking.mask(lookupPhone), isAdmin);
         return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully",
-                bookingService.getActiveByPhoneNumber(phoneNumber)));
+                bookingService.getActiveByPhoneNumber(lookupPhone)));
     }
 
     @PatchMapping("/{id}/cancel")
