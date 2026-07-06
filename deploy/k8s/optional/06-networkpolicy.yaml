@@ -1,0 +1,69 @@
+# =============================================================================
+# OWASP A05 — network segmentation for the `ticketing` namespace (OPT-IN)
+# =============================================================================
+# This file is intentionally NOT applied by the standard deploy routine:
+# `kubectl apply -f deploy/k8s/` is NON-recursive, so it never descends into
+# this `optional/` subdirectory. Apply it DELIBERATELY, and watch pod readiness:
+#
+#     kubectl apply -f deploy/k8s/optional/06-networkpolicy.yaml
+#     kubectl -n ticketing get pods -w        # confirm everything stays Ready
+#
+# Rollback (instant) if anything goes unready:
+#     kubectl delete -f deploy/k8s/optional/06-networkpolicy.yaml
+#
+# WHY OPT-IN: k3s enforces NetworkPolicy via its built-in kube-router controller
+# (unless started with --disable-network-policy). kube-router permits traffic
+# from the local node, so the kubelet's httpGet/tcpSocket health probes (incl.
+# the redis/kafka tcpSocket probes) keep working under a default-deny. That
+# behaviour can't be validated from this repo against the live single-node cell,
+# so segmentation is a deliberate operator step rather than an auto-applied
+# change that could sever probes on `kubectl apply`.
+#
+# DESIGN: ingress-only (egress stays open so DNS, the DB/Redis/Kafka clients,
+# and external calls to InnBucks/veengu/SMS are unaffected). Net effect once
+# applied: pods accept traffic only from other pods in this namespace, except
+# the api-gateway which is the public edge.
+# -----------------------------------------------------------------------------
+---
+# 1) Default-deny all ingress to every pod in the namespace. On its own this
+#    would block everything; the allow policies below re-open the required paths.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: ticketing
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+# 2) Allow any pod in the ticketing namespace to reach any other pod in it.
+#    This restores the intra-cell service mesh (gateway->services, service->
+#    service via discovery, services->postgres/redis/kafka, eureka registration)
+#    while cross-namespace and external direct access stays denied.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-same-namespace-ingress
+  namespace: ticketing
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}   # any pod in THIS namespace (no namespaceSelector => same ns)
+---
+# 3) The api-gateway is the public edge (reached via NodePort 30080 -> 8080 from
+#    the host nginx). Allow ingress to it from anywhere on the app + management
+#    ports; everything else in the namespace remains namespace-internal only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-gateway-public-ingress
+  namespace: ticketing
+spec:
+  podSelector: { matchLabels: { app: api-gateway } }
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - { protocol: TCP, port: 8080 }
+        - { protocol: TCP, port: 9090 }

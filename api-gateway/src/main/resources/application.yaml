@@ -461,6 +461,8 @@ security:
   headers:
     frame-options: ${SECURITY_HEADERS_FRAME_OPTIONS:DENY}
     hsts: ${SECURITY_HEADERS_HSTS:max-age=31536000; includeSubDomains}
+    referrer-policy: ${SECURITY_HEADERS_REFERRER_POLICY:strict-origin-when-cross-origin}
+    permissions-policy: ${SECURITY_HEADERS_PERMISSIONS_POLICY:geolocation=(), camera=(), microphone=(), payment=()}
     csp: ${SECURITY_HEADERS_CSP:}
     csp-enforce: ${SECURITY_HEADERS_CSP_ENFORCE:false}
 

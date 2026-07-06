@@ -1,4 +1,6 @@
-# Eureka discovery servers (HA pair).
+# Eureka discovery servers (HA pair). OWASP A05 workload hardening as per
+# 03-user-service.yaml (no SA token, non-root 10001, seccomp, no-priv-esc,
+# read-only root fs + /tmp emptyDir, caps dropped).
 ---
 apiVersion: v1
 kind: Service
@@ -24,10 +26,21 @@ spec:
     metadata: { labels: { app: discovery-server } }
     spec:
       imagePullSecrets: [ { name: ghcr } ]
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: discovery-server
           image: ghcr.io/mpofuslim/discovery-server:latest
           ports: [ { containerPort: 8761 } ]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
           envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
           env:
             - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0" }
@@ -38,6 +51,8 @@ spec:
           resources: { requests: { memory: 320Mi }, limits: { memory: 512Mi } }
           readinessProbe: { httpGet: { path: /actuator/health, port: 8761 }, initialDelaySeconds: 30, periodSeconds: 10, failureThreshold: 15 }
           livenessProbe:  { httpGet: { path: /actuator/health, port: 8761 }, initialDelaySeconds: 120, periodSeconds: 15, failureThreshold: 6 }
+          volumeMounts: [ { name: tmp, mountPath: /tmp } ]
+      volumes: [ { name: tmp, emptyDir: {} } ]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -49,10 +64,21 @@ spec:
     metadata: { labels: { app: discovery-server-2 } }
     spec:
       imagePullSecrets: [ { name: ghcr } ]
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: discovery-server-2
           image: ghcr.io/mpofuslim/discovery-server:latest
           ports: [ { containerPort: 8761 } ]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
           envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
           env:
             - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0" }
@@ -63,3 +89,5 @@ spec:
           resources: { requests: { memory: 320Mi }, limits: { memory: 512Mi } }
           readinessProbe: { httpGet: { path: /actuator/health, port: 8761 }, initialDelaySeconds: 30, periodSeconds: 10, failureThreshold: 15 }
           livenessProbe:  { httpGet: { path: /actuator/health, port: 8761 }, initialDelaySeconds: 120, periodSeconds: 15, failureThreshold: 6 }
+          volumeMounts: [ { name: tmp, mountPath: /tmp } ]
+      volumes: [ { name: tmp, emptyDir: {} } ]

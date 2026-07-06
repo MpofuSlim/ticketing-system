@@ -115,3 +115,17 @@ innbucks:
 logging:
   pattern:
     level: "%5p [${spring.application.name:-},%X{country:-},%X{homeCountry:-},%X{traceId:-},%X{spanId:-},%X{correlationId:-}]"
+
+---
+# OWASP A05: backends serve no Swagger/OpenAPI in a deployed cell — the
+# gateway hosts the only (auth-gated, fail-closed) copy. Gated on prod; dev/test
+# keep docs on for local use.
+spring:
+  config:
+    activate:
+      on-profile: prod
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false

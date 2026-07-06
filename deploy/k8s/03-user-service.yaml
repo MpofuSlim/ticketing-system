@@ -16,10 +16,27 @@ spec:
     metadata: { labels: { app: user-service } }
     spec:
       imagePullSecrets: [ { name: ghcr } ]
+      # OWASP A05 — workload hardening. The service doesn't call the k8s API, so
+      # don't mount its ServiceAccount token. Run as a fixed non-root UID with a
+      # locked-down seccomp profile. runAsUser is pinned numeric (not the image's
+      # "app" name) so the kubelet can verify non-root; the fat jar is
+      # world-readable so any UID can read it, and the only writable path the JVM
+      # needs (java.io.tmpdir / hsperfdata / Tomcat temp) is the /tmp emptyDir.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: user-service
           image: ghcr.io/mpofuslim/user-service:latest
           ports: [ { containerPort: 8081 } ]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
           envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
           env:
             - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0" }
@@ -50,3 +67,5 @@ spec:
           resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }
           readinessProbe: { httpGet: { path: /actuator/health, port: 8081 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health, port: 8081 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
+          volumeMounts: [ { name: tmp, mountPath: /tmp } ]
+      volumes: [ { name: tmp, emptyDir: {} } ]
