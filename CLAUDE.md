@@ -186,6 +186,47 @@ loyalty platform landed via `claude/add-loyalty-service` (merged in #91) and
 the old H2 sibling branch was deleted — the legacy `claude/*` branch names
 are history; use `feature/*` from now on.
 
+## CI/CD & supply-chain integrity (OWASP A08)
+
+**These are invariants — a change that weakens any of them needs a deliberate,
+called-out reason, not a silent revert.**
+
+- **Every third-party GitHub Action is pinned to an immutable commit SHA**, with
+  a trailing `# vX.Y.Z` comment — never a movable tag (`@v4`, `@main`). A
+  movable tag lets a hijacked/retagged release run arbitrary code in CI with the
+  workflow's token. Dependabot's `github-actions` ecosystem bumps the SHA + the
+  version comment together; keep them in lock-step. When adding a new action,
+  resolve its SHA (`git ls-remote https://github.com/<owner>/<repo> refs/tags/<tag>`)
+  and pin it — do NOT paste a floating tag.
+- **Every workflow declares least-privilege `permissions:`.** Default to
+  `contents: read`; escalate per-job only where required (`pull-requests: write`
+  for the dependency-review comment; `packages: write` + `id-token: write` +
+  `attestations: write` on the Release build for GHCR push + provenance).
+- **The Release build scans before it pushes, then signs.** Trivy scans the
+  locally-loaded image (CRITICAL/HIGH, os+library, `--ignorefile .trivyignore`)
+  and gates the push; only then is the image pushed **with a SLSA provenance
+  attestation + SBOM** (`provenance: mode=max`, `sbom: true`) and a GitHub-native
+  signed build-provenance attestation. Verify a deployed digest with
+  `gh attestation verify oci://ghcr.io/<owner>/<service>@<digest> --repo MpofuSlim/ticketing-system`.
+- **`.trivyignore` is a governed waiver list** — every entry needs an owner +
+  reason + review-date comment (rules are in the file). Prefer fixing/upgrading
+  over waiving; the root `pom.xml` carries the CVE version-overrides.
+- **PR-time SCA**: `ci.yml`'s `dependency-review` job flags any *new* High/Critical
+  direct dependency a PR introduces (diff-scoped — it won't fail on the existing
+  baseline). Transitive/library CVEs are caught by the Release Trivy image scan.
+- **`innbucks-core-gateway`** is an EOL Spring Boot 3.2.4 connectivity spike,
+  not a reactor module and not containerized — so CI doesn't build it and Trivy
+  doesn't scan it. It's covered by Dependabot alerts + the dependency-review gate
+  only. **Upgrade it onto the Boot-4 line or retire it before any production
+  use** — don't grow it in place on 3.2.4.
+
+Deferred (documented, not yet done): base-image **digest**-pinning in the
+Dockerfiles (would activate the already-configured Dependabot `docker`
+ecosystem — currently a no-op against the floating `21-jre-alpine` tag; must be
+paired so security point-releases still flow), and **verify-at-deploy** (a
+`gh attestation verify` / cosign gate in the pull step so the box refuses an
+unattested image).
+
 ## Deploying to the EC2 k3s cell after a merge
 
 > [!IMPORTANT]

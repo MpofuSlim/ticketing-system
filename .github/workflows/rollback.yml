@@ -39,8 +39,9 @@ jobs:
           fi
           echo "Rolling back to sha-${{ inputs.target_sha }}"
 
+      # SHA-pinned (OWASP A08 supply-chain integrity); dependabot maintains it.
       - name: Checkout (for docker-compose.yml + scripts/)
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           ref: ${{ inputs.target_sha }}
 

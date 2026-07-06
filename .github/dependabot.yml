@@ -45,6 +45,32 @@ updates:
           - "net.logstash.logback*"
         update-types: ["minor", "patch"]
 
+  # innbucks-core-gateway is a Spring Boot 3.2.4 connectivity spike that is NOT
+  # a module of the Boot-4 reactor, so the "/" Maven config above never sees it
+  # and it is built/scanned by nothing (no Dockerfile -> not in the Release
+  # Trivy scan; not a reactor module -> not in CI). GitHub's repo-wide
+  # dependency graph still feeds Dependabot security ALERTS for its pom, and the
+  # CI dependency-review gate covers it on PRs — this entry adds proactive
+  # version-update PRs so the EOL Boot 3.2.4 line gets nudged forward (OWASP
+  # A08). Note: if Dependabot can't resolve the private innbucks.co.zw:core jar,
+  # this directory's update run may log a resolution error (harmless to other
+  # ecosystems) — the real fix is to upgrade-or-retire the spike.
+  - package-ecosystem: "maven"
+    directory: "/innbucks-core-gateway"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "08:00"
+      timezone: "Etc/UTC"
+    open-pull-requests-limit: 5
+    target-branch: "master"
+    labels:
+      - "dependencies"
+      - "java"
+      - "core-gateway-spike"
+    commit-message:
+      prefix: "deps(core-gateway)"
+
   - package-ecosystem: "docker"
     directory: "/api-gateway"
     schedule: { interval: "weekly", day: "monday", time: "08:00", timezone: "Etc/UTC" }

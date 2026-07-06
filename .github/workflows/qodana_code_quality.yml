@@ -9,17 +9,22 @@ on:
 jobs:
   qodana:
     runs-on: ubuntu-latest
+    # Least privilege (OWASP A08). push-fixes is 'none' below, so Qodana never
+    # commits — contents:read is enough. It still needs pull-requests:write for
+    # post-pr-comment and checks:write for use-annotations.
     permissions:
-      contents: write
+      contents: read
       pull-requests: write
       checks: write
     steps:
-      - uses: actions/checkout@v4
+      # SHA-pinned (OWASP A08 supply-chain integrity); dependabot maintains the
+      # pin + version comment.
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
       - name: 'Qodana Scan'
-        uses: JetBrains/qodana-action@v2025.3
+        uses: JetBrains/qodana-action@89eb4357efd2b52e639f3216e63edaf33b82622b # v2025.3.2
         env:
           QODANA_TOKEN: ${{ secrets.QODANA_TOKEN }}
         with:
