@@ -27,6 +27,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.EnumSet;
 
 @Service
@@ -341,6 +343,9 @@ public class OtpService {
                     .registrationTier(1)
                     .verified(false)
                     .phoneVerified(true)
+                    // A01/A04: stamp the proof-of-ownership time so the tier2/3/4
+                    // gate sees a recent verification for this fresh account.
+                    .phoneVerifiedAt(LocalDateTime.now(ZoneOffset.UTC))
                     .build();
             customerProfileRepository.save(profile);
             pendingRegistrationRepository.delete(pending);
@@ -358,13 +363,17 @@ public class OtpService {
                 .filter(u -> u.hasRole(User.Role.CUSTOMER))
                 .flatMap(u -> customerProfileRepository.findByUserId(u.getId()))
                 .ifPresent(profile -> {
+                    // A01/A04: refresh the proof-of-ownership window on EVERY
+                    // successful verify — even a re-verify of an already-verified
+                    // phone — so the tier2/3/4 gate sees a fresh timestamp.
+                    profile.setPhoneVerifiedAt(LocalDateTime.now(ZoneOffset.UTC));
                     if (!profile.isPhoneVerified()) {
                         profile.setPhoneVerified(true);
-                        customerProfileRepository.save(profile);
                         // First time this phone has been verified — same
                         // signal to loyalty as the pending-registration path.
                         loyaltyServiceClient.promoteUserByPhone(phoneNumber);
                     }
+                    customerProfileRepository.save(profile);
                 });
     }
 

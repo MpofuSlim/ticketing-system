@@ -50,6 +50,8 @@ spring:
                     redis-rate-limiter.burstCapacity: ${AUTH_REGISTER_RATE_LIMIT_BURST_CAPACITY:5}
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
+                    # Fail-SAFE: keep throttling this SMS/abuse surface if Redis is down.
+                    rate-limiter: "#{@resilientRedisRateLimiter}"
 
             # OTP request/verify trigger real SMS sends, so they are the one
             # money-cost surface on the otherwise-limiter-free /auth/** family.
@@ -72,6 +74,8 @@ spring:
                     redis-rate-limiter.burstCapacity: ${AUTH_OTP_RATE_LIMIT_BURST_CAPACITY:3}
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
+                    # Fail-SAFE: OTP sends real SMS — keep throttling if Redis is down.
+                    rate-limiter: "#{@resilientRedisRateLimiter}"
 
             # 2FA endpoints: rate-limit per-IP to bound TOTP/backup-code brute
             # force. The downstream MfaService also caps via the OTP failed-
@@ -106,6 +110,8 @@ spring:
                     redis-rate-limiter.burstCapacity: ${AUTH_OTP_RATE_LIMIT_BURST_CAPACITY:3}
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
+                    # Fail-SAFE: forgot-password sends SMS OTP — keep throttling if Redis is down.
+                    rate-limiter: "#{@resilientRedisRateLimiter}"
 
             - id: user-auth-route
               uri: lb://user-service
@@ -292,6 +298,8 @@ spring:
                     redis-rate-limiter.burstCapacity: ${PAYMENTS_READ_RATE_LIMIT_BURST_CAPACITY:100}
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
+                    # Fail-SAFE: keep throttling the payments surface if Redis is down.
+                    rate-limiter: "#{@resilientRedisRateLimiter}"
 
             - id: payments-innbucks-write-route
               uri: lb://payment-service
@@ -305,6 +313,8 @@ spring:
                     redis-rate-limiter.burstCapacity: ${PAYMENTS_INNBUCKS_RATE_LIMIT_BURST_CAPACITY:3}
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@paymentsInnbucksIpKeyResolver}"
+                    # Fail-SAFE: public payment-initiation rail — keep throttling if Redis is down.
+                    rate-limiter: "#{@resilientRedisRateLimiter}"
 
             - id: payment-service-write-route
               uri: lb://payment-service
@@ -318,6 +328,8 @@ spring:
                     redis-rate-limiter.burstCapacity: ${PAYMENTS_WRITE_RATE_LIMIT_BURST_CAPACITY:5}
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
+                    # Fail-SAFE: payment mutation (money path) — keep throttling if Redis is down.
+                    rate-limiter: "#{@resilientRedisRateLimiter}"
 
             - id: loyalty-internal-deny
               uri: forward:/__edge_deny__
@@ -432,6 +444,18 @@ spring:
 
 gateway:
   trusted-proxy-count: ${GATEWAY_TRUSTED_PROXY_COUNT:1}
+
+# Fail-safe rate-limit fallback (OWASP A04). When Redis is unreachable the
+# SMS-cost / payment routes wired to @resilientRedisRateLimiter keep throttling
+# via an in-memory Bucket4j bucket (see ResilientRedisRateLimiter). These knobs
+# only bound that per-instance fallback map; steady-state limits still come from
+# the per-route redis-rate-limiter.* args. max-buckets caps distinct
+# (route,key) buckets (LRU eviction); bucket-idle-minutes expires idle keys.
+innbucks:
+  ratelimit:
+    fallback:
+      max-buckets: ${RATE_LIMIT_FALLBACK_MAX_BUCKETS:50000}
+      bucket-idle-minutes: ${RATE_LIMIT_FALLBACK_BUCKET_IDLE_MINUTES:10}
 
 security:
   headers:

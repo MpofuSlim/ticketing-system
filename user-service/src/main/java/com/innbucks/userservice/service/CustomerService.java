@@ -28,6 +28,8 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 
 @Service
@@ -57,6 +59,18 @@ public class CustomerService {
      *  env var; same key the rest of the service is pinned to. */
     @Value("${innbucks.country:ZW}")
     private String deploymentCountry = "ZW";
+
+    /**
+     * A01/A04 — how recently the target phone must have completed OTP
+     * verification for a tier2/3/4 KYC-upgrade to be allowed. The legitimate
+     * flow (tier1 -> /auth/otp/verify -> tier2) stamps phone_verified_at moments
+     * earlier, so 30 minutes is comfortably enough for a real user to fill in
+     * the KYC form, while a stale/never-verified phone is refused. Field-injected
+     * with a default (like {@link #deploymentCountry}) so it stays out of the
+     * Lombok constructor and plain-{@code new} unit tests get a sane value.
+     */
+    @Value("${innbucks.registration.verify-window:PT30M}")
+    private Duration verifyWindow = Duration.ofMinutes(30);
 
     /**
      * Tier 1 no longer creates a User or CustomerProfile. It stashes the phone + hashed password
@@ -104,6 +118,7 @@ public class CustomerService {
     @Transactional
     public CustomerRegistrationResponseDTO registerTier2(CustomerTier2RegisterDTO request) {
         CustomerProfile profile = loadProfile(request.getMsisdn(), 1);
+        requireRecentlyVerified(profile);
 
         // Strip any HTML from the free-text name fields before they land on the
         // persisted profile + user (OWASP A03 / stored-XSS). The raw request
@@ -203,6 +218,7 @@ public class CustomerService {
     @Transactional
     public CustomerRegistrationResponseDTO registerTier3(String phoneNumber, CustomerTier3RegisterDTO request) {
         CustomerProfile profile = loadProfile(phoneNumber, 2);
+        requireRecentlyVerified(profile);
 
         profile.setBiometricsReference(request.getBiometricsReference());
         profile.setRegistrationTier(3);
@@ -229,6 +245,7 @@ public class CustomerService {
     @Transactional
     public CustomerRegistrationResponseDTO registerTier4(String phoneNumber, CustomerTier4RegisterDTO request) {
         CustomerProfile profile = loadProfile(phoneNumber, 3);
+        requireRecentlyVerified(profile);
 
         profile.setIdDocumentPath(request.getIdDocumentPath());
         profile.setProofOfResidencePath(request.getProofOfResidencePath());
@@ -383,6 +400,36 @@ public class CustomerService {
         return MsisdnValidator.normalizeToE164(raw, deploymentCountry)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "Invalid phone number: " + raw));
+    }
+
+    /**
+     * A01/A04 account-takeover guard for the tier2/3/4 KYC-upgrade endpoints.
+     *
+     * <p>Those endpoints take the target account's phone straight from the
+     * request body and overwrite its email / KYC data. Without proof the caller
+     * actually controls that phone, an unauthenticated attacker could upgrade
+     * (and effectively take over) a victim's account simply by naming their
+     * number. We require the phone to have completed an OTP verification within
+     * {@link #verifyWindow} — the legitimate flow
+     * (tier1 -> /auth/otp/verify -> tier2) stamps {@code phone_verified_at}
+     * moments earlier, so it passes, while an attacker can't mint a fresh OTP
+     * for a number they don't hold.
+     *
+     * <p>Rejected with 403 via {@link ResponseStatusException} (honoured by
+     * {@code GlobalExceptionHandler.handleResponseStatus}). The request contract
+     * is unchanged — the phone still comes from the body; the recency check is
+     * the added gate, so there is no frontend change.
+     */
+    private void requireRecentlyVerified(CustomerProfile profile) {
+        LocalDateTime verifiedAt = profile.getPhoneVerifiedAt();
+        if (verifiedAt == null
+                || Duration.between(verifiedAt, LocalDateTime.now(ZoneOffset.UTC))
+                        .compareTo(verifyWindow) > 0) {
+            // phone_verification_required — keep the copy generic (no account
+            // enumeration) but actionable: point the user at the OTP step.
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "Verify your phone at /auth/otp/verify before completing registration.");
+        }
     }
 
     private CustomerProfile loadProfile(String phoneNumber, int requiredCurrentTier) {

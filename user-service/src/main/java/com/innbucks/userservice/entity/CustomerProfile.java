@@ -88,6 +88,14 @@ public class CustomerProfile {
     @Builder.Default
     private boolean phoneVerified = false;
 
+    // A01/A04: the LAST time this phone completed OTP verification. Stamped on
+    // every successful /auth/otp/verify (OtpService.finalizeVerification) so the
+    // tier2/3/4 KYC-upgrade endpoints can require a RECENT verification (proof
+    // the caller owns the phone) instead of trusting the request-body msisdn.
+    // Nullable: legacy rows and phones that never OTP-verified have no stamp.
+    @Column(name = "phone_verified_at")
+    private LocalDateTime phoneVerifiedAt;
+
     private LocalDateTime updatedAt;
 
     @PreUpdate

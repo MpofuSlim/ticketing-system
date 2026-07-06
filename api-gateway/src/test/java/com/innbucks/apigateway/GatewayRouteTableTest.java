@@ -93,6 +93,14 @@ class GatewayRouteTableTest {
             "seat-service-proxy-route", "booking-service-proxy-route",
             "payment-service-proxy-route", "loyalty-service-proxy-route");
 
+    // OWASP A04: the SMS-cost / payment abuse surfaces that MUST keep throttling
+    // when Redis is down, so they are pinned to the in-memory-fallback limiter
+    // (@resilientRedisRateLimiter) rather than RedisRateLimiter's fail-open one.
+    private static final List<String> RESILIENT_LIMITED_ROUTES = List.of(
+            "auth-register-route", "auth-otp-route", "auth-password-reset-route",
+            "payment-service-read-route", "payments-innbucks-write-route",
+            "payment-service-write-route");
+
     @Autowired
     RouteDefinitionLocator locator;
 
@@ -293,5 +301,53 @@ class GatewayRouteTableTest {
                     .allSatisfy(p -> assertThat(p).contains("/v3/api-docs"));
             assertThat(filterNames(id)).as("StripPrefix on %s", id).contains("StripPrefix");
         });
+    }
+
+    /** True if the route's RequestRateLimiter filter names @resilientRedisRateLimiter. */
+    private boolean usesResilientLimiter(String id) {
+        return route(id).getFilters().stream()
+                .filter(f -> "RequestRateLimiter".equals(f.getName()))
+                .flatMap(f -> f.getArgs().values().stream())
+                .anyMatch(v -> v != null && v.contains("resilientRedisRateLimiter"));
+    }
+
+    @Test
+    void smsCostAndPaymentRoutesUseTheResilientFailSafeLimiter() {
+        // OWASP A04: RedisRateLimiter fails OPEN on a Redis outage, silently
+        // dropping throttling. These SMS-cost (OTP/register/forgot-password) and
+        // payment routes are pinned to @resilientRedisRateLimiter so a Redis
+        // outage degrades to in-memory throttling instead of no throttling. A
+        // regression that drops the rate-limiter arg reverts them to fail-open
+        // and fails here.
+        RESILIENT_LIMITED_ROUTES.forEach(id -> {
+            assertThat(filterNames(id))
+                    .as("resilient route %s must still carry a RequestRateLimiter", id)
+                    .contains("RequestRateLimiter");
+            assertThat(usesResilientLimiter(id))
+                    .as("route %s must use @resilientRedisRateLimiter (fail-safe on Redis outage)", id)
+                    .isTrue();
+        });
+    }
+
+    @Test
+    void loginAndMfaStayFailOpenToAvoidLockoutOnRedisOutage() {
+        // Login (the /auth/** catch-all) carries NO limiter, and MFA — the
+        // second login step — stays on the default fail-OPEN Redis limiter.
+        // Both MUST NOT be routed through the fail-safe limiter: a Redis outage
+        // must never throttle/lock users out mid-login.
+        assertThat(filterNames("user-auth-route"))
+                .as("login catch-all must have no limiter (fail-open)")
+                .doesNotContain("RequestRateLimiter");
+        assertThat(filterNames("auth-mfa-route"))
+                .as("MFA keeps a limiter, just the fail-open Redis one")
+                .contains("RequestRateLimiter");
+        assertThat(usesResilientLimiter("auth-mfa-route"))
+                .as("MFA must stay fail-open (default Redis limiter), not fail-safe")
+                .isFalse();
+        // A representative always-fail-open authenticated route stays on the
+        // default limiter too — the fail-safe bucket is opt-in, not global.
+        assertThat(usesResilientLimiter("booking-service-route"))
+                .as("ordinary authenticated routes stay on the default Redis limiter")
+                .isFalse();
     }
 }

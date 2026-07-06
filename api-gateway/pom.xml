@@ -46,6 +46,22 @@
             <artifactId>spring-boot-starter-data-redis-reactive</artifactId>
         </dependency>
 
+        <!-- Bucket4j: correct in-memory token bucket backing the
+             ResilientRedisRateLimiter's fail-SAFE fallback (OWASP A04). When
+             Redis is unreachable the stock RedisRateLimiter fails OPEN (drops
+             all throttling on the SMS-cost / payment routes); the fallback
+             keeps throttling locally at the same replenish/burst. Neither
+             Spring Boot's nor Spring Cloud's BOM manages bucket4j, so the
+             version is pinned here explicitly. 8.10.1 is the current 8.x line,
+             matching the io.github.bucket4j package that Spring Cloud Gateway
+             5.0.2's own Bucket4jRateLimiter already compiles against. Bump in
+             lockstep if that ever moves. -->
+        <dependency>
+            <groupId>com.bucket4j</groupId>
+            <artifactId>bucket4j-core</artifactId>
+            <version>8.10.1</version>
+        </dependency>
+
         <!-- JWT validation at gateway level -->
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
