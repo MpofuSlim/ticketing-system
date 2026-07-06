@@ -2,6 +2,7 @@ package com.innbucks.apigateway.config;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cloud.gateway.filter.ratelimit.KeyResolver;
+import org.springframework.cloud.gateway.filter.ratelimit.RedisRateLimiter;
 import org.springframework.cloud.gateway.support.ipresolver.RemoteAddressResolver;
 import org.springframework.cloud.gateway.support.ipresolver.XForwardedRemoteAddressResolver;
 import org.springframework.context.annotation.Bean;
@@ -11,6 +12,7 @@ import org.springframework.http.HttpHeaders;
 import reactor.core.publisher.Mono;
 
 import java.net.InetSocketAddress;
+import java.time.Duration;
 
 /**
  * Resolves the bucket key the gateway's RequestRateLimiter charges against.
@@ -96,5 +98,36 @@ public class RateLimiterConfig {
             }
             return Mono.just("anonymous-payments-innbucks");
         };
+    }
+
+    /**
+     * Fail-SAFE rate limiter for the SMS-cost / payment routes (OWASP A04). It
+     * wraps the auto-configured {@link RedisRateLimiter}: Redis stays the
+     * cross-instance source of truth, but when Redis is unreachable — where the
+     * stock limiter fails OPEN and drops all throttling — it falls back to an
+     * in-memory Bucket4j bucket at the SAME replenish/burst the route
+     * configured. See {@link ResilientRedisRateLimiter} for the detection and
+     * boundedness details.
+     *
+     * <p>{@code autowireCandidate = false} keeps this bean out of the
+     * by-type {@code RateLimiter} injection that Spring Cloud Gateway's
+     * {@code RequestRateLimiterGatewayFilterFactory} uses to pick the DEFAULT
+     * limiter — so every route that does not opt in explicitly stays on the
+     * auto-configured {@code RedisRateLimiter} (fail-open), and login is never
+     * throttled by a Redis outage. Routes opt in by name with
+     * {@code rate-limiter: "#{@resilientRedisRateLimiter}"}; the SpEL bean
+     * reference resolves by name regardless of {@code autowireCandidate}.
+     *
+     * <p>The bucket map is bounded by {@code max-buckets} (LRU eviction) and
+     * {@code bucket-idle-minutes} (idle expiry) so it cannot leak memory under
+     * a key-rotating flood during an outage.
+     */
+    @Bean(autowireCandidate = false)
+    public ResilientRedisRateLimiter resilientRedisRateLimiter(
+            RedisRateLimiter redisRateLimiter,
+            @Value("${innbucks.ratelimit.fallback.max-buckets:50000}") long maxBuckets,
+            @Value("${innbucks.ratelimit.fallback.bucket-idle-minutes:10}") long bucketIdleMinutes) {
+        return new ResilientRedisRateLimiter(
+                redisRateLimiter, maxBuckets, Duration.ofMinutes(bucketIdleMinutes));
     }
 }
