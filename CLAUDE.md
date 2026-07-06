@@ -228,6 +228,42 @@ paired so security point-releases still flow), and **verify-at-deploy** (a
 `gh attestation verify` / cosign gate in the pull step so the box refuses an
 unattested image).
 
+## Cryptography & key management (OWASP A02)
+
+**At-rest is keyed/hashed, never plaintext, for every sensitive field** — and
+new sensitive columns MUST follow suit:
+
+- Passwords + MFA backup codes: **Argon2id** (delegating `PasswordEncoder`,
+  legacy-bcrypt verify only). TOTP secret: **AES-GCM-256** (`MfaSecretCipher`).
+  National ID, audit rows, **OTP codes**, loyalty voucher/QR: **HMAC-SHA256**
+  (keyed). Refresh/device/denylist tokens: SHA-256 (already high-entropy).
+- **Low-entropy secrets (OTP is 6 digits) MUST be HMAC-keyed, not bare-hashed** —
+  a fast unkeyed hash of a million-value space is trivially reversed from a DB
+  read. `OtpHasher` (key `otp.hmac-secret`) mirrors `NationalIdHasher`.
+- **Every keyed secret is env-var + guarded**: `ProductionSecretsGuard` refuses
+  to boot under a deployment profile on a `change-me` placeholder. Boot-required
+  set now includes `AUDIT_HMAC_SECRET` (A09) and **`OTP_HMAC_SECRET`** (A02) —
+  provision both per cell (`openssl rand -base64 48`) or user-service won't start.
+  k8s auto-flows them via `envFrom: secretRef`; compose maps them explicitly.
+
+Deferred (the A02 A−→A crux — **infra migrations, needs the running cluster +
+staged rollout, NOT a code-only PR**):
+
+- **Retire shared-secret HS256 → RS256/JWKS.** Today `jwt.secret` is a symmetric
+  key present in every service, so any compromised service can *mint* fleet-wide
+  tokens (not just verify). Fix: user-service signs with a private key; others
+  verify via a published public key (JWKS). Migrate with a dual-verify window
+  (verifiers accept HS256 **and** RS256), then flip minting to RS256, then drop
+  HS256 — the security benefit only lands after the flip. Touches all six
+  `JwtUtil`s. No FE impact (backends verify, not the app).
+- **KMS/Vault custody + rotation** for `jwt.secret`, `mfa.encryption-key`, the
+  HMAC secrets, and internal tokens. No rotation exists today (JWT has no `kid`;
+  `MfaSecretCipher`'s `v1:` prefix already scaffolds multi-key).
+- **In-cluster TLS/mTLS.** Only the Cloudflare/nginx edge is encrypted; service↔
+  service, ↔Postgres (`sslmode=verify-full`), ↔Redis (TLS), ↔Kafka (`SASL_SSL`)
+  are plaintext behind the edge. `06-networkpolicy.yaml` is segmentation, not
+  encryption. Needs a mesh or per-hop TLS + cert management.
+
 ## Deploying to the EC2 k3s cell after a merge
 
 > [!IMPORTANT]

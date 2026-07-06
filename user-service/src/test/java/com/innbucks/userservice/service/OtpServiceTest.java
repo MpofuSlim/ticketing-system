@@ -15,11 +15,14 @@ import com.innbucks.userservice.repository.OtpRepository;
 import com.innbucks.userservice.repository.OtpRetryAttemptRepository;
 import com.innbucks.userservice.repository.PendingRegistrationRepository;
 import com.innbucks.userservice.repository.UserRepository;
+import com.innbucks.userservice.security.OtpHasher;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.time.Instant;
 import java.util.Optional;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -29,6 +32,18 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 class OtpServiceTest {
+
+    // Same hasher the service is built with below — so assertions can check that
+    // the PERSISTED code equals the HMAC of the code that was actually delivered
+    // (A02: otps.code stores the HMAC, not the raw 6-digit code).
+    private static final OtpHasher HASHER = new OtpHasher("test-otp-hmac-secret-unit-tests-0123456789");
+
+    /** Pull the 6-digit code out of a dispatched OTP message. */
+    private static String extractCode(String message) {
+        Matcher m = Pattern.compile("\\b(\\d{6})\\b").matcher(message);
+        assertTrue(m.find(), "message should carry a 6-digit code, was: " + message);
+        return m.group(1);
+    }
 
     private OtpService newService(OtpRepository otpRepo,
                                   OtpRetryAttemptRepository retryRepo,
@@ -61,7 +76,7 @@ class OtpServiceTest {
         // LoyaltyServiceClient.promoteUserByPhone is fired post-OTP-verify but
         // the call is best-effort and never affects assertions in these tests,
         // so a noop mock is fine.
-        return new OtpService(otpRepo, retryRepo, userRepo, profileRepo, pendingRepo,
+        return new OtpService(otpRepo, HASHER, retryRepo, userRepo, profileRepo, pendingRepo,
                 mock(LoyaltyServiceClient.class), whatsApp, sms, email);
     }
 
@@ -79,16 +94,16 @@ class OtpServiceTest {
         verify(otpRepo).deleteByPhoneNumber("+263771234567");
         ArgumentCaptor<Otp> saved = ArgumentCaptor.forClass(Otp.class);
         verify(otpRepo).save(saved.capture());
-        String code = saved.getValue().getCode();
-        assertTrue(code.matches("\\d{6}"), "OTP should be a 6-digit code, was: " + code);
         assertEquals("+263771234567", saved.getValue().getPhoneNumber());
 
-        // SMS is the primary channel: the exact persisted code is delivered to
-        // the same phone, and the WhatsApp fallback is NOT touched on success.
+        // SMS is the primary channel: the delivered message carries the raw
+        // 6-digit code, while the PERSISTED value is its HMAC (A02). The WhatsApp
+        // fallback is NOT touched on success.
         ArgumentCaptor<String> message = ArgumentCaptor.forClass(String.class);
         verify(sms).sendSms(eq("+263771234567"), message.capture(), anyString());
-        assertTrue(message.getValue().contains(code),
-                "SMS message should carry the generated OTP code");
+        String rawCode = extractCode(message.getValue());
+        assertEquals(HASHER.hash(rawCode), saved.getValue().getCode(),
+                "persisted OTP code should be the HMAC of the delivered code");
         verifyNoInteractions(whatsApp);
     }
 
@@ -109,7 +124,10 @@ class OtpServiceTest {
         // carrying the exact persisted code.
         ArgumentCaptor<Otp> saved = ArgumentCaptor.forClass(Otp.class);
         verify(otpRepo).save(saved.capture());
-        verify(whatsApp).sendCustomNotification(eq("+263771234567"), contains(saved.getValue().getCode()));
+        ArgumentCaptor<String> waMsg = ArgumentCaptor.forClass(String.class);
+        verify(whatsApp).sendCustomNotification(eq("+263771234567"), waMsg.capture());
+        assertEquals(HASHER.hash(extractCode(waMsg.getValue())), saved.getValue().getCode(),
+                "persisted OTP code should be the HMAC of the delivered code");
     }
 
     @Test
@@ -180,7 +198,7 @@ class OtpServiceTest {
         CustomerProfileRepository profileRepo = mock(CustomerProfileRepository.class);
         PendingRegistrationRepository pendingRepo = mock(PendingRegistrationRepository.class);
 
-        when(otpRepo.consume(eq("+263771234567"), eq("000000"), any())).thenReturn(1);
+        when(otpRepo.consume(eq("+263771234567"), eq(HASHER.hash("000000")), any())).thenReturn(1);
         PendingRegistration pending = PendingRegistration.builder()
                 .phoneNumber("+263771234567")
                 .passwordHash("hashed-pw")
@@ -213,7 +231,7 @@ class OtpServiceTest {
         CustomerProfileRepository profileRepo = mock(CustomerProfileRepository.class);
         PendingRegistrationRepository pendingRepo = mock(PendingRegistrationRepository.class);
 
-        when(otpRepo.consume(eq("+263771234567"), eq("000000"), any())).thenReturn(1);
+        when(otpRepo.consume(eq("+263771234567"), eq(HASHER.hash("000000")), any())).thenReturn(1);
         when(pendingRepo.findByPhoneNumber("+263771234567")).thenReturn(Optional.empty());
         User user = User.builder().id(7L).phoneNumber("+263771234567")
                 .roles(java.util.EnumSet.of(User.Role.CUSTOMER)).build();
@@ -277,7 +295,10 @@ class OtpServiceTest {
 
         ArgumentCaptor<Otp> saved = ArgumentCaptor.forClass(Otp.class);
         verify(otpRepo).save(saved.capture());
-        verify(whatsApp).sendCustomNotification(eq("+254712345678"), contains(saved.getValue().getCode()));
+        ArgumentCaptor<String> waMsg = ArgumentCaptor.forClass(String.class);
+        verify(whatsApp).sendCustomNotification(eq("+254712345678"), waMsg.capture());
+        assertEquals(HASHER.hash(extractCode(waMsg.getValue())), saved.getValue().getCode(),
+                "persisted OTP code should be the HMAC of the delivered code");
         // SMS gateway is NEVER hit for a foreign-prefix number.
         verifyNoInteractions(sms);
     }
@@ -366,7 +387,7 @@ class OtpServiceTest {
         OtpRepository otpRepo = mock(OtpRepository.class);
         OtpRetryAttemptRepository retryRepo = mock(OtpRetryAttemptRepository.class);
         PendingRegistrationRepository pendingRepo = mock(PendingRegistrationRepository.class);
-        when(otpRepo.consume(eq("+263771234567"), eq("123456"), any())).thenReturn(1);
+        when(otpRepo.consume(eq("+263771234567"), eq(HASHER.hash("123456")), any())).thenReturn(1);
         when(retryRepo.findByPhoneNumber(anyString())).thenReturn(Optional.empty());
 
         boolean ok = newService(otpRepo, retryRepo, mock(UserRepository.class),

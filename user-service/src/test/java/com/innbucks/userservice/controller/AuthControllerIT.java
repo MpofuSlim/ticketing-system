@@ -361,10 +361,18 @@ class AuthControllerIT {
                         .content(objectMapper.writeValueAsString(tier1)))
                 .andExpect(status().isCreated());
 
-        // OTP is now a random 6-digit code (delivered via the mocked WhatsApp
-        // gateway). Read the persisted code and verify with it to materialise
-        // the User + Tier-1 profile.
-        String code = otpRepository.findByPhoneNumber(phone).orElseThrow().getCode();
+        // OTP is a random 6-digit code delivered via the mocked WhatsApp gateway.
+        // A02: otps.code now stores the HMAC of the code, not the raw digits, so
+        // recover the delivered code from the WhatsApp mock (not the DB) and
+        // verify with it to materialise the User + Tier-1 profile.
+        org.mockito.ArgumentCaptor<String> otpMsg = org.mockito.ArgumentCaptor.forClass(String.class);
+        org.mockito.Mockito.verify(whatsAppNotificationClient)
+                .sendCustomNotification(org.mockito.ArgumentMatchers.eq(phone), otpMsg.capture());
+        java.util.regex.Matcher otpMatcher =
+                java.util.regex.Pattern.compile("\\b(\\d{6})\\b").matcher(otpMsg.getValue());
+        org.junit.jupiter.api.Assertions.assertTrue(otpMatcher.find(),
+                "OTP message should carry a 6-digit code");
+        String code = otpMatcher.group(1);
         Map<String, String> verify = Map.of("phoneNumber", phone, "code", code);
         mockMvc.perform(post("/auth/otp/verify")
                         .contentType(MediaType.APPLICATION_JSON)

@@ -45,6 +45,7 @@ public class OtpService {
     static final int MAX_FAILED_VERIFICATIONS = 3;
 
     private final OtpRepository otpRepository;
+    private final com.innbucks.userservice.security.OtpHasher otpHasher;
     private final OtpRetryAttemptRepository retryRepository;
     private final UserRepository userRepository;
     private final CustomerProfileRepository customerProfileRepository;
@@ -152,7 +153,9 @@ public class OtpService {
      */
     private boolean consumeOtp(String phoneNumber, String code) {
         Instant now = Instant.now();
-        int consumed = otpRepository.consume(phoneNumber, code, now);
+        // A02: rows store the HMAC of the code — hash the submitted code so the
+        // consume query matches HMAC-to-HMAC (deterministic keyed digest).
+        int consumed = otpRepository.consume(phoneNumber, otpHasher.hash(code), now);
         if (consumed > 0) {
             retryRepository.findByPhoneNumber(phoneNumber).ifPresent(retryRepository::delete);
             return true;
@@ -217,7 +220,8 @@ public class OtpService {
         otpRepository.flush();
         Otp otp = Otp.builder()
                 .phoneNumber(phoneNumber)
-                .code(code)
+                // A02: never persist the raw code — store its keyed HMAC.
+                .code(otpHasher.hash(code))
                 .expiresAt(now.plus(OTP_TTL))
                 .createdAt(now)
                 .failedAttempts(0)
