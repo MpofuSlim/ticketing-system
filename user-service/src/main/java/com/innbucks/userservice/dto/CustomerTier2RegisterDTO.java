@@ -7,6 +7,7 @@ import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Past;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.time.LocalDate;
@@ -21,13 +22,16 @@ public class CustomerTier2RegisterDTO {
 
     @Schema(example = "Sarah")
     @NotBlank(message = "First name is required")
+    @Size(max = 100, message = "First name must not exceed 100 characters")
     private String firstName;
 
     @Schema(example = "Tiffany", nullable = true)
+    @Size(max = 100, message = "Middle name must not exceed 100 characters")
     private String middleName;
 
     @Schema(example = "Moyo")
     @NotBlank(message = "Last name is required")
+    @Size(max = 100, message = "Last name must not exceed 100 characters")
     private String lastName;
 
     @Schema(example = "2001-01-01", description = "Date of birth (ISO-8601, must be in the past).")

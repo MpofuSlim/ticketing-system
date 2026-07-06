@@ -14,6 +14,7 @@ import com.innbucks.eventservice.exception.ForbiddenException;
 import com.innbucks.eventservice.exception.NotFoundException;
 import com.innbucks.eventservice.mapper.EventMapper;
 import com.innbucks.eventservice.repository.EventRepository;
+import com.innbucks.eventservice.util.HtmlSanitizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.*;
@@ -43,6 +44,18 @@ public class EventService {
             "image/jpeg", "image/png", "image/gif", "image/webp"
     );
 
+    // OWASP A03: allowlist of sortable properties = exactly the persistent
+    // fields of the Event entity. A sortBy outside this set is rejected with a
+    // clean 400 instead of leaking a 500 PropertyReferenceException (which also
+    // enables entity field-name enumeration). Every property sortable today
+    // stays sortable, so this is invisible to legitimate callers.
+    private static final Set<String> SORTABLE_FIELDS = Set.of(
+            "eventId", "tenantUserUuid", "title", "description", "venue", "country",
+            "category", "location", "startDateTime", "endDateTime", "totalCapacity",
+            "availableTickets", "bannerImage", "bannerContentType", "version",
+            "deleted", "active", "rejected", "createdAt", "updatedAt"
+    );
+
     private final EventRepository eventRepository;
     private final EventMapper eventMapper;
     private final SeatCategoryGateway seatCategoryGateway;
@@ -58,7 +71,7 @@ public class EventService {
             int size,
             String sortBy
     ) {
-        Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
+        Pageable pageable = PageRequest.of(page, size, ascendingSort(sortBy));
         log.debug("Fetching active events from={} to={} venue={} page={} size={} sortBy={}",
                 from, to, venue, page, size, sortBy);
         return enrichWithAvailability(eventRepository.findAllActive(from, to, venue, pageable));
@@ -74,7 +87,7 @@ public class EventService {
             int size,
             String sortBy
     ) {
-        Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
+        Pageable pageable = PageRequest.of(page, size, ascendingSort(sortBy));
         log.debug("Fetching active=true events from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
                 from, to, venue, country, category, page, size, sortBy);
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
@@ -101,7 +114,7 @@ public class EventService {
             int size,
             String sortBy
     ) {
-        Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
+        Pageable pageable = PageRequest.of(page, size, ascendingSort(sortBy));
         log.debug("Fetching events for tenantUserUuid={} from={} to={} venue={} page={} size={} sortBy={}",
                 tenantUserUuid, from, to, venue, page, size, sortBy);
         return enrichWithAvailability(
@@ -130,7 +143,7 @@ public class EventService {
             int size,
             String sortBy
     ) {
-        Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
+        Pageable pageable = PageRequest.of(page, size, ascendingSort(sortBy));
         if (assignedEventIds == null || assignedEventIds.isEmpty()) {
             log.debug("Team-member has no event assignments organizerUuid={} -> empty page", organizerUuid);
             return Page.empty(pageable);
@@ -158,7 +171,7 @@ public class EventService {
             int size,
             String sortBy
     ) {
-        Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
+        Pageable pageable = PageRequest.of(page, size, ascendingSort(sortBy));
         log.debug("Fetching active events for tenantUserUuid={} from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
                 tenantUserUuid, from, to, venue, country, category, page, size, sortBy);
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
@@ -192,7 +205,7 @@ public class EventService {
             int size,
             String sortBy
     ) {
-        Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
+        Pageable pageable = PageRequest.of(page, size, ascendingSort(sortBy));
         if (assignedEventIds == null || assignedEventIds.isEmpty()) {
             log.debug("Team-member has no event assignments organizerUuid={} -> empty active page", organizerUuid);
             return Page.empty(pageable);
@@ -224,7 +237,7 @@ public class EventService {
             int size,
             String sortBy
     ) {
-        Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
+        Pageable pageable = PageRequest.of(page, size, ascendingSort(sortBy));
         log.debug("Fetching active=false events from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
                 from, to, venue, country, category, page, size, sortBy);
         Page<Event> events = category == null
@@ -249,7 +262,7 @@ public class EventService {
             int size,
             String sortBy
     ) {
-        Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
+        Pageable pageable = PageRequest.of(page, size, ascendingSort(sortBy));
         log.debug("Fetching inactive events for tenantUserUuid={} from={} to={} venue={} country={} category={} page={} size={} sortBy={}",
                 tenantUserUuid, from, to, venue, country, category, page, size, sortBy);
         Page<Event> events = category == null
@@ -283,7 +296,7 @@ public class EventService {
             int size,
             String sortBy
     ) {
-        Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
+        Pageable pageable = PageRequest.of(page, size, ascendingSort(sortBy));
         if (assignedEventIds == null || assignedEventIds.isEmpty()) {
             log.debug("Team-member has no event assignments organizerUuid={} -> empty inactive page", organizerUuid);
             return Page.empty(pageable);
@@ -315,7 +328,7 @@ public class EventService {
             int size,
             String sortBy
     ) {
-        Pageable pageable = PageRequest.of(page, size, Sort.by(sortBy).ascending());
+        Pageable pageable = PageRequest.of(page, size, ascendingSort(sortBy));
         log.debug("Searching events q={} page={} size={} sortBy={}", q, page, size, sortBy);
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
         return enrichWithAvailability(
@@ -449,9 +462,11 @@ public class EventService {
 
         Event event = Event.builder()
                 .tenantUserUuid(tenantUserUuid)
-                .title(request.getTitle())
-                .description(request.getDescription())
-                .venue(request.getVenue())
+                // OWASP A03: sanitize free text on the write path so stored data
+                // is safe regardless of how any client renders it.
+                .title(HtmlSanitizer.stripAll(request.getTitle()))
+                .description(HtmlSanitizer.sanitizeRichText(request.getDescription()))
+                .venue(HtmlSanitizer.stripAll(request.getVenue()))
                 .country(country)
                 .category(request.getCategory())
                 .location(toLocation(request.getLocation()))
@@ -485,6 +500,17 @@ public class EventService {
 
     public record BannerImage(byte[] bytes, String contentType) {}
 
+    // OWASP A03: validate the user-supplied sort property against the allowlist
+    // before handing it to Spring Data. A null/blank sortBy preserves the prior
+    // default-sort behavior untouched; any other value outside the allowlist is a
+    // clean 400 rather than a 500 PropertyReferenceException.
+    private static Sort ascendingSort(String sortBy) {
+        if (sortBy != null && !sortBy.isBlank() && !SORTABLE_FIELDS.contains(sortBy)) {
+            throw new BadRequestException("Invalid sort field: " + sortBy);
+        }
+        return Sort.by(Sort.Direction.ASC, sortBy);
+    }
+
     private static Location toLocation(LocationDTO dto) {
         if (dto == null) return null;
         return Location.builder()
@@ -502,9 +528,9 @@ public class EventService {
         if (contentType == null || !ALLOWED_BANNER_CONTENT_TYPES.contains(contentType.toLowerCase())) {
             throw new BadRequestException("Please upload a JPG, PNG, GIF, or WEBP image.");
         }
+        byte[] bytes;
         try {
-            event.setBannerImage(file.getBytes());
-            event.setBannerContentType(contentType.toLowerCase());
+            bytes = file.getBytes();
         } catch (IOException e) {
             // Genuine server-side I/O failure reading the upload stream — let
             // the catch-all in GlobalExceptionHandler return 500 with a
@@ -512,6 +538,51 @@ public class EventService {
             // the @Transactional boundary unchecked.
             throw new RuntimeException("Failed to read banner image", e);
         }
+        // OWASP A03: the declared Content-Type is attacker-controlled, so confirm
+        // the payload really is one of the image formats we accept by matching its
+        // magic-byte signature before we store (and later serve) it — this rejects
+        // an HTML/script payload smuggled under an image/* header.
+        if (!isSupportedImageSignature(bytes)) {
+            throw new BadRequestException("Please upload a valid image file (JPG, PNG, GIF, or WEBP).");
+        }
+        event.setBannerImage(bytes);
+        event.setBannerContentType(contentType.toLowerCase());
+    }
+
+    // Magic-byte sniff for the four banner formats we allow. Signature-only (no
+    // full image decode) — enough to reject non-image payloads without pulling
+    // in an image library.
+    private static boolean isSupportedImageSignature(byte[] b) {
+        if (b == null) {
+            return false;
+        }
+        // JPEG: FF D8 FF
+        if (b.length >= 3
+                && (b[0] & 0xFF) == 0xFF && (b[1] & 0xFF) == 0xD8 && (b[2] & 0xFF) == 0xFF) {
+            return true;
+        }
+        // PNG: 89 50 4E 47 0D 0A 1A 0A
+        if (b.length >= 8
+                && (b[0] & 0xFF) == 0x89 && (b[1] & 0xFF) == 0x50 && (b[2] & 0xFF) == 0x4E
+                && (b[3] & 0xFF) == 0x47 && (b[4] & 0xFF) == 0x0D && (b[5] & 0xFF) == 0x0A
+                && (b[6] & 0xFF) == 0x1A && (b[7] & 0xFF) == 0x0A) {
+            return true;
+        }
+        // GIF: 47 49 46 38 ("GIF8")
+        if (b.length >= 4
+                && (b[0] & 0xFF) == 0x47 && (b[1] & 0xFF) == 0x49 && (b[2] & 0xFF) == 0x46
+                && (b[3] & 0xFF) == 0x38) {
+            return true;
+        }
+        // WEBP: bytes 0-3 "RIFF" (52 49 46 46) AND bytes 8-11 "WEBP" (57 45 42 50)
+        if (b.length >= 12
+                && (b[0] & 0xFF) == 0x52 && (b[1] & 0xFF) == 0x49 && (b[2] & 0xFF) == 0x46
+                && (b[3] & 0xFF) == 0x46
+                && (b[8] & 0xFF) == 0x57 && (b[9] & 0xFF) == 0x45 && (b[10] & 0xFF) == 0x42
+                && (b[11] & 0xFF) == 0x50) {
+            return true;
+        }
+        return false;
     }
 
     @Transactional
@@ -543,9 +614,12 @@ public class EventService {
         java.time.LocalDateTime oldStartDateTime = event.getStartDateTime();
         String oldVenue = event.getVenue();
 
-        if (request.getTitle() != null)        event.setTitle(request.getTitle());
-        if (request.getDescription() != null)  event.setDescription(request.getDescription());
-        if (request.getVenue() != null)        event.setVenue(request.getVenue());
+        // OWASP A03: sanitize free text on the write path (title/venue plain-text,
+        // description rich-text) before it lands on the entity. category is an
+        // enum — no free text to sanitize.
+        if (request.getTitle() != null)        event.setTitle(HtmlSanitizer.stripAll(request.getTitle()));
+        if (request.getDescription() != null)  event.setDescription(HtmlSanitizer.sanitizeRichText(request.getDescription()));
+        if (request.getVenue() != null)        event.setVenue(HtmlSanitizer.stripAll(request.getVenue()));
         if (request.getCategory() != null)     event.setCategory(request.getCategory());
         if (request.getLocation() != null)     event.setLocation(toLocation(request.getLocation()));
         if (request.getStartDateTime() != null) event.setStartDateTime(request.getStartDateTime());

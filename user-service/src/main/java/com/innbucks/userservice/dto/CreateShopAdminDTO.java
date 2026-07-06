@@ -4,6 +4,7 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.util.UUID;
@@ -17,13 +18,16 @@ import java.util.UUID;
 public class CreateShopAdminDTO {
 
     @NotBlank(message = "firstName is required")
+    @Size(max = 100, message = "firstName must not exceed 100 characters")
     @Schema(example = "Tendai")
     private String firstName;
 
     @Schema(example = "M", nullable = true)
+    @Size(max = 100, message = "middleName must not exceed 100 characters")
     private String middleName;
 
     @NotBlank(message = "lastName is required")
+    @Size(max = 100, message = "lastName must not exceed 100 characters")
     @Schema(example = "Moyo")
     private String lastName;
 

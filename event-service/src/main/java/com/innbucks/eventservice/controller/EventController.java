@@ -1048,6 +1048,10 @@ public class EventController {
         EventService.BannerImage banner = eventService.getEventBanner(id);
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType(banner.contentType()))
+                // OWASP A03: stop the browser MIME-sniffing the stored bytes into
+                // an executable type (e.g. HTML/JS) regardless of the served
+                // Content-Type — defence-in-depth alongside upload magic-byte checks.
+                .header("X-Content-Type-Options", "nosniff")
                 .cacheControl(CacheControl.maxAge(java.time.Duration.ofHours(1)).cachePublic())
                 .body(banner.bytes());
     }

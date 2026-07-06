@@ -17,13 +17,16 @@ public class CreateEventRequestDTO {
 
     @Schema(example = "Summer Concert")
     @NotBlank(message = "Title is required")
+    @Size(max = 200, message = "Title must be at most 200 characters")
     private String title;
 
     @Schema(description = "Optional longer description.")
+    @Size(max = 10000, message = "Description must be at most 10000 characters")
     private String description;
 
     @Schema(example = "Harare Gardens")
     @NotBlank(message = "Venue is required")
+    @Size(max = 255, message = "Venue must be at most 255 characters")
     private String venue;
 
     @Schema(

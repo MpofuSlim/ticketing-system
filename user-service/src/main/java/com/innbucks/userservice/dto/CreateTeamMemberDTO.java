@@ -3,6 +3,7 @@ package com.innbucks.userservice.dto;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 @Data
@@ -16,13 +17,16 @@ import lombok.Data;
 public class CreateTeamMemberDTO {
 
     @NotBlank(message = "firstName is required")
+    @Size(max = 100, message = "firstName must not exceed 100 characters")
     @Schema(example = "Tariro")
     private String firstName;
 
     @Schema(example = "K", nullable = true)
+    @Size(max = 100, message = "middleName must not exceed 100 characters")
     private String middleName;
 
     @NotBlank(message = "lastName is required")
+    @Size(max = 100, message = "lastName must not exceed 100 characters")
     @Schema(example = "Chikomo")
     private String lastName;
 

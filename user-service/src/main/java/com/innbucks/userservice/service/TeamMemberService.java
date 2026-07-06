@@ -9,6 +9,7 @@ import com.innbucks.userservice.repository.RefreshTokenRepository;
 import com.innbucks.userservice.repository.TeamMemberEventAssignmentRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.security.AuthenticatedCaller;
+import com.innbucks.userservice.util.HtmlSanitizer;
 import com.innbucks.userservice.util.MsisdnValidator;
 import com.innbucks.userservice.util.TemporaryPasswordGenerator;
 import lombok.RequiredArgsConstructor;
@@ -80,9 +81,11 @@ public class TeamMemberService {
 
         String tempPassword = TemporaryPasswordGenerator.generate();
         User member = User.builder()
-                .firstName(req.getFirstName())
-                .middleName(req.getMiddleName())
-                .lastName(req.getLastName())
+                // Strip HTML from the free-text name fields before persisting
+                // (OWASP A03 / stored-XSS).
+                .firstName(HtmlSanitizer.stripAll(req.getFirstName()))
+                .middleName(HtmlSanitizer.stripAll(req.getMiddleName()))
+                .lastName(HtmlSanitizer.stripAll(req.getLastName()))
                 .email(req.getEmail())
                 .phoneNumber(normalizedPhone)
                 .homeCountry(deploymentCountry)

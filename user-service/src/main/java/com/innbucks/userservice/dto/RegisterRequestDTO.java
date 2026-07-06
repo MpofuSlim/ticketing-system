@@ -20,13 +20,16 @@ public class RegisterRequestDTO {
 
     @Schema(example = "Alice")
     @NotBlank(message = "First name is required")
+    @Size(max = 100, message = "First name must not exceed 100 characters")
     private String firstName;
 
     @Schema(example = "Jane", nullable = true)
+    @Size(max = 100, message = "Middle name must not exceed 100 characters")
     private String middleName;
 
     @Schema(example = "Moyo")
     @NotBlank(message = "Last name is required")
+    @Size(max = 100, message = "Last name must not exceed 100 characters")
     private String lastName;
 
     @Schema(example = "+263771234567")
@@ -55,6 +58,7 @@ public class RegisterRequestDTO {
 
     @Schema(example = "InnBucks Ticketing Ltd", nullable = true,
             description = "Legal or trading name of the business. Required when isBusiness is true.")
+    @Size(max = 200, message = "Business name must not exceed 200 characters")
     private String businessName;
 
     @Schema(example = "123 Samora Machel Ave, Harare", nullable = true,

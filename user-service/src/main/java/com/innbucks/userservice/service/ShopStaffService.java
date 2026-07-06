@@ -7,6 +7,7 @@ import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.event.CredentialDeliveryRequested;
 import com.innbucks.userservice.integration.LoyaltyServiceClient;
 import com.innbucks.userservice.repository.UserRepository;
+import com.innbucks.userservice.util.HtmlSanitizer;
 import com.innbucks.userservice.util.MsisdnValidator;
 import com.innbucks.userservice.util.TemporaryPasswordGenerator;
 import lombok.RequiredArgsConstructor;
@@ -279,9 +280,12 @@ public class ShopStaffService {
             throw badRequest("Phone number already registered");
         }
         return User.builder()
-                .firstName(firstName)
-                .middleName(middleName)
-                .lastName(lastName)
+                // Strip HTML from the free-text name fields before persisting
+                // (OWASP A03 / stored-XSS). Single choke point for both the
+                // SHOP_ADMIN and SHOP_USER creation paths.
+                .firstName(HtmlSanitizer.stripAll(firstName))
+                .middleName(HtmlSanitizer.stripAll(middleName))
+                .lastName(HtmlSanitizer.stripAll(lastName))
                 .email(email)
                 .phoneNumber(normalizedPhone)
                 .homeCountry(deploymentCountry)
