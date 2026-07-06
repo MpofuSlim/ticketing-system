@@ -74,6 +74,14 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- BouncyCastle: backs Argon2id password hashing (Spring Security's
+             Argon2PasswordEncoder delegates to BC's Argon2BytesGenerator).
+             Version managed by the parent pom (bcprov-jdk18on 1.84). -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcprov-jdk18on</artifactId>
+        </dependency>
+
         <!-- TOTP (RFC 6238): generates secrets, builds otpauth:// provisioning
              URIs, verifies 6-digit codes with a configurable time-step skew.
              Google-Authenticator / Authy compatible. Used by MfaService for the
