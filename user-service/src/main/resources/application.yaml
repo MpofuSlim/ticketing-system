@@ -59,6 +59,14 @@ national-id:
 audit:
   hmac-secret: ${AUDIT_HMAC_SECRET:change-me-audit-hmac-secret}
 
+# A02 at-rest protection — HMAC-SHA256 key for hashing OTP codes in otps.code.
+# A 6-digit OTP under a fast unkeyed hash is trivially reversible from a DB read;
+# this keyed digest (key never in the DB) makes stored codes useless to a
+# DB-read attacker. ProductionSecretsGuard refuses to boot under a deployment
+# profile while this holds the change-me placeholder. Generate: openssl rand -base64 48
+otp:
+  hmac-secret: ${OTP_HMAC_SECRET:change-me-otp-hmac-secret}
+
 # 2FA / TOTP — AES-GCM key for the users.mfa_secret column at rest. Base64'd
 # 32-byte value; ProductionSecretsGuard refuses to boot under prod while this
 # holds the change-me placeholder. Issuer is purely cosmetic (the label

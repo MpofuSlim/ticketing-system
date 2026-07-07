@@ -20,7 +20,10 @@ public class Otp {
     @Column(name = "phone_number", nullable = false, unique = true)
     private String phoneNumber;
 
-    @Column(nullable = false, length = 6)
+    // Stores the HMAC-SHA256 (hex) of the code, not the code itself (A02, V30) —
+    // 64 chars. OtpHasher seals on write; verification hashes the submitted code
+    // and matches HMAC-to-HMAC.
+    @Column(nullable = false, length = 64)
     private String code;
 
     @Column(nullable = false)

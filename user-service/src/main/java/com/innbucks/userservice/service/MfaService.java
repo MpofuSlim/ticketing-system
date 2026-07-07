@@ -35,11 +35,12 @@ import java.util.List;
  * 30-second step) — Google-Authenticator / Authy compatible.
  *
  * <p>Backup codes: at enrolment the service mints {@code backupCodeCount}
- * one-time codes, persists them bcrypt-hashed, and returns the PLAINTEXT list
- * exactly once. {@link #verifyForLogin} matches a 6-digit input against TOTP
- * first; anything that doesn't (e.g. an alphanumeric backup code) is then
- * matched bcrypt-style against the unused backup-code rows and atomically
- * consumed.
+ * one-time codes, persists them hashed via the shared delegating
+ * {@code PasswordEncoder} (Argon2id — the same encoder used for user passwords),
+ * and returns the PLAINTEXT list exactly once. {@link #verifyForLogin} matches a
+ * 6-digit input against TOTP first; anything that doesn't (e.g. an alphanumeric
+ * backup code) is then matched against the unused backup-code rows via the
+ * encoder and atomically consumed.
  *
  * <p>All state-changing operations are {@code @Transactional}.
  */
