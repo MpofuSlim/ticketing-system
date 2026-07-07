@@ -60,12 +60,11 @@ public class SecurityConfig {
                         // permit this path; Spring's static-resource handler serves the
                         // file from the booking-service jar.
                         .requestMatchers(org.springframework.http.HttpMethod.GET, "/brand/**").permitAll()
-                        // Internal endpoint: event-service reads it to compute
-                        // availableTickets on every event response.
-                        .requestMatchers(HttpMethod.GET, "/bookings/active-counts").permitAll()
-                        // Internal endpoint: seat-service reads it to compute a
-                        // live availableSeats per category on every category read.
-                        .requestMatchers(HttpMethod.GET, "/bookings/categories/active-counts").permitAll()
+                        // A01: the active-counts reads moved under
+                        // /bookings/internal/** (GET permitAll below + X-Internal-Token
+                        // check in the controller + gateway edge-deny) so they are no
+                        // longer anonymously enumerable. Do NOT re-add a public
+                        // permitAll for /bookings/active-counts here.
                         .requestMatchers(HttpMethod.POST, "/bookings").permitAll()
                         // Confirm is called by payment-service after a payment.
                         // No JWT is involved — payment-service authenticates via

@@ -696,12 +696,22 @@ public class BookingController {
                 bookingService.getBookingsByEvent(eventId, requesterOrganizerUuid, isAdmin)));
     }
 
-    @GetMapping("/active-counts")
+    // A01: internal-only. Moved under /bookings/internal/** and gated by the
+    // shared X-Internal-Token so an anonymous internet caller can no longer
+    // enumerate active booking/sales counts per arbitrary eventId. The
+    // gateway's booking-internal-deny route blocks /bookings/internal/** at the
+    // edge; SecurityConfig permits it at the Spring layer; the token check here
+    // is the actual trust boundary (the three-files-agree pattern). Called by
+    // event-service's BookingGateway with X-Internal-Token (service identity,
+    // never a user JWT) — public availability display still works because
+    // event-service, not the browser, makes this call.
+    @GetMapping("/internal/active-counts")
     @SecurityRequirements()
     @Operation(
-            summary = "Active booking item counts per event",
+            summary = "Active booking item counts per event (internal, S2S)",
             description = "Internal endpoint used by event-service to compute `availableTickets` " +
-                    "(`totalCapacity − count`). Returns one row per supplied eventId that has at least " +
+                    "(`totalCapacity − count`). Authenticated with the shared X-Internal-Token; denied " +
+                    "at the gateway edge. Returns one row per supplied eventId that has at least " +
                     "one PENDING or CONFIRMED booking item; eventIds with no active bookings are absent " +
                     "from the response. CANCELLED bookings are excluded so released seats free up capacity."
     )
@@ -723,21 +733,38 @@ public class BookingController {
                                     }
                                     """)
                     )
-            )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401", description = "Missing or invalid X-Internal-Token")
     })
     public ResponseEntity<ApiResult<List<EventActiveCountDTO>>> getActiveCounts(
-            @RequestParam("eventIds") List<UUID> eventIds) {
-        log.debug("GET /bookings/active-counts eventIds={}", eventIds);
+            @RequestParam("eventIds") List<UUID> eventIds,
+            @RequestHeader(value = "X-Internal-Token", required = false) String internalToken) {
+        if (!authorizedInternal(internalToken)) {
+            log.warn("Unauthorized GET /bookings/internal/active-counts — missing or wrong X-Internal-Token");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.<List<EventActiveCountDTO>>builder()
+                            .code("401 UNAUTHORIZED")
+                            .message("Missing or invalid X-Internal-Token")
+                            .data(null)
+                            .build());
+        }
+        log.debug("GET /bookings/internal/active-counts eventIds={} (S2S)", eventIds);
         return ResponseEntity.ok(ApiResult.ok("Active booking counts retrieved successfully",
                 bookingService.getActiveItemCountsByEvents(eventIds)));
     }
 
-    @GetMapping("/categories/active-counts")
+    // A01: internal-only (see /internal/active-counts above). Gated by
+    // X-Internal-Token; called by seat-service's BookingServiceClient for the
+    // public category/availability listings (service identity, not a user JWT,
+    // so anonymous public browsing still resolves availability).
+    @GetMapping("/internal/categories/active-counts")
     @SecurityRequirements()
     @Operation(
-            summary = "Active booking item counts per category",
+            summary = "Active booking item counts per category (internal, S2S)",
             description = "Internal endpoint used by seat-service to compute a live `availableSeats` " +
-                    "per seat category (`totalSeats − count`). Returns one row per supplied categoryId " +
+                    "per seat category (`totalSeats − count`). Authenticated with the shared " +
+                    "X-Internal-Token; denied at the gateway edge. Returns one row per supplied categoryId " +
                     "that has at least one PENDING or CONFIRMED booking item; categoryIds with no active " +
                     "bookings are absent from the response (the caller reads them as full capacity). " +
                     "CANCELLED bookings are excluded so released holds free capacity immediately."
@@ -760,11 +787,23 @@ public class BookingController {
                                     }
                                     """)
                     )
-            )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "401", description = "Missing or invalid X-Internal-Token")
     })
     public ResponseEntity<ApiResult<List<CategoryActiveCountDTO>>> getCategoryActiveCounts(
-            @RequestParam("categoryIds") List<UUID> categoryIds) {
-        log.debug("GET /bookings/categories/active-counts categoryIds={}", categoryIds);
+            @RequestParam("categoryIds") List<UUID> categoryIds,
+            @RequestHeader(value = "X-Internal-Token", required = false) String internalToken) {
+        if (!authorizedInternal(internalToken)) {
+            log.warn("Unauthorized GET /bookings/internal/categories/active-counts — missing or wrong X-Internal-Token");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.<List<CategoryActiveCountDTO>>builder()
+                            .code("401 UNAUTHORIZED")
+                            .message("Missing or invalid X-Internal-Token")
+                            .data(null)
+                            .build());
+        }
+        log.debug("GET /bookings/internal/categories/active-counts categoryIds={} (S2S)", categoryIds);
         return ResponseEntity.ok(ApiResult.ok("Active category counts retrieved successfully",
                 bookingService.getActiveItemCountsByCategories(categoryIds)));
     }

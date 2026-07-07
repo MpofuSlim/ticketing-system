@@ -116,6 +116,10 @@ management:
 
 innbucks:
   country: ${INNBUCKS_COUNTRY:ZW}
+  # A01: shared fleet secret used to call booking-service's internal
+  # /bookings/internal/categories/active-counts for live availability. Same
+  # INTERNAL_API_TOKEN as booking/event-service; guarded by ProductionSecretsGuard.
+  internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
 
 logging:
   pattern:
