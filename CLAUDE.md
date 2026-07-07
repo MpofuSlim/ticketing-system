@@ -249,12 +249,16 @@ new sensitive columns MUST follow suit:
   deployment profile** (all six data services) — Redis holds session-revocation
   + rate-limit state, so an unauthenticated Redis is a tamper surface; compose/k8s
   already require `REDIS_PASSWORD`, and this makes a forgotten one fail fast.
-  Deferred (A02-M3): make the guard **fail-closed on an EMPTY active-profile set**
-  (a prod container launched without `SPRING_PROFILES_ACTIVE` currently boots on
-  the placeholders). It's blocked on first normalising the ~8 `@SpringBootTest`
-  classes that run with no `@ActiveProfiles` to an explicit `test` profile —
-  otherwise fail-closed-on-empty breaks their context load. Do that test cleanup
-  first, then flip the guard.
+  **A02-M3 (done):** the guard is now **fail-closed on an EMPTY active-profile
+  set** across all seven guards (6 data services + discovery-server) —
+  "deployment" = an active-profile set containing NO `dev/test/it/local` profile,
+  which now includes the empty set. A prod container launched without
+  `SPRING_PROFILES_ACTIVE` no longer boots on the placeholders; local dev / a
+  stray `java -jar` must opt out explicitly with a `dev`/`test`/`local` profile.
+  No test normalisation was needed — every `@SpringBootTest` already pins an
+  explicit `test`/`it` profile (the earlier "~8 no-profile tests" concern was a
+  false positive: those files only *mention* `@SpringBootTest` in comments).
+  Contract pinned by `user-service/.../config/ProductionSecretsGuardTest.java`.
 
 Deferred (the A02 A−→A crux — **infra migrations, needs the running cluster +
 staged rollout, NOT a code-only PR**):

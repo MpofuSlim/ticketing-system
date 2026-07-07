@@ -17,10 +17,12 @@ import java.util.Set;
  * open, letting anything that reaches :8761 register a rogue instance and hijack
  * {@code lb://} traffic (audit CR-2).
  *
- * <p>"Deployment" = any active profile other than {@code dev/test/it/local}
- * (e.g. {@code prod}, {@code uat}, {@code staging}). An empty profile set is
- * treated as non-deployment, so local runs and stray {@code java -jar} runs keep
- * working against the open (no-auth) default. This mirrors the
+ * <p>"Deployment" = an active-profile set containing NO {@code dev/test/it/local}
+ * profile (e.g. {@code prod}, {@code uat}, {@code staging}). A02-M3: this now
+ * includes an EMPTY profile set — a registry launched without
+ * {@code SPRING_PROFILES_ACTIVE} is treated as a deployment and fails closed on a
+ * blank password instead of coming up open. Local dev / a stray {@code java -jar}
+ * must opt out explicitly with a dev/test/local profile. This mirrors the
  * {@code ProductionSecretsGuard} the data services use.
  */
 @Configuration
@@ -46,11 +48,15 @@ public class ProductionSecretsGuard {
     @PostConstruct
     void verifyEurekaPasswordSet() {
         String[] active = env.getActiveProfiles();
-        boolean deployment = active.length > 0
-                && Arrays.stream(active).noneMatch(NON_DEPLOYMENT_PROFILES::contains);
+        // A02-M3: fail-CLOSED. Deployment = the active-profile set contains NO
+        // non-deployment (dev/test/it/local) profile — which now INCLUDES the
+        // EMPTY set. A registry launched without SPRING_PROFILES_ACTIVE is
+        // treated as a deployment and must not come up with a blank password;
+        // local dev / a stray `java -jar` must opt out explicitly with a
+        // dev/test/local profile.
+        boolean deployment = Arrays.stream(active).noneMatch(NON_DEPLOYMENT_PROFILES::contains);
         if (!deployment) {
-            log.info("Eureka password guard skipped (non-deployment profile: {})",
-                    active.length == 0 ? "<none>" : Arrays.toString(active));
+            log.info("Eureka password guard skipped (non-deployment profile: {})", Arrays.toString(active));
             return;
         }
 
