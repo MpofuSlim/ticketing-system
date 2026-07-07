@@ -244,7 +244,14 @@ new sensitive columns MUST follow suit:
   to boot under a deployment profile on a `change-me` placeholder. Boot-required
   set now includes `AUDIT_HMAC_SECRET` (A09) and **`OTP_HMAC_SECRET`** (A02) —
   provision both per cell (`openssl rand -base64 48`) or user-service won't start.
-  k8s auto-flows them via `envFrom: secretRef`; compose maps them explicitly.
+  `AUDIT_HMAC_SECRET` is now **also** guarded by payment-service, which grew its
+  own tamper-evident `audit_events` table (A09 — money-movement events: payment
+  code generation, confirmation, failure/unknown, settlement discrepancies) that
+  seals each row with the same keyed HMAC + nightly `AuditIntegrityVerifier`
+  (metric `payment.audit.integrity.broken`, alert `PaymentAuditIntegrityBroken`).
+  Wire audit into new payment states via `PaymentRecordService.transition()` (the
+  single lifecycle chokepoint). k8s auto-flows the secret via `envFrom: secretRef`
+  (compose maps it explicitly — payment-service now has its own `AUDIT_HMAC_SECRET`).
   The guard also **fails boot on a blank `spring.data.redis.password` under a
   deployment profile** (all six data services) — Redis holds session-revocation
   + rate-limit state, so an unauthenticated Redis is a tamper surface; compose/k8s

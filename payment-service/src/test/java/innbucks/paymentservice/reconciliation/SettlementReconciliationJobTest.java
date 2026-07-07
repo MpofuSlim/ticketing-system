@@ -53,6 +53,7 @@ class SettlementReconciliationJobTest {
     private ReconRunRepository runs;
     private InnbucksApiClient innbucksApi;
     private PaymentMetrics metrics;
+    private innbucks.paymentservice.audit.AuditService auditService;
 
     @BeforeEach
     void setUp() {
@@ -60,11 +61,12 @@ class SettlementReconciliationJobTest {
         runs = mock(ReconRunRepository.class);
         innbucksApi = mock(InnbucksApiClient.class);
         metrics = new PaymentMetrics(new SimpleMeterRegistry());
+        auditService = mock(innbucks.paymentservice.audit.AuditService.class);
         when(runs.save(any(ReconRun.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 
     private SettlementReconciliationJob job(String account) {
-        return new SettlementReconciliationJob(payments, runs, innbucksApi, metrics, account);
+        return new SettlementReconciliationJob(payments, runs, innbucksApi, metrics, auditService, account);
     }
 
     private static Payment row(PaymentStatus status, String code, String amount) {
