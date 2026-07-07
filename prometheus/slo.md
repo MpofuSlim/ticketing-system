@@ -167,3 +167,41 @@ guesswork until this is fixed.
 3. If the collector is up but rejecting: check its receive logs for
    schema/protocol mismatch (usually a major OTel version skew between
    SDK and collector).
+
+### `AuditIntegrityBroken`
+
+A row in `audit_events` failed its `row_hmac` recompute — its **content**
+was altered after write. The HMAC key lives in app config/env
+(`AUDIT_HMAC_SECRET`), never in the DB, so an attacker with only DB write
+access can't forge a matching tag. Page severity: treat as an incident.
+
+1. Find the row(s): the verifier logs `AUDIT_ROW_TAMPERED id=… eventType=…`
+   on the service that scanned (user-service or payment-service).
+2. Rule out the benign cause first: was `AUDIT_HMAC_SECRET` rotated without
+   re-sealing existing rows? A rotation invalidates every prior tag at once —
+   you'll see a large `checked`-sized spike, not one or two rows. If so, this
+   is a process failure, not an intrusion; re-seal or accept the gap and
+   document it.
+3. If it's a handful of rows: pull the DB write/audit log for those `id`s,
+   diff against any replica/backup, and open a security incident — someone
+   with DB write access edited the forensic log.
+
+### `AuditChainBroken`
+
+A `chain_hmac` link failed to recompute — a whole row was **deleted,
+reordered, or truncated** from the append-only log (V32 hash-chaining).
+`row_hmac` can't see this because the surviving rows are individually
+intact; the chain catches it because each row is bound to its predecessor.
+Ticket severity (surviving content is intact; can also be a benign
+rotation).
+
+1. Find the break point: the scanning service logs `AUDIT_CHAIN_BROKEN
+   id=… eventType=…` at the row *after* the gap — the deleted/moved row sat
+   immediately before it.
+2. Cross-check `AuditIntegrityBroken`: a chain break with **no** content-tamper
+   alert points at deletion/reordering specifically (content edits would trip
+   both). A chain break across *many* rows at once is the rotation signature —
+   `AUDIT_HMAC_SECRET` changed without re-chaining.
+3. If it's a genuine gap: reconstruct the missing row from the gateway access
+   log / OTel spans for that window, pull the DB write log to see who deleted
+   it, and escalate to a security incident.

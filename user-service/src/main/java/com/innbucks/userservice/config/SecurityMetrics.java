@@ -30,6 +30,7 @@ public class SecurityMetrics {
     private final Counter tokenReuse;
     private final Counter mfaFailure;
     private final Counter auditIntegrityBroken;
+    private final Counter auditChainBroken;
 
     public SecurityMetrics(MeterRegistry registry) {
         this.registry = registry;
@@ -50,6 +51,15 @@ public class SecurityMetrics {
         // audit row, or the HMAC secret rotated without a re-seal.
         this.auditIntegrityBroken = Counter.builder("security.audit.integrity.broken")
                 .description("audit_events rows whose stored HMAC failed verification (tamper signal)")
+                .baseUnit("rows")
+                .register(registry);
+        // Hash-chain break: a row was DELETED, REORDERED, or the tail truncated —
+        // the chain link no longer recomputes. Ticket severity (not page like
+        // content-tamper above): the surviving rows' content is still intact and
+        // a break can also be a benign secret rotation without a re-chain, so it
+        // warrants prompt investigation rather than an immediate page.
+        this.auditChainBroken = Counter.builder("security.audit.chain.broken")
+                .description("audit_events chain links that failed to recompute (deletion/reorder signal)")
                 .baseUnit("rows")
                 .register(registry);
     }
@@ -109,5 +119,12 @@ public class SecurityMetrics {
     /** Called by the audit-integrity verifier for each row that fails HMAC checking. */
     public void auditIntegrityBroken(long count) {
         if (count > 0) auditIntegrityBroken.increment(count);
+    }
+
+    /** Called by the audit-integrity verifier for each broken hash-chain link
+     *  (a deleted/reordered/truncated row). Ticket severity — see the counter's
+     *  description in the constructor. */
+    public void auditChainBroken(long count) {
+        if (count > 0) auditChainBroken.increment(count);
     }
 }

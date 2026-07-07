@@ -1,7 +1,9 @@
 package com.innbucks.userservice.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.innbucks.userservice.entity.AuditChainHead;
 import com.innbucks.userservice.entity.AuditEvent;
+import com.innbucks.userservice.repository.AuditChainHeadRepository;
 import com.innbucks.userservice.repository.AuditEventRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -11,6 +13,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 
 import java.util.Map;
+import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
@@ -19,17 +22,24 @@ import static org.mockito.Mockito.*;
 class AuditServiceTest {
 
     private AuditEventRepository repo;
+    private AuditChainHeadRepository chainHeadRepo;
     private PlatformTransactionManager txManager;
     private AuditService service;
 
     @BeforeEach
     void setUp() {
         repo = mock(AuditEventRepository.class);
+        // save echoes the row back (the DB would assign an id); the dbFailure
+        // test re-stubs this to throw.
+        when(repo.save(any(AuditEvent.class))).thenAnswer(inv -> inv.getArgument(0));
+        chainHeadRepo = mock(AuditChainHeadRepository.class);
+        // Head starts at genesis (null chain_hmac), like the migration-seeded row.
+        when(chainHeadRepo.lockHead()).thenReturn(Optional.of(new AuditChainHead(1, null, null)));
         // Stub a transaction manager that just runs the callback —
         // we don't need real transaction semantics for these tests.
         txManager = mock(PlatformTransactionManager.class);
         when(txManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
-        service = new AuditService(repo, new ObjectMapper(), txManager, "test-audit-hmac-secret");
+        service = new AuditService(repo, chainHeadRepo, new ObjectMapper(), txManager, "test-audit-hmac-secret");
     }
 
     @Test
@@ -158,5 +168,47 @@ class AuditServiceTest {
         verify(repo).save(saved.capture());
         assertNull(saved.getValue().getIpAddress());
         assertNull(saved.getValue().getUserAgent());
+    }
+
+    @Test
+    void record_sealsAndChainsRow_thenAdvancesHead() {
+        when(repo.save(any(AuditEvent.class))).thenAnswer(inv -> {
+            AuditEvent e = inv.getArgument(0);
+            e.setId(77L);                            // DB assigns the id on save
+            return e;
+        });
+
+        service.recordSuccess(
+                AuditEventType.AUTH_LOGIN_SUCCESS,
+                "42", AuditService.ACTOR_TYPE_USER,
+                "42", AuditService.TARGET_TYPE_USER,
+                null, AuditContext.none());
+
+        ArgumentCaptor<AuditEvent> savedRow = ArgumentCaptor.forClass(AuditEvent.class);
+        verify(repo).save(savedRow.capture());
+        AuditEvent row = savedRow.getValue();
+        assertNotNull(row.getRowHmac(), "row must be content-sealed");
+        assertNotNull(row.getChainHmac(), "row must be chained to its predecessor");
+        // Genesis link: prev chain is null (fresh head).
+        assertEquals(service.computeChainHmac(null, row.getRowHmac()), row.getChainHmac(),
+                "chain_hmac must be HMAC(prevChain, rowHmac) with the seeded genesis predecessor");
+
+        // The head advances to this row's chain tag + id for the next write.
+        ArgumentCaptor<AuditChainHead> savedHead = ArgumentCaptor.forClass(AuditChainHead.class);
+        verify(chainHeadRepo).save(savedHead.capture());
+        assertEquals(row.getChainHmac(), savedHead.getValue().getChainHmac());
+        assertEquals(77L, savedHead.getValue().getLastEventId());
+    }
+
+    @Test
+    void computeChainHmac_bindsPredecessor_soDeletingARowIsDetectable() {
+        String rowHmac = "a".repeat(64);
+        String genesis = service.computeChainHmac(null, rowHmac);
+
+        assertEquals(genesis, service.computeChainHmac(null, rowHmac), "same inputs -> same tag");
+        // A different predecessor MUST change the link — that's what makes a
+        // deleted/reordered row break the chain at the next surviving row.
+        assertNotEquals(genesis, service.computeChainHmac("deadbeef".repeat(8), rowHmac),
+                "a different predecessor chain must yield a different link");
     }
 }
