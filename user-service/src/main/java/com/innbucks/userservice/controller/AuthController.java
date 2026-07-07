@@ -656,9 +656,12 @@ public class AuthController {
                     The token's SHA-256 hash is added to a server-side denylist. Any subsequent request
                     to user-service that presents the same token will be treated as unauthenticated.
 
-                    **Scope note:** today the denylist is checked only in user-service. Other services
-                    (booking, seat, event) continue to accept the token until it expires naturally. For
-                    a full logout, the client should also delete its stored token.
+                    **Full session teardown:** logout also bumps the user's `token_version` (published to
+                    the shared Redis so every service — booking, seat, event, payment, loyalty — rejects
+                    the just-logged-out access token immediately, not only after its TTL) and revokes every
+                    refresh-token family, so a cached refresh token cannot mint a new access token after
+                    logout. "Remember this device" trust is intentionally preserved for the next login.
+                    The client should still delete its stored tokens.
 
                     Safe to call multiple times — revoking an already-revoked token is a no-op.
                     """)
@@ -691,6 +694,11 @@ public class AuthController {
         // already valid enough to reach this point (the controller
         // doesn't verify it further; revoke is idempotent).
         String subject = safeSubject(token);
+        // A07: tear down the session, not just the one access token. Bumps
+        // token_version (fleet-wide kill switch via shared Redis) and revokes
+        // every refresh-token family so a cached refresh token can't outlive
+        // the logout. Best-effort/idempotent — safe on a null subject.
+        authService.revokeSessionOnLogout(subject);
         auditService.recordSuccess(
                 AuditEventType.AUTH_LOGOUT,
                 subject, AuditService.ACTOR_TYPE_USER,

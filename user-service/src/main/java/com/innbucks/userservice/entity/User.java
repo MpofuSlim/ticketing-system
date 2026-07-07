@@ -173,6 +173,28 @@ public class User {
     private Instant lockedUntil;
 
     /**
+     * Running count of consecutive wrong TOTP / backup codes at the MFA login
+     * step (POST /auth/login/mfa). Kept SEPARATE from
+     * {@link #failedLoginAttempts} (OWASP A04/A07, see V31): the password step
+     * resets that counter on success, so sharing it would let a
+     * password-holding attacker clear their MFA strikes by re-authenticating.
+     * Bumped only by the MFA verification path; reset to 0 on a correct code or
+     * once an expired {@link #mfaLockedUntil} window elapses.
+     */
+    @Column(name = "mfa_failed_attempts", nullable = false)
+    @Builder.Default
+    private int mfaFailedAttempts = 0;
+
+    /**
+     * MFA-step lockout deadline. {@code null} means not locked; a timestamp in
+     * the future means /auth/login/mfa returns 423 until then (independent of a
+     * freshly minted mfaToken). Cleared on a successful code or auto-reset once
+     * the window elapses.
+     */
+    @Column(name = "mfa_locked_until")
+    private Instant mfaLockedUntil;
+
+    /**
      * For TEAM_MEMBER rows: the user_uuid of the EVENT_ORGANIZER that
      * created this team member. Null for every other role. Drives the
      * "list my team" query and the "can this scanner work this event"

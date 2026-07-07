@@ -256,6 +256,21 @@ staged rollout, NOT a code-only PR**):
   (verifiers accept HS256 **and** RS256), then flip minting to RS256, then drop
   HS256 — the security benefit only lands after the flip. Touches all six
   `JwtUtil`s. No FE impact (backends verify, not the app).
+  - **Stage 1 (dual-verify) is DONE in code** — all six `JwtUtil`s now select the
+    verification key by the token's own `alg` header (`keyLocator`): RS* → an
+    optional `jwt.public-key` (PEM), else the HS256 secret. user-service can also
+    MINT RS256 behind `jwt.signing-algorithm=RS256` (+ `jwt.private-key`, optional
+    `jwt.key-id` for a `kid`), defaulting to HS256 so merge is a no-op. All keys
+    are optional env vars (`JWT_PUBLIC_KEY` / `JWT_PRIVATE_KEY` / `JWT_SIGNING_ALG`
+    / `JWT_KEY_ID`); RS256-signing misconfig fails fast at boot. Contract pinned by
+    `user-service/.../security/JwtUtilRs256Test.java`.
+  - **Remaining (operational, per the "needs the running cluster" caveat):**
+    (1) generate an RSA keypair per cell + provision `JWT_PUBLIC_KEY` fleet-wide
+    and roll every service (verifiers now accept both); (2) set user-service
+    `JWT_SIGNING_ALG=RS256` + `JWT_PRIVATE_KEY` and roll it (mint flips to RS256 —
+    this is where the security benefit lands); (3) once no HS256 tokens remain in
+    flight (≥ max token TTL after the flip), drop `JWT_SECRET`. Do NOT flip (2)
+    before (1) is deployed everywhere or the fleet can't verify the new tokens.
 - **KMS/Vault custody + rotation** for `jwt.secret`, `mfa.encryption-key`, the
   HMAC secrets, and internal tokens. No rotation exists today (JWT has no `kid`;
   `MfaSecretCipher`'s `v1:` prefix already scaffolds multi-key).

@@ -597,6 +597,7 @@ public class AuthService implements ApplicationEventPublisherAware {
      */
     @Transactional(noRollbackFor = {InvalidCredentialsException.class,
             MfaService.MfaException.class,
+            AccountLockedException.class,
             com.innbucks.userservice.security.MfaTokenService.InvalidMfaTokenException.class})
     public AuthResponseDTO completeLoginWithMfa(String mfaToken, String code, String deviceId,
                                                 boolean rememberDevice, AuditContext auditContext) {
@@ -608,14 +609,85 @@ public class AuthService implements ApplicationEventPublisherAware {
                 com.innbucks.userservice.security.MfaTokenService.Purpose.LOGIN_MFA);
         User user = userRepository.findById(userId)
                 .orElseThrow(InvalidCredentialsException::new);
+
+        // A04/A07: MFA step-2 brute-force cap. The mfaToken is deliberately
+        // reusable across retries (a mistyped code must NOT force a fresh
+        // login), so the throttle lives on the account via dedicated
+        // mfa_failed_attempts / mfa_locked_until columns (V31) that the
+        // password path does NOT reset — otherwise a password-holding attacker
+        // could clear their strikes by re-authenticating. An active lockout
+        // short-circuits BEFORE the code check, so a fresh mfaToken can't
+        // reopen the window.
+        Instant now = Instant.now();
+        if (user.getMfaLockedUntil() != null && user.getMfaLockedUntil().isAfter(now)) {
+            auditService.recordFailure(
+                    AuditEventType.AUTH_LOGIN_REJECTED_LOCKED,
+                    String.valueOf(user.getId()), AuditService.ACTOR_TYPE_USER,
+                    String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
+                    "mfa_locked",
+                    java.util.Map.of("mfaLockedUntil", user.getMfaLockedUntil().toString(), "step", "mfa"),
+                    auditContext);
+            sec(m -> m.loginFailure("mfa_locked"));
+            throw new AccountLockedException(user.getMfaLockedUntil());
+        }
+        // Lockout window elapsed — clear it so this attempt starts a fresh count.
+        if (user.getMfaLockedUntil() != null) {
+            user.setMfaFailedAttempts(0);
+            user.setMfaLockedUntil(null);
+        }
         if (!mfaService.verifyForLogin(user, code)) {
+            int attempts = user.getMfaFailedAttempts() + 1;
+            user.setMfaFailedAttempts(attempts);
+            boolean justLocked = false;
+            Instant lockedUntil = null;
+            if (attempts >= maxFailedLoginAttempts) {
+                lockedUntil = now.plus(Duration.ofMinutes(lockoutDurationMinutes));
+                user.setMfaLockedUntil(lockedUntil);
+                // Reset the counter under the lock so the post-lockout window
+                // starts clean (mirrors the elapsed-window reset above).
+                user.setMfaFailedAttempts(0);
+                justLocked = true;
+                log.warn("MFA step locked userId={} attempts={} until={}",
+                        user.getId(), attempts, lockedUntil);
+            } else {
+                log.info("Failed MFA attempt userId={} attempts={} threshold={}",
+                        user.getId(), attempts, maxFailedLoginAttempts);
+            }
+            userRepository.save(user);
+            if (justLocked) {
+                publishAccountLocked(user, lockedUntil);
+            }
             auditService.recordFailure(
                     AuditEventType.AUTH_LOGIN_FAILURE,
                     String.valueOf(user.getId()), AuditService.ACTOR_TYPE_USER,
                     String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
-                    "mfa_code_invalid", java.util.Map.of(), auditContext);
+                    "mfa_code_invalid", java.util.Map.of("attempts", attempts), auditContext);
             sec(m -> { m.loginFailure("mfa_code_invalid"); m.mfaFailure(); });
+            if (justLocked) {
+                auditService.recordSuccess(
+                        AuditEventType.AUTH_ACCOUNT_LOCKED,
+                        null, AuditService.ACTOR_TYPE_SYSTEM,
+                        String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
+                        java.util.Map.of(
+                                "attempts", attempts,
+                                "lockedUntil", lockedUntil.toString(),
+                                "durationMinutes", lockoutDurationMinutes,
+                                "step", "mfa"),
+                        auditContext);
+                sec(m -> m.accountLocked());
+                // 423 so the FE renders the same lockout UX as a password
+                // lockout; the @Transactional noRollbackFor keeps the save above
+                // committed despite the throw.
+                throw new AccountLockedException(lockedUntil);
+            }
             throw new MfaService.MfaException("That code didn't match. Try the next one your app shows.");
+        }
+        // Correct code — clear any accumulated MFA strikes / lockout so a later
+        // genuine typo run starts fresh.
+        if (user.getMfaFailedAttempts() != 0 || user.getMfaLockedUntil() != null) {
+            user.setMfaFailedAttempts(0);
+            user.setMfaLockedUntil(null);
+            userRepository.save(user);
         }
 
         // Mint device trust ONLY when the user opted in AND we can scope it to a
@@ -715,6 +787,47 @@ public class AuthService implements ApplicationEventPublisherAware {
                 null, auditContext);
         // Security alert (email + SMS): a password change is a takeover tripwire.
         publishSecurityAlert(user, com.innbucks.userservice.event.AccountSecurityAlertEvent.Type.PASSWORD_CHANGED);
+    }
+
+    /**
+     * Logout session teardown (OWASP A07). The controller already denylists the
+     * exact access token, but that denylist is only consulted in user-service and
+     * — critically — does NOT touch refresh tokens. Without this, a refresh token
+     * captured/cached before logout stays valid for its full 7-day TTL and can
+     * mint fresh access tokens via {@code /auth/refresh} after the user "logged
+     * out". Here we:
+     *   1) bump {@code token_version} and publish it to shared Redis so every
+     *      service's JwtFilter rejects the just-logged-out access token
+     *      immediately (not just after its 15-min TTL), and
+     *   2) revoke every refresh-token family for the user so none can be
+     *      exchanged for a new access token.
+     *
+     * <p>Device-trust ("remember this device") is deliberately left intact — it
+     * is designed to survive logout so the next login on that device can still
+     * skip the MFA challenge; a password change / MFA-disable is what clears it.
+     *
+     * <p>Best-effort and idempotent: an unresolvable subject is a no-op so a
+     * repeat logout (or a logout with a token that's about to expire) still
+     * returns 200.
+     */
+    @Transactional
+    public void revokeSessionOnLogout(String subject) {
+        if (subject == null || subject.isBlank()) {
+            return;
+        }
+        User user = (subject.contains("@")
+                ? userRepository.findByEmail(subject)
+                : userRepository.findByPhoneNumber(subject))
+                .orElse(null);
+        if (user == null) {
+            return;
+        }
+        user.setTokenVersion(user.getTokenVersion() + 1);
+        userRepository.save(user);
+        publishTokenVersion(user, user.getTokenVersion());
+        int revoked = refreshTokenRepository.revokeAllForUser(user.getId(), Instant.now());
+        log.info("Logout revoked session userId={} newTokenVersion={} revokedRefreshTokens={}",
+                user.getId(), user.getTokenVersion(), revoked);
     }
 
     /**

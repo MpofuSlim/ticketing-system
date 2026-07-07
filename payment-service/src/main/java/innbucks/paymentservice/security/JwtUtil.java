@@ -1,14 +1,23 @@
 package innbucks.paymentservice.security;
 
 import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Header;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.Locator;
+import io.jsonwebtoken.ProtectedHeader;
 import io.jsonwebtoken.security.Keys;
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
+import java.security.Key;
+import java.security.KeyFactory;
+import java.security.PublicKey;
+import java.security.spec.X509EncodedKeySpec;
+import java.util.Base64;
 import java.util.UUID;
 
 /**
@@ -37,6 +46,66 @@ public class JwtUtil {
 
     public JwtUtil(@Value("${jwt.secret}") String secret) {
         this.signingKey = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
+    }
+
+    // OWASP A02 stage-1 RS256/JWKS migration (dual-verify). Optional RSA public
+    // key: when set, this service verifies BOTH HS256 and RS256 tokens (selected
+    // by the token's own `alg` header). When unset it behaves exactly as before
+    // (HS256 only). This is a verifier — it never mints, so no private key here.
+    @Value("${jwt.public-key:}")
+    private String publicKeyPem;
+
+    private PublicKey rsaPublicKey;
+    private Locator<Key> keyLocator;
+    private volatile boolean keysReady;
+
+    // @PostConstruct validates config at boot under Spring; ensureKeyMaterial()
+    // also runs lazily on first use so plain unit tests that `new JwtUtil(secret)`
+    // (no Spring lifecycle) still work. Idempotent.
+    @PostConstruct
+    void initKeyMaterial() {
+        ensureKeyMaterial();
+    }
+
+    private void ensureKeyMaterial() {
+        if (keysReady) {
+            return;
+        }
+        synchronized (this) {
+            if (keysReady) {
+                return;
+            }
+            SecretKey hmacKey = signingKey;
+            if (publicKeyPem != null && !publicKeyPem.isBlank()) {
+                this.rsaPublicKey = parseRsaPublicKey(publicKeyPem);
+            }
+            this.keyLocator = (Header header) -> {
+                if (header instanceof ProtectedHeader ph) {
+                    String alg = ph.getAlgorithm();
+                    if (alg != null && alg.startsWith("RS")) {
+                        if (rsaPublicKey == null) {
+                            throw new io.jsonwebtoken.security.SignatureException(
+                                    "RS-signed token presented but no jwt.public-key is configured");
+                        }
+                        return rsaPublicKey;
+                    }
+                }
+                return hmacKey;
+            };
+            this.keysReady = true;
+        }
+    }
+
+    private static PublicKey parseRsaPublicKey(String pem) {
+        try {
+            byte[] der = Base64.getDecoder().decode(
+                    pem.replaceAll("-----BEGIN [^-]+-----", "")
+                            .replaceAll("-----END [^-]+-----", "")
+                            .replaceAll("\\s", ""));
+            return KeyFactory.getInstance("RSA").generatePublic(new X509EncodedKeySpec(der));
+        } catch (Exception e) {
+            throw new IllegalStateException("Invalid jwt.public-key (expected PKCS#8/X.509 PEM)", e);
+        }
     }
 
     /**
@@ -148,9 +217,10 @@ public class JwtUtil {
 
     private Claims parseOrNull(String token) {
         if (token == null || token.isBlank()) return null;
+        ensureKeyMaterial();
         try {
             return Jwts.parser()
-                    .verifyWith(signingKey)
+                    .keyLocator(keyLocator)
                     .requireIssuer(TOKEN_ISSUER)
                     .requireAudience(TOKEN_AUDIENCE)
                     .build()

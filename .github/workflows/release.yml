@@ -98,10 +98,18 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,scope=${{ matrix.service }},mode=max
 
+      # A08 supply-chain: install Trivy from an IMMUTABLE version tag, never the
+      # mutable `main` branch. This job holds packages:write + id-token:write +
+      # attestations:write, so remote code piped to a shell here could push
+      # malicious images and mint valid provenance attestations for them. Pin
+      # both the installer script ref AND the installed version; bump
+      # deliberately (Dependabot doesn't track this raw curl).
       - name: Install Trivy
+        env:
+          TRIVY_VERSION: "0.69.3"
         run: |
-          curl -sSfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-            | sudo sh -s -- -b /usr/local/bin
+          curl -sSfL "https://raw.githubusercontent.com/aquasecurity/trivy/v${TRIVY_VERSION}/contrib/install.sh" \
+            | sudo sh -s -- -b /usr/local/bin "v${TRIVY_VERSION}"
 
       # Gate: scan the LOADED local image and fail the job on any CRITICAL/HIGH
       # (os + library) before the push step runs. Previously the push happened
