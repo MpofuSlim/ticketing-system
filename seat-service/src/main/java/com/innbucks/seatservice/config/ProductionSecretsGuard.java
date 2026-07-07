@@ -27,7 +27,11 @@ import java.util.Set;
 public class ProductionSecretsGuard {
 
     private static final List<String> SECRETS_TO_CHECK = List.of(
-            "jwt.secret"
+            "jwt.secret",
+            // A01: seat-service now calls booking-service's internal
+            // active-counts endpoint with this shared token — refuse to boot on
+            // the placeholder so a deployed cell can't fall back to it.
+            "innbucks.internal-api-token"
     );
 
     private static final String PLACEHOLDER_MARKER = "change-me";

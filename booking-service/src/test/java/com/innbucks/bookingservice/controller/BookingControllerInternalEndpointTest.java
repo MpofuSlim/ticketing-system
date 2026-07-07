@@ -159,4 +159,57 @@ class BookingControllerInternalEndpointTest {
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
         verifyNoInteractions(bookingService);
     }
+
+    // --- A01: active-counts reads are now internal-token gated (were public) --
+
+    @Test
+    void activeCounts_validToken_returnsCounts() {
+        when(bookingService.getActiveItemCountsByEvents(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(java.util.List.of(new com.innbucks.bookingservice.dto.EventActiveCountDTO()));
+
+        ResponseEntity<ApiResult<java.util.List<com.innbucks.bookingservice.dto.EventActiveCountDTO>>> resp =
+                controller.getActiveCounts(java.util.List.of(UUID.randomUUID()), TOKEN);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        verify(bookingService).getActiveItemCountsByEvents(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void activeCounts_missingToken_returns401_andNeverReads() {
+        ResponseEntity<ApiResult<java.util.List<com.innbucks.bookingservice.dto.EventActiveCountDTO>>> resp =
+                controller.getActiveCounts(java.util.List.of(UUID.randomUUID()), null);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        verifyNoInteractions(bookingService);
+    }
+
+    @Test
+    void activeCounts_wrongToken_returns401_andNeverReads() {
+        ResponseEntity<ApiResult<java.util.List<com.innbucks.bookingservice.dto.EventActiveCountDTO>>> resp =
+                controller.getActiveCounts(java.util.List.of(UUID.randomUUID()), "not-the-secret");
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        verifyNoInteractions(bookingService);
+    }
+
+    @Test
+    void categoryActiveCounts_validToken_returnsCounts() {
+        when(bookingService.getActiveItemCountsByCategories(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(java.util.List.of(new com.innbucks.bookingservice.dto.CategoryActiveCountDTO()));
+
+        ResponseEntity<ApiResult<java.util.List<com.innbucks.bookingservice.dto.CategoryActiveCountDTO>>> resp =
+                controller.getCategoryActiveCounts(java.util.List.of(UUID.randomUUID()), TOKEN);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        verify(bookingService).getActiveItemCountsByCategories(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void categoryActiveCounts_missingToken_returns401_andNeverReads() {
+        ResponseEntity<ApiResult<java.util.List<com.innbucks.bookingservice.dto.CategoryActiveCountDTO>>> resp =
+                controller.getCategoryActiveCounts(java.util.List.of(UUID.randomUUID()), null);
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        verifyNoInteractions(bookingService);
+    }
 }
