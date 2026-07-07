@@ -1,5 +1,8 @@
 package innbucks.paymentservice.reconciliation;
 
+import innbucks.paymentservice.audit.AuditContext;
+import innbucks.paymentservice.audit.AuditEventType;
+import innbucks.paymentservice.audit.AuditService;
 import innbucks.paymentservice.client.CodeStatementEntry;
 import innbucks.paymentservice.client.InnbucksApiClient;
 import innbucks.paymentservice.config.PaymentMetrics;
@@ -67,6 +70,7 @@ public class SettlementReconciliationJob {
     private final ReconRunRepository reconRunRepository;
     private final InnbucksApiClient innbucksApiClient;
     private final PaymentMetrics metrics;
+    private final AuditService auditService;
     private final String reconAccount;
 
     public SettlementReconciliationJob(
@@ -74,11 +78,13 @@ public class SettlementReconciliationJob {
             ReconRunRepository reconRunRepository,
             InnbucksApiClient innbucksApiClient,
             PaymentMetrics metrics,
+            AuditService auditService,
             @Value("${payments.innbucks.recon.account:}") String reconAccount) {
         this.paymentRepository = paymentRepository;
         this.reconRunRepository = reconRunRepository;
         this.innbucksApiClient = innbucksApiClient;
         this.metrics = metrics;
+        this.auditService = auditService;
         this.reconAccount = reconAccount == null ? "" : reconAccount.trim();
     }
 
@@ -128,6 +134,24 @@ public class SettlementReconciliationJob {
                             + "matched={} coverageComplete={} — see recon_run {}",
                     day, run.getOursNotTheirs(), run.getTheirsNotOurs(), run.getAmountMismatches(),
                     run.getMatchedCount(), run.isCoverageComplete(), run.getId());
+            // A09: seal a tamper-evident audit row for the discrepancy — our
+            // ledger and the InnBucks statement disagree, a money incident that
+            // must survive later edits to recon_run.
+            Map<String, Object> meta = new HashMap<>();
+            meta.put("day", day.toString());
+            meta.put("oursNotTheirs", run.getOursNotTheirs());
+            meta.put("theirsNotOurs", run.getTheirsNotOurs());
+            meta.put("amountMismatches", run.getAmountMismatches());
+            meta.put("matched", run.getMatchedCount());
+            meta.put("coverageComplete", run.isCoverageComplete());
+            auditService.record(
+                    AuditEventType.PAYMENT_RECON_DISCREPANCY,
+                    AuditService.OUTCOME_FAILURE,
+                    "system", AuditService.ACTOR_TYPE_SYSTEM,
+                    run.getId() == null ? null : String.valueOf(run.getId()), "RECON_RUN",
+                    "settlement discrepancy",
+                    meta,
+                    AuditContext.none());
         } else {
             log.info("Settlement recon CLEAN for {}: matched={} amountCents={} coverageComplete={}",
                     day, run.getMatchedCount(), run.getMatchedAmountCents(), run.isCoverageComplete());

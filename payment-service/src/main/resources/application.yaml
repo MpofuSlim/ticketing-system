@@ -89,6 +89,15 @@ app:
   idempotency:
     store: ${IDEMPOTENCY_STORE:memory}
 
+audit:
+  # OWASP A09 — HMAC key that seals every audit_events row (tamper-evidence).
+  # Lives in env, never in the DB; ProductionSecretsGuard refuses to boot under
+  # a deployment profile while it still holds this placeholder.
+  hmac-secret: ${AUDIT_HMAC_SECRET:change-me-audit-hmac-secret}
+  integrity:
+    verify-limit: ${AUDIT_INTEGRITY_VERIFY_LIMIT:5000}
+    verify-cron: ${AUDIT_INTEGRITY_VERIFY_CRON:0 30 3 * * *}
+
 jwt:
   secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
   # OWASP A02 stage-1 RS256/JWKS dual-verify. When JWT_PUBLIC_KEY is set this

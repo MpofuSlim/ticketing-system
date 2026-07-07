@@ -19,6 +19,7 @@ public class PaymentMetrics {
 
     private final MeterRegistry registry;
     private final Timer shopCheckoutDuration;
+    private final Counter auditIntegrityBroken;
 
     public PaymentMetrics(MeterRegistry registry) {
         this.registry = registry;
@@ -28,6 +29,13 @@ public class PaymentMetrics {
         this.shopCheckoutDuration = Timer.builder("payment.shop_checkout.duration")
                 .description("End-to-end /payments/shop-checkout latency including the loyalty round-trip")
                 .publishPercentiles(0.5, 0.95, 0.99)
+                .register(registry);
+        // OWASP A09 tamper signal from the audit-log HMAC verifier. The invariant
+        // is zero, so ANY increase is page-worthy — someone altered/deleted a
+        // payment audit_events row, or the audit.hmac-secret rotated without a re-seal.
+        this.auditIntegrityBroken = Counter.builder("payment.audit.integrity.broken")
+                .description("audit_events rows whose stored HMAC failed verification (tamper signal)")
+                .baseUnit("rows")
                 .register(registry);
     }
 
@@ -144,5 +152,10 @@ public class PaymentMetrics {
                 .tag("type", type)
                 .register(registry)
                 .increment();
+    }
+
+    /** Called by the audit-integrity verifier for each row that fails HMAC checking. */
+    public void auditIntegrityBroken(long count) {
+        if (count > 0) auditIntegrityBroken.increment(count);
     }
 }

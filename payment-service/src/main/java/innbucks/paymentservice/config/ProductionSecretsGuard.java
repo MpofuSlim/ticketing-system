@@ -42,7 +42,8 @@ public class ProductionSecretsGuard {
             "innbucks.internal-api-token",
             "oradian-middleware.internal-token",
             "jwt.secret",
-            "whatsapp.api-key"
+            "whatsapp.api-key",
+            "audit.hmac-secret"
     );
 
     private static final String PLACEHOLDER_MARKER = "change-me";

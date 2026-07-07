@@ -305,3 +305,13 @@ groups:
           summary: "PENDING payment rows not settling to a terminal state"
           description: "{{ $value | humanize }} stale-PENDING rows in 15m (sustained 10m) — payment-service is failing to mark rows SUCCEEDED/FAILED (likely a DB hiccup after the upstream call)."
           runbook: "prometheus/slo.md#paymentstalependingdrip"
+
+      - alert: PaymentAuditIntegrityBroken
+        expr: increase(payment_audit_integrity_broken_total[1h]) > 0
+        for: 0m
+        labels:
+          severity: page
+        annotations:
+          summary: "payment audit_events tamper detected — HMAC verification failed"
+          description: "{{ $value | humanize }} payment audit rows failed HMAC verification in the last hour. Someone altered the payment audit log, or the audit.hmac-secret rotated without a re-seal. Treat as a money-movement incident."
+          runbook: "prometheus/slo.md#paymentauditintegritybroken"

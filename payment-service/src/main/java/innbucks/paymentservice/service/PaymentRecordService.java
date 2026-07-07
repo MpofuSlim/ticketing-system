@@ -1,5 +1,8 @@
 package innbucks.paymentservice.service;
 
+import innbucks.paymentservice.audit.AuditContext;
+import innbucks.paymentservice.audit.AuditEventType;
+import innbucks.paymentservice.audit.AuditService;
 import innbucks.paymentservice.entity.Payment;
 import innbucks.paymentservice.entity.Payment.PaymentStatus;
 import innbucks.paymentservice.entity.PaymentEvent;
@@ -14,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.EnumSet;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -86,6 +90,7 @@ public class PaymentRecordService {
 
     private final PaymentRepository repository;
     private final PaymentEventRepository eventRepository;
+    private final AuditService auditService;
 
     /**
      * UX pre-check companion to the DB's one-active-payment-per-booking
@@ -252,8 +257,52 @@ public class PaymentRecordService {
         payment.setStatus(target);
         repository.save(payment);
         recordEvent(payment, from, target, detail, upstreamRef);
+        // A09: tamper-evident audit alongside the plain PaymentEvent journal.
+        // The PaymentEvent row is a mutable history log; this seals a keyed HMAC
+        // row (audit_events) that the AuditIntegrityVerifier can prove wasn't
+        // altered after the fact — the money-movement trail for a payments box.
+        auditTransition(payment, from, target, detail, upstreamRef);
         log.info("payment {} -> {} id={} paymentReference={} upstreamRef={}",
                 from, target, payment.getId(), payment.getPaymentReference(), upstreamRef);
+    }
+
+    /**
+     * A09: write a tamper-evident audit row for a money-significant transition.
+     * Maps the target status to the payment audit taxonomy; intermediate states
+     * (PENDING and the reserved veengu states) carry no money outcome and are
+     * skipped. Runs through {@link AuditService} (its own REQUIRES_NEW tx that
+     * swallows failures), so it never breaks or blocks the ledger write.
+     */
+    private void auditTransition(Payment payment, PaymentStatus from, PaymentStatus to,
+                                 String detail, String upstreamRef) {
+        AuditEventType type;
+        String outcome;
+        switch (to) {
+            case TOKEN_ISSUED -> { type = AuditEventType.PAYMENT_CODE_GENERATED; outcome = AuditService.OUTCOME_SUCCESS; }
+            case SUCCEEDED -> { type = AuditEventType.PAYMENT_CONFIRMED; outcome = AuditService.OUTCOME_SUCCESS; }
+            case FAILED, REJECTED, EXPIRED -> { type = AuditEventType.PAYMENT_FAILED; outcome = AuditService.OUTCOME_FAILURE; }
+            // Money may have moved but the outcome is unconfirmed/unclassifiable —
+            // the operator-queue states. Recorded as FAILURE so "not cleanly
+            // succeeded" is one filter.
+            case IN_DOUBT, COMPLETED_UNCONFIRMED -> { type = AuditEventType.PAYMENT_STATUS_UNKNOWN; outcome = AuditService.OUTCOME_FAILURE; }
+            default -> { return; } // PENDING / CONSENTED / EXECUTING / REQUIRES_AUTH — not money-terminal
+        }
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("from", from == null ? null : from.name());
+        metadata.put("to", to.name());
+        if (payment.getBookingId() != null) metadata.put("bookingId", payment.getBookingId().toString());
+        if (payment.getAmount() != null) metadata.put("amount", String.valueOf(payment.getAmount()));
+        if (payment.getCurrency() != null) metadata.put("currency", payment.getCurrency());
+        if (payment.getPaymentReference() != null) metadata.put("paymentReference", payment.getPaymentReference());
+        if (upstreamRef != null) metadata.put("upstreamRef", upstreamRef);
+        auditService.record(
+                type,
+                outcome,
+                "system", AuditService.ACTOR_TYPE_SYSTEM,
+                payment.getId().toString(), "PAYMENT",
+                AuditService.OUTCOME_FAILURE.equals(outcome) ? detail : null,
+                metadata,
+                AuditContext.none());
     }
 
     private void recordEvent(Payment payment, PaymentStatus from, PaymentStatus to,
