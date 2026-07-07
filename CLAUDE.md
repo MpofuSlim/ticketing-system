@@ -264,8 +264,11 @@ new sensitive columns MUST follow suit:
   `security.audit.chain.broken` → alert `AuditChainBroken` (**ticket**, vs the
   content-tamper `AuditIntegrityBroken` **page** — surviving content is intact and
   a break can also be a benign secret rotation). Pre-V32 rows have
-  `chain_hmac = NULL` (legacy, never a break), same as pre-V29 for `row_hmac`. Not
-  yet ported to payment-service — that's the next follow-up now that #397 merged.
+  `chain_hmac = NULL` (legacy, never a break), same as pre-V29 for `row_hmac`.
+  **Now also in payment-service** (V10, same design): `chain_hmac` +
+  `audit_chain_head`, `payment.audit.chain.broken` → alert `PaymentAuditChainBroken`
+  (ticket, vs the `PaymentAuditIntegrityBroken` page). Both services' audit logs
+  now detect row deletion/reordering, not just content tampering.
   The guard also **fails boot on a blank `spring.data.redis.password` under a
   deployment profile** (all six data services) — Redis holds session-revocation
   + rate-limit state, so an unauthenticated Redis is a tamper surface; compose/k8s

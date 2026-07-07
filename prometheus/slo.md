@@ -205,3 +205,23 @@ rotation).
 3. If it's a genuine gap: reconstruct the missing row from the gateway access
    log / OTel spans for that window, pull the DB write log to see who deleted
    it, and escalate to a security incident.
+
+### `PaymentAuditIntegrityBroken`
+
+Same as `AuditIntegrityBroken` above, but on **payment-service**'s
+`audit_events` — the money-movement log (code generation, confirmation,
+failure, UNKNOWN status, settlement discrepancies). A content edit here is a
+**money-movement incident**: someone altered the record of who was charged or
+which settlement disagreed. Follow the `AuditIntegrityBroken` steps; the
+verifier logs `AUDIT_ROW_TAMPERED` from payment-service, and the metric is
+`payment_audit_integrity_broken_total`.
+
+### `PaymentAuditChainBroken`
+
+Same as `AuditChainBroken` above, but on **payment-service**'s `audit_events`
+(V10 hash-chaining). A deleted/reordered money-movement row — e.g. the record
+of a fraudulent confirmation removed to hide it. Follow the `AuditChainBroken`
+steps; the verifier logs `AUDIT_CHAIN_BROKEN` from payment-service, and the
+metric is `payment_audit_chain_broken_total`. Cross-check
+`PaymentAuditIntegrityBroken`: a chain break with no content-tamper alert
+points at deletion specifically.

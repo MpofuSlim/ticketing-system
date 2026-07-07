@@ -70,15 +70,18 @@ public class AuditService {
     private static final char SEP = '';
 
     private final AuditEventRepository repository;
+    private final AuditChainHeadRepository chainHeadRepository;
     private final ObjectMapper objectMapper;
     private final TransactionTemplate transactionTemplate;
     private final SecretKeySpec hmacKey;
 
     public AuditService(AuditEventRepository repository,
+                        AuditChainHeadRepository chainHeadRepository,
                         ObjectMapper objectMapper,
                         PlatformTransactionManager transactionManager,
                         @Value("${audit.hmac-secret:change-me-audit-hmac-secret}") String hmacSecret) {
         this.repository = repository;
+        this.chainHeadRepository = chainHeadRepository;
         this.objectMapper = objectMapper;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
         this.transactionTemplate.setPropagationBehavior(
@@ -122,7 +125,7 @@ public class AuditService {
         // before it is persisted (OWASP A09). See computeHmac / AuditIntegrityVerifier.
         event.setRowHmac(computeHmac(event));
         try {
-            transactionTemplate.execute(status -> repository.save(event));
+            transactionTemplate.execute(status -> appendChained(event));
         } catch (RuntimeException ex) {
             // Don't propagate: a broken audit path must not break login.
             // Operators reading logs will see this marker and can pivot
@@ -130,6 +133,31 @@ public class AuditService {
             log.error("AUDIT_WRITE_FAILED type={} outcome={} actorId={} reason={}",
                     type.name(), outcome, actorId, ex.getMessage(), ex);
         }
+    }
+
+    /**
+     * Persist one already-sealed row as the next link in the hash-chain (OWASP
+     * A09). Runs inside the caller's REQUIRES_NEW audit transaction.
+     *
+     * <p>Takes a {@code SELECT ... FOR UPDATE} on the single {@code audit_chain_head}
+     * row FIRST, so concurrent audit writers serialise here and each appends to a
+     * single, un-forked chain. Then it links this row to its predecessor —
+     * {@code chain_hmac = HMAC(key, prev_chain_hmac || row_hmac)} — persists the
+     * row, and advances the head. The lock is released when the transaction
+     * commits. The head row is seeded by migration V10; the {@code orElseGet}
+     * genesis fallback only fires if it is somehow absent (keeps a fresh/legacy
+     * DB writable rather than wedging the audit path).
+     */
+    private AuditEvent appendChained(AuditEvent event) {
+        AuditChainHead head = chainHeadRepository.lockHead()
+                .orElseGet(() -> new AuditChainHead(1, null, null));
+        String chainHmac = computeChainHmac(head.getChainHmac(), event.getRowHmac());
+        event.setChainHmac(chainHmac);
+        AuditEvent saved = repository.save(event);
+        head.setChainHmac(chainHmac);
+        head.setLastEventId(saved.getId());
+        chainHeadRepository.save(head);
+        return saved;
     }
 
     /** Convenience overload for success rows that need no failure_reason. */
@@ -198,6 +226,23 @@ public class AuditService {
                 + nz(e.getFailureReason()) + SEP
                 + nz(e.getCorrelationId()) + SEP
                 + nz(e.getMetadata());
+        return hmacHex(canonical);
+    }
+
+    /**
+     * Chain link tag: {@code HMAC-SHA256(key, prev_chain_hmac || row_hmac)},
+     * hex-encoded (OWASP A09 deletion/reorder-evidence). Binding each row to its
+     * predecessor's chain tag makes any deletion, reordering, or tail-truncation
+     * break the link at the next surviving row — and the attacker can't repair
+     * the downstream chain without the HMAC key. {@code prevChainHmac} is null
+     * for the genesis row (first ever chained write). Uses the {@link #SEP} unit
+     * separator so the two hex fields can't forge a boundary.
+     */
+    public String computeChainHmac(String prevChainHmac, String rowHmac) {
+        return hmacHex(nz(prevChainHmac) + SEP + nz(rowHmac));
+    }
+
+    private String hmacHex(String canonical) {
         try {
             Mac mac = Mac.getInstance(HMAC_ALGORITHM);
             mac.init(hmacKey);
