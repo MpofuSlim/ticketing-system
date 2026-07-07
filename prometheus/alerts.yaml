@@ -231,3 +231,77 @@ groups:
           summary: "audit_events tamper detected — HMAC verification failed"
           description: "{{ $value | humanize }} audit rows failed HMAC verification in the last hour. Someone altered the audit log, or the audit.hmac-secret rotated without a re-seal. Treat as an incident."
           runbook: "prometheus/slo.md#auditintegritybroken"
+
+      # A09: sustained invalid-token (401) volume at the services (the gateway
+      # doesn't verify JWTs — downstream services do, so 401s originate there).
+      # A steady rate is a broken client or a token-brute-force sweep; the
+      # gateway is excluded like HighHttp5xxRate. Distinct from AuthzDenied (403).
+      - alert: Auth401Spike
+        expr: sum(rate(http_server_requests_seconds_count{status="401",job!="api-gateway"}[5m])) > 1
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Invalid-token (401) rate elevated (token brute force or broken client)"
+          description: "{{ $value | humanize }} 401 responses/sec cluster-wide over 5m (sustained 10m). Baseline is near-zero once clients refresh correctly."
+          runbook: "prometheus/slo.md#auth401spike"
+
+  # A09 — payment money-movement integrity. Fed by payment-service PaymentMetrics
+  # (payment.* counters, exported as payment_*_total). These were emitted but had
+  # NO alert rule, so a customer-debited-without-tickets drip or a settlement
+  # discrepancy fired silently. Per PaymentMetrics' own contract, any non-zero on
+  # the money-safety signals is page-worthy. Metrics exist only on payment-service
+  # (scraped Bearer-authenticated), so no job filter is needed.
+  - name: payment-integrity
+    interval: 30s
+    rules:
+
+      - alert: PaymentUnconfirmedRetryStillFailing
+        expr: sum(increase(payment_payments_unconfirmed_retry_total{outcome="still_failing"}[15m])) > 0
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "Paid-but-unconfirmed bookings the reconciler can't resolve"
+          description: "{{ $value | humanize }} still-failing confirm retries in 15m (sustained 10m) — customer money moved but the booking never confirmed. Work the operator queue."
+          runbook: "prometheus/slo.md#paymentunconfirmedretrystillfailing"
+
+      - alert: PaymentReconDiscrepancy
+        expr: sum(increase(payment_recon_discrepancies_total[1h])) > 0
+        for: 0m
+        labels:
+          severity: page
+        annotations:
+          summary: "Settlement reconciliation discrepancy"
+          description: "{{ $value | humanize }} settlement discrepancies ({{ $labels.type }}) in the last hour. Our ledger and the InnBucks statement disagree — treat as a money incident."
+          runbook: "prometheus/slo.md#paymentrecondiscrepancy"
+
+      - alert: PaymentStaleInDoubt
+        expr: sum(increase(payment_payments_stale_total{status="IN_DOUBT"}[15m])) > 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Ticket payments stuck IN_DOUBT (money may have moved)"
+          description: "{{ $value | humanize }} payment rows past the reconciliation threshold in IN_DOUBT over 15m — the upstream outcome is unclassifiable and money MAY have left the customer."
+          runbook: "prometheus/slo.md#paymentstaleindoubt"
+
+      - alert: PaymentCodeResolutionUnknown
+        expr: sum(increase(payment_payments_code_resolution_total{outcome=~"unknown|error"}[15m])) > 0
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Code-status poller returning unknown/error outcomes"
+          description: "{{ $value | humanize }} unknown/error code-resolution outcomes in 15m (sustained 10m) — the InnBucks status contract needs attention while customer money may be waiting."
+          runbook: "prometheus/slo.md#paymentcoderesolutionunknown"
+
+      - alert: PaymentStalePendingDrip
+        expr: sum(increase(payment_transactions_stale_pending_total[15m])) > 0
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "PENDING payment rows not settling to a terminal state"
+          description: "{{ $value | humanize }} stale-PENDING rows in 15m (sustained 10m) — payment-service is failing to mark rows SUCCEEDED/FAILED (likely a DB hiccup after the upstream call)."
+          runbook: "prometheus/slo.md#paymentstalependingdrip"
