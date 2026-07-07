@@ -245,6 +245,16 @@ new sensitive columns MUST follow suit:
   set now includes `AUDIT_HMAC_SECRET` (A09) and **`OTP_HMAC_SECRET`** (A02) —
   provision both per cell (`openssl rand -base64 48`) or user-service won't start.
   k8s auto-flows them via `envFrom: secretRef`; compose maps them explicitly.
+  The guard also **fails boot on a blank `spring.data.redis.password` under a
+  deployment profile** (all six data services) — Redis holds session-revocation
+  + rate-limit state, so an unauthenticated Redis is a tamper surface; compose/k8s
+  already require `REDIS_PASSWORD`, and this makes a forgotten one fail fast.
+  Deferred (A02-M3): make the guard **fail-closed on an EMPTY active-profile set**
+  (a prod container launched without `SPRING_PROFILES_ACTIVE` currently boots on
+  the placeholders). It's blocked on first normalising the ~8 `@SpringBootTest`
+  classes that run with no `@ActiveProfiles` to an explicit `test` profile —
+  otherwise fail-closed-on-empty breaks their context load. Do that test cleanup
+  first, then flip the guard.
 
 Deferred (the A02 A−→A crux — **infra migrations, needs the running cluster +
 staged rollout, NOT a code-only PR**):
