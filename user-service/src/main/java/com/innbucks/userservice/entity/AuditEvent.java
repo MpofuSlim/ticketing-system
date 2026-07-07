@@ -72,4 +72,16 @@ public class AuditEvent {
      */
     @Column(name = "row_hmac", length = 64)
     private String rowHmac;
+
+    /**
+     * OWASP A09 hash-chaining: {@code HMAC-SHA256(key, prev_chain_hmac || row_hmac)}
+     * binding this row to its predecessor (see {@code AuditService.computeChainHmac}).
+     * Where {@link #rowHmac} proves the row's content is intact, this proves no
+     * row was DELETED, REORDERED, or truncated from the tail — deleting a row
+     * breaks the link at the next surviving row, and the attacker can't repair
+     * the downstream chain without the key. Walked by {@code AuditIntegrityVerifier};
+     * null on rows written before V32 (chain not applicable, reported as legacy).
+     */
+    @Column(name = "chain_hmac", length = 64)
+    private String chainHmac;
 }

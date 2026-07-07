@@ -232,6 +232,23 @@ groups:
           description: "{{ $value | humanize }} audit rows failed HMAC verification in the last hour. Someone altered the audit log, or the audit.hmac-secret rotated without a re-seal. Treat as an incident."
           runbook: "prometheus/slo.md#auditintegritybroken"
 
+      # A09: hash-chain break (V32). Where AuditIntegrityBroken above catches a
+      # row's CONTENT being altered, this catches a whole row being DELETED,
+      # REORDERED, or the tail truncated — the per-row HMAC can't see that, but
+      # the chain link at the next surviving row stops recomputing. Ticket, not
+      # page: the surviving rows' content is intact and a break can also be a
+      # benign secret rotation without a re-chain, so it warrants prompt
+      # investigation rather than an immediate wake-up.
+      - alert: AuditChainBroken
+        expr: increase(security_audit_chain_broken_total[1h]) > 0
+        for: 0m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "audit_events chain break — a row may have been deleted or reordered"
+          description: "{{ $value | humanize }} audit chain links failed to recompute in the last hour. A row was deleted/reordered/truncated from the append-only log, or the audit.hmac-secret rotated without re-chaining. Investigate against the row_hmac (content) signal and the DB write log."
+          runbook: "prometheus/slo.md#auditchainbroken"
+
       # A09: sustained invalid-token (401) volume at the services (the gateway
       # doesn't verify JWTs — downstream services do, so 401s originate there).
       # A steady rate is a broken client or a token-brute-force sweep; the

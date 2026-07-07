@@ -252,6 +252,20 @@ new sensitive columns MUST follow suit:
   Wire audit into new payment states via `PaymentRecordService.transition()` (the
   single lifecycle chokepoint). k8s auto-flows the secret via `envFrom: secretRef`
   (compose maps it explicitly — payment-service now has its own `AUDIT_HMAC_SECRET`).
+  **Hash-chaining (A09, user-service, V32):** `row_hmac` only proves a row's
+  *content* is intact — it can't detect a whole row being **deleted, reordered,
+  or truncated** from the tail (each survivor still self-verifies). So every row
+  also carries `chain_hmac = HMAC(key, prev_chain_hmac ‖ row_hmac)`, binding it to
+  its predecessor; deleting any row breaks the link at the next survivor and the
+  attacker can't repair the downstream chain without the key. Writes serialise on
+  a single-row `audit_chain_head` table locked `SELECT … FOR UPDATE` inside the
+  REQUIRES_NEW audit tx (DB-agnostic; stops two writers forking the chain).
+  `AuditIntegrityVerifier` walks the chain oldest-first and exports
+  `security.audit.chain.broken` → alert `AuditChainBroken` (**ticket**, vs the
+  content-tamper `AuditIntegrityBroken` **page** — surviving content is intact and
+  a break can also be a benign secret rotation). Pre-V32 rows have
+  `chain_hmac = NULL` (legacy, never a break), same as pre-V29 for `row_hmac`. Not
+  yet ported to payment-service — that's the next follow-up now that #397 merged.
   The guard also **fails boot on a blank `spring.data.redis.password` under a
   deployment profile** (all six data services) — Redis holds session-revocation
   + rate-limit state, so an unauthenticated Redis is a tamper surface; compose/k8s
