@@ -8,6 +8,8 @@ import org.springframework.data.domain.Sort;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 /**
@@ -25,6 +27,17 @@ import java.util.List;
  * is zero). Rows written before the HMAC column existed carry no HMAC and are
  * counted as {@code legacy} (unverifiable), never as {@code tampered}. Read-only
  * and idempotent, so running it on every instance is harmless.
+ *
+ * <p><b>Hash-chain (V10).</b> The per-row HMAC only proves a row's content is
+ * intact — it cannot detect a whole row being DELETED, REORDERED, or truncated
+ * from the tail. So each row also carries a {@code chain_hmac} linking it to its
+ * predecessor. This verifier additionally walks the window oldest-first and
+ * recomputes each link; a mismatch means a neighbouring row was removed or moved,
+ * and is exported as {@link PaymentMetrics#auditChainBroken(long)} (ticket
+ * severity — surviving content is intact and a break can also be a benign secret
+ * rotation, so it warrants investigation rather than an immediate page). The
+ * first chained row in the window is treated as an anchor: its predecessor lies
+ * outside the scanned window, so its back-link can't be checked here.
  */
 @Component
 @Slf4j
@@ -49,19 +62,25 @@ public class AuditIntegrityVerifier {
         this.verifyLimit = verifyLimit;
     }
 
-    /** Outcome of a verification pass. {@code tampered > 0} is a security incident. */
-    public record Result(int checked, int ok, int tampered, int legacy) {}
+    /**
+     * Outcome of a verification pass. {@code tampered > 0} (content altered) or
+     * {@code chainBroken > 0} (row deleted/reordered) is a security incident.
+     */
+    public record Result(int checked, int ok, int tampered, int legacy,
+                         int chainOk, int chainBroken) {}
 
     @Scheduled(cron = "${audit.integrity.verify-cron:0 30 3 * * *}")
     public void scheduledVerify() {
         Result r = verifyRecent();
-        if (r.tampered() > 0) {
-            log.error("AUDIT_INTEGRITY_BROKEN checked={} ok={} TAMPERED={} legacy={} — "
-                    + "an audit_events row failed HMAC verification; investigate immediately",
-                    r.checked(), r.ok(), r.tampered(), r.legacy());
+        if (r.tampered() > 0 || r.chainBroken() > 0) {
+            log.error("AUDIT_INTEGRITY_BROKEN checked={} ok={} TAMPERED={} legacy={} "
+                    + "chainOk={} CHAIN_BROKEN={} — an audit_events row failed HMAC/chain "
+                    + "verification; investigate immediately",
+                    r.checked(), r.ok(), r.tampered(), r.legacy(), r.chainOk(), r.chainBroken());
         } else {
-            log.info("Audit integrity verified: checked={} ok={} legacy={} (no tampering)",
-                    r.checked(), r.ok(), r.legacy());
+            log.info("Audit integrity verified: checked={} ok={} legacy={} chainOk={} "
+                    + "(no tampering, chain intact)",
+                    r.checked(), r.ok(), r.legacy(), r.chainOk());
         }
     }
 
@@ -72,7 +91,7 @@ public class AuditIntegrityVerifier {
      * that crashes is worse than one that reports zero.
      */
     public Result verifyRecent() {
-        int checked = 0, ok = 0, tampered = 0, legacy = 0;
+        int checked = 0, ok = 0, tampered = 0, legacy = 0, chainOk = 0, chainBroken = 0;
         try {
             List<AuditEvent> rows = repository.findAll(
                     PageRequest.of(0, verifyLimit, Sort.by(Sort.Direction.DESC, "id"))).getContent();
@@ -90,10 +109,60 @@ public class AuditIntegrityVerifier {
                             row.getId(), row.getEventType(), row.getOccurredAt());
                 }
             }
+            int[] chain = verifyChain(rows);
+            chainOk = chain[0];
+            chainBroken = chain[1];
         } catch (RuntimeException ex) {
             log.error("Audit integrity verification pass failed to run: {}", ex.getMessage(), ex);
         }
         paymentMetrics.auditIntegrityBroken(tampered);
-        return new Result(checked, ok, tampered, legacy);
+        paymentMetrics.auditChainBroken(chainBroken);
+        return new Result(checked, ok, tampered, legacy, chainOk, chainBroken);
+    }
+
+    /**
+     * Walk the hash-chain oldest-first and recompute each link (OWASP A09
+     * deletion/reorder detection). Returns {@code [chainOk, chainBroken]}.
+     *
+     * <p>{@code rows} arrives newest-first (the DESC scan), so we reverse to
+     * oldest-first. The first chained row in the window is an <em>anchor</em>: its
+     * predecessor lies outside the scanned window, so its back-link can't be
+     * checked and it is neither ok nor broken. Each subsequent row's stored
+     * {@code chain_hmac} must equal {@code HMAC(prevChain, row.rowHmac)}; a
+     * mismatch means a row between them was deleted or reordered. After a break we
+     * re-anchor on the stored chain value so ONE deletion flags exactly once
+     * rather than cascading. A legacy (pre-V10, null chain) row resets the anchor,
+     * since the chain isn't continuous across it.
+     */
+    private int[] verifyChain(List<AuditEvent> rows) {
+        List<AuditEvent> asc = new ArrayList<>(rows);
+        Collections.reverse(asc);                   // oldest-first for the forward walk
+        int chainOk = 0, chainBroken = 0;
+        String prevChain = null;
+        boolean anchored = false;
+        for (AuditEvent row : asc) {
+            String storedChain = row.getChainHmac();
+            if (storedChain == null || storedChain.isBlank()) {
+                anchored = false;                   // pre-V10 row: chain not applicable
+                prevChain = null;
+                continue;
+            }
+            if (!anchored) {
+                prevChain = storedChain;            // predecessor outside window: anchor only
+                anchored = true;
+                continue;
+            }
+            String expected = auditService.computeChainHmac(prevChain, row.getRowHmac());
+            if (expected.equals(storedChain)) {
+                chainOk++;
+            } else {
+                chainBroken++;
+                log.error("AUDIT_CHAIN_BROKEN id={} eventType={} occurredAt={} — chain link "
+                        + "does not recompute; a preceding audit row may have been deleted or reordered",
+                        row.getId(), row.getEventType(), row.getOccurredAt());
+            }
+            prevChain = storedChain;                // re-anchor on stored so one break flags once
+        }
+        return new int[]{chainOk, chainBroken};
     }
 }

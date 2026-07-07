@@ -332,3 +332,20 @@ groups:
           summary: "payment audit_events tamper detected — HMAC verification failed"
           description: "{{ $value | humanize }} payment audit rows failed HMAC verification in the last hour. Someone altered the payment audit log, or the audit.hmac-secret rotated without a re-seal. Treat as a money-movement incident."
           runbook: "prometheus/slo.md#paymentauditintegritybroken"
+
+      # A09: hash-chain break (V10) on the payment audit log. Where
+      # PaymentAuditIntegrityBroken catches a row's CONTENT being altered, this
+      # catches a whole money-movement row being DELETED, REORDERED, or the tail
+      # truncated — the per-row HMAC can't see that, but the chain link at the
+      # next surviving row stops recomputing. Ticket, not page: surviving content
+      # is intact and a break can also be a benign secret rotation without a
+      # re-chain, so investigate promptly rather than waking someone.
+      - alert: PaymentAuditChainBroken
+        expr: increase(payment_audit_chain_broken_total[1h]) > 0
+        for: 0m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "payment audit_events chain break — a row may have been deleted or reordered"
+          description: "{{ $value | humanize }} payment audit chain links failed to recompute in the last hour. A money-movement row was deleted/reordered/truncated from the append-only log, or the audit.hmac-secret rotated without re-chaining. Investigate against the row_hmac (content) signal and the DB write log."
+          runbook: "prometheus/slo.md#paymentauditchainbroken"
