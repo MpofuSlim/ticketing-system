@@ -2,16 +2,27 @@ package com.innbucks.userservice.security;
 
 import com.innbucks.userservice.util.MsisdnCountryResolver;
 import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.Header;
 import io.jsonwebtoken.JwtBuilder;
 import io.jsonwebtoken.JwtException;
 import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.Locator;
+import io.jsonwebtoken.ProtectedHeader;
 import io.jsonwebtoken.security.Keys;
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
+import java.security.Key;
+import java.security.KeyFactory;
+import java.security.PrivateKey;
+import java.security.PublicKey;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.X509EncodedKeySpec;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
@@ -30,6 +41,133 @@ public class JwtUtil {
 
     @Value("${jwt.refresh-expiration}")
     private long refreshExpiration;
+
+    // --- OWASP A02 stage-1 RS256/JWKS migration (dual-verify) --------------
+    // Optional RSA key material. When unset, this service both signs AND
+    // verifies with the shared HS256 secret exactly as before (zero behaviour
+    // change). When set, verification accepts BOTH HS256 and RS256 (selected by
+    // the token's own `alg` header via keyLocator), and — only when
+    // jwt.signing-algorithm=RS256 — minting switches to RS256 with the private
+    // key. This is the safe rollout order: deploy dual-verify everywhere first,
+    // then flip THIS service's mint to RS256, then retire HS256. No FE impact
+    // (the JWT wire format/claims are unchanged; only the signature alg differs).
+    @Value("${jwt.public-key:}")
+    private String publicKeyPem;
+
+    @Value("${jwt.private-key:}")
+    private String privateKeyPem;
+
+    /** HS256 (default) or RS256. RS256 requires jwt.private-key + jwt.public-key. */
+    @Value("${jwt.signing-algorithm:HS256}")
+    private String signingAlgorithm;
+
+    /** Optional `kid` JWS header, stamped on minted tokens so future key
+     *  rotation / JWKS lookup can select the right key. Omitted when blank. */
+    @Value("${jwt.key-id:}")
+    private String keyId;
+
+    private PublicKey rsaPublicKey;
+    private PrivateKey rsaPrivateKey;
+    private boolean signRs256;
+    private Locator<Key> keyLocator;
+    private volatile boolean keysReady;
+
+    // @PostConstruct runs under Spring so RS256 misconfiguration fails fast at
+    // boot; ensureKeyMaterial() also runs lazily on first use so plain unit
+    // tests that `new JwtUtil()` + set fields via reflection (no Spring
+    // lifecycle) still work. Idempotent either way.
+    @PostConstruct
+    void initKeyMaterial() {
+        ensureKeyMaterial();
+    }
+
+    private void ensureKeyMaterial() {
+        if (keysReady) {
+            return;
+        }
+        synchronized (this) {
+            if (keysReady) {
+                return;
+            }
+            SecretKey hmacKey = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8));
+            if (publicKeyPem != null && !publicKeyPem.isBlank()) {
+                this.rsaPublicKey = parseRsaPublicKey(publicKeyPem);
+            }
+            if (privateKeyPem != null && !privateKeyPem.isBlank()) {
+                this.rsaPrivateKey = parseRsaPrivateKey(privateKeyPem);
+            }
+            this.signRs256 = "RS256".equalsIgnoreCase(signingAlgorithm == null ? "" : signingAlgorithm.trim());
+            if (signRs256 && rsaPrivateKey == null) {
+                throw new IllegalStateException(
+                        "jwt.signing-algorithm=RS256 but jwt.private-key is not configured");
+            }
+            if (signRs256 && rsaPublicKey == null) {
+                // user-service verifies its own freshly-minted tokens (e.g. /auth/refresh),
+                // so it must hold the public half too.
+                throw new IllegalStateException(
+                        "jwt.signing-algorithm=RS256 requires jwt.public-key for self-verification");
+            }
+            // Route each incoming token to the right verification key by its own
+            // `alg` header: RS* -> the RSA public key (must be configured), else
+            // the shared HMAC secret. This is what makes verification accept
+            // both while the fleet is mid-migration.
+            this.keyLocator = (Header header) -> {
+                if (header instanceof ProtectedHeader ph) {
+                    String alg = ph.getAlgorithm();
+                    if (alg != null && alg.startsWith("RS")) {
+                        if (rsaPublicKey == null) {
+                            throw new io.jsonwebtoken.security.SignatureException(
+                                    "RS-signed token presented but no jwt.public-key is configured");
+                        }
+                        return rsaPublicKey;
+                    }
+                }
+                return hmacKey;
+            };
+            this.keysReady = true;
+        }
+    }
+
+    private static PublicKey parseRsaPublicKey(String pem) {
+        try {
+            byte[] der = Base64.getDecoder().decode(stripPem(pem));
+            return KeyFactory.getInstance("RSA").generatePublic(new X509EncodedKeySpec(der));
+        } catch (Exception e) {
+            throw new IllegalStateException("Invalid jwt.public-key (expected PKCS#8/X.509 PEM)", e);
+        }
+    }
+
+    private static PrivateKey parseRsaPrivateKey(String pem) {
+        try {
+            byte[] der = Base64.getDecoder().decode(stripPem(pem));
+            return KeyFactory.getInstance("RSA").generatePrivate(new PKCS8EncodedKeySpec(der));
+        } catch (Exception e) {
+            throw new IllegalStateException("Invalid jwt.private-key (expected PKCS#8 PEM)", e);
+        }
+    }
+
+    /** Strip PEM armour + whitespace, leaving the base64 body. */
+    private static String stripPem(String pem) {
+        return pem.replaceAll("-----BEGIN [^-]+-----", "")
+                .replaceAll("-----END [^-]+-----", "")
+                .replaceAll("\\s", "");
+    }
+
+    /**
+     * Applies the configured signature to a builder. HS256 by default (identical
+     * token to before); RS256 only when jwt.signing-algorithm=RS256. Stamps the
+     * optional `kid` header on either path when configured.
+     */
+    private JwtBuilder applySignature(JwtBuilder builder) {
+        ensureKeyMaterial();
+        if (keyId != null && !keyId.isBlank()) {
+            builder.header().keyId(keyId).and();
+        }
+        if (signRs256) {
+            return builder.signWith(rsaPrivateKey, Jwts.SIG.RS256);
+        }
+        return builder.signWith(getSigningKey(), Jwts.SIG.HS256);
+    }
 
     /** Token type marker. Access tokens omit the claim (treated as access);
      *  refresh tokens carry {@code type=refresh} and are accepted only by
@@ -60,15 +198,14 @@ public class JwtUtil {
         // A random jti guarantees the JWT (and therefore its SHA-256 hash) is
         // unique even for two refresh tokens minted in the same second for
         // the same subject — critical for the unique index on token_hash.
-        return Jwts.builder()
+        return applySignature(Jwts.builder()
                 .id(UUID.randomUUID().toString())
                 .subject(subject)
                 .claim("type", TOKEN_TYPE_REFRESH)
                 .issuer(TOKEN_ISSUER)
                 .audience().add(TOKEN_AUDIENCE).and()
                 .issuedAt(new Date())
-                .expiration(new Date(System.currentTimeMillis() + refreshExpiration))
-                .signWith(getSigningKey(), Jwts.SIG.HS256)
+                .expiration(new Date(System.currentTimeMillis() + refreshExpiration)))
                 .compact();
     }
 
@@ -190,12 +327,11 @@ public class JwtUtil {
         if (emitDisplayName && lastName != null && !lastName.isBlank()) {
             builder.claim("lastName", lastName);
         }
-        return builder
+        return applySignature(builder
                 .issuer(TOKEN_ISSUER)
                 .audience().add(TOKEN_AUDIENCE).and()
                 .issuedAt(new Date())
-                .expiration(new Date(System.currentTimeMillis() + expiration))
-                .signWith(getSigningKey(), Jwts.SIG.HS256)
+                .expiration(new Date(System.currentTimeMillis() + expiration)))
                 .compact();
     }
 
@@ -426,8 +562,9 @@ public class JwtUtil {
     }
 
     private Claims getClaims(String token) {
+        ensureKeyMaterial();
         return Jwts.parser()
-                .verifyWith(getSigningKey())
+                .keyLocator(keyLocator)
                 .requireIssuer(TOKEN_ISSUER)
                 .requireAudience(TOKEN_AUDIENCE)
                 .build()

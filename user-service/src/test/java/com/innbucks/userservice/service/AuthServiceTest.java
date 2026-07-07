@@ -1266,6 +1266,91 @@ class AuthServiceTest {
     }
 
     @Test
+    void completeLoginWithMfa_capsWrongCodes_thenLocksWith423_andRejectsEvenCorrectCodeWhileLocked() {
+        // A04/A07: the MFA step must brute-force-cap. First (threshold-1) wrong
+        // codes throw the 400-mapped MfaException; the threshold-th throws the
+        // 423-mapped AccountLockedException and stamps mfa_locked_until. While
+        // locked, even a CORRECT code is rejected with 423 (the lockout
+        // short-circuits before the code check), so a fresh mfaToken can't
+        // reopen the window.
+        UserRepository userRepo = mock(UserRepository.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        RefreshTokenService refreshTokenService = mock(RefreshTokenService.class);
+
+        User user = mfaSystemUser();
+        when(userRepo.findById(55L)).thenReturn(Optional.of(user));
+
+        com.innbucks.userservice.security.MfaTokenService tokenService =
+                mock(com.innbucks.userservice.security.MfaTokenService.class);
+        when(tokenService.verify("step1",
+                com.innbucks.userservice.security.MfaTokenService.Purpose.LOGIN_MFA)).thenReturn(55L);
+        MfaService mfaService = mock(MfaService.class);
+        when(mfaService.verifyForLogin(user, "000000")).thenReturn(false); // always wrong
+        when(mfaService.verifyForLogin(user, "472938")).thenReturn(true);  // correct, but never reached once locked
+
+        AuthService svc = withLockoutConfig(new AuthService(userRepo, mock(TenantProfileRepository.class),
+                mock(CustomerProfileRepository.class), mock(PasswordEncoder.class), jwt,
+                mock(TokenRevocationService.class), refreshTokenService,
+                mock(RefreshTokenRepository.class), mock(AuditService.class)));
+        wireMfa(svc, new com.innbucks.userservice.security.MfaPolicy(), tokenService, mfaService,
+                mock(DeviceTrustService.class));
+
+        // Wrong codes below threshold: 400-mapped MfaException, NOT a lockout.
+        for (int i = 1; i < LOCKOUT_THRESHOLD; i++) {
+            RuntimeException ex = assertThrows(RuntimeException.class,
+                    () -> svc.completeLoginWithMfa("step1", "000000", null, false, AuditContext.none()));
+            assertFalse(ex instanceof AuthService.AccountLockedException,
+                    "attempt below threshold must not be a 423 lockout");
+            assertTrue(ex instanceof MfaService.MfaException, "expected MfaException, got " + ex.getClass());
+        }
+        assertNull(user.getMfaLockedUntil(), "must not be locked before the threshold");
+
+        // Threshold-th wrong code: 423-mapped AccountLockedException + lock stamped.
+        assertThrows(AuthService.AccountLockedException.class,
+                () -> svc.completeLoginWithMfa("step1", "000000", null, false, AuditContext.none()));
+        assertNotNull(user.getMfaLockedUntil(), "mfa_locked_until must be stamped at the threshold");
+        assertTrue(user.getMfaLockedUntil().isAfter(java.time.Instant.now()));
+
+        // Even the CORRECT code is now rejected with 423 until the window elapses.
+        assertThrows(AuthService.AccountLockedException.class,
+                () -> svc.completeLoginWithMfa("step1", "472938", null, false, AuditContext.none()));
+    }
+
+    @Test
+    void completeLoginWithMfa_correctCode_clearsAccumulatedMfaStrikes() {
+        // A wrong code then a correct one: the correct code resets the MFA
+        // strike counter so a later genuine typo run starts fresh.
+        UserRepository userRepo = mock(UserRepository.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        RefreshTokenService refreshTokenService = mock(RefreshTokenService.class);
+
+        User user = mfaSystemUser();
+        user.setMfaFailedAttempts(3); // pretend 3 prior wrong codes
+        when(userRepo.findById(55L)).thenReturn(Optional.of(user));
+        when(refreshTokenService.issueNewFamily(any(), any())).thenReturn("refresh");
+        when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean())).thenReturn("tok");
+
+        com.innbucks.userservice.security.MfaTokenService tokenService =
+                mock(com.innbucks.userservice.security.MfaTokenService.class);
+        when(tokenService.verify("step1",
+                com.innbucks.userservice.security.MfaTokenService.Purpose.LOGIN_MFA)).thenReturn(55L);
+        MfaService mfaService = mock(MfaService.class);
+        when(mfaService.verifyForLogin(user, "472938")).thenReturn(true);
+
+        AuthService svc = withLockoutConfig(new AuthService(userRepo, mock(TenantProfileRepository.class),
+                mock(CustomerProfileRepository.class), mock(PasswordEncoder.class), jwt,
+                mock(TokenRevocationService.class), refreshTokenService,
+                mock(RefreshTokenRepository.class), mock(AuditService.class)));
+        wireMfa(svc, new com.innbucks.userservice.security.MfaPolicy(), tokenService, mfaService,
+                mock(DeviceTrustService.class));
+
+        AuthResponseDTO resp = svc.completeLoginWithMfa("step1", "472938", null, false, AuditContext.none());
+        assertEquals("tok", resp.getToken());
+        assertEquals(0, user.getMfaFailedAttempts(), "a correct code must clear the MFA strike counter");
+    }
+
+    @Test
     void completeLoginWithMfa_rememberDeviceFalse_doesNotMintTrust() {
         UserRepository userRepo = mock(UserRepository.class);
         CustomerProfileRepository customerRepo = mock(CustomerProfileRepository.class);

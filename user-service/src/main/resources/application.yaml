@@ -43,6 +43,21 @@ jwt:
   secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
   expiration: ${JWT_EXPIRATION_MS:900000}
   refresh-expiration: ${JWT_REFRESH_EXPIRATION_MS:604800000}
+  # OWASP A02 stage-1 RS256/JWKS migration (dual-verify). All unset by default,
+  # so this service signs AND verifies with the HS256 secret above exactly as
+  # before. Rollout order (no FE impact — JWT claims are unchanged, only the
+  # signature alg differs):
+  #   1) Deploy every service with JWT_PUBLIC_KEY set (verify accepts HS256+RS256).
+  #   2) Set user-service JWT_SIGNING_ALG=RS256 + JWT_PRIVATE_KEY (flip minting).
+  #   3) Once no HS256 tokens remain in flight, retire JWT_SECRET.
+  # public-key: PKCS#8/X.509 PEM (-----BEGIN PUBLIC KEY-----). Enables RS256 verify.
+  public-key: ${JWT_PUBLIC_KEY:}
+  # private-key: PKCS#8 PEM (-----BEGIN PRIVATE KEY-----). Required only to MINT RS256.
+  private-key: ${JWT_PRIVATE_KEY:}
+  # signing-algorithm: HS256 (default) | RS256. RS256 needs both keys above.
+  signing-algorithm: ${JWT_SIGNING_ALG:HS256}
+  # key-id: optional `kid` header stamped on minted tokens for rotation/JWKS.
+  key-id: ${JWT_KEY_ID:}
 
 # Keyed hash for national IDs at rest (PII). The stored customer_profiles
 # .national_id is HMAC-SHA256'd with this secret; the raw value only ever

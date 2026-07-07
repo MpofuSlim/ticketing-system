@@ -78,9 +78,18 @@ spring:
                     rate-limiter: "#{@resilientRedisRateLimiter}"
 
             # 2FA endpoints: rate-limit per-IP to bound TOTP/backup-code brute
-            # force. The downstream MfaService also caps via the OTP failed-
-            # attempt counter on the user row; the gateway throttle adds an
-            # IP-level guard that fires before any work happens. Matched BEFORE
+            # force. Defence-in-depth pairs with the downstream per-account MFA
+            # lockout (AuthService.completeLoginWithMfa caps wrong codes via the
+            # users.mfa_failed_attempts / mfa_locked_until columns and returns
+            # 423 at the threshold — dedicated columns the password step does
+            # NOT reset, so a password-holding attacker can't clear their MFA
+            # strikes by re-authenticating). This gateway throttle adds an
+            # IP-level guard that fires before any work happens. Uses the
+            # fail-SAFE limiter so a Redis outage still throttles locally rather
+            # than fail-open (the previous gap that left MFA brute force
+            # unthrottled at the edge during an outage). The fallback degrades to
+            # a per-instance bucket at the SAME rate — it never blanket-denies,
+            # so a legit user typing one code is never blocked. Matched BEFORE
             # the /auth/** catch-all below.
             - id: auth-mfa-route
               uri: lb://user-service
@@ -93,6 +102,7 @@ spring:
                     redis-rate-limiter.burstCapacity: ${AUTH_OTP_RATE_LIMIT_BURST_CAPACITY:3}
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
+                    rate-limiter: "#{@resilientRedisRateLimiter}"
 
             # Forgot-password: the request step sends an OTP (SMS cost + abuse
             # vector), so rate-limit it like /auth/otp/**. Matched BEFORE the
