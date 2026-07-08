@@ -141,6 +141,41 @@ class BookingServiceTest {
     }
 
     @Test
+    void publicView_withholdsTicketCredentialUntilConfirmed() {
+        BookingRepository repo = mock(BookingRepository.class);
+        BookingService service = newService(repo, mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+
+        UUID id = java.util.UUID.randomUUID();
+        BookingItem item = BookingItem.builder()
+                .seatId(java.util.UUID.randomUUID())
+                .categoryId(DEFAULT_CATEGORY_ID).categoryName("VIP")
+                .priceAtBooking(new java.math.BigDecimal("50.00"))
+                .ticketNumber("20260619-48291X")
+                .build();
+
+        // PENDING (unpaid) — the gate credential must be withheld.
+        Booking pending = Booking.builder().id(id).eventId(java.util.UUID.randomUUID())
+                .status(Booking.BookingStatus.PENDING).totalAmount(new java.math.BigDecimal("50.00"))
+                .items(java.util.List.of(item)).build();
+        when(repo.findById(id)).thenReturn(java.util.Optional.of(pending));
+
+        var pendingView = service.getBookingByIdPublic(id);
+        assertEquals(1, pendingView.getItems().size());
+        assertNull(pendingView.getItems().get(0).getTicketNumber());
+        assertNull(pendingView.getItems().get(0).getQrCode());
+
+        // CONFIRMED (paid) — the credential is exposed so the ticket can render.
+        Booking confirmed = Booking.builder().id(id).eventId(java.util.UUID.randomUUID())
+                .status(Booking.BookingStatus.CONFIRMED).totalAmount(new java.math.BigDecimal("50.00"))
+                .items(java.util.List.of(item)).build();
+        when(repo.findById(id)).thenReturn(java.util.Optional.of(confirmed));
+
+        var confirmedView = service.getBookingByIdPublic(id);
+        assertEquals("20260619-48291X", confirmedView.getItems().get(0).getTicketNumber());
+        assertNotNull(confirmedView.getItems().get(0).getQrCode());
+    }
+
+    @Test
     void createBooking_rejectsWhenCategorySoldOut() {
         // The per-category counter is the oversell guard: a claim that would
         // push remaining below zero returns 0 rows (tryClaim), which the service

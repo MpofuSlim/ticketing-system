@@ -596,6 +596,13 @@ public class BookingService {
      * magic-link view can still render the e-tickets.
      */
     private PublicBookingResponseDTO toPublicDTO(Booking booking) {
+        // The ticket number + QR are the gate-entry credential. Only a CONFIRMED
+        // (paid) booking may expose them: a PENDING (unpaid, still-held) or
+        // CANCELLED booking still renders publicly (status, amount, seats) but
+        // withholds the scannable credential, so an unpaid/void booking can never
+        // produce a live ticket via the by-UUID magic link. Mirrors the CONFIRMED
+        // gate already enforced by TicketController / the ticket-scan path.
+        boolean confirmed = booking.getStatus() == Booking.BookingStatus.CONFIRMED;
         List<BookingItemDTO> itemDTOs = booking.getItems() == null
                 ? List.of()
                 : booking.getItems().stream()
@@ -606,8 +613,8 @@ public class BookingService {
                             .rowLabel(i.getRowLabel())
                             .seatNumber(i.getSeatNumber())
                             .priceAtBooking(i.getPriceAtBooking())
-                            .ticketNumber(i.getTicketNumber())
-                            .qrCode(qrCodeGenerator.toDataUri(i.getTicketNumber()))
+                            .ticketNumber(confirmed ? i.getTicketNumber() : null)
+                            .qrCode(confirmed ? qrCodeGenerator.toDataUri(i.getTicketNumber()) : null)
                             .build())
                   .collect(Collectors.toList());
 
