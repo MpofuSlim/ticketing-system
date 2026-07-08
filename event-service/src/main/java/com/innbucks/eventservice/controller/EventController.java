@@ -546,7 +546,11 @@ public class EventController {
     }
 
     @GetMapping("/inactive")
-    @SecurityRequirements()
+    // Authenticated only. The inactive listing = drafts + admin-rejected events;
+    // it must never be public (it previously dumped every organizer's unpublished
+    // catalogue to anonymous callers). Organizers/team-members are self-scoped in
+    // the handler; only SUPER_ADMIN reaches the fleet-wide moderation view.
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','TEAM_MEMBER','SUPER_ADMIN')")
     @Operation(
             summary = "List events that are flagged inactive",
             description = """

@@ -34,6 +34,11 @@ public class SecurityConfig {
                         .requestMatchers("/swagger-ui/**").permitAll()
                         .requestMatchers("/swagger-ui.html").permitAll()
                         .requestMatchers("/v3/api-docs/**").permitAll()
+                        // Inactive = drafts + admin-rejected events: authenticated only
+                        // (URL-level backstop for the @PreAuthorize on GET /events/inactive,
+                        // so a dropped annotation can't silently expose it). MUST precede
+                        // the broad /events/** permitAll below — first match wins.
+                        .requestMatchers(HttpMethod.GET, "/events/inactive").authenticated()
                         .requestMatchers(HttpMethod.GET, "/events").permitAll()
                         .requestMatchers(HttpMethod.GET, "/events/**").permitAll()
                         // Internal: booking-service decrements availability on confirm.

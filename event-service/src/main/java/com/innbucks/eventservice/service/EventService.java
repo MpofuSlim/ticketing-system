@@ -79,7 +79,27 @@ public class EventService {
         Pageable pageable = PageRequest.of(page, size, ascendingSort(sortBy));
         log.debug("Fetching active events from={} to={} venue={} page={} size={} sortBy={}",
                 from, to, venue, page, size, sortBy);
-        return enrichWithAvailability(eventRepository.findAllActive(from, to, venue, pageable));
+        // Published events only for this anonymous listing: active=true, not
+        // admin-rejected, not ended. Drafts / admin-rejected events must never
+        // surface publicly — organizers see their own via GET /events/my.
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+        return stripInternalIds(enrichWithAvailability(
+                eventRepository.findAllActiveOnly(from, to, venue, null, now, pageable)));
+    }
+
+    /** Nulls organizer-internal identifiers before a response leaves an
+     *  anonymous-reachable endpoint. {@code tenantUserUuid} is the organizer's
+     *  stable cross-service user id (used fleet-wide for ownership checks); it
+     *  must not be broadcast to the public, where it enables organizer
+     *  enumeration/correlation. Authenticated owner/admin listings keep it. */
+    private Page<EventResponseDTO> stripInternalIds(Page<EventResponseDTO> page) {
+        page.getContent().forEach(EventService::stripInternalIds);
+        return page;
+    }
+
+    private static EventResponseDTO stripInternalIds(EventResponseDTO dto) {
+        dto.setTenantUserUuid(null);
+        return dto;
     }
 
     public Page<EventResponseDTO> getActiveOnlyEvents(
@@ -99,7 +119,7 @@ public class EventService {
         Page<Event> events = category == null
                 ? eventRepository.findAllActiveOnly(from, to, venue, country, now, pageable)
                 : eventRepository.findAllActiveOnlyByCategory(from, to, venue, country, category, now, pageable);
-        return enrichWithAvailability(events);
+        return stripInternalIds(enrichWithAvailability(events));
     }
 
     /**
@@ -321,10 +341,18 @@ public class EventService {
                     log.warn("Event not found eventId={}", eventId);
                     return new NotFoundException("Event not found");
                 });
+        // Public-by-UUID access exposes PUBLISHED events only. A draft (active=false)
+        // or admin-rejected event is treated as not-found so it can't be read by
+        // anyone who guesses/harvests its UUID; organizers use GET /events/my.
+        if (!event.isActive() || event.isRejected()) {
+            log.warn("Rejecting public access to non-published event eventId={} active={} rejected={}",
+                    eventId, event.isActive(), event.isRejected());
+            throw new NotFoundException("Event not found");
+        }
         EventResponseDTO response = toDtoWithAvailability(event, fetchActiveCounts(eventId));
         attachOrganizer(response, event, resolveOrganizers(List.of(event)));
         response.setSeatCategories(seatCategoryGateway.fetchForEvent(eventId));
-        return response;
+        return stripInternalIds(response);
     }
 
     public Page<EventResponseDTO> searchEvents(
@@ -336,8 +364,8 @@ public class EventService {
         Pageable pageable = PageRequest.of(page, size, ascendingSort(sortBy));
         log.debug("Searching events q={} page={} size={} sortBy={}", q, page, size, sortBy);
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
-        return enrichWithAvailability(
-                eventRepository.searchByKeyword(q == null ? "" : q.trim(), now, pageable));
+        return stripInternalIds(enrichWithAvailability(
+                eventRepository.searchByKeyword(q == null ? "" : q.trim(), now, pageable)));
     }
 
     public Page<EventResponseDTO> getEventsByCountry(
@@ -366,7 +394,7 @@ public class EventService {
             dto.setEventNo(n++);
             dtos.add(dto);
         }
-        return new PageImpl<>(dtos, pageable, entities.getTotalElements());
+        return stripInternalIds(new PageImpl<>(dtos, pageable, entities.getTotalElements()));
     }
 
     // Returns the event mapped to its DTO with availableTickets recomputed as

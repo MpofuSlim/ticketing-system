@@ -332,7 +332,41 @@ class EventServiceTest {
         EventResponseDTO result = service.getEventById(eventId);
 
         assertNull(result.getOrganizer());
-        assertEquals(ORGANIZER_AB, result.getTenantUserUuid());
+        // getEventById is a public-by-UUID read: the organizer's internal
+        // tenantUserUuid is intentionally stripped so it isn't broadcast to
+        // anonymous callers (A01 — organizer enumeration). The event itself is
+        // still served (it is published: active defaults true via @Builder.Default).
+        assertNull(result.getTenantUserUuid());
+    }
+
+    @Test
+    void getEventById_draftOrRejected_isNotFound() {
+        EventRepository repo = mock(EventRepository.class);
+        EventService service = new EventService(repo, new EventMapper(),
+                mock(SeatCategoryGateway.class), mock(BookingGateway.class),
+                mock(OrganizerGateway.class), mock(BookingNotificationGateway.class));
+
+        // A draft (active=false) must not be readable via the public by-UUID path.
+        UUID draftId = UUID.randomUUID();
+        Event draft = Event.builder().eventId(draftId).tenantUserUuid(ORGANIZER_AB).title("Draft")
+                .venue("V").country("Zimbabwe").category(EventCategory.CONCERT)
+                .startDateTime(LocalDateTime.now().plusDays(1))
+                .endDateTime(LocalDateTime.now().plusDays(1).plusHours(2))
+                .totalCapacity(10).availableTickets(10).deleted(false).active(false).build();
+        when(repo.findByEventIdAndDeletedFalse(draftId)).thenReturn(Optional.of(draft));
+        assertEquals("Event not found", assertThrows(RuntimeException.class,
+                () -> service.getEventById(draftId)).getMessage());
+
+        // An admin-rejected event (active=true guard bypassed) is likewise hidden.
+        UUID rejectedId = UUID.randomUUID();
+        Event rejected = Event.builder().eventId(rejectedId).tenantUserUuid(ORGANIZER_AB).title("Rejected")
+                .venue("V").country("Zimbabwe").category(EventCategory.CONCERT)
+                .startDateTime(LocalDateTime.now().plusDays(1))
+                .endDateTime(LocalDateTime.now().plusDays(1).plusHours(2))
+                .totalCapacity(10).availableTickets(10).deleted(false).rejected(true).build();
+        when(repo.findByEventIdAndDeletedFalse(rejectedId)).thenReturn(Optional.of(rejected));
+        assertEquals("Event not found", assertThrows(RuntimeException.class,
+                () -> service.getEventById(rejectedId)).getMessage());
     }
 
     @Test
