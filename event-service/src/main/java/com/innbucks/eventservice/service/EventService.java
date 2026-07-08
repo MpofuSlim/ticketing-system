@@ -93,7 +93,7 @@ public class EventService {
      *  must not be broadcast to the public, where it enables organizer
      *  enumeration/correlation. Authenticated owner/admin listings keep it. */
     private Page<EventResponseDTO> stripInternalIds(Page<EventResponseDTO> page) {
-        page.getContent().forEach(EventService::stripInternalIds);
+        page.getContent().forEach(dto -> dto.setTenantUserUuid(null));
         return page;
     }
 
@@ -341,18 +341,46 @@ public class EventService {
                     log.warn("Event not found eventId={}", eventId);
                     return new NotFoundException("Event not found");
                 });
-        // Public-by-UUID access exposes PUBLISHED events only. A draft (active=false)
-        // or admin-rejected event is treated as not-found so it can't be read by
-        // anyone who guesses/harvests its UUID; organizers use GET /events/my.
-        if (!event.isActive() || event.isRejected()) {
-            log.warn("Rejecting public access to non-published event eventId={} active={} rejected={}",
+        // Published events are visible to anyone by UUID. A draft (active=false,
+        // e.g. freshly created and pending approval) or admin-rejected event is
+        // served ONLY to its owning organizer or a SUPER_ADMIN — anyone else,
+        // including anonymous callers, gets 404 so it can't be read by guessing/
+        // harvesting the UUID.
+        boolean owner = callerMayViewUnpublished(event);
+        boolean published = event.isActive() && !event.isRejected();
+        if (!published && !owner) {
+            log.warn("Rejecting access to non-published event eventId={} active={} rejected={}",
                     eventId, event.isActive(), event.isRejected());
             throw new NotFoundException("Event not found");
         }
         EventResponseDTO response = toDtoWithAvailability(event, fetchActiveCounts(eventId));
         attachOrganizer(response, event, resolveOrganizers(List.of(event)));
         response.setSeatCategories(seatCategoryGateway.fetchForEvent(eventId));
-        return stripInternalIds(response);
+        // Keep the organizer's internal id for the owner/admin who act on it;
+        // strip it for anonymous/other-organizer (public) consumption.
+        return owner ? response : stripInternalIds(response);
+    }
+
+    /**
+     * Whether the current caller may view an UNPUBLISHED (draft or admin-rejected)
+     * event: the owning organizer (JWT {@code organizerUuid} == the event's
+     * {@code tenantUserUuid}) or a SUPER_ADMIN. Anonymous callers and other
+     * organizers may not — the public by-id / banner endpoints 404 for them.
+     */
+    private boolean callerMayViewUnpublished(Event event) {
+        org.springframework.security.core.Authentication auth =
+                org.springframework.security.core.context.SecurityContextHolder
+                        .getContext().getAuthentication();
+        if (auth == null) {
+            return false;
+        }
+        boolean superAdmin = auth.getAuthorities().stream()
+                .anyMatch(a -> "ROLE_SUPER_ADMIN".equals(a.getAuthority()));
+        if (superAdmin) {
+            return true;
+        }
+        UUID caller = com.innbucks.eventservice.security.AuthenticatedCaller.organizerUuid(auth);
+        return caller != null && caller.equals(event.getTenantUserUuid());
     }
 
     public Page<EventResponseDTO> searchEvents(
@@ -525,6 +553,13 @@ public class EventService {
     public BannerImage getEventBanner(UUID eventId) {
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
                 .orElseThrow(() -> new NotFoundException("Event not found"));
+        // Same visibility rule as getEventById: a draft/rejected event's banner is
+        // owner/admin-only; anonymous callers get 404 so the artwork of an
+        // unpublished event isn't exposed by UUID.
+        boolean published = event.isActive() && !event.isRejected();
+        if (!published && !callerMayViewUnpublished(event)) {
+            throw new NotFoundException("Event not found");
+        }
         if (event.getBannerImage() == null || event.getBannerImage().length == 0) {
             throw new NotFoundException("No banner image has been uploaded for this event yet.");
         }

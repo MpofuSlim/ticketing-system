@@ -234,12 +234,17 @@ class EventControllerTest {
 
         String eventId = objectMapper.readTree(body).path("data").path("eventId").asText();
 
-        mockMvc.perform(get("/events/" + eventId + "/banner"))
+        // The event is created as a draft (active=false, pending approval), so the
+        // by-id + banner reads are the OWNER's preview — authenticate as the
+        // creating organizer. (Anonymous access to an unpublished event is 404 now.)
+        mockMvc.perform(get("/events/" + eventId + "/banner")
+                        .with(jwtAuth("tenant-99", ORGANIZER_99, "EVENT_ORGANIZER")))
                 .andExpect(status().isOk())
                 .andExpect(content().contentType(MediaType.IMAGE_PNG))
                 .andExpect(content().bytes(pngBytes));
 
-        mockMvc.perform(get("/events/" + eventId))
+        mockMvc.perform(get("/events/" + eventId)
+                        .with(jwtAuth("tenant-99", ORGANIZER_99, "EVENT_ORGANIZER")))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.bannerUrl", containsString("/banner")));
     }
