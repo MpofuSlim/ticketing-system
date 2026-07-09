@@ -597,7 +597,7 @@ public class EventService {
     private static void applyBanner(Event event, MultipartFile file) {
         if (file == null || file.isEmpty()) return;
         if (file.getSize() > MAX_BANNER_BYTES) {
-            throw new BadRequestException("That image is too large. Please use one under 5 MB.");
+            throw new BadRequestException("That image is too large. Please use one under 10 MB.");
         }
         String contentType = file.getContentType();
         if (contentType == null || !ALLOWED_BANNER_CONTENT_TYPES.contains(contentType.toLowerCase())) {

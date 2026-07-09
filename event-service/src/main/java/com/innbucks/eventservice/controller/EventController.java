@@ -960,7 +960,7 @@ public class EventController {
 
                     The request is `multipart/form-data` with two parts:
                     - `event` — JSON body matching `CreateEventRequest` (title, description, venue, category, location, startDateTime, endDateTime, totalCapacity).
-                    - `eventBanner` — optional image file (JPEG/PNG/WEBP — GIF is not accepted; max 5 MB).
+                    - `eventBanner` — optional image file (JPEG/PNG/WEBP — GIF is not accepted; max 10 MB).
 
                     Validation:
                     - `startDateTime` and `endDateTime` must be **in the future**, and `endDateTime` must be **after** `startDateTime`.
@@ -1068,7 +1068,7 @@ public class EventController {
         @Schema(description = "Event JSON payload", implementation = CreateEventRequestDTO.class)
         public CreateEventRequestDTO event;
 
-        @Schema(type = "string", format = "binary", description = "Optional banner image (JPEG/PNG/WEBP — GIF is not accepted; max 5 MB).")
+        @Schema(type = "string", format = "binary", description = "Optional banner image (JPEG/PNG/WEBP — GIF is not accepted; max 10 MB).")
         public MultipartFile eventBanner;
     }
 
