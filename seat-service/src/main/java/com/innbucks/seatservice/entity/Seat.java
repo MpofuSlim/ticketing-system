@@ -2,6 +2,9 @@ package com.innbucks.seatservice.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.springframework.data.annotation.CreatedBy;
+import org.springframework.data.annotation.LastModifiedBy;
+import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
@@ -13,6 +16,7 @@ import java.util.UUID;
                 columnNames = {"category_id", "row_label", "seat_number"}
         )
 )
+@EntityListeners(AuditingEntityListener.class)
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -54,12 +58,31 @@ public class Seat {
 
     private LocalDateTime createdAt;
 
+    private LocalDateTime updatedAt;
+
+    /** Actor (organizer uuid, or JWT email fallback) that created this row,
+     *  auto-stamped by JPA auditing. See JpaAuditingConfig. Null for legacy rows
+     *  and system/unauthenticated writes. */
+    @CreatedBy
+    @Column(name = "created_by", updatable = false, length = 255)
+    private String createdBy;
+
+    /** Actor that last updated this row (JPA auditing; equals createdBy on INSERT). */
+    @LastModifiedBy
+    @Column(name = "updated_by", length = 255)
+    private String updatedBy;
+
     @PrePersist
     public void onCreate() {
         this.createdAt = LocalDateTime.now(ZoneOffset.UTC);
         if (this.status == null) {
             this.status = SeatStatus.AVAILABLE;
         }
+    }
+
+    @PreUpdate
+    public void onUpdate() {
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     public enum SeatStatus {
