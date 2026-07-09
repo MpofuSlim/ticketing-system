@@ -2,6 +2,9 @@ package com.innbucks.userservice.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.springframework.data.annotation.CreatedBy;
+import org.springframework.data.annotation.LastModifiedBy;
+import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -17,6 +20,7 @@ import java.util.UUID;
         uniqueConstraints = @UniqueConstraint(
                 name = "uq_team_member_event",
                 columnNames = {"team_member_user_uuid", "event_id"}))
+@EntityListeners(AuditingEntityListener.class)
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -42,10 +46,29 @@ public class TeamMemberEventAssignment {
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
+    private LocalDateTime updatedAt;
+
+    /** Acting principal (user_uuid or JWT email) that created this assignment,
+     *  auto-stamped by JPA auditing. Mirrors assignedByOrganizerUuid for the
+     *  common case; set uniformly across audited entities. */
+    @CreatedBy
+    @Column(name = "created_by", updatable = false, length = 255)
+    private String createdBy;
+
+    /** Acting principal on the last update (JPA auditing). */
+    @LastModifiedBy
+    @Column(name = "updated_by", length = 255)
+    private String updatedBy;
+
     @PrePersist
     void onCreate() {
         if (createdAt == null) {
             createdAt = LocalDateTime.now(ZoneOffset.UTC);
         }
+    }
+
+    @PreUpdate
+    void stampUpdatedAt() {
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 }
