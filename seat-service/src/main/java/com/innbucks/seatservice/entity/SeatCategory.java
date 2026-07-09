@@ -2,6 +2,9 @@ package com.innbucks.seatservice.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.springframework.data.annotation.CreatedBy;
+import org.springframework.data.annotation.LastModifiedBy;
+import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -10,6 +13,7 @@ import java.util.UUID;
 
 @Entity
 @Table(name = "seat_categories")
+@EntityListeners(AuditingEntityListener.class)
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -45,6 +49,17 @@ public class SeatCategory {
 
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+
+    /** Actor (organizer uuid, or JWT email fallback) that created this row,
+     *  auto-stamped by JPA auditing. See JpaAuditingConfig. */
+    @CreatedBy
+    @Column(name = "created_by", updatable = false, length = 255)
+    private String createdBy;
+
+    /** Actor that last updated this row (JPA auditing; equals createdBy on INSERT). */
+    @LastModifiedBy
+    @Column(name = "updated_by", length = 255)
+    private String updatedBy;
 
     @PrePersist
     public void onCreate() {
