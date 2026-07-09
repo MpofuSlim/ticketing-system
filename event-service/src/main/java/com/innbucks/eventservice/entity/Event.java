@@ -2,12 +2,16 @@ package com.innbucks.eventservice.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.springframework.data.annotation.CreatedBy;
+import org.springframework.data.annotation.LastModifiedBy;
+import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
 
 @Entity
+@EntityListeners(AuditingEntityListener.class)
 // The legacy email-based tenant_id column and its (tenant_id, title, venue,
 // start_date_time) unique constraint were dropped in V8 once the backfill of
 // tenant_user_uuid completed. The duplicate-create guard now lives at the
@@ -107,6 +111,22 @@ public class Event {
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;
+
+    /**
+     * Stable {@code user_uuid} (or the JWT subject/email when a token carries no
+     * uuid claim) of the principal that created this row — auto-stamped by JPA
+     * auditing on INSERT, never updated. See {@code JpaAuditingConfig}. Null for
+     * legacy rows and any system/unauthenticated write.
+     */
+    @CreatedBy
+    @Column(name = "created_by", updatable = false, length = 255)
+    private String createdBy;
+
+    /** Principal that last updated this row, auto-stamped by JPA auditing on
+     *  every UPDATE (and set equal to {@code createdBy} on INSERT). */
+    @LastModifiedBy
+    @Column(name = "updated_by", length = 255)
+    private String updatedBy;
 
     @PrePersist
     public void onCreate() {
