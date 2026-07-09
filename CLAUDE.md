@@ -324,10 +324,13 @@ staged rollout, NOT a code-only PR**):
 > service(s) whose code changed.** This is a standing expectation — don't make
 > the operator ask.
 
-The ZW cell runs on single-node **k3s** on the EC2 box (`10.0.146.246`). The
-Release workflow's `Deploy to EC2` job is broken (SSH) and is a legacy
-docker-compose deploy anyway, so **deploys are manual via `kubectl`** until that
-job is fixed or removed. After a merge, the routine on the box is:
+The ZW cell runs on single-node **k3s** on the EC2 box (`10.0.146.246`), so
+**deploys are manual via `kubectl`**. (The Release workflow used to carry a
+`Deploy to EC2` job — a legacy docker-compose-over-SSH deploy that predated the
+k3s migration and failed on every run at "Prepare SSH". It has been **removed**;
+the Release workflow now ends at build → scan → push → attest, which is all we
+need since `kubectl` pulls the freshly-pushed `:latest` image.) After a merge,
+the routine on the box is:
 
 ```sh
 git -C ~/ticketing-system pull
@@ -345,8 +348,8 @@ kubectl -n ticketing rollout status  deployment/<service>
   `unknown flag: --all` and nothing restarts. To roll the whole fleet use:
   `kubectl -n ticketing get deploy -o name | xargs kubectl -n ticketing rollout restart`
 - A restart only helps once the new image is pushed: confirm the merge commit's
-  `Build, scan, push (<service>)` job in the **Release** workflow is green (the
-  `Deploy to EC2` job failing is expected and unrelated).
+  `Build, scan, push (<service>)` job in the **Release** workflow is green before
+  rolling.
 - Verify through the edge after the rollout — e.g. an unauthenticated call to a
   secured endpoint returns `401` (new image present) rather than `404` (old).
 
