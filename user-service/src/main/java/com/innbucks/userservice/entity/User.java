@@ -3,6 +3,9 @@ package com.innbucks.userservice.entity;
 import com.innbucks.userservice.security.MfaSecretConverter;
 import jakarta.persistence.*;
 import lombok.*;
+import org.springframework.data.annotation.CreatedBy;
+import org.springframework.data.annotation.LastModifiedBy;
+import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -13,6 +16,7 @@ import java.util.UUID;
 
 @Entity
 @Table(name = "users")
+@EntityListeners(AuditingEntityListener.class)
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -139,6 +143,21 @@ public class User {
     @Column(updatable = false)
     private LocalDateTime createdAt = LocalDateTime.now(ZoneOffset.UTC);
 
+    private LocalDateTime updatedAt;
+
+    /** Acting principal's user_uuid (or JWT email fallback) that created this
+     *  account — auto-stamped by JPA auditing (see JpaAuditingConfig). Null for
+     *  self-registration / system writes with no authenticated principal. */
+    @CreatedBy
+    @Column(name = "created_by", updatable = false, length = 255)
+    private String createdBy;
+
+    /** Acting principal on the last update (e.g. the admin who activated / reset
+     *  this account); null when the update came from an unauthenticated flow. */
+    @LastModifiedBy
+    @Column(name = "updated_by", length = 255)
+    private String updatedBy;
+
     // Monotonically increasing per-user counter ("session epoch"). Every
     // access JWT carries the value at mint time; JwtFilter rejects tokens
     // whose claim is stale relative to the DB. /auth/login bumps this in
@@ -228,6 +247,11 @@ public class User {
         if (userUuid == null) {
             userUuid = UUID.randomUUID();
         }
+    }
+
+    @PreUpdate
+    void stampUpdatedAt() {
+        this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
     public enum Role {
