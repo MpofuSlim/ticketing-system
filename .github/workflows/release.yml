@@ -37,6 +37,15 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
+      # Throttle concurrent OIDC id-token requests. When all matrix legs hit
+      # GitHub's identity-token endpoint at once, the attestation step below
+      # intermittently fails ("error retrieving identity token / no tokens
+      # available") — with 8 legs we saw ~4 fail per run. Capping parallelism
+      # halves the contention; paired with the retry on the attestation step
+      # for defence in depth. Release is a post-merge pipeline, so the extra
+      # wall-clock of running in waves is an acceptable trade for a green,
+      # fully-attested build.
+      max-parallel: 4
       matrix:
         service:
           - discovery-server
@@ -149,81 +158,29 @@ jobs:
       # the runner's OIDC identity and stored in GitHub (no external public
       # transparency log). Lets anyone verify an image digest was built by THIS
       # repo's workflow: `gh attestation verify oci://ghcr.io/<owner>/<svc>@<digest>`.
+      #
+      # Retry wrapper: fetching the OIDC identity token intermittently fails
+      # under matrix concurrency ("error retrieving identity token / no tokens
+      # available"). The first attempt runs with continue-on-error so a
+      # transient blip doesn't fail the job outright; the second attempt (only
+      # when the first failed) refetches the token and near-always succeeds.
+      # The RETRY step has NO continue-on-error, so a genuine attestation
+      # failure still fails the job — the OWASP A08 provenance guarantee is
+      # preserved, not weakened.
       - name: Attest build provenance
+        id: attest
         if: github.event_name != 'pull_request'
+        continue-on-error: true
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
 
-  deploy:
-    name: Deploy to EC2
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
-        || github.event_name == 'workflow_dispatch'
-    concurrency:
-      group: ec2-deploy
-      cancel-in-progress: false
-
-    steps:
-      - name: Checkout (for docker-compose.yml + scripts/)
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-
-      - name: Prepare SSH
-        run: |
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
-
-      - name: Sync compose + scripts to EC2
-        run: |
-          rsync -avz --delete \
-            --exclude='.env' \
-            --exclude='.DS_Store' \
-            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no" \
-            docker-compose.yml scripts/ \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}:/home/${{ secrets.EC2_USER }}/superApp/
-
-      - name: Pull pinned images + bring the stack up
-        run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
-            ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
-            "GHCR_TOKEN='${{ secrets.GITHUB_TOKEN }}' \
-             GHCR_USER='${{ github.actor }}' \
-             IMAGE_TAG='sha-${{ github.sha }}' \
-             bash -s" <<'EOF'
-            set -euo pipefail
-
-            docker network inspect innbucks-shared >/dev/null 2>&1 \
-              || docker network create innbucks-shared
-
-            cd ~/superApp
-            if [ ! -f .env ]; then
-              echo "::error::.env missing on EC2 — create ~/superApp/.env first"
-              exit 1
-            fi
-
-            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-
-            export IMAGE_TAG
-            echo "Pulling images at tag $IMAGE_TAG ..."
-            docker compose --profile payments pull
-
-            echo "Restarting stack ..."
-            docker compose --profile payments up -d --no-build --remove-orphans --wait
-
-            docker logout ghcr.io
-
-            echo
-            echo "Final state:"
-            docker compose --profile payments ps
-          EOF
-
-      - name: Wipe SSH key from the runner
-        if: always()
-        run: rm -f ~/.ssh/deploy_key
+      - name: Attest build provenance (retry on transient OIDC failure)
+        if: github.event_name != 'pull_request' && steps.attest.outcome == 'failure'
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true
