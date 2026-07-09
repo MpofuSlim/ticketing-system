@@ -250,6 +250,45 @@ class EventControllerTest {
     }
 
     @Test
+    void createEvent_withGifBanner_isRejected() throws Exception {
+        MockMultipartFile eventPart = new MockMultipartFile(
+                "event", "event.json", MediaType.APPLICATION_JSON_VALUE,
+                objectMapper.writeValueAsBytes(sampleRequest("Concert With Gif", EventCategory.CONCERT)));
+
+        // "GIF8" magic bytes with an honestly-declared image/gif content type —
+        // rejected by the content-type allowlist (GIF is not an accepted banner format).
+        byte[] gifBytes = {0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x00, 0x00};
+        MockMultipartFile bannerPart = new MockMultipartFile(
+                "eventBanner", "banner.gif", "image/gif", gifBytes);
+
+        mockMvc.perform(multipart("/events").file(eventPart).file(bannerPart)
+                        .with(jwtAuth("tenant-99", ORGANIZER_99, "EVENT_ORGANIZER"))
+                        .requestAttr("jwtCountry", "Zimbabwe"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message", containsString("JPG, PNG, or WEBP")));
+    }
+
+    @Test
+    void createEvent_withGifBytesSmuggledAsPng_isRejected() throws Exception {
+        MockMultipartFile eventPart = new MockMultipartFile(
+                "event", "event.json", MediaType.APPLICATION_JSON_VALUE,
+                objectMapper.writeValueAsBytes(sampleRequest("Concert With Fake Png", EventCategory.CONCERT)));
+
+        // GIF payload under a lying image/png header — the content-type allowlist
+        // passes, so this pins the magic-byte check: the GIF signature must no
+        // longer be recognised as a supported image.
+        byte[] gifBytes = {0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x00, 0x00};
+        MockMultipartFile bannerPart = new MockMultipartFile(
+                "eventBanner", "banner.png", MediaType.IMAGE_PNG_VALUE, gifBytes);
+
+        mockMvc.perform(multipart("/events").file(eventPart).file(bannerPart)
+                        .with(jwtAuth("tenant-99", ORGANIZER_99, "EVENT_ORGANIZER"))
+                        .requestAttr("jwtCountry", "Zimbabwe"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message", containsString("valid image file")));
+    }
+
+    @Test
     void updateEvent_persistsChangesToDatabase() throws Exception {
         Event saved = eventRepository.save(Event.builder()
                 .tenantUserUuid(ORGANIZER_1)

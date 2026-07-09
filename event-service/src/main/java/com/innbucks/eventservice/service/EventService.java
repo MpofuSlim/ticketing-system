@@ -40,8 +40,11 @@ import java.util.UUID;
 public class EventService {
 
     private static final long MAX_BANNER_BYTES = 10L * 1024 * 1024; // 10 MB
+    // GIF is deliberately NOT accepted: banners are static marketing images and
+    // animated GIFs are rejected as a product decision — don't re-add it here
+    // without also restoring the GIF magic-byte branch in isSupportedImageSignature.
     private static final Set<String> ALLOWED_BANNER_CONTENT_TYPES = Set.of(
-            "image/jpeg", "image/png", "image/gif", "image/webp"
+            "image/jpeg", "image/png", "image/webp"
     );
 
     // OWASP A03: allowlist of sortable properties = exactly the persistent
@@ -594,11 +597,11 @@ public class EventService {
     private static void applyBanner(Event event, MultipartFile file) {
         if (file == null || file.isEmpty()) return;
         if (file.getSize() > MAX_BANNER_BYTES) {
-            throw new BadRequestException("That image is too large. Please use one under 5 MB.");
+            throw new BadRequestException("That image is too large. Please use one under 10 MB.");
         }
         String contentType = file.getContentType();
         if (contentType == null || !ALLOWED_BANNER_CONTENT_TYPES.contains(contentType.toLowerCase())) {
-            throw new BadRequestException("Please upload a JPG, PNG, GIF, or WEBP image.");
+            throw new BadRequestException("Please upload a JPG, PNG, or WEBP image.");
         }
         byte[] bytes;
         try {
@@ -615,15 +618,15 @@ public class EventService {
         // magic-byte signature before we store (and later serve) it — this rejects
         // an HTML/script payload smuggled under an image/* header.
         if (!isSupportedImageSignature(bytes)) {
-            throw new BadRequestException("Please upload a valid image file (JPG, PNG, GIF, or WEBP).");
+            throw new BadRequestException("Please upload a valid image file (JPG, PNG, or WEBP).");
         }
         event.setBannerImage(bytes);
         event.setBannerContentType(contentType.toLowerCase());
     }
 
-    // Magic-byte sniff for the four banner formats we allow. Signature-only (no
-    // full image decode) — enough to reject non-image payloads without pulling
-    // in an image library.
+    // Magic-byte sniff for the three banner formats we allow (GIF is rejected —
+    // see ALLOWED_BANNER_CONTENT_TYPES). Signature-only (no full image decode) —
+    // enough to reject non-image payloads without pulling in an image library.
     private static boolean isSupportedImageSignature(byte[] b) {
         if (b == null) {
             return false;
@@ -638,12 +641,6 @@ public class EventService {
                 && (b[0] & 0xFF) == 0x89 && (b[1] & 0xFF) == 0x50 && (b[2] & 0xFF) == 0x4E
                 && (b[3] & 0xFF) == 0x47 && (b[4] & 0xFF) == 0x0D && (b[5] & 0xFF) == 0x0A
                 && (b[6] & 0xFF) == 0x1A && (b[7] & 0xFF) == 0x0A) {
-            return true;
-        }
-        // GIF: 47 49 46 38 ("GIF8")
-        if (b.length >= 4
-                && (b[0] & 0xFF) == 0x47 && (b[1] & 0xFF) == 0x49 && (b[2] & 0xFF) == 0x46
-                && (b[3] & 0xFF) == 0x38) {
             return true;
         }
         // WEBP: bytes 0-3 "RIFF" (52 49 46 46) AND bytes 8-11 "WEBP" (57 45 42 50)
