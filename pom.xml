@@ -39,7 +39,7 @@
              leak), CVE-2026-43513 (HIGH, LockOutRealm case-sensitivity). 11.0.22
              is the fix-line. Drop this override on the next Boot upgrade if the
              BOM has caught up. -->
-        <tomcat.version>11.0.23</tomcat.version>
+        <tomcat.version>11.0.24</tomcat.version>
         <!-- postgres JDBC 42.7.10 (pinned by Boot 4.0.6's BOM) has CVE-2026-42198
              (HIGH): client-side DoS via malicious SCRAM-SHA-256 response. 42.7.11
              fixes it. Drop on Boot upgrade once BOM catches up. -->
