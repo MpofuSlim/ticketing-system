@@ -43,7 +43,7 @@
         <!-- postgres JDBC 42.7.10 (pinned by Boot 4.0.6's BOM) has CVE-2026-42198
              (HIGH): client-side DoS via malicious SCRAM-SHA-256 response. 42.7.11
              fixes it. Drop on Boot upgrade once BOM catches up. -->
-        <postgresql.version>42.7.12</postgresql.version>
+        <postgresql.version>42.7.13</postgresql.version>
         <!-- netty pulled in by api-gateway (Spring Cloud Gateway), user-service
              (WebFlux DNS resolver) and reactor-netty paths in other services.
              4.2.14.Final has four HIGH CVEs (all reported by Trivy 2026-06-09):
