@@ -353,6 +353,34 @@ kubectl -n ticketing rollout status  deployment/<service>
 - Verify through the edge after the rollout — e.g. an unauthenticated call to a
   secured endpoint returns `401` (new image present) rather than `404` (old).
 
+### Rolling back
+
+There is no rollback workflow — a version rollback on k3s is a one-liner. The
+Release build pushes every image as both `:latest` and `:sha-<commit>`, so roll
+a service back by pinning it to a known-good SHA tag:
+
+```sh
+kubectl -n ticketing set image deployment/<service> \
+  '*=ghcr.io/mpofuslim/<service>:sha-<good-commit>'
+kubectl -n ticketing rollout status deployment/<service>
+```
+
+Return to the tip by re-pinning `:latest` (then restart to re-pull it):
+
+```sh
+kubectl -n ticketing set image deployment/<service> '*=ghcr.io/mpofuslim/<service>:latest'
+kubectl -n ticketing rollout restart deployment/<service>
+```
+
+- `kubectl rollout undo` does **not** help here: every revision runs the mutable
+  `:latest`, so undo reverts the pod spec but not the image version — pin the SHA
+  tag instead.
+- The old `Rollback` GitHub Action was a docker-compose-over-SSH deploy from
+  before the k3s migration (it SSH'd to the box and ran `docker compose ... up`,
+  failing at "Prepare SSH" the same way the retired `Deploy to EC2` job did). It
+  never worked against the k3s cell and has been **removed**; use the `kubectl`
+  procedure above.
+
 ## InnBucks Merchant API — the ticket-payment rail (2D code)
 
 **Ticket payments (`POST /payments` in payment-service) run EXCLUSIVELY on
