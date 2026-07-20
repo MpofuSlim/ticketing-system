@@ -532,10 +532,24 @@ logging:
 # plain config, NOT X-Forwarded-Prefix: the gateway applies that header to
 # route matching (every route 404s), which is why the edge must not send it.
 # Empty default = domain-root behavior (local dev, direct NodePort access).
+#
+# Do NOT set springdoc.swagger-ui.path or .config-url here. Hard-won facts,
+# pinned by SwaggerPublicPrefixTest.uiEntryPointServesDirectlyWithoutRedirect:
+#   1. The UI entry point must serve 200 DIRECTLY. A server-side redirect can
+#      never carry the public prefix through the stripping edge, so the
+#      browser lands on the domain root and loops. Overriding `path` (and/or
+#      setting `config-url`) installs springdoc's 302-redirecting welcome
+#      handler at /swagger-ui/index.html — with a broken doubled target, no
+#      less. With the defaults, /swagger-ui/index.html is a plain 200 and only
+#      the unused /swagger-ui.html alias redirects.
+#   2. config-url wouldn't help anyway: the swagger-initializer.js springdoc
+#      serves hardcodes configUrl "/v3/api-docs/swagger-config" (root-
+#      relative) regardless of the property. That single root-relative fetch
+#      is instead routed at the EDGE (an nginx `location /v3/api-docs` to the
+#      gateway); the config it returns carries the prefixed urls below, and
+#      everything downstream (docs, servers, Try-it-out) stays prefix-correct.
 springdoc:
   swagger-ui:
-    path: /swagger-ui/index.html
-    config-url: ${PUBLIC_API_PREFIX:}/v3/api-docs/swagger-config
     urls:
       - name: user-service
         url: ${PUBLIC_API_PREFIX:}/user-service/v3/api-docs
