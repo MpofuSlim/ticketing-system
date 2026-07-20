@@ -156,12 +156,16 @@ class AuthControllerIT {
     }
 
     @Test
-    void login_validCredentials_onMfaExemptChannel_returnsJwt() throws Exception {
-        // System users are required to do MFA on WEB/MOBILE, but USSD/WhatsApp
-        // are exempt (no TOTP surface on those rails). On an exempt channel the
-        // happy path is a single normal AuthResponseDTO with real tokens — this
-        // pins that credential->JWT contract end to end. The WEB enrolment path
-        // is covered by the two tests below.
+    void login_systemUser_ussdHeaderFromPublicEdge_cannotBypassMfa() throws Exception {
+        // Security regression guard (A07): USSD/WhatsApp are MFA-exempt channels,
+        // but the channel arrives on the PUBLIC /auth/login as the untrusted
+        // X-Auth-Channel header. A password-holding attacker must NOT be able to
+        // send `X-Auth-Channel: USSD` to skip the second factor on a privileged
+        // account — the public edge clamps the channel to WEB (see
+        // AuthChannel.forPublicLogin), so a system user still gets the enrolment
+        // challenge (mfaEnrollmentRequired + mfaToken), NOT a JWT. A genuine
+        // USSD/WhatsApp login would originate from a trusted server-side adapter,
+        // not this header.
         RegisterPayload register = baseSystemPayload("user1@example.com", "0777000001", "loyalty");
 
         mockMvc.perform(post("/auth/register")
@@ -180,12 +184,9 @@ class AuthControllerIT {
                         .content(objectMapper.writeValueAsString(login)))
                 .andExpect(status().isOk())
                 .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
-                .andExpect(jsonPath("$.code").value("200 OK"))
-                .andExpect(jsonPath("$.data.token", not(blankOrNullString())))
-                .andExpect(jsonPath("$.data.refreshToken", not(blankOrNullString())))
-                .andExpect(jsonPath("$.data.email").value("user1@example.com"))
-                .andExpect(jsonPath("$.data.roles[0]").value("MERCHANT_ADMIN"))
-                .andExpect(jsonPath("$.data.mfaRequired").value(false));
+                .andExpect(jsonPath("$.data.mfaEnrollmentRequired").value(true))
+                .andExpect(jsonPath("$.data.mfaToken", not(blankOrNullString())))
+                .andExpect(jsonPath("$.data.token").doesNotExist());
     }
 
     @Test
@@ -292,17 +293,9 @@ class AuthControllerIT {
         approve("user3@example.com");
 
         // This test is about refresh-token rotation + reuse detection, not MFA,
-        // so grab the initial token pair on an MFA-exempt channel to keep the
-        // setup focused.
-        LoginPayload login = new LoginPayload();
-        login.identifier = "user3@example.com";
-        login.password = KNOWN_LOGIN_PASSWORD;
-        String loginBody = mockMvc.perform(post("/auth/login")
-                        .header("X-Auth-Channel", "USSD")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(login)))
-                .andExpect(status().isOk())
-                .andReturn().getResponse().getContentAsString();
+        // so grab the initial token pair by completing the system user's WEB MFA
+        // enrolment (USSD can no longer bypass MFA from the public edge).
+        String loginBody = enrolSystemUserOnWeb("user3@example.com");
         String originalRefresh = objectMapper.readTree(loginBody).at("/data/refreshToken").asText();
         assertThat(originalRefresh).isNotBlank();
 

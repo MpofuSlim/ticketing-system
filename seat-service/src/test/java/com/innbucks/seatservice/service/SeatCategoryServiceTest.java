@@ -153,6 +153,45 @@ class SeatCategoryServiceTest {
     }
 
     @Test
+    void createCategory_rejectsNonHttpImageUrl_withBadRequest() {
+        // A03/A10: a javascript:/data:/relative/scheme-relative value must not
+        // survive ingest (stored-XSS / open-redirect / SSRF-rebasing fuel).
+        for (String bad : List.of(
+                "javascript:alert(1)",
+                "data:text/html;base64,PHNjcmlwdD4=",
+                "//evil.example.com/x.png",
+                "/assets/section-a.png",
+                "ftp://cdn.example.com/x.png",
+                "not a url")) {
+            SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+            SeatRepository seatRepo = mock(SeatRepository.class);
+            SeatCategoryService service = service(catRepo, seatRepo);
+
+            assertThrows(com.innbucks.seatservice.exception.BadRequestException.class,
+                    () -> service.createCategory(request(UUID.randomUUID(), "VIP",
+                            List.of(section("A", 2, bad)))),
+                    "expected 400 for image URL: " + bad);
+            // The bad request must be rejected BEFORE any seats are persisted.
+            verify(seatRepo, never()).saveAll(anyList());
+        }
+    }
+
+    @Test
+    void createCategory_acceptsAbsoluteHttpAndHttpsImageUrl() {
+        for (String ok : List.of(
+                "https://cdn.innbucks.co.zw/sections/vip-a.png",
+                "http://cdn.example.com/a.png",
+                "HTTPS://Cdn.Example.com/a.png")) {
+            SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+            SeatRepository seatRepo = mock(SeatRepository.class);
+            SeatCategoryService service = service(catRepo, seatRepo);
+
+            assertDoesNotThrow(() -> service.createCategory(request(UUID.randomUUID(), "VIP",
+                    List.of(section("A", 1, ok)))), "expected accept for image URL: " + ok);
+        }
+    }
+
+    @Test
     void getCategoriesByEvent_recoversSectionImage_fromSeats() {
         SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
         SeatRepository seatRepo = mock(SeatRepository.class);

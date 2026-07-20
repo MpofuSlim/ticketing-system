@@ -245,8 +245,11 @@ public class AuthController {
         // country from an email); JWT affinity catches them post-auth.
         cellAffinityChecker.requireDomesticIfMsisdn(request.getIdentifier());
         loginRateLimiter.checkLogin(request.getIdentifier(), clientIp(httpRequest));
+        // Untrusted, client-supplied header — clamp to WEB/MOBILE so a public
+        // caller cannot assert USSD/WhatsApp to switch the second factor off
+        // (MfaPolicy treats those channels as MFA-free). See AuthChannel.forPublicLogin.
         com.innbucks.userservice.security.AuthChannel channel =
-                com.innbucks.userservice.security.AuthChannel.parseOrDefault(authChannel);
+                com.innbucks.userservice.security.AuthChannel.forPublicLogin(authChannel);
         log.info("Received login request identifier={} hasDeviceId={} hasTrustToken={} channel={}",
                 com.innbucks.userservice.util.MsisdnMasking.mask(request.getIdentifier()),
                 deviceId != null && !deviceId.isBlank(),

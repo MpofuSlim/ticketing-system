@@ -28,7 +28,8 @@ public class SectionSeatConfigDTO {
     @Schema(example = "https://cdn.innbucks.co.zw/sections/vip-a.png", nullable = true,
             description = "Optional URL of an image for this section (e.g. a seat-map thumbnail the FE "
                     + "renders next to the section). Host the image elsewhere and pass the link; max 1024 "
-                    + "characters. Echoed back on reads.")
+                    + "characters. Must be an absolute http(s) URL (a relative path or a "
+                    + "javascript:/data: value is rejected with 400). Echoed back on reads.")
     @Size(max = 1024, message = "Section image URL must be at most 1024 characters")
     private String imageUrl;
 }

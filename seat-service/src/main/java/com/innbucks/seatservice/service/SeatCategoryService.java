@@ -16,6 +16,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.net.URI;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -119,8 +120,9 @@ public class SeatCategoryService {
         for (SectionSeatConfigDTO sectionConfig : request.getSections()) {
             String sectionLabel = HtmlSanitizer.stripAll(sectionConfig.getSection().trim().toUpperCase(Locale.ROOT));
             // Optional per-section image, stamped on every seat in the section so
-            // the read paths can recover it by section. Blank → null (no image).
-            String sectionImageUrl = normalizeImageUrl(sectionConfig.getImageUrl());
+            // the read paths can recover it by section. Blank → null (no image);
+            // non-blank is validated to an absolute http(s) URL at ingest.
+            String sectionImageUrl = validateAndNormalizeImageUrl(sectionConfig.getImageUrl());
             for (int num = 1; num <= sectionConfig.getSeatCount(); num++) {
                 seats.add(Seat.builder()
                         .category(category)
@@ -250,6 +252,45 @@ public class SeatCategoryService {
         }
         String trimmed = imageUrl.trim();
         return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    /**
+     * Trim + validate a section image URL on the WRITE path. Blank → null (no
+     * image); a non-blank value MUST be an absolute {@code http(s)} URL with a
+     * host, else a 400.
+     *
+     * <p>A03/A10: this value is stored verbatim and echoed straight back to
+     * clients (and a future seat-map preview could dereference it), so a
+     * {@code javascript:}/{@code data:} payload (stored-XSS fuel) or a
+     * relative/scheme-relative value (open-redirect / SSRF-rebasing fuel) must
+     * not survive ingest. Reads still go through the trim-only
+     * {@link #normalizeImageUrl}, so any pre-existing row is never re-validated
+     * on the way out — this stricter gate applies to new writes only.
+     */
+    private static String validateAndNormalizeImageUrl(String imageUrl) {
+        String normalized = normalizeImageUrl(imageUrl);
+        if (normalized == null) {
+            return null;
+        }
+        final URI uri;
+        try {
+            uri = URI.create(normalized);
+        } catch (IllegalArgumentException badUri) {
+            throw invalidSectionImageUrl();
+        }
+        String scheme = uri.getScheme();
+        String host = uri.getHost();
+        boolean absoluteHttp = ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))
+                && host != null && !host.isBlank();
+        if (!absoluteHttp) {
+            throw invalidSectionImageUrl();
+        }
+        return normalized;
+    }
+
+    private static BadRequestException invalidSectionImageUrl() {
+        return new BadRequestException(
+                "Section image URL must be an absolute http(s) URL (e.g. https://cdn.example.com/section.png).");
     }
 
     private List<SectionSeatConfigDTO> sectionsForCategory(UUID categoryId) {
