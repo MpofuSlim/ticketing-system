@@ -436,59 +436,12 @@ services:
       retries: 10
       start_period: 45s
 
-  loyalty-service:
-    build:
-      context: .
-      dockerfile: loyalty-service/Dockerfile
-    image: ghcr.io/${GHCR_OWNER:-mpofuslim}/loyalty-service:${IMAGE_TAG:-dev}
-    container_name: innbucks-loyalty-service
-    restart: unless-stopped
-    mem_limit: 640m
-    mem_reservation: 448m
-    depends_on:
-      discovery-server:
-        condition: service_healthy
-      postgres:
-        condition: service_healthy
-    environment:
-      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
-      INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
-      INNBUCKS_CURRENCY: ${INNBUCKS_CURRENCY:-USD}
-      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
-      TRACING_ENABLED: ${TRACING_ENABLED:-false}
-      OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
-      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/,http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD}@discovery-server-2:8761/eureka/
-      DB_URL: jdbc:postgresql://postgres:5432/loyalty_service
-      DB_USERNAME: ${POSTGRES_USER:-postgres}
-      DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
-      DB_DRIVER: org.postgresql.Driver
-      HIBERNATE_DIALECT: org.hibernate.dialect.PostgreSQLDialect
-      JPA_DDL_AUTO: validate
-      FLYWAY_ENABLED: "true"
-      # Redis: the shared logout-token denylist (added for loyalty-service in #314)
-      # needs the cell's Redis. Without these it defaults to localhost:6379 and the
-      # health check fails the container.
-      REDIS_HOST: redis
-      REDIS_PORT: "6379"
-      REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}
-      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
-      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
-      LOYALTY_VOUCHER_SECRET: ${LOYALTY_VOUCHER_SECRET:?set LOYALTY_VOUCHER_SECRET in .env (see .env.example)}
-      LOYALTY_QR_SECRET: ${LOYALTY_QR_SECRET:?set LOYALTY_QR_SECRET in .env (see .env.example)}
-      # Notification gateways for the guest-checkout congratulations message
-      # (SMS primary via the InnBucks core gateway, WhatsApp fallback). Same
-      # creds/URLs booking-service + payment-service receive.
-      WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-http://localhost:8089}
-      WHATSAPP_API_KEY: ${WHATSAPP_API_KEY:?set WHATSAPP_API_KEY in .env}
-      INNBUCKS_GATEWAY_URL: ${INNBUCKS_GATEWAY_URL:-http://10.0.155.69:8088}
-    ports:
-      - "127.0.0.1:8086:8086"
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8086/actuator/health"]
-      interval: 10s
-      timeout: 3s
-      retries: 10
-      start_period: 45s
+  # loyalty-service was extracted to its own repository (MpofuSlim/InnRewards).
+  # It is no longer built from this repo. To run it alongside this stack for
+  # local cross-service work, clone InnRewards and `docker compose up` there (it
+  # publishes the same ghcr.io/mpofuslim/loyalty-service image and registers as
+  # `loyalty-service` on this stack's Eureka), or pull the published image
+  # directly. The gateway's /loyalty/** route resolves it by Eureka name.
 
   api-gateway:
     build:

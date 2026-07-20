@@ -87,12 +87,8 @@ updates:
     labels: ["dependencies", "docker"]
     commit-message: { prefix: "docker(payment-service)" }
 
-  - package-ecosystem: "docker"
-    directory: "/loyalty-service"
-    schedule: { interval: "weekly", day: "monday", time: "08:00", timezone: "Etc/UTC" }
-    open-pull-requests-limit: 3
-    labels: ["dependencies", "docker"]
-    commit-message: { prefix: "docker(loyalty-service)" }
+  # loyalty-service was extracted to MpofuSlim/InnRewards, which carries its
+  # own Dockerfile Dependabot config.
 
   - package-ecosystem: "github-actions"
     directory: "/"

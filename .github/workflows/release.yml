@@ -55,7 +55,6 @@ jobs:
           - seat-service
           - booking-service
           - payment-service
-          - loyalty-service
 
     steps:
       # Third-party actions pinned to immutable commit SHAs (OWASP A08 —
