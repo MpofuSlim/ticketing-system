@@ -478,6 +478,16 @@ security:
 server:
   port: ${SERVER_PORT:8080}
   shutdown: graceful
+  # The public edge (Cloudflare/nginx on dtx.innbucks.co.zw) now mounts this
+  # system under a path prefix (/foundry) shared with other systems on the
+  # domain, stripping the prefix before proxying and declaring it via
+  # X-Forwarded-Prefix (plus the standard X-Forwarded-Proto/Host). `framework`
+  # makes WebFlux honor those headers when constructing URIs, so anything that
+  # builds an absolute or root-relative URL (springdoc/Swagger links, redirect
+  # Locations) reflects the public https://.../foundry/... form instead of the
+  # stripped internal one. No effect on route matching, and a no-op when the
+  # headers are absent (local dev, direct calls).
+  forward-headers-strategy: framework
 
 eureka:
   client:
