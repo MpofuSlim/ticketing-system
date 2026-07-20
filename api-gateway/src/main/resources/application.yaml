@@ -524,22 +524,31 @@ logging:
   pattern:
     level: "%5p [${spring.application.name:-},%X{traceId:-},%X{spanId:-},%X{correlationId:-}]"
 
+# PUBLIC_API_PREFIX: the path prefix the public edge mounts this system under
+# (dtx.innbucks.co.zw hosts several systems; ours lives at /foundry). nginx
+# STRIPS the prefix before proxying, so routes/services never see it — but the
+# browser-side Swagger UI fetches these URLs from the PUBLIC origin, so they
+# must carry the prefix to survive the round-trip through the edge. Deliberately
+# plain config, NOT X-Forwarded-Prefix: the gateway applies that header to
+# route matching (every route 404s), which is why the edge must not send it.
+# Empty default = domain-root behavior (local dev, direct NodePort access).
 springdoc:
   swagger-ui:
     path: /swagger-ui/index.html
+    config-url: ${PUBLIC_API_PREFIX:}/v3/api-docs/swagger-config
     urls:
       - name: user-service
-        url: /user-service/v3/api-docs
+        url: ${PUBLIC_API_PREFIX:}/user-service/v3/api-docs
       - name: event-service
-        url: /event-service/v3/api-docs
+        url: ${PUBLIC_API_PREFIX:}/event-service/v3/api-docs
       - name: seat-service
-        url: /seat-service/v3/api-docs
+        url: ${PUBLIC_API_PREFIX:}/seat-service/v3/api-docs
       - name: booking-service
-        url: /booking-service/v3/api-docs
+        url: ${PUBLIC_API_PREFIX:}/booking-service/v3/api-docs
       - name: payment-service
-        url: /payment-service/v3/api-docs
+        url: ${PUBLIC_API_PREFIX:}/payment-service/v3/api-docs
       - name: loyalty-service
-        url: /loyalty-service/v3/api-docs
+        url: ${PUBLIC_API_PREFIX:}/loyalty-service/v3/api-docs
 
 # HTTP Basic credentials guarding the Swagger UI above (see
 # SwaggerSecurityConfig). With a blank password Swagger fails closed under the
