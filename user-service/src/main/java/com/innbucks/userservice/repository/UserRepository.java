@@ -15,6 +15,14 @@ public interface UserRepository extends JpaRepository<User, Long> {
     List<User> findByUserUuidIn(Collection<UUID> userUuids);
     Optional<User> findByPhoneNumber(String phoneNumber);
     boolean existsByEmail(String email);
+    /**
+     * Case-insensitive email existence check. Registration uses this so a
+     * case-variant of an already-registered address ({@code John@Example.com}
+     * vs {@code john@example.com}) is rejected as a duplicate — the
+     * {@code uk_users_email} constraint (V1) is case-sensitive, so the exact
+     * {@link #existsByEmail(String)} alone would let the variant through.
+     */
+    boolean existsByEmailIgnoreCase(String email);
     boolean existsByPhoneNumber(String phoneNumber);
     /**
      * Composite uniqueness check matching the {@code uk_users_phone_country}
