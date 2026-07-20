@@ -276,16 +276,21 @@ public class SeatCategoryService {
         try {
             uri = URI.create(normalized);
         } catch (IllegalArgumentException badUri) {
-            throw new BadRequestException(
-                    "Section image URL must be an absolute http(s) URL (e.g. https://cdn.example.com/section.png).");
+            throw invalidSectionImageUrl();
         }
         String scheme = uri.getScheme();
-        boolean httpScheme = "http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme);
-        if (!httpScheme || uri.getHost() == null || uri.getHost().isBlank()) {
-            throw new BadRequestException(
-                    "Section image URL must be an absolute http(s) URL (e.g. https://cdn.example.com/section.png).");
+        String host = uri.getHost();
+        boolean absoluteHttp = ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme))
+                && host != null && !host.isBlank();
+        if (!absoluteHttp) {
+            throw invalidSectionImageUrl();
         }
         return normalized;
+    }
+
+    private static BadRequestException invalidSectionImageUrl() {
+        return new BadRequestException(
+                "Section image URL must be an absolute http(s) URL (e.g. https://cdn.example.com/section.png).");
     }
 
     private List<SectionSeatConfigDTO> sectionsForCategory(UUID categoryId) {
