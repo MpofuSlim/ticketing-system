@@ -387,21 +387,36 @@ Non-negotiables when touching this integration:
 
 ## Veengu API reference — source of truth for payment integrations
 
-**The canonical spec for every veengu-backed payment integration in this
-repo is `docs/api/veengu-openapi.json`.** That file is the official
-**Veengu Platform Frontend API v3.1.0** (168 endpoints, 50 tags, contact
-`dev@veengu.com`, sandbox base URL `https://demo.veengu.cloud/api/`). Any
-new payment, transfer, beneficiary, top-up, statement, KYC or
-profile-related client we add to talk to veengu MUST be modelled against
-this spec — not against ad-hoc field names from a chat or a Postman
-export. If the wire shape we observe in production diverges, update the
-JSON in-tree and ship the change in the same PR as the client change so
-the contract test (per the WireMock convention above) is anchored to a
-versioned source.
+**Two veengu API surfaces are pinned in-tree, and every veengu-backed
+client MUST be modelled against the matching one** — not against ad-hoc
+field names from a chat or a Postman export. If the wire shape we observe
+in production diverges, update the JSON in-tree and ship the change in the
+same PR as the client change so the contract test (per the WireMock
+convention above) is anchored to a versioned source.
 
-The spec is ~1 MB — too large to inline anywhere or grep usefully. Use
+1. **`docs/api/veengu-openapi.json`** — the official **Veengu Platform
+   Frontend API v3.1.0** (168 endpoints, 50 tags, contact `dev@veengu.com`,
+   sandbox base URL `https://demo.veengu.cloud/api/`). The customer-session
+   surface: what a logged-in app user does (P2P, purchase, top-up,
+   statements, own KYC).
+2. **`docs/api/veengu-integration-openapi.json`** — the official **Veengu
+   Platform Integration API v3.1.0** (212 endpoints, 91 schemas, partner
+   sandbox `https://veengu.cloud/integration/api`; instance base URL is
+   provided by the platform tenant). The **B2B/server-to-server partner
+   surface**: onboarding individuals/businesses, accounts/cards/
+   beneficiaries, remittance & cash payout, incoming/outgoing/direct
+   transfers, payroll, debit orders, reversals, callbacks. Auth is
+   per-request headers — `V-Tenant` (tenant code) + `V-Access-Token`
+   (partner API key; separate test/live keys), both provisioned by the
+   platform tenant at partner onboarding (NOT self-service); optional
+   `V-Profile` (act on behalf of a profile UUID discovered at
+   registration/search) and `V-Api-Channel` (defaults to `MIDDLEWARE`).
+   The access token can create financial transactions — env-var/secret
+   custody only, never committed, per the A02 rules above.
+
+Each spec is ~1 MB — too large to inline anywhere or grep usefully. Use
 the snippets below (same shape as `OradianMiddleware/docs/oradian-swagger.json`)
-to inspect it:
+to inspect either file (swap the filename):
 
 ```bash
 # List endpoints under a tag (try: "P2P", "Purchase", "Payout", "Top-Up account",
