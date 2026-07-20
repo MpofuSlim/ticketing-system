@@ -3,6 +3,7 @@ package com.innbucks.eventservice.service;
 import com.innbucks.eventservice.client.BookingGateway;
 import com.innbucks.eventservice.client.BookingNotificationGateway;
 import com.innbucks.eventservice.client.OrganizerGateway;
+import com.innbucks.eventservice.client.OrganizerNotificationGateway;
 import com.innbucks.eventservice.client.SeatCategoryGateway;
 import com.innbucks.eventservice.dto.*;
 import com.innbucks.eventservice.entity.Event;
@@ -70,6 +71,7 @@ public class EventService {
     private final BookingGateway bookingGateway;
     private final OrganizerGateway organizerGateway;
     private final BookingNotificationGateway bookingNotificationGateway;
+    private final OrganizerNotificationGateway organizerNotificationGateway;
 
     public Page<EventResponseDTO> getAllActiveEvents(
             LocalDateTime from,
@@ -878,6 +880,9 @@ public class EventService {
         event.setRejected(false);
         Event saved = eventRepository.save(event);
         log.info("Event approved eventId={} tenantUserUuid={}", eventId, saved.getTenantUserUuid());
+        // Tell the owning organizer their event has been approved (email-first,
+        // WhatsApp fallback via user-service). Best-effort — never fails approval.
+        organizerNotificationGateway.notifyEventApproved(saved.getTenantUserUuid(), saved.getTitle());
         return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
     }
 
