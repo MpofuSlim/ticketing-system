@@ -103,4 +103,36 @@ class MfaPolicyTest {
         // An unknown / typo value falls back to WEB — strictest-by-default.
         assertThat(AuthChannel.parseOrDefault("desktop")).isEqualTo(AuthChannel.WEB);
     }
+
+    // ---- forPublicLogin: the untrusted-edge clamp (MFA-bypass regression) ----
+
+    @Test
+    void forPublicLogin_honoursOnlyAppChannels() {
+        assertThat(AuthChannel.forPublicLogin("WEB")).isEqualTo(AuthChannel.WEB);
+        assertThat(AuthChannel.forPublicLogin(" mobile ")).isEqualTo(AuthChannel.MOBILE);
+    }
+
+    @Test
+    void forPublicLogin_collapsesMfaFreeChannelsToWeb() {
+        // The whole point: a public caller must NOT be able to assert USSD /
+        // WhatsApp (which MfaPolicy treats as second-factor-free) to skip MFA.
+        assertThat(AuthChannel.forPublicLogin("USSD")).isEqualTo(AuthChannel.WEB);
+        assertThat(AuthChannel.forPublicLogin("ussd")).isEqualTo(AuthChannel.WEB);
+        assertThat(AuthChannel.forPublicLogin("WHATSAPP")).isEqualTo(AuthChannel.WEB);
+    }
+
+    @Test
+    void forPublicLogin_blankAndUnknown_defaultToWeb() {
+        assertThat(AuthChannel.forPublicLogin(null)).isEqualTo(AuthChannel.WEB);
+        assertThat(AuthChannel.forPublicLogin("")).isEqualTo(AuthChannel.WEB);
+        assertThat(AuthChannel.forPublicLogin("desktop")).isEqualTo(AuthChannel.WEB);
+    }
+
+    @Test
+    void forPublicLogin_systemUserOnUssdHeader_stillChallenged() {
+        // End-to-end intent: even with X-Auth-Channel: USSD, a system user's
+        // login (parsed via the public clamp) still trips the MFA gate.
+        AuthChannel clamped = AuthChannel.forPublicLogin("USSD");
+        assertThat(policy.shouldChallenge(user(false, User.Role.SUPER_ADMIN), clamped)).isTrue();
+    }
 }
