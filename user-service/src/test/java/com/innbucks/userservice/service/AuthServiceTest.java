@@ -109,7 +109,7 @@ class AuthServiceTest {
         TenantProfileRepository tenantRepo = mock(TenantProfileRepository.class);
         PasswordEncoder encoder = mock(PasswordEncoder.class);
         JwtUtil jwt = mock(JwtUtil.class);
-        when(userRepo.existsByEmail(any())).thenReturn(false);
+        when(userRepo.existsByEmailIgnoreCase(any())).thenReturn(false);
         when(userRepo.existsByPhoneNumber(any())).thenReturn(false);
         when(encoder.encode(any())).thenReturn("hashed");
 
@@ -140,7 +140,7 @@ class AuthServiceTest {
         TenantProfileRepository tenantRepo = mock(TenantProfileRepository.class);
         PasswordEncoder encoder = mock(PasswordEncoder.class);
         JwtUtil jwt = mock(JwtUtil.class);
-        when(userRepo.existsByEmail(any())).thenReturn(false);
+        when(userRepo.existsByEmailIgnoreCase(any())).thenReturn(false);
         when(userRepo.existsByPhoneNumber(any())).thenReturn(false);
         when(encoder.encode(any())).thenReturn("hashed");
 
@@ -162,7 +162,7 @@ class AuthServiceTest {
         TenantProfileRepository tenantRepo = mock(TenantProfileRepository.class);
         PasswordEncoder encoder = mock(PasswordEncoder.class);
         JwtUtil jwt = mock(JwtUtil.class);
-        when(userRepo.existsByEmail(any())).thenReturn(false);
+        when(userRepo.existsByEmailIgnoreCase(any())).thenReturn(false);
         when(userRepo.existsByPhoneNumber(any())).thenReturn(false);
         when(encoder.encode(any())).thenReturn("hashed");
 
@@ -190,7 +190,7 @@ class AuthServiceTest {
         TenantProfileRepository tenantRepo = mock(TenantProfileRepository.class);
         PasswordEncoder encoder = mock(PasswordEncoder.class);
         JwtUtil jwt = mock(JwtUtil.class);
-        when(userRepo.existsByEmail(any())).thenReturn(false);
+        when(userRepo.existsByEmailIgnoreCase(any())).thenReturn(false);
         when(userRepo.existsByPhoneNumber(any())).thenReturn(false);
         when(encoder.encode(any())).thenReturn("hashed");
 
@@ -224,7 +224,7 @@ class AuthServiceTest {
         TenantProfileRepository tenantRepo = mock(TenantProfileRepository.class);
         PasswordEncoder encoder = mock(PasswordEncoder.class);
         JwtUtil jwt = mock(JwtUtil.class);
-        when(userRepo.existsByEmail(any())).thenReturn(false);
+        when(userRepo.existsByEmailIgnoreCase(any())).thenReturn(false);
         when(userRepo.existsByPhoneNumber(any())).thenReturn(false);
         when(encoder.encode(any())).thenReturn("hashed");
 
@@ -266,7 +266,7 @@ class AuthServiceTest {
     @Test
     void register_rejectsDuplicateEmail() {
         UserRepository userRepo = mock(UserRepository.class);
-        when(userRepo.existsByEmail("dup@example.com")).thenReturn(true);
+        when(userRepo.existsByEmailIgnoreCase("dup@example.com")).thenReturn(true);
         AuthService service = newService(userRepo, mock(TenantProfileRepository.class),
                 mock(PasswordEncoder.class), mock(JwtUtil.class));
 

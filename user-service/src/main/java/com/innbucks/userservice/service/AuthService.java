@@ -230,7 +230,10 @@ public class AuthService implements ApplicationEventPublisherAware {
                     "We don't have a role available for the services you selected.");
         }
 
-        if (userRepository.existsByEmail(request.getEmail())) {
+        // Case-insensitive so a case-variant of an existing address is caught
+        // (uk_users_email is case-sensitive, so an exact check alone would let
+        // John@Example.com register alongside john@example.com).
+        if (userRepository.existsByEmailIgnoreCase(request.getEmail())) {
             log.warn("Registration failed, email already registered email={}", request.getEmail());
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Email already registered");
         }
@@ -281,6 +284,15 @@ public class AuthService implements ApplicationEventPublisherAware {
 
         if (request.isBusiness()) {
             log.info("Business account, creating tenant profile userId={}", user.getId());
+            String bpoNumber = HtmlSanitizer.stripAll(request.getBpoNumber());
+            // BPO / tax number is unique across registered businesses — reject a
+            // second business claiming the same number (checked on the sanitised
+            // value, the same form that gets stored).
+            if (bpoNumber != null && !bpoNumber.isBlank()
+                    && tenantProfileRepository.existsByBpoNumber(bpoNumber)) {
+                log.warn("Registration failed, BPO number already registered userId={}", user.getId());
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "BPO number already registered");
+            }
             TenantProfile profile = TenantProfile.builder()
                     .user(user)
                     // Strip HTML from the free-text business name before persisting
@@ -288,7 +300,7 @@ public class AuthService implements ApplicationEventPublisherAware {
                     .businessName(HtmlSanitizer.stripAll(request.getBusinessName()))
                     .businessAddress(HtmlSanitizer.stripAll(request.getBusinessAddress()))
                     .businessEmail(request.getBusinessEmail())
-                    .bpoNumber(HtmlSanitizer.stripAll(request.getBpoNumber()))
+                    .bpoNumber(bpoNumber)
                     .build();
             tenantProfileRepository.save(profile);
             log.info("Tenant profile saved userId={}", user.getId());
