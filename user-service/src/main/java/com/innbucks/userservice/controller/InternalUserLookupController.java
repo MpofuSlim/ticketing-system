@@ -1,8 +1,10 @@
 package com.innbucks.userservice.controller;
 
 import com.innbucks.userservice.dto.ApiResult;
+import com.innbucks.userservice.dto.InternalNotifyRequestDTO;
 import com.innbucks.userservice.dto.UserContactDTO;
 import com.innbucks.userservice.entity.User;
+import com.innbucks.userservice.notification.UserNotificationDispatcher;
 import com.innbucks.userservice.repository.UserRepository;
 import io.swagger.v3.oas.annotations.Hidden;
 import io.swagger.v3.oas.annotations.Operation;
@@ -12,6 +14,8 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -41,11 +45,14 @@ public class InternalUserLookupController {
 
     private final UserRepository userRepository;
     private final InternalTokenAuthorizer tokenAuthorizer;
+    private final UserNotificationDispatcher notificationDispatcher;
 
     public InternalUserLookupController(UserRepository userRepository,
-                                        InternalTokenAuthorizer tokenAuthorizer) {
+                                        InternalTokenAuthorizer tokenAuthorizer,
+                                        UserNotificationDispatcher notificationDispatcher) {
         this.userRepository = userRepository;
         this.tokenAuthorizer = tokenAuthorizer;
+        this.notificationDispatcher = notificationDispatcher;
     }
 
     @GetMapping("/{userUuid}/contact")
@@ -69,6 +76,43 @@ public class InternalUserLookupController {
                 })
                 .orElseGet(() -> {
                     log.debug("Internal contact lookup found no user for user_uuid={}", userUuid);
+                    return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                            .body(ApiResult.error(HttpStatus.NOT_FOUND, "User not found"));
+                });
+    }
+
+    @PostMapping("/{userUuid}/notify")
+    @Operation(summary = "(S2S) Send a best-effort notification to a user by user_uuid",
+            description = "Resolves the user's channels and sends the supplied subject + message "
+                    + "email-first, WhatsApp-fallback. Used by event-service to tell an organizer their "
+                    + "event was approved. Fire-and-forget: returns 202 immediately and delivery runs "
+                    + "async/best-effort. Requires X-Internal-Token; 404 when the uuid resolves to no user, "
+                    + "400 when subject or message is blank.")
+    public ResponseEntity<?> notifyUser(
+            @RequestHeader(value = "X-Internal-Token", required = false) String token,
+            @PathVariable UUID userUuid,
+            @RequestBody(required = false) InternalNotifyRequestDTO body,
+            HttpServletRequest request) {
+        // Token check FIRST so the endpoint stays fail-closed before it reveals
+        // anything about the body or the user.
+        if (!tokenAuthorizer.authorized(token, request)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+        }
+        if (body == null || body.subject() == null || body.subject().isBlank()
+                || body.message() == null || body.message().isBlank()) {
+            return ResponseEntity.badRequest()
+                    .body(ApiResult.error(HttpStatus.BAD_REQUEST, "subject and message are required"));
+        }
+        return userRepository.findByUserUuid(userUuid)
+                .<ResponseEntity<?>>map(user -> {
+                    notificationDispatcher.dispatch(
+                            user.getEmail(), user.getPhoneNumber(), body.subject(), body.message());
+                    log.debug("Internal notify dispatched user_uuid={}", userUuid);
+                    return ResponseEntity.accepted()
+                            .body(ApiResult.ok("Notification queued", null));
+                })
+                .orElseGet(() -> {
+                    log.debug("Internal notify found no user for user_uuid={}", userUuid);
                     return ResponseEntity.status(HttpStatus.NOT_FOUND)
                             .body(ApiResult.error(HttpStatus.NOT_FOUND, "User not found"));
                 });
