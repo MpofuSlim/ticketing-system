@@ -151,6 +151,10 @@ app:
   booking:
     hold-ttl-minutes: ${BOOKING_HOLD_TTL_MINUTES:5}
     expiration-poll-interval-ms: ${BOOKING_EXPIRATION_POLL_MS:30000}
+    # Pre-event WhatsApp reminder (EventReminderScheduler): sent once per
+    # CONFIRMED booking when its event starts within this window. Hourly cron.
+    reminder-window-hours: ${BOOKING_REMINDER_WINDOW_HOURS:24}
+    reminder-cron: ${BOOKING_REMINDER_CRON:0 10 * * * *}
   idempotency:
     store: ${IDEMPOTENCY_STORE:memory}
   events:

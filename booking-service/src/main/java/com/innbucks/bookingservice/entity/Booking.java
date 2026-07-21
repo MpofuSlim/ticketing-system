@@ -83,6 +83,13 @@ public class Booking {
     // hold model existed.
     private LocalDateTime expiresAt;
 
+    // When the pre-event reminder was sent (or consumed) for this CONFIRMED
+    // booking. Set on the reminder attempt — success or failure — so the
+    // hourly EventReminderScheduler never retries into spam; also set
+    // silently for bookings whose event already started. Null = not yet
+    // considered. UTC, like every LocalDateTime here.
+    private LocalDateTime reminderSentAt;
+
     // Idempotency guard for the event-service availability release. Set true
     // after a successful PATCH /events/{id}/availability/release as part of
     // reversing a CONFIRMED booking; the reverse handler short-circuits the

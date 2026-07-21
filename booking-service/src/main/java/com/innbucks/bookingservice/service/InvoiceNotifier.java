@@ -56,6 +56,44 @@ public class InvoiceNotifier {
         }
     }
 
+    /**
+     * Emails the organizer that a previously-issued invoice is now OVERDUE
+     * (dunning). Same contract as {@link #notifyIssued}: strictly best-effort,
+     * any failure is a log line — the status flip is already committed.
+     */
+    public void notifyOverdue(EventInvoice invoice) {
+        try {
+            String to = resolveOrganizerEmail(invoice.getOrganizerUuid());
+            if (to == null || to.isBlank()) {
+                log.info("No business email for organizer={}; overdue notice for {} not emailed",
+                        invoice.getOrganizerUuid(), invoice.getInvoiceNumber());
+                return;
+            }
+            email.sendEmail(to, overdueSubject(invoice), overdueBody(invoice),
+                    "INVOICE-OVERDUE-" + invoice.getId());
+            log.info("Overdue notice for invoice {} emailed to organizer={}",
+                    invoice.getInvoiceNumber(), invoice.getOrganizerUuid());
+        } catch (RuntimeException ex) {
+            log.warn("Failed emailing overdue notice for invoice {} (invoice still OVERDUE): {}",
+                    invoice.getInvoiceNumber(), ex.getMessage());
+        }
+    }
+
+    private static String overdueSubject(EventInvoice i) {
+        return "Overdue: SwiftInn commission invoice " + i.getInvoiceNumber()
+                + " (" + i.getCurrency() + " " + i.getTotalAmount().toPlainString() + ")";
+    }
+
+    private static String overdueBody(EventInvoice i) {
+        return "Hi,\n\n"
+                + "Your SwiftInn commission invoice " + i.getInvoiceNumber() + " for "
+                + i.getCurrency() + " " + i.getTotalAmount().toPlainString()
+                + " is now past its due date and has been marked overdue.\n\n"
+                + "Please arrange payment at your earliest convenience, or contact "
+                + "SwiftInn support if you believe this is in error or have already paid.\n\n"
+                + "Thank you,\nSwiftInn";
+    }
+
     private String resolveOrganizerEmail(UUID organizerUuid) {
         ApiResult<List<TenantContactDTO>> res =
                 userServiceClient.lookupTenants(new TenantLookupRequest(List.of(organizerUuid)), internalToken);
