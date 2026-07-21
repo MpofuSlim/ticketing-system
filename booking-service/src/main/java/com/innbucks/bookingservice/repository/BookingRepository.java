@@ -36,4 +36,17 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
           AND b.expiresAt < :now
     """)
     List<Booking> findExpiredPending(@Param("now") LocalDateTime now);
+
+    // EventReminderScheduler scan: which events still have CONFIRMED bookings
+    // that were never considered for the pre-event reminder. Bounded by the
+    // partial index idx_bookings_reminder_pending (V18).
+    @Query("""
+            select distinct b.eventId from Booking b
+            where b.status = com.innbucks.bookingservice.entity.Booking.BookingStatus.CONFIRMED
+              and b.reminderSentAt is null
+            """)
+    List<UUID> findEventIdsWithUnremindedConfirmed();
+
+    List<Booking> findByEventIdAndStatusAndReminderSentAtIsNull(
+            UUID eventId, Booking.BookingStatus status);
 }

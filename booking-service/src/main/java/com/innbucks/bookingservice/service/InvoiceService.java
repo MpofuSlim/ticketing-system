@@ -257,12 +257,17 @@ public class InvoiceService {
         return toResponse(invoices.save(invoice), true);
     }
 
-    /** Flip every unpaid, past-due ISSUED invoice to OVERDUE. Returns the count flipped. */
+    /**
+     * Flip every unpaid, past-due ISSUED invoice to OVERDUE. Returns the
+     * flipped invoices so the scheduler can email each organizer their
+     * overdue notice AFTER this transaction commits (a notification failure
+     * must never roll back the status flip).
+     */
     @Transactional
-    public int flagOverdue(LocalDateTime asOf) {
+    public List<EventInvoice> flagOverdue(LocalDateTime asOf) {
         List<EventInvoice> due = invoices.findIssuedPastDue(asOf);
         if (due.isEmpty()) {
-            return 0;
+            return List.of();
         }
         for (EventInvoice invoice : due) {
             invoice.setStatus(InvoiceStatus.OVERDUE);
@@ -270,7 +275,7 @@ public class InvoiceService {
         invoices.saveAll(due);
         metrics.incOverdueFlagged(due.size());
         log.info("Flagged {} invoice(s) OVERDUE", due.size());
-        return due.size();
+        return due;
     }
 
     // ------------------------------------------------------------------

@@ -36,10 +36,14 @@ import java.util.UUID;
 public class InvoiceScheduler {
 
     private final InvoiceService invoiceService;
+    private final InvoiceNotifier invoiceNotifier;
     private final BillingConfigService billingConfig;
 
-    public InvoiceScheduler(InvoiceService invoiceService, BillingConfigService billingConfig) {
+    public InvoiceScheduler(InvoiceService invoiceService,
+                            InvoiceNotifier invoiceNotifier,
+                            BillingConfigService billingConfig) {
         this.invoiceService = invoiceService;
+        this.invoiceNotifier = invoiceNotifier;
         this.billingConfig = billingConfig;
     }
 
@@ -76,13 +80,19 @@ public class InvoiceScheduler {
         }
     }
 
-    /** Flip unpaid, past-due ISSUED invoices to OVERDUE so the dashboard + alerts see them. */
+    /**
+     * Flip unpaid, past-due ISSUED invoices to OVERDUE so the dashboard +
+     * alerts see them, then email each organizer their overdue notice
+     * (dunning). Notifications run after the flip has committed and are
+     * best-effort per invoice — one failed email never blocks the rest.
+     */
     @Scheduled(cron = "${app.invoicing.overdue-cron:0 0 2 * * *}", zone = "UTC")
     @SchedulerLock(name = "InvoiceScheduler.sweepOverdue", lockAtMostFor = "PT10M", lockAtLeastFor = "PT30S")
     public void sweepOverdue() {
-        int flagged = invoiceService.flagOverdue(LocalDateTime.now(ZoneOffset.UTC));
-        if (flagged > 0) {
-            log.info("Overdue sweep flagged {} invoice(s)", flagged);
+        var flagged = invoiceService.flagOverdue(LocalDateTime.now(ZoneOffset.UTC));
+        if (!flagged.isEmpty()) {
+            log.info("Overdue sweep flagged {} invoice(s)", flagged.size());
+            flagged.forEach(invoiceNotifier::notifyOverdue);
         }
     }
 }

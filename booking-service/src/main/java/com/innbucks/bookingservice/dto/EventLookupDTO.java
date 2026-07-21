@@ -5,6 +5,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.LocalDateTime;
 import java.util.UUID;
 
 // Minimal mirror of event-service's EventResponseDTO. We capture `tenantUserUuid`
@@ -26,4 +27,7 @@ public class EventLookupDTO {
     private UUID tenantUserUuid;
     // Event display name, used as `eventName` on the WhatsApp e-ticket QR message.
     private String title;
+    // Event start, used by EventReminderScheduler to find events starting within
+    // the reminder window. LocalDateTime in UTC, same as event-service stores it.
+    private LocalDateTime startDateTime;
 }
