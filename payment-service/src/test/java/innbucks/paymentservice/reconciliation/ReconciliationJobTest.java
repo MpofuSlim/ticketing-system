@@ -56,6 +56,7 @@ class ReconciliationJobTest {
                 mock(PaymentRecordService.class), mock(BookingServiceClient.class),
                 mock(InnbucksApiClient.class), metrics,
                 mock(innbucks.paymentservice.service.CodePaymentResolutionService.class),
+                mock(UnconfirmedPaymentAlerter.class),
                 FIVE_MINUTES, batchSize);
     }
 
@@ -66,6 +67,7 @@ class ReconciliationJobTest {
         return new ReconciliationJob(mock(TransactionRepository.class), payments,
                 records, bookings, mock(InnbucksApiClient.class), metrics,
                 new innbucks.paymentservice.service.CodePaymentResolutionService(records, bookings, metrics),
+                mock(UnconfirmedPaymentAlerter.class),
                 FIVE_MINUTES, 100);
     }
 
@@ -79,6 +81,7 @@ class ReconciliationJobTest {
         return new ReconciliationJob(mock(TransactionRepository.class), payments,
                 records, bookings, innbucksApi, metrics,
                 new innbucks.paymentservice.service.CodePaymentResolutionService(records, bookings, metrics),
+                mock(UnconfirmedPaymentAlerter.class),
                 FIVE_MINUTES, 100);
     }
 

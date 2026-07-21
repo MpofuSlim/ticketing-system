@@ -155,6 +155,13 @@ public class Payment {
     @Column(name = "completed_at")
     private Instant completedAt;
 
+    /** When the one-time stuck-payment alert (operator email + customer
+     *  WhatsApp) was sent for a COMPLETED_UNCONFIRMED row that keeps failing
+     *  confirmation. Stamped on the attempt by UnconfirmedPaymentAlerter so
+     *  the nightly reconciler never re-alerts. Null = never alerted. */
+    @Column(name = "operator_alerted_at")
+    private Instant operatorAlertedAt;
+
     @PrePersist
     void onCreate() {
         if (id == null) {

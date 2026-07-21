@@ -57,6 +57,25 @@ oradian-middleware:
   connect-timeout-ms: ${ORADIAN_MIDDLEWARE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${ORADIAN_MIDDLEWARE_READ_TIMEOUT_MS:10000}
 
+# InnBucks public notification API (email) — same platform + BANK_API_* creds
+# as the payment rail; mirrors booking-service's innbucks-notify block. Used by
+# UnconfirmedPaymentAlerter's one-time operator email for stuck payments.
+innbucks-notify:
+  base-url: ${BANK_API_URL:https://staging.innbucks.co.zw}
+  api-key: ${BANK_API_KEY:}
+  username: ${BANK_API_USERNAME:}
+  password: ${BANK_API_PASSWORD:}
+  connect-timeout-ms: ${BANK_API_CONNECT_TIMEOUT_MS:3000}
+  read-timeout-ms: ${BANK_API_READ_TIMEOUT_MS:20000}
+  token-ttl: ${BANK_API_TOKEN_TTL:PT8M}
+
+# Operator inbox for stuck-payment alerts (paid-but-unconfirmable queue).
+# Blank = operator email disabled (customer WhatsApp still sent); the metric
+# payment.payments.unconfirmed_retry{outcome=still_failing} remains the
+# dashboard signal either way.
+payment:
+  operator-alert-email: ${OPERATOR_ALERT_EMAIL:}
+
 whatsapp:
   base-url: ${WHATSAPP_GATEWAY_URL:http://localhost:8089}
   api-key: ${WHATSAPP_API_KEY:change-me-whatsapp-api-key}
