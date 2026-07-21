@@ -43,18 +43,66 @@ public class OrganizerNotificationGateway {
     }
 
     /**
-     * Notify {@code organizerUuid} that their event was approved. No-op on a null
-     * uuid; never throws.
+     * Notify {@code organizerUuid} that their event was approved (un-rejected).
+     * No-op on a null uuid; never throws.
      */
     public void notifyEventApproved(UUID organizerUuid, String eventTitle) {
         if (organizerUuid == null) {
             return;
         }
-        String title = (eventTitle == null || eventTitle.isBlank()) ? "Your event" : eventTitle.trim();
         String subject = "Your event has been approved";
-        String message = "Your event \"" + title
+        String message = "Your event \"" + safeTitle(eventTitle)
                 + "\" has been approved and is now ready to publish on InnBucks.";
         notify(organizerUuid, subject, message);
+    }
+
+    /**
+     * Notify {@code organizerUuid} that their event went live (activated /
+     * published). No-op on a null uuid; never throws.
+     */
+    public void notifyEventActivated(UUID organizerUuid, String eventTitle) {
+        if (organizerUuid == null) {
+            return;
+        }
+        String subject = "Your event is now live";
+        String message = "Your event \"" + safeTitle(eventTitle)
+                + "\" is now live on InnBucks and visible to customers.";
+        notify(organizerUuid, subject, message);
+    }
+
+    /**
+     * Notify {@code organizerUuid} that their event was deactivated
+     * (unpublished). No-op on a null uuid; never throws.
+     */
+    public void notifyEventDeactivated(UUID organizerUuid, String eventTitle) {
+        if (organizerUuid == null) {
+            return;
+        }
+        String subject = "Your event has been deactivated";
+        String message = "Your event \"" + safeTitle(eventTitle)
+                + "\" has been deactivated and is no longer visible to customers on InnBucks. "
+                + "You can re-activate it from your dashboard when you're ready.";
+        notify(organizerUuid, subject, message);
+    }
+
+    /**
+     * Notify {@code organizerUuid} that an administrator rejected their event.
+     * No-op on a null uuid; never throws.
+     */
+    public void notifyEventRejected(UUID organizerUuid, String eventTitle) {
+        if (organizerUuid == null) {
+            return;
+        }
+        String subject = "Your event was not approved";
+        String message = "Your event \"" + safeTitle(eventTitle)
+                + "\" was reviewed by an administrator and has not been approved, so it is not "
+                + "visible to customers on InnBucks. Please review the event details or contact "
+                + "support for more information.";
+        notify(organizerUuid, subject, message);
+    }
+
+    private static String safeTitle(String eventTitle) {
+        return (eventTitle == null || eventTitle.isBlank()) ? "Your event" : eventTitle.trim();
     }
 
     private void notify(UUID userUuid, String subject, String message) {
@@ -69,8 +117,9 @@ public class OrganizerNotificationGateway {
             String url = userServiceBaseUrl + "/users/internal/" + userUuid + "/notify";
             restTemplate.exchange(url, HttpMethod.POST, request, Void.class);
         } catch (RuntimeException e) {
-            // Best-effort: a notification failure must never fail the approval.
-            log.warn("Organizer approval notification failed userUuid={} cause={}", userUuid, e.toString());
+            // Best-effort: a notification failure must never fail the action it
+            // accompanies (approve/activate/deactivate/reject).
+            log.warn("Organizer notification failed userUuid={} cause={}", userUuid, e.toString());
         }
     }
 }

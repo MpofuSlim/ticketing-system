@@ -512,6 +512,167 @@ class EventServiceTest {
         verify(repo, never()).save(any());
     }
 
+    // ── Organizer lifecycle notifications (email-first via user-service) ──
+    // Contract: notify the OWNING organizer exactly when the flag actually
+    // changes — never on an idempotent re-click, never on a refused action.
+
+    private static EventService serviceWithNotify(EventRepository repo, OrganizerNotificationGateway orgNotify) {
+        return new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class),
+                mock(BookingGateway.class), mock(OrganizerGateway.class),
+                mock(BookingNotificationGateway.class), orgNotify);
+    }
+
+    @Test
+    void activateEvent_onRealActivation_notifiesOwningOrganizer() {
+        EventRepository repo = mock(EventRepository.class);
+        OrganizerNotificationGateway orgNotify = mock(OrganizerNotificationGateway.class);
+        EventService service = serviceWithNotify(repo, orgNotify);
+
+        UUID eventId = UUID.randomUUID();
+        Event existing = baseEvent(eventId, TENANT_1);
+        existing.setActive(false); // draft -> live is a real state change
+        when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
+        when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.activateEvent(TENANT_1, "ROLE_EVENT_ORGANIZER", eventId);
+
+        verify(orgNotify).notifyEventActivated(TENANT_1, "T");
+    }
+
+    @Test
+    void activateEvent_alreadyActive_doesNotNotify() {
+        EventRepository repo = mock(EventRepository.class);
+        OrganizerNotificationGateway orgNotify = mock(OrganizerNotificationGateway.class);
+        EventService service = serviceWithNotify(repo, orgNotify);
+
+        UUID eventId = UUID.randomUUID();
+        Event existing = baseEvent(eventId, TENANT_1); // active=true via @Builder.Default
+        when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
+        when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.activateEvent(TENANT_1, "ROLE_EVENT_ORGANIZER", eventId);
+
+        verifyNoInteractions(orgNotify);
+    }
+
+    @Test
+    void deactivateEvent_onRealDeactivation_notifiesOwningOrganizer() {
+        EventRepository repo = mock(EventRepository.class);
+        OrganizerNotificationGateway orgNotify = mock(OrganizerNotificationGateway.class);
+        EventService service = serviceWithNotify(repo, orgNotify);
+
+        UUID eventId = UUID.randomUUID();
+        Event existing = baseEvent(eventId, TENANT_1); // live -> unpublished is a real change
+        when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
+        when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        // Admin deactivating another tenant's event still notifies the OWNER.
+        service.deactivateEvent(ADMIN_USER, "ROLE_SUPER_ADMIN", eventId);
+
+        verify(orgNotify).notifyEventDeactivated(TENANT_1, "T");
+    }
+
+    @Test
+    void deactivateEvent_alreadyInactive_doesNotNotify() {
+        EventRepository repo = mock(EventRepository.class);
+        OrganizerNotificationGateway orgNotify = mock(OrganizerNotificationGateway.class);
+        EventService service = serviceWithNotify(repo, orgNotify);
+
+        UUID eventId = UUID.randomUUID();
+        Event existing = baseEvent(eventId, TENANT_1);
+        existing.setActive(false);
+        when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
+        when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.deactivateEvent(TENANT_1, "ROLE_EVENT_ORGANIZER", eventId);
+
+        verifyNoInteractions(orgNotify);
+    }
+
+    @Test
+    void deactivateEvent_unauthorized_doesNotNotify() {
+        EventRepository repo = mock(EventRepository.class);
+        OrganizerNotificationGateway orgNotify = mock(OrganizerNotificationGateway.class);
+        EventService service = serviceWithNotify(repo, orgNotify);
+
+        UUID eventId = UUID.randomUUID();
+        when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(baseEvent(eventId, OWNER_TENANT)));
+
+        assertThrows(RuntimeException.class,
+                () -> service.deactivateEvent(OTHER_TENANT, "ROLE_EVENT_ORGANIZER", eventId));
+
+        verifyNoInteractions(orgNotify);
+        verify(repo, never()).save(any());
+    }
+
+    @Test
+    void rejectEvent_onRealRejection_notifiesOwningOrganizer() {
+        EventRepository repo = mock(EventRepository.class);
+        OrganizerNotificationGateway orgNotify = mock(OrganizerNotificationGateway.class);
+        EventService service = serviceWithNotify(repo, orgNotify);
+
+        UUID eventId = UUID.randomUUID();
+        Event existing = baseEvent(eventId, TENANT_7); // rejected=false -> true is a real change
+        when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
+        when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.rejectEvent(eventId);
+
+        verify(orgNotify).notifyEventRejected(TENANT_7, "T");
+    }
+
+    @Test
+    void rejectEvent_alreadyRejected_doesNotNotify() {
+        EventRepository repo = mock(EventRepository.class);
+        OrganizerNotificationGateway orgNotify = mock(OrganizerNotificationGateway.class);
+        EventService service = serviceWithNotify(repo, orgNotify);
+
+        UUID eventId = UUID.randomUUID();
+        Event existing = baseEvent(eventId, TENANT_7);
+        existing.setRejected(true);
+        existing.setActive(false);
+        when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
+        when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.rejectEvent(eventId);
+
+        verifyNoInteractions(orgNotify);
+    }
+
+    @Test
+    void approveEvent_onRealUnrejection_notifiesOwningOrganizer() {
+        EventRepository repo = mock(EventRepository.class);
+        OrganizerNotificationGateway orgNotify = mock(OrganizerNotificationGateway.class);
+        EventService service = serviceWithNotify(repo, orgNotify);
+
+        UUID eventId = UUID.randomUUID();
+        Event existing = baseEvent(eventId, TENANT_7);
+        existing.setRejected(true);
+        existing.setActive(false);
+        when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
+        when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.approveEvent(eventId);
+
+        verify(orgNotify).notifyEventApproved(TENANT_7, "T");
+    }
+
+    @Test
+    void approveEvent_neverRejected_isNoOpAndDoesNotNotify() {
+        EventRepository repo = mock(EventRepository.class);
+        OrganizerNotificationGateway orgNotify = mock(OrganizerNotificationGateway.class);
+        EventService service = serviceWithNotify(repo, orgNotify);
+
+        UUID eventId = UUID.randomUUID();
+        Event existing = baseEvent(eventId, TENANT_7); // rejected=false already
+        when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
+        when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        service.approveEvent(eventId);
+
+        verifyNoInteractions(orgNotify);
+    }
+
     private Event existingEventFor(UUID eventId) {
         return Event.builder()
                 .eventId(eventId).tenantUserUuid(TENANT_1).title("Jazz Night")

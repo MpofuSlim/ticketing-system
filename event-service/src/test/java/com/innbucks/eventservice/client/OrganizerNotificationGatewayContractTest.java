@@ -74,9 +74,57 @@ class OrganizerNotificationGatewayContractTest {
     }
 
     @Test
-    @DisplayName("guard rail: null organizer uuid makes NO HTTP call")
+    @DisplayName("activated notify: subject says live, message carries the title")
+    void activated_verifiesOutboundContract() {
+        UUID organizer = UUID.randomUUID();
+        wireMock.stubFor(post(urlEqualTo("/users/internal/" + organizer + "/notify"))
+                .willReturn(aResponse().withStatus(202)));
+
+        gateway.notifyEventActivated(organizer, "Pink Fun Run");
+
+        wireMock.verify(postRequestedFor(urlEqualTo("/users/internal/" + organizer + "/notify"))
+                .withHeader("X-Internal-Token", equalTo("test-token"))
+                .withRequestBody(matchingJsonPath("$.subject", equalTo("Your event is now live")))
+                .withRequestBody(matchingJsonPath("$.message", containing("Pink Fun Run"))));
+    }
+
+    @Test
+    @DisplayName("deactivated notify: subject says deactivated, message carries the title")
+    void deactivated_verifiesOutboundContract() {
+        UUID organizer = UUID.randomUUID();
+        wireMock.stubFor(post(urlEqualTo("/users/internal/" + organizer + "/notify"))
+                .willReturn(aResponse().withStatus(202)));
+
+        gateway.notifyEventDeactivated(organizer, "Pink Fun Run");
+
+        wireMock.verify(postRequestedFor(urlEqualTo("/users/internal/" + organizer + "/notify"))
+                .withHeader("X-Internal-Token", equalTo("test-token"))
+                .withRequestBody(matchingJsonPath("$.subject", equalTo("Your event has been deactivated")))
+                .withRequestBody(matchingJsonPath("$.message", containing("Pink Fun Run"))));
+    }
+
+    @Test
+    @DisplayName("rejected notify: subject says not approved, message carries the title")
+    void rejected_verifiesOutboundContract() {
+        UUID organizer = UUID.randomUUID();
+        wireMock.stubFor(post(urlEqualTo("/users/internal/" + organizer + "/notify"))
+                .willReturn(aResponse().withStatus(202)));
+
+        gateway.notifyEventRejected(organizer, "Pink Fun Run");
+
+        wireMock.verify(postRequestedFor(urlEqualTo("/users/internal/" + organizer + "/notify"))
+                .withHeader("X-Internal-Token", equalTo("test-token"))
+                .withRequestBody(matchingJsonPath("$.subject", equalTo("Your event was not approved")))
+                .withRequestBody(matchingJsonPath("$.message", containing("Pink Fun Run"))));
+    }
+
+    @Test
+    @DisplayName("guard rail: null organizer uuid makes NO HTTP call (all four methods)")
     void nullUuid_noNetworkCall() {
         gateway.notifyEventApproved(null, "Summer Concert");
+        gateway.notifyEventActivated(null, "Summer Concert");
+        gateway.notifyEventDeactivated(null, "Summer Concert");
+        gateway.notifyEventRejected(null, "Summer Concert");
 
         wireMock.verify(0, postRequestedFor(urlPathMatching("/users/internal/.*/notify")));
     }
