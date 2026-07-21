@@ -813,9 +813,16 @@ public class EventService {
             throw new ConflictException("This event has been rejected by an administrator and cannot be activated");
         }
 
+        boolean wasActive = event.isActive();
         event.setActive(true);
         Event saved = eventRepository.save(event);
         log.info("Event activated eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
+        // Tell the owning organizer their event is live (email-first, WhatsApp
+        // fallback via user-service). Only on a real state change — a repeated
+        // activate on an already-live event must not re-send. Best-effort.
+        if (!wasActive) {
+            organizerNotificationGateway.notifyEventActivated(saved.getTenantUserUuid(), saved.getTitle());
+        }
         return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
     }
 
@@ -835,9 +842,16 @@ public class EventService {
             throw new ForbiddenException("You are not authorized to deactivate this event");
         }
 
+        boolean wasActive = event.isActive();
         event.setActive(false);
         Event saved = eventRepository.save(event);
         log.info("Event deactivated eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
+        // Tell the owning organizer their event was unpublished (email-first,
+        // WhatsApp fallback via user-service). Only on a real state change —
+        // deactivating an already-inactive event must not re-send. Best-effort.
+        if (wasActive) {
+            organizerNotificationGateway.notifyEventDeactivated(saved.getTenantUserUuid(), saved.getTitle());
+        }
         return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
     }
 
@@ -856,10 +870,17 @@ public class EventService {
                     log.warn("Reject failed, event not found eventId={}", eventId);
                     return new NotFoundException("Event not found");
                 });
+        boolean wasRejected = event.isRejected();
         event.setRejected(true);
         event.setActive(false);
         Event saved = eventRepository.save(event);
         log.info("Event rejected eventId={} tenantUserUuid={}", eventId, saved.getTenantUserUuid());
+        // Tell the owning organizer their event was declined (email-first,
+        // WhatsApp fallback via user-service). Only on a real state change —
+        // re-rejecting an already-rejected event must not re-send. Best-effort.
+        if (!wasRejected) {
+            organizerNotificationGateway.notifyEventRejected(saved.getTenantUserUuid(), saved.getTitle());
+        }
         return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
     }
 
@@ -877,12 +898,17 @@ public class EventService {
                     log.warn("Approve failed, event not found eventId={}", eventId);
                     return new NotFoundException("Event not found");
                 });
+        boolean wasRejected = event.isRejected();
         event.setRejected(false);
         Event saved = eventRepository.save(event);
         log.info("Event approved eventId={} tenantUserUuid={}", eventId, saved.getTenantUserUuid());
         // Tell the owning organizer their event has been approved (email-first,
-        // WhatsApp fallback via user-service). Best-effort — never fails approval.
-        organizerNotificationGateway.notifyEventApproved(saved.getTenantUserUuid(), saved.getTitle());
+        // WhatsApp fallback via user-service). Only on a real state change —
+        // approving a never-rejected event is a documented no-op and must not
+        // send. Best-effort — never fails approval.
+        if (wasRejected) {
+            organizerNotificationGateway.notifyEventApproved(saved.getTenantUserUuid(), saved.getTitle());
+        }
         return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
     }
 
