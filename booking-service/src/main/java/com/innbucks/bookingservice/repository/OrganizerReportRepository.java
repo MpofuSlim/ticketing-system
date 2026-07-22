@@ -4,6 +4,7 @@ import com.innbucks.bookingservice.entity.Booking;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
 import org.springframework.data.repository.query.Param;
+import org.springframework.lang.Nullable;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -44,7 +45,7 @@ public interface OrganizerReportRepository extends Repository<Booking, UUID> {
           AND b.createdAt >= :start AND b.createdAt < :end
         ORDER BY b.createdAt ASC
     """)
-    List<Booking> findConfirmedWithItems(@Param("organizerUuid") UUID organizerUuid,
+    List<Booking> findConfirmedWithItems(@Param("organizerUuid") @Nullable UUID organizerUuid,
                                          @Param("eventId") UUID eventId,
                                          @Param("start") LocalDateTime start,
                                          @Param("end") LocalDateTime end);
@@ -64,7 +65,7 @@ public interface OrganizerReportRepository extends Repository<Booking, UUID> {
           AND (:eventId IS NULL OR b.eventId = :eventId)
           AND b.createdAt >= :start AND b.createdAt < :end
     """)
-    List<Booking> findReversed(@Param("organizerUuid") UUID organizerUuid,
+    List<Booking> findReversed(@Param("organizerUuid") @Nullable UUID organizerUuid,
                                @Param("eventId") UUID eventId,
                                @Param("start") LocalDateTime start,
                                @Param("end") LocalDateTime end);

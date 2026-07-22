@@ -279,6 +279,7 @@ public class OrganizerReportController {
      * re-login rather than silently returning another organizer's (or
      * empty) data.
      */
+    @org.springframework.lang.Nullable
     private UUID resolveScope(Authentication authentication) {
         if (authentication != null && authentication.getAuthorities().stream()
                 .anyMatch(a -> "ROLE_SUPER_ADMIN".equals(a.getAuthority()))) {
