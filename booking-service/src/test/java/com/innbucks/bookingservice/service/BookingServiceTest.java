@@ -1069,7 +1069,7 @@ class BookingServiceTest {
                         .eventId(fx.eventId)
                         .tenantUserUuid(organizerUuid)
                         .build();
-        when(eventClient.getEvent(fx.eventId))
+        when(eventClient.getEventInternal(eq(fx.eventId), any()))
                 .thenReturn(ApiResult.ok("ok", eventLookup));
 
         @SuppressWarnings("unchecked")
@@ -1086,7 +1086,7 @@ class BookingServiceTest {
         service.createBooking(null, 2, "+263770000001", fx.request);
 
         // The lookup MUST run on the guest path.
-        verify(eventClient).getEvent(fx.eventId);
+        verify(eventClient).getEventInternal(eq(fx.eventId), any());
         // And the captured organizer uuid MUST land on the saved booking,
         // so a later scan/ report can resolve to the organizer.
         // createBooking saves the booking more than once (PENDING insert,
@@ -1112,7 +1112,7 @@ class BookingServiceTest {
         RequestFixture fx = request(new BigDecimal("20.00"));
 
         EventServiceClient eventClient = mock(EventServiceClient.class);
-        when(eventClient.getEvent(any())).thenThrow(new RuntimeException("event-service down"));
+        when(eventClient.getEventInternal(any(), any())).thenThrow(new RuntimeException("event-service down"));
 
         @SuppressWarnings("unchecked")
         org.springframework.beans.factory.ObjectProvider<EventServiceClient> provider =

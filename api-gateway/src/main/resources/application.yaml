@@ -185,6 +185,11 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
+            - id: event-internal-deny
+              uri: forward:/__edge_deny__
+              predicates:
+                - Path=/events/internal/**
+
             - id: event-availability-deny
               uri: forward:/__edge_deny__
               predicates:

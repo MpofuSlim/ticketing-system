@@ -21,6 +21,12 @@ public class EventServiceClientFallback implements EventServiceClient {
     }
 
     @Override
+    public ApiResult<EventLookupDTO> getEventInternal(java.util.UUID id, String internalToken) {
+        log.warn("event-service circuit open or call failed (getEventInternal) eventId={}", id);
+        return ApiResult.<EventLookupDTO>builder().code("503").message("event unavailable").data(null).build();
+    }
+
+    @Override
     public ApiResult<AvailabilityResponseDTO> consumeAvailability(java.util.UUID id, int count, String internalToken) {
         log.warn("event-service circuit open or call failed (consumeAvailability) eventId={} count={}",
                 id, count);

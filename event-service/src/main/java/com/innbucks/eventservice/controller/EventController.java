@@ -1454,6 +1454,68 @@ public class EventController {
         return ResponseEntity.ok(ApiResult.ok("Event deleted successfully", null));
     }
 
+    @GetMapping("/internal/{id}")
+    @SecurityRequirements()
+    @Operation(
+            summary = "Get event by id (internal)",
+            description = """
+                    Internal endpoint: sibling services call this to read an event
+                    INCLUDING `tenantUserUuid`, which the public `GET /events/{id}`
+                    strips for anonymous callers so organizer ids can't be
+                    enumerated — and a server-side service call is anonymous.
+                    booking-service uses it for its event-ownership checks (bookings
+                    and scan-report analytics) and to capture the owning organizer
+                    onto new bookings. Draft/rejected events are returned too — an
+                    ownership check must keep working after an event is unpublished.
+
+                    Requires the `X-Internal-Token` shared secret. Missing or wrong
+                    token returns 401. The gateway also blocks /events/internal/**
+                    from the public internet via the event-internal-deny rule; this
+                    controller check is defence in depth.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(
+                    responseCode = "200",
+                    description = "Event returned with tenantUserUuid intact",
+                    content = @Content(
+                            mediaType = "application/json",
+                            examples = @ExampleObject(name = "Internal event lookup", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Event retrieved successfully",
+                                      "data": {
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "tenantUserUuid": "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e",
+                                        "title": "Summer Concert",
+                                        "venue": "Harare Gardens",
+                                        "country": "Zimbabwe",
+                                        "category": "CONCERT",
+                                        "startDateTime": "2026-06-15T19:00:00",
+                                        "endDateTime": "2026-06-15T22:00:00",
+                                        "totalCapacity": 500,
+                                        "availableTickets": 420,
+                                        "active": true
+                                      }
+                                    }
+                                    """)
+                    )
+            ),
+            @ApiResponse(responseCode = "400", description = "Event does not exist or is soft-deleted (handled by the global exception handler today)"),
+            @ApiResponse(responseCode = "401", description = "Missing or invalid X-Internal-Token")
+    })
+    public ResponseEntity<ApiResult<EventResponseDTO>> getEventInternal(
+            @Parameter(description = "Event UUID") @PathVariable UUID id,
+            @RequestHeader(value = "X-Internal-Token", required = false) String internalToken
+    ) {
+        if (!authorizedInternal(internalToken)) {
+            log.warn("Unauthorized GET /events/internal/{} — missing or wrong X-Internal-Token", id);
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing or invalid X-Internal-Token"));
+        }
+        return ResponseEntity.ok(ApiResult.ok("Event retrieved successfully", eventService.getEventInternal(id)));
+    }
+
     @PatchMapping("/{id}/availability/consume")
     @SecurityRequirements()
     @Operation(

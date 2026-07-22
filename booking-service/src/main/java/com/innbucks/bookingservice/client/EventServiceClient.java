@@ -20,6 +20,19 @@ public interface EventServiceClient {
     @GetMapping("/events/{id}")
     ApiResult<EventLookupDTO> getEvent(@PathVariable("id") UUID id);
 
+    // Internal full lookup INCLUDING tenantUserUuid. The public GET
+    // /events/{id} strips that field for anonymous callers (A01 organizer-
+    // enumeration hardening) — and a server-side Feign call IS anonymous, so
+    // every ownership check and the tenant capture at booking creation must
+    // read through this endpoint instead. Same X-Internal-Token contract as
+    // the availability calls; also returns draft/rejected events so ownership
+    // checks keep working after an event is unpublished.
+    @GetMapping("/events/internal/{id}")
+    ApiResult<EventLookupDTO> getEventInternal(
+            @PathVariable("id") UUID id,
+            @RequestHeader("X-Internal-Token") String internalToken
+    );
+
     // Decrements the event's stored availableTickets atomically. Called from
     // BookingService.confirmBooking once a booking transitions to CONFIRMED.
     //

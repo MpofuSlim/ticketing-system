@@ -426,7 +426,10 @@ public class BookingService {
                     "Cannot verify event ownership");
         }
         try {
-            var lookup = client.getEvent(eventId);
+            // Internal variant — the public endpoint strips tenantUserUuid for
+            // anonymous (= server-side) callers, which made this check always
+            // see null and 403 every organizer.
+            var lookup = client.getEventInternal(eventId, eventInternalToken);
             if (lookup == null || lookup.getData() == null) {
                 throw new org.springframework.security.access.AccessDeniedException("Event not found");
             }
@@ -957,7 +960,10 @@ public class BookingService {
             return null;
         }
         try {
-            ApiResult<EventLookupDTO> envelope = event.getEvent(eventId);
+            // Internal variant: the public GET /events/{id} strips tenantUserUuid
+            // for anonymous callers, and this server-side call is anonymous — the
+            // whole point of this lookup is capturing that field onto the booking.
+            ApiResult<EventLookupDTO> envelope = event.getEventInternal(eventId, eventInternalToken);
             return envelope == null ? null : envelope.getData();
         } catch (Exception ex) {
             log.warn("Failed to fetch event lookup eventId={} reason={}", eventId, ex.getMessage());

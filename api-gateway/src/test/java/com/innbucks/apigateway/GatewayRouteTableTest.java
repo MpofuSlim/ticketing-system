@@ -47,7 +47,7 @@ class GatewayRouteTableTest {
             "cells-lookup-route", "user-admin-route",
             "booking-event-organizer-reports-route", "user-event-organizer-route",
             "user-internal-deny", "user-self-route",
-            "event-availability-deny", "event-service-route",
+            "event-internal-deny", "event-availability-deny", "event-service-route",
             "seat-service-seat-route", "seat-service-category-route",
             "booking-internal-deny", "booking-service-route", "booking-invoices-route",
             "booking-tickets-route",
@@ -151,6 +151,9 @@ class GatewayRouteTableTest {
         List<String> order = orderedIds();
         assertThat(order.indexOf("event-availability-deny"))
                 .as("event-availability-deny must match before /events/**")
+                .isBetween(0, order.indexOf("event-service-route") - 1);
+        assertThat(order.indexOf("event-internal-deny"))
+                .as("event-internal-deny must match before /events/**")
                 .isBetween(0, order.indexOf("event-service-route") - 1);
         assertThat(order.indexOf("loyalty-internal-deny"))
                 .as("loyalty-internal-deny must match before /loyalty/**")

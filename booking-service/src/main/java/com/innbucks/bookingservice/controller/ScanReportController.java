@@ -76,6 +76,14 @@ public class ScanReportController {
      *  explicitly check for an available client before delegating. */
     private final ObjectProvider<EventServiceClient> eventClientProvider;
 
+    /** Shared secret presented on event-service's internal lookup (the public
+     *  by-id endpoint strips tenantUserUuid for anonymous callers, which a
+     *  server-side call is). Same value as INTERNAL_API_TOKEN on the
+     *  event-service end of the wire. Field (not constructor) injection so
+     *  {@code new}-instantiated unit tests need not supply it. */
+    @org.springframework.beans.factory.annotation.Value("${innbucks.internal-api-token:}")
+    private String eventInternalToken;
+
     @GetMapping("/me")
     @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','TEAM_MEMBER')")
     @Operation(summary = "List my scan attempts",
@@ -504,7 +512,10 @@ public class ScanReportController {
         }
         EventLookupDTO data;
         try {
-            ApiResult<EventLookupDTO> lookup = client.getEvent(eventId);
+            // Internal variant — the public endpoint strips tenantUserUuid for
+            // anonymous (= server-side) callers, which made this check always
+            // see null and 403 every organizer.
+            ApiResult<EventLookupDTO> lookup = client.getEventInternal(eventId, eventInternalToken);
             data = lookup == null ? null : lookup.getData();
         } catch (Exception e) {
             log.warn("Event ownership lookup failed eventId={} cause={}", eventId, e.toString());
