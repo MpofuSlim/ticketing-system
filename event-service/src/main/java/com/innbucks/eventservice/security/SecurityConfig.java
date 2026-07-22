@@ -40,6 +40,13 @@ public class SecurityConfig {
                         // the broad /events/** permitAll below — first match wins.
                         .requestMatchers(HttpMethod.GET, "/events/inactive").authenticated()
                         .requestMatchers(HttpMethod.GET, "/events").permitAll()
+                        // Internal: full event lookup (tenantUserUuid intact) for sibling
+                        // services — booking-service's ownership checks + tenant capture.
+                        // Controller enforces X-Internal-Token; gateway's
+                        // event-internal-deny blocks the path at the edge. Technically
+                        // shadowed by the broad GET /events/** permitAll below, but kept
+                        // explicit so tightening that rule can't silently 401 S2S calls.
+                        .requestMatchers(HttpMethod.GET, "/events/internal/*").permitAll()
                         .requestMatchers(HttpMethod.GET, "/events/**").permitAll()
                         // Internal: booking-service decrements availability on confirm.
                         .requestMatchers(HttpMethod.PATCH, "/events/*/availability/consume").permitAll()

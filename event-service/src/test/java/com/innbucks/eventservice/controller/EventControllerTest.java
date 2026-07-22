@@ -510,6 +510,79 @@ class EventControllerTest {
         org.junit.jupiter.api.Assertions.assertEquals(95, reloaded.getAvailableTickets());
     }
 
+    // ---- GET /events/internal/{id} — the S2S full lookup ------------------
+    // Exists because the public by-id endpoint strips tenantUserUuid for
+    // anonymous callers (A01), and sibling services' server-side calls ARE
+    // anonymous: booking-service's ownership checks and its tenant capture at
+    // booking creation read through this endpoint. The trio below mirrors the
+    // consume-availability internal-token contract; the fourth test pins the
+    // actual regression (public strips the field, internal keeps it).
+
+    @Test
+    void getEventInternal_withoutInternalToken_returns401() throws Exception {
+        Event saved = eventRepository.save(eventBuilder()
+                .title("Concert")
+                .startDateTime(LocalDateTime.now().plusDays(7))
+                .endDateTime(LocalDateTime.now().plusDays(7).plusHours(2))
+                .build());
+
+        mockMvc.perform(get("/events/internal/{id}", saved.getEventId()))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void getEventInternal_withWrongInternalToken_returns401() throws Exception {
+        Event saved = eventRepository.save(eventBuilder()
+                .title("Concert")
+                .startDateTime(LocalDateTime.now().plusDays(7))
+                .endDateTime(LocalDateTime.now().plusDays(7).plusHours(2))
+                .build());
+
+        mockMvc.perform(get("/events/internal/{id}", saved.getEventId())
+                        .header("X-Internal-Token", "wrong-token"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void getEventInternal_withValidToken_returnsTenantUserUuid_evenForDrafts() throws Exception {
+        // active=false: a draft. The internal lookup must still serve it —
+        // ownership checks keep working after an event is unpublished.
+        Event saved = eventRepository.save(eventBuilder()
+                .title("Draft Concert")
+                .active(false)
+                .startDateTime(LocalDateTime.now().plusDays(7))
+                .endDateTime(LocalDateTime.now().plusDays(7).plusHours(2))
+                .build());
+
+        mockMvc.perform(get("/events/internal/{id}", saved.getEventId())
+                        .header("X-Internal-Token", VALID_INTERNAL_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code", is("200 OK")))
+                .andExpect(jsonPath("$.data.eventId", is(saved.getEventId().toString())))
+                .andExpect(jsonPath("$.data.tenantUserUuid", is(ORGANIZER_1.toString())))
+                .andExpect(jsonPath("$.data.title", is("Draft Concert")));
+    }
+
+    @Test
+    void publicGetById_strips_tenantUserUuid_butInternalKeepsIt() throws Exception {
+        // The regression this endpoint fixes: anonymous public read has the
+        // field stripped, so a service needing it MUST use the internal path.
+        Event saved = eventRepository.save(eventBuilder()
+                .title("Concert")
+                .startDateTime(LocalDateTime.now().plusDays(7))
+                .endDateTime(LocalDateTime.now().plusDays(7).plusHours(2))
+                .build());
+
+        mockMvc.perform(get("/events/{id}", saved.getEventId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.tenantUserUuid", nullValue()));
+
+        mockMvc.perform(get("/events/internal/{id}", saved.getEventId())
+                        .header("X-Internal-Token", VALID_INTERNAL_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.tenantUserUuid", is(ORGANIZER_1.toString())));
+    }
+
     @Test
     @WithMockUser(username = "admin@innbucks.co.zw", roles = "SUPER_ADMIN")
     void getEventsByOrganizer_asSuperAdmin_returnsOnlyThatOrganizersEvents() throws Exception {

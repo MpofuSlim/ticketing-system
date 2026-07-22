@@ -204,7 +204,7 @@ class ScanReportControllerTest {
         UUID eventId = UUID.randomUUID();
         EventLookupDTO eventDto = new EventLookupDTO();
         eventDto.setTenantUserUuid(organizerUuid);
-        when(eventClient.getEvent(eventId)).thenReturn(ApiResult.ok("ok", eventDto));
+        when(eventClient.getEventInternal(eq(eventId), any())).thenReturn(ApiResult.ok("ok", eventDto));
         Instant from = Instant.parse("2026-06-19T17:00:00Z");
         Instant to = Instant.parse("2026-06-20T02:00:00Z");
         PageResponse<ScanAttemptDTO> page = new PageResponse<>(List.of(), 0, 20, 0L, 0);
@@ -229,7 +229,7 @@ class ScanReportControllerTest {
         EventLookupDTO eventDto = new EventLookupDTO();
         // Event is owned by someone else.
         eventDto.setTenantUserUuid(otherOrganizer);
-        when(eventClient.getEvent(eventId)).thenReturn(ApiResult.ok("ok", eventDto));
+        when(eventClient.getEventInternal(eq(eventId), any())).thenReturn(ApiResult.ok("ok", eventDto));
 
         assertThatThrownBy(() -> controller(svc, eventClient).eventScans(
                 organizerAuth(callerOrganizer, UUID.randomUUID()),
@@ -246,7 +246,7 @@ class ScanReportControllerTest {
         ScanReportService svc = mock(ScanReportService.class);
         EventServiceClient eventClient = mock(EventServiceClient.class);
         UUID eventId = UUID.randomUUID();
-        when(eventClient.getEvent(eventId)).thenReturn(ApiResult.ok("ok", null));
+        when(eventClient.getEventInternal(eq(eventId), any())).thenReturn(ApiResult.ok("ok", null));
 
         assertThatThrownBy(() -> controller(svc, eventClient).eventScans(
                 organizerAuth(UUID.randomUUID(), UUID.randomUUID()),
@@ -269,7 +269,7 @@ class ScanReportControllerTest {
         UUID eventId = UUID.randomUUID();
         EventLookupDTO eventDto = new EventLookupDTO();
         eventDto.setTenantUserUuid(UUID.randomUUID());  // someone else
-        when(eventClient.getEvent(eventId)).thenReturn(ApiResult.ok("ok", eventDto));
+        when(eventClient.getEventInternal(eq(eventId), any())).thenReturn(ApiResult.ok("ok", eventDto));
 
         assertThatThrownBy(() -> controller(svc, eventClient).eventStats(
                 organizerAuth(callerOrganizer, UUID.randomUUID()), eventId,

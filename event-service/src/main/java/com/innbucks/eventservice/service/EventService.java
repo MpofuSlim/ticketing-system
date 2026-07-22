@@ -367,6 +367,26 @@ public class EventService {
     }
 
     /**
+     * Internal (service-to-service) lookup: the event WITH {@code tenantUserUuid}
+     * intact. The public by-id endpoint strips that field for anonymous callers
+     * (organizer enumeration, A01) — which is exactly what a sibling service's
+     * server-side call is, so booking-service's ownership checks and its tenant
+     * capture at booking creation read through this endpoint instead. Trusted
+     * callers also see draft/rejected events: an ownership check must keep
+     * working after an event is unpublished. No availability enrichment or
+     * organizer/seat-category resolution — internal consumers only read the
+     * entity's own fields.
+     */
+    public EventResponseDTO getEventInternal(UUID eventId) {
+        Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
+                .orElseThrow(() -> {
+                    log.warn("Internal lookup: event not found eventId={}", eventId);
+                    return new NotFoundException("Event not found");
+                });
+        return eventMapper.toDTO(event);
+    }
+
+    /**
      * Whether the current caller may view an UNPUBLISHED (draft or admin-rejected)
      * event: the owning organizer (JWT {@code organizerUuid} == the event's
      * {@code tenantUserUuid}) or a SUPER_ADMIN. Anonymous callers and other
