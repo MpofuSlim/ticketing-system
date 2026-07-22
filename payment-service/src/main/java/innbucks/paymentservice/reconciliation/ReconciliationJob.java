@@ -79,6 +79,7 @@ public class ReconciliationJob {
     private final InnbucksApiClient innbucksApiClient;
     private final PaymentMetrics metrics;
     private final innbucks.paymentservice.service.CodePaymentResolutionService resolutionService;
+    private final UnconfirmedPaymentAlerter unconfirmedAlerter;
     private final Duration stalePendingThreshold;
     private final int batchSize;
 
@@ -90,6 +91,7 @@ public class ReconciliationJob {
             InnbucksApiClient innbucksApiClient,
             PaymentMetrics metrics,
             innbucks.paymentservice.service.CodePaymentResolutionService resolutionService,
+            UnconfirmedPaymentAlerter unconfirmedAlerter,
             @Value("${payment-service.reconciliation.stale-pending-threshold:PT5M}") Duration stalePendingThreshold,
             @Value("${payment-service.reconciliation.batch-size:100}") int batchSize) {
         this.repository = repository;
@@ -99,6 +101,7 @@ public class ReconciliationJob {
         this.innbucksApiClient = innbucksApiClient;
         this.metrics = metrics;
         this.resolutionService = resolutionService;
+        this.unconfirmedAlerter = unconfirmedAlerter;
         this.stalePendingThreshold = stalePendingThreshold;
         this.batchSize = batchSize;
     }
@@ -272,6 +275,10 @@ public class ReconciliationJob {
                 log.warn("Reconciler confirm retry still failing paymentId={} paymentReference={} upstreamRef={} bookingId={} reason={}",
                         p.getId(), p.getPaymentReference(), p.getVeenguTransactionId(),
                         p.getBookingId(), e.getMessage());
+                // One-time human escalation: operator email + customer
+                // reassurance on the FIRST still-failing retry per payment
+                // (operator_alerted_at guards re-alerting). Best-effort.
+                unconfirmedAlerter.onStillFailing(p, e.getMessage());
             }
         }
     }
