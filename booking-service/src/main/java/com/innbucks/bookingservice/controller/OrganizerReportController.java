@@ -51,10 +51,11 @@ import java.util.UUID;
 @RequiredArgsConstructor
 @Slf4j
 @Tag(name = "Organizer Reports",
-     description = "Financial reports for an EVENT_ORGANIZER. Revenue is recognised from CONFIRMED " +
-                   "bookings (paid); admin reversals show as refunds. Scoped to the caller's own events.")
+     description = "Financial reports for an EVENT_ORGANIZER (scoped to their own events) or a " +
+                   "SUPER_ADMIN (fleet-wide). Revenue is recognised from CONFIRMED bookings (paid); " +
+                   "admin reversals show as refunds.")
 @SecurityRequirement(name = "bearerAuth")
-@PreAuthorize("hasRole('EVENT_ORGANIZER')")
+@PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
 public class OrganizerReportController {
 
     private final OrganizerReportService reportService;
@@ -100,7 +101,7 @@ public class OrganizerReportController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
-                    description = "Caller is not an EVENT_ORGANIZER",
+                    description = "Caller holds neither EVENT_ORGANIZER nor SUPER_ADMIN",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
@@ -111,7 +112,7 @@ public class OrganizerReportController {
             @RequestParam(required = false) UUID eventId,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
-        UUID organizerUuid = requireOrganizer(authentication);
+        UUID organizerUuid = resolveScope(authentication);
         log.debug("GET /event-organizer/reports/revenue organizer={} eventId={} from={} to={}",
                 organizerUuid, eventId, from, to);
         return ResponseEntity.ok(ApiResult.ok("Revenue summary retrieved",
@@ -157,7 +158,7 @@ public class OrganizerReportController {
             Authentication authentication,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
-        UUID organizerUuid = requireOrganizer(authentication);
+        UUID organizerUuid = resolveScope(authentication);
         log.debug("GET /event-organizer/reports/by-event organizer={} from={} to={}", organizerUuid, from, to);
         return ResponseEntity.ok(ApiResult.ok("Per-event revenue retrieved",
                 reportService.revenueByEvent(organizerUuid, from, to)));
@@ -194,7 +195,7 @@ public class OrganizerReportController {
             @RequestParam UUID eventId,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
-        UUID organizerUuid = requireOrganizer(authentication);
+        UUID organizerUuid = resolveScope(authentication);
         log.debug("GET /event-organizer/reports/by-category organizer={} eventId={} from={} to={}",
                 organizerUuid, eventId, from, to);
         return ResponseEntity.ok(ApiResult.ok("Per-category revenue retrieved",
@@ -229,7 +230,7 @@ public class OrganizerReportController {
             @RequestParam(required = false, defaultValue = "DAY") BucketSize bucket,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
-        UUID organizerUuid = requireOrganizer(authentication);
+        UUID organizerUuid = resolveScope(authentication);
         log.debug("GET /event-organizer/reports/time-series organizer={} eventId={} bucket={} from={} to={}",
                 organizerUuid, eventId, bucket, from, to);
         return ResponseEntity.ok(ApiResult.ok("Sales time-series retrieved",
@@ -259,7 +260,7 @@ public class OrganizerReportController {
             @RequestParam(required = false) UUID eventId,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to) {
-        UUID organizerUuid = requireOrganizer(authentication);
+        UUID organizerUuid = resolveScope(authentication);
         log.info("CSV export /event-organizer/reports/bookings/export organizer={} eventId={} from={} to={}",
                 organizerUuid, eventId, from, to);
         String csv = reportService.confirmedBookingsCsv(organizerUuid, eventId, from, to);
@@ -270,12 +271,19 @@ public class OrganizerReportController {
     }
 
     /**
-     * The reports are scoped by the caller's organizerUuid claim. Every current
-     * EVENT_ORGANIZER token carries it; a legacy token minted before the claim
-     * existed would not, so fail with a clear 400 telling them to re-login
-     * rather than silently returning another organizer's (or empty) data.
+     * Resolve the report scope from the caller's token. SUPER_ADMIN tokens
+     * carry no organizer claim and get {@code null} = fleet-wide (the
+     * repository treats a null organizer as "all organizers"). Every current
+     * EVENT_ORGANIZER token carries the claim; a legacy token minted before
+     * the claim existed would not, so fail with a clear 400 telling them to
+     * re-login rather than silently returning another organizer's (or
+     * empty) data.
      */
-    private UUID requireOrganizer(Authentication authentication) {
+    private UUID resolveScope(Authentication authentication) {
+        if (authentication != null && authentication.getAuthorities().stream()
+                .anyMatch(a -> "ROLE_SUPER_ADMIN".equals(a.getAuthority()))) {
+            return null;
+        }
         UUID organizerUuid = AuthenticatedCaller.organizerUuid(authentication);
         if (organizerUuid == null) {
             throw new BadRequestException(

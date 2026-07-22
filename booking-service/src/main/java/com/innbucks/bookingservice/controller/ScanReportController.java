@@ -48,9 +48,11 @@ import java.util.UUID;
  *   <li>{@code /scans/me*} — the calling user's own scan history and
  *       outcome stats. EVENT_ORGANIZER or TEAM_MEMBER may call.</li>
  *   <li>{@code /scans/events/{eventId}*} and {@code /scans/team-stats} —
- *       organizer-only views. Per-event endpoints verify the caller owns
+ *       organizer views. Per-event endpoints verify the caller owns
  *       the event (organizerUuid == event.tenantUserUuid) before reading;
- *       team-stats scopes by the caller's own organizerUuid.</li>
+ *       team-stats scopes by the caller's own organizerUuid. SUPER_ADMIN
+ *       may call all three: ownership is bypassed and team-stats goes
+ *       fleet-wide (null organizer scope).</li>
  * </ul>
  *
  * <p>Fraud-signals view (/scans/fraud) is deferred to a follow-up PR.
@@ -218,7 +220,7 @@ public class ScanReportController {
     }
 
     @GetMapping("/events/{eventId}")
-    @PreAuthorize("hasRole('EVENT_ORGANIZER')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(summary = "List scan attempts for an event",
             description = "Returns every scan attempt for the named event in the [from, to] window, " +
                           "newest first. The caller must OWN the event (organizerUuid match).")
@@ -259,7 +261,7 @@ public class ScanReportController {
                                     { "code": "400 BAD_REQUEST", "message": "'size' must be between 1 and 100.", "data": null }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
-                    description = "Caller does not own this event (or is not EVENT_ORGANIZER)",
+                    description = "Caller does not own this event (or holds neither EVENT_ORGANIZER nor SUPER_ADMIN)",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     { "code": "403 FORBIDDEN", "message": "You do not own this event", "data": null }
@@ -278,18 +280,23 @@ public class ScanReportController {
             @RequestParam Instant to,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        UUID organizerUuid = requireOrganizer(authentication);
+        // SUPER_ADMIN sees every event's scans (no organizer claim on an
+        // admin token, so the ownership check is bypassed, not just passed).
+        boolean admin = isSuperAdmin(authentication);
+        UUID organizerUuid = admin ? null : requireOrganizer(authentication);
         validateRange(from, to);
         validatePage(page, size);
-        requireEventOwnership(eventId, organizerUuid);
-        log.debug("GET /scans/events/{} organizer={} from={} to={} page={} size={}",
-                eventId, organizerUuid, from, to, page, size);
+        if (!admin) {
+            requireEventOwnership(eventId, organizerUuid);
+        }
+        log.debug("GET /scans/events/{} organizer={} admin={} from={} to={} page={} size={}",
+                eventId, organizerUuid, admin, from, to, page, size);
         return ResponseEntity.ok(ApiResult.ok("Event scan attempts retrieved",
                 scanReportService.listEventScans(eventId, from, to, page, size)));
     }
 
     @GetMapping("/events/{eventId}/stats")
-    @PreAuthorize("hasRole('EVENT_ORGANIZER')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(summary = "Outcome stats for an event",
             description = "Outcome breakdown for the named event over the [from, to] window. " +
                           "Every Outcome enum value is present in the response (zero-filled).")
@@ -341,17 +348,20 @@ public class ScanReportController {
             @PathVariable UUID eventId,
             @RequestParam Instant from,
             @RequestParam Instant to) {
-        UUID organizerUuid = requireOrganizer(authentication);
+        boolean admin = isSuperAdmin(authentication);
+        UUID organizerUuid = admin ? null : requireOrganizer(authentication);
         validateRange(from, to);
-        requireEventOwnership(eventId, organizerUuid);
-        log.debug("GET /scans/events/{}/stats organizer={} from={} to={}",
-                eventId, organizerUuid, from, to);
+        if (!admin) {
+            requireEventOwnership(eventId, organizerUuid);
+        }
+        log.debug("GET /scans/events/{}/stats organizer={} admin={} from={} to={}",
+                eventId, organizerUuid, admin, from, to);
         return ResponseEntity.ok(ApiResult.ok("Event scan stats retrieved",
                 scanReportService.eventStats(eventId, from, to)));
     }
 
     @GetMapping("/team-stats")
-    @PreAuthorize("hasRole('EVENT_ORGANIZER')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(summary = "Team scan-outcome leaderboard",
             description = "Per-team-member outcome breakdown for the calling organizer's gate staff " +
                           "over the [from, to] window. Members are ordered by total scans DESC.")
@@ -406,7 +416,7 @@ public class ScanReportController {
                                     { "code": "400 BAD_REQUEST", "message": "'from' (2026-06-30T00:00:00Z) must not be after 'to' (2026-06-01T00:00:00Z).", "data": null }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
-                    description = "Caller is not an EVENT_ORGANIZER",
+                    description = "Caller holds neither EVENT_ORGANIZER nor SUPER_ADMIN",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
@@ -416,7 +426,8 @@ public class ScanReportController {
             Authentication authentication,
             @RequestParam Instant from,
             @RequestParam Instant to) {
-        UUID organizerUuid = requireOrganizer(authentication);
+        // SUPER_ADMIN: null scope = every organizer's gate staff fleet-wide.
+        UUID organizerUuid = isSuperAdmin(authentication) ? null : requireOrganizer(authentication);
         validateRange(from, to);
         log.debug("GET /scans/team-stats organizer={} from={} to={}", organizerUuid, from, to);
         return ResponseEntity.ok(ApiResult.ok("Team scan stats retrieved",
@@ -460,6 +471,11 @@ public class ScanReportController {
     /** Mirror of {@link OrganizerReportController#requireOrganizer}. A legacy
      *  EVENT_ORGANIZER token without the organizerUuid claim must NOT silently
      *  scope to null and return another organizer's (or empty) data. */
+    private static boolean isSuperAdmin(Authentication authentication) {
+        return authentication != null && authentication.getAuthorities().stream()
+                .anyMatch(a -> "ROLE_SUPER_ADMIN".equals(a.getAuthority()));
+    }
+
     private static UUID requireOrganizer(Authentication authentication) {
         UUID organizerUuid = AuthenticatedCaller.organizerUuid(authentication);
         if (organizerUuid == null) {

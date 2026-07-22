@@ -36,6 +36,17 @@ class OrganizerReportControllerTest {
         return auth;
     }
 
+    private static UsernamePasswordAuthenticationToken superAdminAuth() {
+        // Admin tokens carry no organizer claim; the ROLE_SUPER_ADMIN
+        // authority is what flips the scope to fleet-wide (null).
+        var auth = new UsernamePasswordAuthenticationToken("admin@innbucks.co.zw", null,
+                java.util.List.of(new org.springframework.security.core.authority.SimpleGrantedAuthority(
+                        "ROLE_SUPER_ADMIN")));
+        auth.setDetails(new JwtAuthDetails("admin@innbucks.co.zw", null,
+                UUID.randomUUID(), null, "Super", "Admin"));
+        return auth;
+    }
+
     @Test
     void revenue_scopesToCallersOrganizerUuid() {
         OrganizerReportService svc = mock(OrganizerReportService.class);
@@ -54,6 +65,24 @@ class OrganizerReportControllerTest {
         assertThat(resp.getBody().getData()).isSameAs(dto);
         // The service was called with the caller's org uuid, not anything else.
         verify(svc).revenueSummary(eq(org), isNull(), isNull(), isNull());
+    }
+
+    @Test
+    void revenue_superAdmin_getsFleetWideNullScope() {
+        // SUPER_ADMIN has no organizer claim — instead of the 400 an
+        // organizer would get, the scope resolves to null = all organizers.
+        OrganizerReportService svc = mock(OrganizerReportService.class);
+        RevenueSummaryDTO dto = new RevenueSummaryDTO(
+                LocalDate.of(2026, 5, 1), LocalDate.of(2026, 5, 31), null,
+                1, 1, new BigDecimal("100.00"), new BigDecimal("100.00"), BigDecimal.ZERO,
+                0, BigDecimal.ZERO, new BigDecimal("100.00"), new BigDecimal("100.00"), "USD");
+        when(svc.revenueSummary(isNull(), isNull(), isNull(), isNull())).thenReturn(dto);
+
+        ResponseEntity<ApiResult<RevenueSummaryDTO>> resp =
+                new OrganizerReportController(svc).revenue(superAdminAuth(), null, null, null);
+
+        assertThat(resp.getStatusCode().is2xxSuccessful()).isTrue();
+        verify(svc).revenueSummary(isNull(), isNull(), isNull(), isNull());
     }
 
     @Test
