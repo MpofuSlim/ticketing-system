@@ -68,6 +68,17 @@ class ScanReportControllerTest {
         return auth;
     }
 
+    private static UsernamePasswordAuthenticationToken superAdminAuth() {
+        // No organizerUuid in the details — an admin token carries no
+        // organizer claim, which is exactly what the endpoints must tolerate.
+        var auth = new UsernamePasswordAuthenticationToken(
+                "admin@innbucks.co.zw", null,
+                List.of(new SimpleGrantedAuthority("ROLE_SUPER_ADMIN")));
+        auth.setDetails(new JwtAuthDetails("admin@innbucks.co.zw", null,
+                UUID.randomUUID(), null, "Super", "Admin"));
+        return auth;
+    }
+
     private static ScanReportController controller(ScanReportService svc, EventServiceClient client) {
         @SuppressWarnings("unchecked")
         ObjectProvider<EventServiceClient> provider = mock(ObjectProvider.class);
@@ -314,6 +325,60 @@ class ScanReportControllerTest {
         assertThat(data.members().get(0).total())
                 .as("top scanner first")
                 .isEqualTo(412L);
+    }
+
+    @Test
+    void eventScans_superAdmin_bypassesOwnershipAndNeedsNoOrganizerClaim() {
+        // SUPER_ADMIN sees any event's scans: no ownership lookup is made
+        // (their token has no organizer claim to compare with anyway).
+        ScanReportService svc = mock(ScanReportService.class);
+        EventServiceClient eventClient = mock(EventServiceClient.class);
+        UUID eventId = UUID.randomUUID();
+        Instant from = Instant.parse("2026-06-19T17:00:00Z");
+        Instant to = Instant.parse("2026-06-20T02:00:00Z");
+        PageResponse<ScanAttemptDTO> page = new PageResponse<>(List.of(), 0, 20, 0L, 0);
+        when(svc.listEventScans(eq(eventId), eq(from), eq(to), anyInt(), anyInt())).thenReturn(page);
+
+        ResponseEntity<ApiResult<PageResponse<ScanAttemptDTO>>> resp =
+                controller(svc, eventClient).eventScans(superAdminAuth(), eventId, from, to, 0, 20);
+
+        assertThat(resp.getStatusCode().is2xxSuccessful()).isTrue();
+        verify(eventClient, never()).getEventInternal(any(), any());
+        verify(svc).listEventScans(eq(eventId), eq(from), eq(to), eq(0), eq(20));
+    }
+
+    @Test
+    void eventStats_superAdmin_bypassesOwnership() {
+        ScanReportService svc = mock(ScanReportService.class);
+        EventServiceClient eventClient = mock(EventServiceClient.class);
+        UUID eventId = UUID.randomUUID();
+        Instant from = Instant.parse("2026-06-19T17:00:00Z");
+        Instant to = Instant.parse("2026-06-20T02:00:00Z");
+        EventScanStatsDTO dto = new EventScanStatsDTO(eventId, from, to, 0L, emptyOutcomes());
+        when(svc.eventStats(eq(eventId), eq(from), eq(to))).thenReturn(dto);
+
+        ResponseEntity<ApiResult<EventScanStatsDTO>> resp =
+                controller(svc, eventClient).eventStats(superAdminAuth(), eventId, from, to);
+
+        assertThat(resp.getStatusCode().is2xxSuccessful()).isTrue();
+        verify(eventClient, never()).getEventInternal(any(), any());
+    }
+
+    @Test
+    void teamStats_superAdmin_getsFleetWideNullScope() {
+        // Null organizer scope = every organizer's gate staff. Pinned so a
+        // future refactor can't quietly turn the admin view into a 400.
+        ScanReportService svc = mock(ScanReportService.class);
+        Instant from = Instant.parse("2026-06-19T17:00:00Z");
+        Instant to = Instant.parse("2026-06-20T02:00:00Z");
+        TeamStatsResponseDTO response = new TeamStatsResponseDTO(from, to, List.of());
+        when(svc.teamStats(eq(null), eq(from), eq(to))).thenReturn(response);
+
+        ResponseEntity<ApiResult<TeamStatsResponseDTO>> resp = controller(svc, null)
+                .teamStats(superAdminAuth(), from, to);
+
+        assertThat(resp.getStatusCode().is2xxSuccessful()).isTrue();
+        verify(svc).teamStats(eq(null), eq(from), eq(to));
     }
 
     @Test

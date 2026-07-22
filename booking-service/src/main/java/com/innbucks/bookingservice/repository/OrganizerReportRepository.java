@@ -4,6 +4,7 @@ import com.innbucks.bookingservice.entity.Booking;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
 import org.springframework.data.repository.query.Param;
+import org.springframework.lang.Nullable;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -17,6 +18,10 @@ import java.util.UUID;
  * booking CRUD. Every query is scoped by {@code tenantUserUuid} — the
  * organizer's stable user_uuid, which is also the JWT {@code organizerUuid}
  * claim — so an organizer can only ever read their own events' figures.
+ * A {@code null} organizerUuid means fleet-wide scope: reserved for
+ * SUPER_ADMIN callers, whose tokens carry no organizer claim (the
+ * controller resolves the scope; organizers can never pass null because
+ * their claim is required there).
  *
  * <p>Money is aggregated in the service layer from these fetches rather than
  * with SQL SUMs over an item join: summing {@code Booking.totalAmount} across a
@@ -35,12 +40,12 @@ public interface OrganizerReportRepository extends Repository<Booking, UUID> {
         SELECT DISTINCT b FROM Booking b
         LEFT JOIN FETCH b.items
         WHERE b.status = com.innbucks.bookingservice.entity.Booking.BookingStatus.CONFIRMED
-          AND b.tenantUserUuid = :organizerUuid
+          AND (:organizerUuid IS NULL OR b.tenantUserUuid = :organizerUuid)
           AND (:eventId IS NULL OR b.eventId = :eventId)
           AND b.createdAt >= :start AND b.createdAt < :end
         ORDER BY b.createdAt ASC
     """)
-    List<Booking> findConfirmedWithItems(@Param("organizerUuid") UUID organizerUuid,
+    List<Booking> findConfirmedWithItems(@Param("organizerUuid") @Nullable UUID organizerUuid,
                                          @Param("eventId") UUID eventId,
                                          @Param("start") LocalDateTime start,
                                          @Param("end") LocalDateTime end);
@@ -56,11 +61,11 @@ public interface OrganizerReportRepository extends Repository<Booking, UUID> {
         SELECT b FROM Booking b
         WHERE b.status = com.innbucks.bookingservice.entity.Booking.BookingStatus.CANCELLED
           AND b.availabilityReleased = true
-          AND b.tenantUserUuid = :organizerUuid
+          AND (:organizerUuid IS NULL OR b.tenantUserUuid = :organizerUuid)
           AND (:eventId IS NULL OR b.eventId = :eventId)
           AND b.createdAt >= :start AND b.createdAt < :end
     """)
-    List<Booking> findReversed(@Param("organizerUuid") UUID organizerUuid,
+    List<Booking> findReversed(@Param("organizerUuid") @Nullable UUID organizerUuid,
                                @Param("eventId") UUID eventId,
                                @Param("start") LocalDateTime start,
                                @Param("end") LocalDateTime end);

@@ -8,6 +8,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.lang.Nullable;
 
 import java.time.Instant;
 import java.util.List;
@@ -67,12 +68,12 @@ public interface ScanAttemptRepository extends JpaRepository<ScanAttempt, UUID> 
         SELECT new com.innbucks.bookingservice.dto.scan.TeamMemberOutcomeCount(
             s.scannerUserUuid, s.scannerEmail, s.scannerDisplayName, s.outcome, COUNT(s))
         FROM ScanAttempt s
-        WHERE s.scannerOrganizerUuid = :organizer
+        WHERE (:organizer IS NULL OR s.scannerOrganizerUuid = :organizer)
           AND s.attemptedAt BETWEEN :from AND :to
           AND s.scannerUserUuid IS NOT NULL
         GROUP BY s.scannerUserUuid, s.scannerEmail, s.scannerDisplayName, s.outcome
     """)
-    List<TeamMemberOutcomeCount> countOutcomesPerTeamMember(@Param("organizer") UUID organizer,
+    List<TeamMemberOutcomeCount> countOutcomesPerTeamMember(@Param("organizer") @Nullable UUID organizer,
                                                             @Param("from") Instant from,
                                                             @Param("to") Instant to);
 }

@@ -95,7 +95,9 @@ public class ScanReportService {
     }
 
     @Transactional(readOnly = true)
-    public TeamStatsResponseDTO teamStats(UUID organizerUuid, Instant from, Instant to) {
+    // organizerUuid == null means fleet-wide (SUPER_ADMIN caller) — the
+    // repository treats a null organizer as "all organizers' gate staff".
+    public TeamStatsResponseDTO teamStats(@org.springframework.lang.Nullable UUID organizerUuid, Instant from, Instant to) {
         List<TeamMemberOutcomeCount> rows =
                 repository.countOutcomesPerTeamMember(organizerUuid, from, to);
 
