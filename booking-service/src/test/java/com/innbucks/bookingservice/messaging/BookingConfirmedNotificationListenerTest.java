@@ -47,7 +47,8 @@ class BookingConfirmedNotificationListenerTest {
         lenient().when(events.getEvent(any()))
                 .thenReturn(ApiResult.ok(EventLookupDTO.builder().title("InnBucks Gala 2026").build()));
         BookingConfirmedNotificationListener listener =
-                new BookingConfirmedNotificationListener(repo, wa, email, events);
+                new BookingConfirmedNotificationListener(repo,
+                        new com.innbucks.bookingservice.service.TicketDeliveryService(wa, email, events));
         return new Mocks(repo, wa, email, events, listener);
     }
 
