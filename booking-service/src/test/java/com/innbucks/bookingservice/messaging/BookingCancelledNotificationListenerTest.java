@@ -62,7 +62,7 @@ class BookingCancelledNotificationListenerTest {
         ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> message = ArgumentCaptor.forClass(String.class);
         verify(m.email()).sendEmail(eq("rufaro@example.com"), subject.capture(), message.capture(),
-                startsWith("BOOKING-CANCEL-"));
+                startsWith("CANCEL-"));
         assertThat(subject.getValue()).contains("refund in progress").contains("INN-20260610-A1B2C3");
         assertThat(message.getValue()).contains("refund");
         verify(m.wa()).sendCustomNotification(eq("+263771234567"), contains("refund"));
