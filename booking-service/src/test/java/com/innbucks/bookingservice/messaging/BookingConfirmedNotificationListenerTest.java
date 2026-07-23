@@ -47,7 +47,8 @@ class BookingConfirmedNotificationListenerTest {
         lenient().when(events.getEvent(any()))
                 .thenReturn(ApiResult.ok(EventLookupDTO.builder().title("InnBucks Gala 2026").build()));
         BookingConfirmedNotificationListener listener =
-                new BookingConfirmedNotificationListener(repo, wa, email, events);
+                new BookingConfirmedNotificationListener(repo,
+                        new com.innbucks.bookingservice.service.TicketDeliveryService(wa, email, events));
         return new Mocks(repo, wa, email, events, listener);
     }
 
@@ -92,7 +93,7 @@ class BookingConfirmedNotificationListenerTest {
         ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> message = ArgumentCaptor.forClass(String.class);
         verify(m.email()).sendEmail(eq("rufaro@example.com"), subject.capture(),
-                message.capture(), startsWith("BOOKING-CONFIRM-"));
+                message.capture(), startsWith("CONF-"));
         assertThat(subject.getValue()).contains("INN-20260610-A1B2C3");
         assertThat(message.getValue())
                 .contains("INN-20260610-A1B2C3")

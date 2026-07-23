@@ -70,7 +70,7 @@ public class InvoiceNotifier {
                 return;
             }
             email.sendEmail(to, overdueSubject(invoice), overdueBody(invoice),
-                    "INVOICE-OVERDUE-" + invoice.getId());
+                    "INV-OVD-" + invoice.getId());   // <=46-char API reference limit
             log.info("Overdue notice for invoice {} emailed to organizer={}",
                     invoice.getInvoiceNumber(), invoice.getOrganizerUuid());
         } catch (RuntimeException ex) {

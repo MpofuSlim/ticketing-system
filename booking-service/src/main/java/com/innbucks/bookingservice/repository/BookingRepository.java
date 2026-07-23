@@ -49,4 +49,15 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
 
     List<Booking> findByEventIdAndStatusAndReminderSentAtIsNull(
             UUID eventId, Booking.BookingStatus status);
+
+    // Booking + items in one round trip, for the manual ticket-resend path:
+    // delivery reads the items OUTSIDE any transaction (no connection held
+    // across the WhatsApp/email network calls), so lazy loading is not an
+    // option there. DISTINCT collapses the fetch-join fan-out.
+    @Query("""
+        SELECT DISTINCT b FROM Booking b
+        LEFT JOIN FETCH b.items
+        WHERE b.id = :id
+    """)
+    Optional<Booking> findByIdWithItems(@Param("id") UUID id);
 }
