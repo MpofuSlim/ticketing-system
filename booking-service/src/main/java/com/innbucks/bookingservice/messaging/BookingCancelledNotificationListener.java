@@ -52,9 +52,12 @@ public class BookingCancelledNotificationListener {
         }
 
         boolean refund = booking.isAvailabilityReleased();
-        String ref = "BOOKING-CANCEL-" + booking.getId();
+        // Ref <=46 chars (API limit), unique per send; subject plain ASCII —
+        // the API rejects typographic punctuation in subjects ("Invalid subject").
+        String ref = "CANCEL-" + booking.getConfirmationNumber() + "-"
+                + java.util.UUID.randomUUID().toString().substring(0, 6);
         String subject = refund
-                ? "Your InnBucks booking " + booking.getConfirmationNumber() + " was cancelled — refund in progress"
+                ? "Your InnBucks booking " + booking.getConfirmationNumber() + " was cancelled - refund in progress"
                 : "Your InnBucks booking " + booking.getConfirmationNumber() + " was cancelled";
         String message = buildCancellationText(booking, refund);
 

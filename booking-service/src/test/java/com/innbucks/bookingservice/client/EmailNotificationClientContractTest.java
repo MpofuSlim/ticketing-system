@@ -89,6 +89,78 @@ class EmailNotificationClientContractTest {
     }
 
     @Test
+    @DisplayName("subject is transliterated to ASCII: em-dash becomes hyphen (API 400s 'Invalid subject' on typography)")
+    void unicodeSubject_isTransliteratedBeforeTheWire() {
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).willReturn(okJson("{\"accessToken\":\"tok-abc\"}")));
+        wireMock.stubFor(post(urlEqualTo(EMAIL)).willReturn(aResponse().withStatus(200)));
+
+        // Observed live 2026-07-23: an em-dash in the SUBJECT draws
+        // {"status":400,"errors":["Invalid subject"]}; the same text in the
+        // BODY is accepted. Subject sanitized, body untouched.
+        client(wireMock.port()).sendEmail("rufaro@example.com",
+                "Your InnBucks tickets \u2014 booking INN-1",
+                "Body keeps typography \u2014 untouched", "REF-1");
+
+        wireMock.verify(postRequestedFor(urlEqualTo(EMAIL))
+                .withRequestBody(matchingJsonPath("$.subject",
+                        equalTo("Your InnBucks tickets - booking INN-1")))
+                .withRequestBody(matchingJsonPath("$.message",
+                        equalTo("Body keeps typography \u2014 untouched"))));
+    }
+
+    @Test
+    @DisplayName("overlong reference is clamped to 46 chars (API 400s 'Invalid reference' beyond that)")
+    void overlongReference_isClampedBeforeTheWire() {
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).willReturn(okJson("{\"accessToken\":\"tok-abc\"}")));
+        wireMock.stubFor(post(urlEqualTo(EMAIL)).willReturn(aResponse().withStatus(200)));
+
+        // 52 chars — the exact shape (BOOKING-CONFIRM-<uuid>) the live API
+        // rejected with {"status":400,"errors":["Invalid reference"]}.
+        String longRef = "BOOKING-CONFIRM-cda7161b-2192-4111-96b5-b295aeb2ff34";
+
+        client(wireMock.port()).sendEmail("rufaro@example.com", "subj", "msg", longRef);
+
+        wireMock.verify(postRequestedFor(urlEqualTo(EMAIL))
+                .withRequestBody(matchingJsonPath("$.reference",
+                        equalTo(longRef.substring(0, 46)))));
+    }
+
+    @Test
+    @DisplayName("validation 400 {status,errors[]}: surfaces as NotificationDeliveryException, no retry")
+    void validationRejection_throwsWithoutRetry() {
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).willReturn(okJson("{\"accessToken\":\"tok-abc\"}")));
+        // The envelope observed live for payload-validation failures.
+        wireMock.stubFor(post(urlEqualTo(EMAIL)).willReturn(aResponse().withStatus(400)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"timestamp\":\"2026-07-23T07:10:30.676+02:00\",\"status\":400,"
+                        + "\"errors\":[\"Invalid reference\",\"Invalid subject\"]}")));
+
+        assertThatThrownBy(() -> client(wireMock.port())
+                .sendEmail("rufaro@example.com", "subj", "msg", "REF-1"))
+                .isInstanceOf(NotificationDeliveryException.class)
+                .hasMessageContaining("HTTP 400");
+        wireMock.verify(1, postRequestedFor(urlEqualTo(EMAIL)));
+    }
+
+    @Test
+    @DisplayName("permission 403 {status,error:Forbidden}: surfaces as NotificationDeliveryException (creds lack email scope)")
+    void forbiddenScope_throws() {
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).willReturn(okJson("{\"accessToken\":\"tok-abc\"}")));
+        // Observed live: valid payload + authenticated token, but the API
+        // client has no email-notification permission.
+        wireMock.stubFor(post(urlEqualTo(EMAIL)).willReturn(aResponse().withStatus(403)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"timestamp\":\"2026-07-23T08:54:17.515+02:00\",\"status\":403,"
+                        + "\"error\":\"Forbidden\",\"path\":\"/api/notification/email\"}")));
+
+        assertThatThrownBy(() -> client(wireMock.port())
+                .sendEmail("rufaro@example.com", "subj", "msg", "REF-1"))
+                .isInstanceOf(NotificationDeliveryException.class)
+                .hasMessageContaining("HTTP 403");
+        wireMock.verify(1, postRequestedFor(urlEqualTo(EMAIL)));
+    }
+
+    @Test
     @DisplayName("blank recipient/subject/message: guarded before any network call")
     void blankInputs_neverHitTheWire() {
         EmailNotificationClient client = client(wireMock.port());

@@ -92,10 +92,15 @@ public class TicketDeliveryService {
         if (emailAddr != null && !emailAddr.isBlank()) {
             emailAttempted = true;
             try {
+                // Ref: <=46 chars (API limit) + unique per send (fresh suffix)
+                // so a manual RESEND can't be swallowed by provider-side
+                // reference dedup. Subject is plain ASCII — the API rejects
+                // typographic punctuation in subjects with 400 "Invalid subject".
                 email.sendEmail(emailAddr,
-                        "Your InnBucks tickets — booking " + booking.getConfirmationNumber(),
+                        "Your InnBucks tickets - booking " + booking.getConfirmationNumber(),
                         buildConfirmationText(booking),
-                        "BOOKING-CONFIRM-" + booking.getId());
+                        "CONF-" + booking.getConfirmationNumber() + "-"
+                                + java.util.UUID.randomUUID().toString().substring(0, 6));
                 emailSent = true;
                 log.info("Booking-confirm email sent bookingId={} ref={}",
                         booking.getId(), booking.getConfirmationNumber());

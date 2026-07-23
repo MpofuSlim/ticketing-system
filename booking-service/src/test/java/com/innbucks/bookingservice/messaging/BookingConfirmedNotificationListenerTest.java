@@ -93,7 +93,7 @@ class BookingConfirmedNotificationListenerTest {
         ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> message = ArgumentCaptor.forClass(String.class);
         verify(m.email()).sendEmail(eq("rufaro@example.com"), subject.capture(),
-                message.capture(), startsWith("BOOKING-CONFIRM-"));
+                message.capture(), startsWith("CONF-"));
         assertThat(subject.getValue()).contains("INN-20260610-A1B2C3");
         assertThat(message.getValue())
                 .contains("INN-20260610-A1B2C3")

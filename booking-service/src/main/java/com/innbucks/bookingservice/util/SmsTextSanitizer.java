@@ -16,8 +16,10 @@ import org.jspecify.annotations.Nullable;
  * (accented letter to its base letter), and replaces anything still outside
  * printable ASCII with {@code '?'} so the gateway never sees a byte it rejects.
  *
- * <p><b>SMS only.</b> Apply this on the SMS send path exclusively — email and
- * WhatsApp render Unicode fine and keep their original typography.
+ * <p>Apply on the SMS send path and on EMAIL SUBJECTS (the email endpoint
+ * charset-validates the subject the same way — observed 400 "Invalid subject"
+ * for an em-dash — while email BODIES accept Unicode and keep their
+ * typography). WhatsApp renders Unicode fine and is never sanitized.
  */
 public final class SmsTextSanitizer {
 

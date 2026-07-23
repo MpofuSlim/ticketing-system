@@ -29,7 +29,10 @@ import java.util.function.Function;
  *
  * <p>Wire body: {@code {subject, message, reference, destinationEmail}} — plain
  * text only (the API has no HTML flag), so email copy matches the SMS/WhatsApp
- * standard. Used by {@code BookingConfirmedNotificationListener} for the
+ * standard. The endpoint validates {@code reference} (max ~46 chars) and
+ * charset-validates {@code subject} (ASCII only — an em-dash draws 400
+ * "Invalid subject"); both are normalised here so callers can't trip them.
+ * The message body accepts Unicode and is passed through untouched. Used by {@code BookingConfirmedNotificationListener} for the
  * confirmed-ticket email; the scannable QR is delivered over WhatsApp, not here.
  * Any rejection / connectivity failure surfaces as
  * {@link NotificationDeliveryException} so callers keep best-effort semantics.
@@ -43,6 +46,8 @@ public class EmailNotificationClient {
     private static final String EMAIL_PATH = "/api/notification/email";
     private static final String SMS_PATH = "/api/notification/sms";
     private static final String API_KEY_HEADER = "X-Api-Key";
+    /** Longest reference observed to pass the notification API's validation. */
+    private static final int MAX_REFERENCE_LENGTH = 46;
 
     private final RestClient restClient;
     private final InnbucksNotifyProperties properties;
@@ -76,12 +81,31 @@ public class EmailNotificationClient {
             throw new NotificationDeliveryException("Email message is blank");
         }
         requireConfigured();
-        String ref = (reference != null && !reference.isBlank())
+        String candidate = (reference != null && !reference.isBlank())
                 ? reference
                 : "TKT-EMAIL-" + UUID.randomUUID();
+        // Observed live (2026-07-23): the email endpoint 400s
+        // {"errors":["Invalid reference"]} for references longer than ~46 chars
+        // (46 = the TKT-EMAIL-<uuid> auto-gen passes; 52 is rejected). Clamp
+        // defensively so a long caller-supplied ref degrades to a truncated
+        // trace id instead of killing the whole send. Final so the auth-retry
+        // lambda can capture it.
+        final String ref;
+        if (candidate.length() > MAX_REFERENCE_LENGTH) {
+            ref = candidate.substring(0, MAX_REFERENCE_LENGTH);
+            log.warn("Email reference '{}' exceeds {} chars — clamped to '{}'",
+                    candidate, MAX_REFERENCE_LENGTH, ref);
+        } else {
+            ref = candidate;
+        }
 
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("subject", subject);
+        // Observed live (2026-07-23): the email endpoint ALSO charset-validates
+        // the SUBJECT — an em-dash draws 400 {"errors":["Invalid subject"]}
+        // while the identical ASCII text is accepted. The message body was NOT
+        // flagged on the same sends, so only the subject is transliterated;
+        // the body keeps its typography.
+        payload.put("subject", SmsTextSanitizer.toGsmSafe(subject));
         payload.put("message", message);
         payload.put("reference", ref);
         payload.put("destinationEmail", to);
