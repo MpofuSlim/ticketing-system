@@ -1,0 +1,86 @@
+# Data Prepper — OpenSearch's trace-ingestion pipeline. Receives OTLP/gRPC
+# spans (from the OTel Collector, port 21890), writes the trace-analytics
+# index pair (otel-v1-apm-span-* + service-map) that Dashboards'
+# Observability -> Traces UI reads natively.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: data-prepper-config
+  namespace: observability
+data:
+  data-prepper-config.yaml: |
+    ssl: false
+  pipelines.yaml: |
+    entry-pipeline:
+      delay: "100"
+      source:
+        otel_trace_source:
+          ssl: false
+      sink:
+        - pipeline:
+            name: "raw-trace-pipeline"
+        - pipeline:
+            name: "service-map-pipeline"
+    raw-trace-pipeline:
+      source:
+        pipeline:
+          name: "entry-pipeline"
+      processor:
+        - otel_traces:
+      sink:
+        - opensearch:
+            hosts: ["http://opensearch:9200"]
+            index_type: trace-analytics-raw
+    service-map-pipeline:
+      delay: "100"
+      source:
+        pipeline:
+          name: "entry-pipeline"
+      processor:
+        - service_map:
+      sink:
+        - opensearch:
+            hosts: ["http://opensearch:9200"]
+            index_type: trace-analytics-service-map
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: data-prepper
+  namespace: observability
+spec:
+  selector: { app: data-prepper }
+  ports:
+    - { name: otlp-grpc, port: 21890 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: data-prepper
+  namespace: observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: data-prepper }
+  template:
+    metadata:
+      labels: { app: data-prepper }
+    spec:
+      containers:
+        - name: data-prepper
+          image: opensearchproject/data-prepper:2.10.2
+          ports:
+            - { containerPort: 21890 }
+          resources:
+            requests: { memory: 512Mi, cpu: 100m }
+            limits: { memory: 768Mi }
+          volumeMounts:
+            - name: config
+              mountPath: /usr/share/data-prepper/pipelines/pipelines.yaml
+              subPath: pipelines.yaml
+            - name: config
+              mountPath: /usr/share/data-prepper/config/data-prepper-config.yaml
+              subPath: data-prepper-config.yaml
+      volumes:
+        - name: config
+          configMap: { name: data-prepper-config }

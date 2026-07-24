@@ -1,0 +1,15 @@
+# Observability stack (OpenSearch-based, matching the InnBucks org standard):
+#   OpenSearch (storage/search) + Dashboards (UI)
+#   Data Prepper (OTel trace ingestion -> trace-analytics indices)
+#   OTel Collector (OTLP/HTTP entry point the Spring services already target)
+#   Fluent Bit (DaemonSet shipping the fleet's JSON container logs)
+#
+# Deliberately in its own subdirectory so the routine
+# `kubectl apply -f deploy/k8s/` does NOT pick it up — apply explicitly:
+#   kubectl apply -f deploy/k8s/observability/
+#
+# Sized for the single-node 15GB cell: ~3GB RAM total across the five pods.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability

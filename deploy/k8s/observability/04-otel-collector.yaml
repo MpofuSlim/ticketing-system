@@ -1,0 +1,73 @@
+# OTel Collector — the fleet's OTLP entry point. The Spring services export
+# OTLP/HTTP (management.otlp.tracing.endpoint = OTLP_ENDPOINT, /v1/traces on
+# 4318); Data Prepper's otel_trace_source speaks OTLP/gRPC — this collector
+# bridges the two (and gives us one place to add tail-sampling/filtering
+# later without touching the services).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: otel-collector-config
+  namespace: observability
+data:
+  config.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          http:
+            endpoint: 0.0.0.0:4318
+          grpc:
+            endpoint: 0.0.0.0:4317
+    processors:
+      batch:
+        timeout: 5s
+    exporters:
+      otlp/dataprepper:
+        endpoint: data-prepper:21890
+        tls:
+          insecure: true
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [otlp/dataprepper]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: otel-collector
+  namespace: observability
+spec:
+  selector: { app: otel-collector }
+  ports:
+    - { name: otlp-http, port: 4318 }
+    - { name: otlp-grpc, port: 4317 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: otel-collector
+  namespace: observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: otel-collector }
+  template:
+    metadata:
+      labels: { app: otel-collector }
+    spec:
+      containers:
+        - name: otel-collector
+          image: otel/opentelemetry-collector-contrib:0.116.1
+          args: ["--config=/etc/otelcol/config.yaml"]
+          ports:
+            - { containerPort: 4318 }
+            - { containerPort: 4317 }
+          resources:
+            requests: { memory: 128Mi, cpu: 50m }
+            limits: { memory: 256Mi }
+          volumeMounts:
+            - { name: config, mountPath: /etc/otelcol }
+      volumes:
+        - name: config
+          configMap: { name: otel-collector-config }

@@ -1,0 +1,44 @@
+# OpenSearch Dashboards — the UI (Discover for logs, Observability -> Traces
+# for the Data Prepper trace-analytics indices). ClusterIP only; reach it from
+# a workstation via:
+#   kubectl -n observability port-forward svc/opensearch-dashboards 5601:5601
+# then open http://localhost:5601. Do NOT NodePort this without re-enabling
+# the security plugin — the box has a public IP.
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensearch-dashboards
+  namespace: observability
+spec:
+  selector: { app: opensearch-dashboards }
+  ports:
+    - { name: http, port: 5601 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opensearch-dashboards
+  namespace: observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: opensearch-dashboards }
+  template:
+    metadata:
+      labels: { app: opensearch-dashboards }
+    spec:
+      containers:
+        - name: dashboards
+          image: opensearchproject/opensearch-dashboards:2.19.1
+          env:
+            - { name: OPENSEARCH_HOSTS, value: '["http://opensearch:9200"]' }
+            - { name: DISABLE_SECURITY_DASHBOARDS_PLUGIN, value: "true" }
+          ports:
+            - { containerPort: 5601 }
+          resources:
+            requests: { memory: 384Mi, cpu: 100m }
+            limits: { memory: 512Mi }
+          readinessProbe:
+            httpGet: { path: /api/status, port: 5601 }
+            initialDelaySeconds: 30
+            periodSeconds: 10
