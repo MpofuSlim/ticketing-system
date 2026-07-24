@@ -9,6 +9,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -95,4 +96,24 @@ public class InvoiceScheduler {
             flagged.forEach(invoiceNotifier::notifyOverdue);
         }
     }
+
+    /**
+     * The nudge BEFORE the dunning: daily, email organizers whose ISSUED
+     * invoices fall due within the lead window (default 3 days). The claim
+     * (marker stamp) commits first; emails are best-effort per invoice after,
+     * so one failed send never blocks the rest and is never retried.
+     */
+    @Scheduled(cron = "${app.invoicing.due-soon-cron:0 15 2 * * *}", zone = "UTC")
+    @SchedulerLock(name = "InvoiceScheduler.sweepDueSoon", lockAtMostFor = "PT10M", lockAtLeastFor = "PT30S")
+    public void sweepDueSoon() {
+        var dueSoon = invoiceService.claimDueSoon(
+                LocalDateTime.now(ZoneOffset.UTC), Duration.ofDays(dueSoonLeadDays));
+        if (!dueSoon.isEmpty()) {
+            log.info("Due-soon sweep claimed {} invoice(s)", dueSoon.size());
+            dueSoon.forEach(invoiceNotifier::notifyDueSoon);
+        }
+    }
+
+    @org.springframework.beans.factory.annotation.Value("${app.invoicing.due-soon-lead-days:3}")
+    private long dueSoonLeadDays;
 }

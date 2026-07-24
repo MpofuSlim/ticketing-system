@@ -79,6 +79,46 @@ public class InvoiceNotifier {
         }
     }
 
+    /**
+     * Emails the organizer that an ISSUED invoice is due within the next few
+     * days — the friendly nudge BEFORE the overdue dunning. Same contract as
+     * the siblings: strictly best-effort, any failure is a log line (the
+     * due-soon marker was already stamped at claim time).
+     */
+    public void notifyDueSoon(EventInvoice invoice) {
+        try {
+            String to = resolveOrganizerEmail(invoice.getOrganizerUuid());
+            if (to == null || to.isBlank()) {
+                log.info("No business email for organizer={}; due-soon notice for {} not emailed",
+                        invoice.getOrganizerUuid(), invoice.getInvoiceNumber());
+                return;
+            }
+            email.sendEmail(to, dueSoonSubject(invoice), dueSoonBody(invoice),
+                    "INV-DUE-" + invoice.getId());   // <=46-char API reference limit
+            log.info("Due-soon notice for invoice {} emailed to organizer={}",
+                    invoice.getInvoiceNumber(), invoice.getOrganizerUuid());
+        } catch (RuntimeException ex) {
+            log.warn("Failed emailing due-soon notice for invoice {} (marker already stamped): {}",
+                    invoice.getInvoiceNumber(), ex.getMessage());
+        }
+    }
+
+    private static String dueSoonSubject(EventInvoice i) {
+        return "Reminder: SwiftInn commission invoice " + i.getInvoiceNumber()
+                + " is due on " + i.getDueAt().toLocalDate();
+    }
+
+    private static String dueSoonBody(EventInvoice i) {
+        return "Hi,\n\n"
+                + "A friendly reminder that your SwiftInn commission invoice "
+                + i.getInvoiceNumber() + " for " + i.getCurrency() + " "
+                + i.getTotalAmount().toPlainString() + " is due on "
+                + i.getDueAt().toLocalDate() + ".\n\n"
+                + "Settling it before the due date keeps your account in good "
+                + "standing. If you have already paid, please disregard this email.\n\n"
+                + "Thank you,\nSwiftInn";
+    }
+
     private static String overdueSubject(EventInvoice i) {
         return "Overdue: SwiftInn commission invoice " + i.getInvoiceNumber()
                 + " (" + i.getCurrency() + " " + i.getTotalAmount().toPlainString() + ")";

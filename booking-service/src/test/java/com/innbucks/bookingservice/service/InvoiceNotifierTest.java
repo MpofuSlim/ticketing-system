@@ -113,4 +113,27 @@ class InvoiceNotifierTest {
         assertThatCode(() -> notifier.notifyIssued(invoice())).doesNotThrowAnyException();
         verify(email, never()).sendEmail(anyString(), anyString(), anyString(), anyString());
     }
+
+    @Test
+    void dueSoon_emailsReminderWithDueDateAndDistinctReference() {
+        when(userServiceClient.lookupTenants(any(), eq("the-internal-token")))
+                .thenReturn(ApiResult.ok("ok", List.of(
+                        new TenantContactDTO(organizer, "Gala Events", "1 Main St", "billing@gala.co.zw"))));
+
+        notifier.notifyDueSoon(invoice());
+
+        verify(email).sendEmail(eq("billing@gala.co.zw"),
+                contains("due on 2026-06-15"), contains("INV-2026-000042"), contains("INV-DUE-"));
+    }
+
+    @Test
+    void dueSoon_swallowsEmailFailure() {
+        when(userServiceClient.lookupTenants(any(), anyString()))
+                .thenReturn(ApiResult.ok("ok", List.of(
+                        new TenantContactDTO(organizer, "Gala Events", "1 Main St", "billing@gala.co.zw"))));
+        doThrow(new NotificationDeliveryException("email gw down"))
+                .when(email).sendEmail(anyString(), anyString(), anyString(), anyString());
+
+        assertThatCode(() -> notifier.notifyDueSoon(invoice())).doesNotThrowAnyException();
+    }
 }

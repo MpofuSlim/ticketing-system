@@ -115,6 +115,12 @@ public class EventInvoice {
     @Column(name = "paid_at")
     private LocalDateTime paidAt;
 
+    // When the one-time "due in a few days" reminder email was attempted for
+    // this ISSUED invoice (V20). Stamped on the attempt — success or failure —
+    // so the daily sweep never re-sends. Null = not yet considered.
+    @Column(name = "due_soon_notified_at")
+    private LocalDateTime dueSoonNotifiedAt;
+
     @Column(name = "cancelled_at")
     private LocalDateTime cancelledAt;
 
