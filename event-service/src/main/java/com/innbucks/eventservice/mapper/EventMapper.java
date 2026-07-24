@@ -14,6 +14,7 @@ public class EventMapper {
                 .eventId(event.getEventId())
                 .tenantUserUuid(event.getTenantUserUuid())
                 .title(event.getTitle())
+                .settlementCode(event.getSettlementCode())
                 .description(event.getDescription())
                 .venue(event.getVenue())
                 .country(event.getCountry())

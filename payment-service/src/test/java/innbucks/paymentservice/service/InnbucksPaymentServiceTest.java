@@ -51,6 +51,7 @@ class InnbucksPaymentServiceTest {
     private PaymentRecordService records;
     private InnbucksApiClient innbucksApi;
     private BookingServiceClient bookings;
+    private innbucks.paymentservice.client.EventServiceClient events;
     private InnbucksPaymentService service;
     private CodePaymentResolutionService resolution;
 
@@ -61,10 +62,16 @@ class InnbucksPaymentServiceTest {
         records = mock(PaymentRecordService.class);
         innbucksApi = mock(InnbucksApiClient.class);
         bookings = mock(BookingServiceClient.class);
+        events = mock(innbucks.paymentservice.client.EventServiceClient.class);
+        // Settlement lookup defaults to "nothing found" — the reference then
+        // carries the event-id tag (or legacy shape when the booking map has
+        // no eventId), which is what most cases here exercise.
+        org.mockito.Mockito.when(events.getSettlementInfo(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(java.util.Optional.empty());
         resolution = new CodePaymentResolutionService(records, bookings,
                 new innbucks.paymentservice.config.PaymentMetrics(
                         new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
-        service = new InnbucksPaymentService(records, innbucksApi, bookings, resolution);
+        service = new InnbucksPaymentService(records, innbucksApi, bookings, events, resolution);
         ReflectionTestUtils.setField(service, "codeTtl", Duration.ofMinutes(10));
         ReflectionTestUtils.setField(service, "cellCurrency", "USD");
 
@@ -101,6 +108,48 @@ class InnbucksPaymentServiceTest {
                 eq("qr-base64-bytes"), any(Instant.class));
         verify(records, never()).markFailed(any(), anyString(), anyString());
         verify(records, never()).markInDoubt(any(), anyString());
+    }
+
+    @Test
+    void settlementCode_flowsIntoReferenceAndTitleIntoNarration() {
+        UUID eventId = UUID.randomUUID();
+        when(bookings.getBooking(bookingId)).thenReturn(Map.of(
+                "totalAmount", new BigDecimal("50.00"), "currency", "USD",
+                "eventId", eventId.toString()));
+        when(events.getSettlementInfo(eventId)).thenReturn(java.util.Optional.of(
+                new innbucks.paymentservice.client.EventServiceClient.EventSettlementInfo(
+                        "PINKRUN26", "Chisipite Senior School Pink Fun Run")));
+        when(innbucksApi.generatePaymentCode(anyString(), anyString(), anyLong()))
+                .thenReturn(approved("701285660", "1616800", 5000L));
+
+        service.processPayment(bookingId, "+263770000001", null);
+
+        org.mockito.ArgumentCaptor<String> ref = org.mockito.ArgumentCaptor.forClass(String.class);
+        org.mockito.ArgumentCaptor<String> narration = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(innbucksApi).generatePaymentCode(ref.capture(), narration.capture(), eq(5000L));
+        assertTrue(ref.getValue().matches("TKZ-PINKRUN26-[0-9A-F]{12}"),
+                "reference must group per event on the merchant statement: " + ref.getValue());
+        assertTrue(narration.getValue().contains("Chisipite Senior School Pink Fun Run"),
+                "narration must carry the event title: " + narration.getValue());
+    }
+
+    @Test
+    void settlementLookupMiss_referenceFallsBackToEventIdTag_paymentUnblocked() {
+        UUID eventId = UUID.fromString("20c96393-8ac8-480a-93d0-ef89981c53e0");
+        when(bookings.getBooking(bookingId)).thenReturn(Map.of(
+                "totalAmount", new BigDecimal("50.00"), "currency", "USD",
+                "eventId", eventId.toString()));
+        // events mock already returns Optional.empty() from setUp
+        when(innbucksApi.generatePaymentCode(anyString(), anyString(), anyLong()))
+                .thenReturn(approved("701285660", "1616800", 5000L));
+
+        InnbucksPaymentResponse resp = service.processPayment(bookingId, "+263770000001", null);
+
+        assertEquals(Status.PROCESSING, resp.getStatus());
+        org.mockito.ArgumentCaptor<String> ref = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(innbucksApi).generatePaymentCode(ref.capture(), anyString(), eq(5000L));
+        assertTrue(ref.getValue().matches("TKZ-20C96393-[0-9A-F]{12}"),
+                "a settlement-lookup miss must degrade to the event-id tag, not block: " + ref.getValue());
     }
 
     @Test
