@@ -116,8 +116,22 @@ jobs:
         env:
           TRIVY_VERSION: "0.69.3"
         run: |
-          curl -sSfL "https://raw.githubusercontent.com/aquasecurity/trivy/v${TRIVY_VERSION}/contrib/install.sh" \
-            | sudo sh -s -- -b /usr/local/bin "v${TRIVY_VERSION}"
+          # Retry: install.sh resolves the tag via the GitHub API, which
+          # intermittently rate-limits shared runners and fails with a
+          # misleading "unable to find v<X>" even though the tag exists
+          # (observed: 5 matrix jobs green, 2 failed, same version, same
+          # minute). Same pinned version on every attempt — the retry adds
+          # resilience, not mutability.
+          for attempt in 1 2 3; do
+            if curl -sSfL "https://raw.githubusercontent.com/aquasecurity/trivy/v${TRIVY_VERSION}/contrib/install.sh" \
+              | sudo sh -s -- -b /usr/local/bin "v${TRIVY_VERSION}"; then
+              exit 0
+            fi
+            echo "Trivy install attempt ${attempt} failed; retrying in $((attempt * 15))s..."
+            sleep $((attempt * 15))
+          done
+          echo "Trivy install failed after 3 attempts" >&2
+          exit 1
 
       # Gate: scan the LOADED local image and fail the job on any CRITICAL/HIGH
       # (os + library) before the push step runs. Previously the push happened
