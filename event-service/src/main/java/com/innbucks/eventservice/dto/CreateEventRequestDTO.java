@@ -24,6 +24,19 @@ public class CreateEventRequestDTO {
     @Size(max = 10000, message = "Description must be at most 10000 characters")
     private String description;
 
+    @Schema(
+            example = "PINKRUN26",
+            description = """
+                    Optional settlement code: 3-12 letters/digits (stored uppercase). Embedded in every
+                    InnBucks payment reference for this event's bookings (`TKZ-<code>-<id>`), so the
+                    merchant bank statement can be filtered/settled per event. Auto-derived from the
+                    title when omitted.
+                    """
+    )
+    @Pattern(regexp = "[A-Za-z0-9]{3,12}",
+            message = "Settlement code must be 3-12 letters or digits")
+    private String settlementCode;
+
     @Schema(example = "Harare Gardens")
     @NotBlank(message = "Venue is required")
     @Size(max = 255, message = "Venue must be at most 255 characters")

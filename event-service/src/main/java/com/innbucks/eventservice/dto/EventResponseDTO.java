@@ -34,6 +34,12 @@ public class EventResponseDTO {
     @Schema(example = "Summer Concert")
     private String title;
 
+    @Schema(example = "PINKRUN26", nullable = true,
+            description = "Per-event settlement code (3-12 uppercase letters/digits) embedded in InnBucks " +
+                          "payment references (`TKZ-<code>-<id>`) for bank-statement grouping. Auto-derived " +
+                          "from the title at creation when not supplied; null on pre-existing events until set.")
+    private String settlementCode;
+
     @Schema(description = "Optional longer description.")
     private String description;
 

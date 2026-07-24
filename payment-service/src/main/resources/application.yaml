@@ -46,6 +46,13 @@ booking-service:
   connect-timeout-ms: ${BOOKING_SERVICE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${BOOKING_SERVICE_READ_TIMEOUT_MS:5000}
 
+# Settlement-tag lookup (best-effort; tight timeouts so a slow event-service
+# can't stall checkout — a miss just degrades the reference to the event-id tag).
+event-service:
+  base-url: http://event-service
+  connect-timeout-ms: ${EVENT_SERVICE_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${EVENT_SERVICE_READ_TIMEOUT_MS:3000}
+
 loyalty-service:
   base-url: http://loyalty-service
   connect-timeout-ms: ${LOYALTY_SERVICE_CONNECT_TIMEOUT_MS:2000}

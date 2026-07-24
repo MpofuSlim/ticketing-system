@@ -41,6 +41,13 @@ public class Event {
     @Column(nullable = false)
     private String title;
 
+    // Short settlement tag ([A-Z0-9]{3,12}) embedded by payment-service in every
+    // InnBucks code-generation reference (TKZ-<CODE>-<shortId>) so the merchant
+    // statement groups per event. Auto-derived from the title at creation when
+    // not supplied; editable via PUT. Nullable for pre-existing events.
+    @Column(name = "settlement_code", length = 12)
+    private String settlementCode;
+
     @Column(columnDefinition = "TEXT")
     private String description;
 

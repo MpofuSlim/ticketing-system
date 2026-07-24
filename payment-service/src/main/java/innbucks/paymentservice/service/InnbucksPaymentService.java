@@ -2,6 +2,7 @@ package innbucks.paymentservice.service;
 
 import innbucks.paymentservice.client.BookingServiceClient;
 import innbucks.paymentservice.client.CodeGenerationResult;
+import innbucks.paymentservice.client.EventServiceClient;
 import innbucks.paymentservice.client.CodeStatusResult;
 import innbucks.paymentservice.client.InnbucksApiClient;
 import innbucks.paymentservice.client.InnbucksApiException;
@@ -64,11 +65,10 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class InnbucksPaymentService {
 
-    private static final String PAYMENT_REFERENCE_PREFIX = "TKT-PMT-";
-
     private final PaymentRecordService paymentRecordService;
     private final InnbucksApiClient innbucksApiClient;
     private final BookingServiceClient bookingServiceClient;
+    private final EventServiceClient eventServiceClient;
     private final CodePaymentResolutionService codePaymentResolutionService;
 
     /**
@@ -123,6 +123,15 @@ public class InnbucksPaymentService {
         if (currency == null || currency.isBlank()) currency = cellCurrency;
         long amountCents = toCents(amount);
 
+        // ---- Step 1.2: settlement tagging (best-effort) -----------------------
+        // The event's settlementCode goes into the InnBucks reference
+        // (TKZ-<CODE>-<id>) so the merchant statement groups per event; the
+        // title makes the statement narration human-readable. A failed lookup
+        // degrades to an event-id tag — it never blocks the payment.
+        UUID eventId = asUuid(booking.get("eventId"));
+        EventServiceClient.EventSettlementInfo eventInfo =
+                eventServiceClient.getSettlementInfo(eventId).orElse(null);
+
         // ---- Step 1.5: make the seat hold outlive the code --------------------
         // The hold (5 min from booking) is shorter than the code (10 min from
         // NOW) — without this, any payment approved after the hold lapsed was
@@ -147,7 +156,8 @@ public class InnbucksPaymentService {
         }
 
         // ---- Step 2: open PENDING ledger row ----------------------------------
-        String paymentReference = PAYMENT_REFERENCE_PREFIX + UUID.randomUUID();
+        String paymentReference = SettlementReference.build(
+                eventInfo != null ? eventInfo.settlementCode() : null, eventId);
         Payment draft = Payment.builder()
                 .paymentReference(paymentReference)
                 .bookingId(bookingId)
@@ -172,7 +182,9 @@ public class InnbucksPaymentService {
         CodeGenerationResult generated;
         try {
             generated = innbucksApiClient.generatePaymentCode(
-                    paymentReference, "InnBucks ticket booking " + shortId(bookingId), amountCents);
+                    paymentReference,
+                    buildNarration(eventInfo != null ? eventInfo.title() : null, bookingId),
+                    amountCents);
         } catch (InnbucksApiTransientException e) {
             // Generation moves NO money. Worst case a code was minted upstream
             // that nobody will ever see — it expires on its own. Closing the
@@ -279,6 +291,27 @@ public class InnbucksPaymentService {
 
     private static String shortId(UUID id) {
         return id.toString().substring(0, 8);
+    }
+
+    /**
+     * Statement narration: lead with the event title (truncated — narration is
+     * free text but statement columns aren't infinite) so a human scanning the
+     * merchant statement sees which event the money belongs to without decoding
+     * the reference. Falls back to the historical generic copy when the event
+     * lookup didn't resolve a title.
+     */
+    static String buildNarration(String eventTitle, UUID bookingId) {
+        if (eventTitle == null || eventTitle.isBlank()) {
+            return "InnBucks ticket booking " + shortId(bookingId);
+        }
+        String title = eventTitle.length() > 60 ? eventTitle.substring(0, 60) : eventTitle;
+        return "Ticketize " + title + " booking " + shortId(bookingId);
+    }
+
+    private static UUID asUuid(Object value) {
+        if (value instanceof UUID uuid) return uuid;
+        if (value == null) return null;
+        try { return UUID.fromString(value.toString()); } catch (IllegalArgumentException e) { return null; }
     }
 
     private static BigDecimal asBigDecimal(Object value) {

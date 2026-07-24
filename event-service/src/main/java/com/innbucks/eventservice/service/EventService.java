@@ -551,6 +551,8 @@ public class EventService {
                 // OWASP A03: sanitize free text on the write path so stored data
                 // is safe regardless of how any client renders it.
                 .title(HtmlSanitizer.stripAll(request.getTitle()))
+                .settlementCode(SettlementCodes.normalizeOrDerive(
+                        request.getSettlementCode(), request.getTitle()))
                 .description(HtmlSanitizer.sanitizeRichText(request.getDescription()))
                 .venue(HtmlSanitizer.stripAll(request.getVenue()))
                 .country(country)
@@ -709,6 +711,9 @@ public class EventService {
         // description rich-text) before it lands on the entity. category is an
         // enum — no free text to sanitize.
         if (request.getTitle() != null)        event.setTitle(HtmlSanitizer.stripAll(request.getTitle()));
+        // Pattern-validated at the DTO ([A-Za-z0-9]{3,12}); normalize to uppercase.
+        if (request.getSettlementCode() != null)
+            event.setSettlementCode(SettlementCodes.normalize(request.getSettlementCode()));
         if (request.getDescription() != null)  event.setDescription(HtmlSanitizer.sanitizeRichText(request.getDescription()));
         if (request.getVenue() != null)        event.setVenue(HtmlSanitizer.stripAll(request.getVenue()));
         if (request.getCategory() != null)     event.setCategory(request.getCategory());

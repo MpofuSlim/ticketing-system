@@ -31,8 +31,10 @@ import java.util.UUID;
         description = "Outcome of an InnBucks/veengu-backed payment attempt.")
 public class InnbucksPaymentResponse {
 
-    @Schema(description = "Stable reference for this payment; carried into veengu and logged on every state transition.",
-            example = "TKT-PMT-f0e1d2c3-4567-890a-bcde-f01234567890")
+    @Schema(description = "Stable reference for this payment; sent to InnBucks as the code-generation "
+            + "reference and logged on every state transition. Shape: TKZ-<event settlement code>-<unique id>, "
+            + "so the merchant bank statement can be grouped per event by prefix.",
+            example = "TKZ-PINKRUN26-4F3A2B1C0D9E")
     private String paymentReference;
 
     @Schema(description = "Booking the payment belongs to (echoed from the request).",
