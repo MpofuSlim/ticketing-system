@@ -83,12 +83,19 @@ public class Booking {
     // hold model existed.
     private LocalDateTime expiresAt;
 
-    // When the pre-event reminder was sent (or consumed) for this CONFIRMED
-    // booking. Set on the reminder attempt — success or failure — so the
-    // hourly EventReminderScheduler never retries into spam; also set
+    // When the DAY-OF pre-event reminder was sent (or consumed) for this
+    // CONFIRMED booking. Set on the reminder attempt — success or failure —
+    // so the hourly EventReminderScheduler never retries into spam; also set
     // silently for bookings whose event already started. Null = not yet
     // considered. UTC, like every LocalDateTime here.
     private LocalDateTime reminderSentAt;
+
+    // When the T-2-DAYS reminder stage (SMS + email) was sent or consumed —
+    // same exactly-once semantics as reminderSentAt. Stamped silently when
+    // the booking only entered the scan inside the day-of window, so a
+    // late booker gets one reminder, not two back-to-back. (V19)
+    @Column(name = "reminder2d_sent_at")
+    private LocalDateTime reminder2dSentAt;
 
     // Idempotency guard for the event-service availability release. Set true
     // after a successful PATCH /events/{id}/availability/release as part of

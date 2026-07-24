@@ -50,6 +50,18 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     List<Booking> findByEventIdAndStatusAndReminderSentAtIsNull(
             UUID eventId, Booking.BookingStatus status);
 
+    // Same scan for the T-2-DAYS reminder stage (SMS + email). Bounded by
+    // idx_bookings_reminder2d_pending (V19).
+    @Query("""
+            select distinct b.eventId from Booking b
+            where b.status = com.innbucks.bookingservice.entity.Booking.BookingStatus.CONFIRMED
+              and b.reminder2dSentAt is null
+            """)
+    List<UUID> findEventIdsWithUn2dRemindedConfirmed();
+
+    List<Booking> findByEventIdAndStatusAndReminder2dSentAtIsNull(
+            UUID eventId, Booking.BookingStatus status);
+
     // Booking + items in one round trip, for the manual ticket-resend path:
     // delivery reads the items OUTSIDE any transaction (no connection held
     // across the WhatsApp/email network calls), so lazy loading is not an
