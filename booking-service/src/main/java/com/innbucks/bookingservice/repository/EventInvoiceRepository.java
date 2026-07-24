@@ -45,6 +45,20 @@ public interface EventInvoiceRepository extends JpaRepository<EventInvoice, UUID
     """)
     List<EventInvoice> findIssuedPastDue(@Param("now") LocalDateTime now);
 
+    /**
+     * ISSUED invoices whose due date falls inside [now, until) and whose
+     * due-soon reminder hasn't been attempted yet — fed to the due-soon sweep.
+     */
+    @Query("""
+        SELECT i FROM EventInvoice i
+        WHERE i.status = com.innbucks.bookingservice.entity.EventInvoice.InvoiceStatus.ISSUED
+          AND i.dueSoonNotifiedAt IS NULL
+          AND i.dueAt >= :now
+          AND i.dueAt < :until
+    """)
+    List<EventInvoice> findIssuedDueSoonUnnotified(@Param("now") LocalDateTime now,
+                                                   @Param("until") LocalDateTime until);
+
     /** Count + total-billed per status for the admin dashboard summary. */
     @Query("""
         SELECT i.status AS status, COUNT(i) AS count, COALESCE(SUM(i.totalAmount), 0) AS total

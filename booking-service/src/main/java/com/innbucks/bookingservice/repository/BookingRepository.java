@@ -62,6 +62,27 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
     List<Booking> findByEventIdAndStatusAndReminder2dSentAtIsNull(
             UUID eventId, Booking.BookingStatus status);
 
+    // OrganizerEventReminderScheduler scan: events with CONFIRMED bookings
+    // whose organizer hasn't had the day-before headline email yet (no marker
+    // row in organizer_event_reminders, V21).
+    @Query("""
+            select distinct b.eventId from Booking b
+            where b.status = com.innbucks.bookingservice.entity.Booking.BookingStatus.CONFIRMED
+              and b.eventId not in (
+                  select r.eventId from OrganizerEventReminder r)
+            """)
+    List<UUID> findEventIdsForOrganizerReminder();
+
+    long countByEventIdAndStatus(UUID eventId, Booking.BookingStatus status);
+
+    // Tickets sold for one event = booking items of its CONFIRMED bookings.
+    @Query("""
+            select count(i) from Booking b join b.items i
+            where b.eventId = :eventId
+              and b.status = com.innbucks.bookingservice.entity.Booking.BookingStatus.CONFIRMED
+            """)
+    long countConfirmedTickets(@Param("eventId") UUID eventId);
+
     // Booking + items in one round trip, for the manual ticket-resend path:
     // delivery reads the items OUTSIDE any transaction (no connection held
     // across the WhatsApp/email network calls), so lazy loading is not an

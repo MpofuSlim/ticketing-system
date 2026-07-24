@@ -24,6 +24,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -276,6 +277,27 @@ public class InvoiceService {
         metrics.incOverdueFlagged(due.size());
         log.info("Flagged {} invoice(s) OVERDUE", due.size());
         return due;
+    }
+
+    /**
+     * Claims the ISSUED invoices due within {@code [asOf, asOf+leadTime)} that
+     * haven't had their due-soon reminder yet: stamps {@code dueSoonNotifiedAt}
+     * and returns them for the scheduler to email AFTER this commits. Stamping
+     * on the claim (not on delivery success) means a failed email is a log
+     * line, never daily retry spam — same discipline as the booking reminders.
+     */
+    @Transactional
+    public List<EventInvoice> claimDueSoon(LocalDateTime asOf, Duration leadTime) {
+        List<EventInvoice> dueSoon = invoices.findIssuedDueSoonUnnotified(asOf, asOf.plus(leadTime));
+        if (dueSoon.isEmpty()) {
+            return List.of();
+        }
+        for (EventInvoice invoice : dueSoon) {
+            invoice.setDueSoonNotifiedAt(asOf);
+        }
+        invoices.saveAll(dueSoon);
+        log.info("Claimed {} invoice(s) for due-soon reminders", dueSoon.size());
+        return dueSoon;
     }
 
     // ------------------------------------------------------------------
