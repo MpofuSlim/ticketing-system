@@ -1,0 +1,113 @@
+# Fluent Bit — ships the ticketing fleet's container logs into OpenSearch as
+# daily ticketing-logs-YYYY.MM.DD indices. The services already log JSON
+# (SPRING_PROFILES_ACTIVE includes `json` -> logstash encoder), so Merge_Log
+# lifts level/traceId/correlationId/... into top-level fields — Discover can
+# filter on them directly, and a traceId links a log line to its trace in
+# the Observability UI.
+#
+# Only the `ticketing` namespace is tailed (the *_ticketing_* filename filter)
+# — infra noise (kube-system, observability itself) stays out of the indices.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fluent-bit
+  namespace: observability
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: fluent-bit-read
+rules:
+  - apiGroups: [""]
+    resources: [pods, namespaces]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: fluent-bit-read
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: fluent-bit-read
+subjects:
+  - kind: ServiceAccount
+    name: fluent-bit
+    namespace: observability
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluent-bit-config
+  namespace: observability
+data:
+  fluent-bit.conf: |
+    [SERVICE]
+        Parsers_File parsers.conf
+        HTTP_Server  Off
+
+    [INPUT]
+        Name              tail
+        Path              /var/log/containers/*_ticketing_*.log
+        Parser            cri
+        Tag               kube.*
+        Mem_Buf_Limit     20MB
+        Skip_Long_Lines   On
+
+    [FILTER]
+        Name                kubernetes
+        Match               kube.*
+        Merge_Log           On
+        Keep_Log            Off
+        K8S-Logging.Parser  Off
+        K8S-Logging.Exclude Off
+
+    [OUTPUT]
+        Name                opensearch
+        Match               kube.*
+        Host                opensearch.observability.svc.cluster.local
+        Port                9200
+        Logstash_Format     On
+        Logstash_Prefix     ticketing-logs
+        Suppress_Type_Name  On
+        Replace_Dots        On
+        Buffer_Size         1MB
+        Trace_Error         On
+
+  parsers.conf: |
+    [PARSER]
+        Name        cri
+        Format      regex
+        Regex       ^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[^ ]*) (?<log>.*)$
+        Time_Key    time
+        Time_Format %Y-%m-%dT%H:%M:%S.%L%z
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fluent-bit
+  namespace: observability
+spec:
+  selector:
+    matchLabels: { app: fluent-bit }
+  template:
+    metadata:
+      labels: { app: fluent-bit }
+    spec:
+      serviceAccountName: fluent-bit
+      containers:
+        - name: fluent-bit
+          image: fluent/fluent-bit:3.2.4
+          resources:
+            requests: { memory: 64Mi, cpu: 50m }
+            limits: { memory: 200Mi }
+          volumeMounts:
+            # k3s/containerd: /var/log/containers symlinks into /var/log/pods,
+            # both under /var/log — one read-only mount covers them.
+            - { name: varlog, mountPath: /var/log, readOnly: true }
+            - { name: config, mountPath: /fluent-bit/etc/ }
+      volumes:
+        - name: varlog
+          hostPath: { path: /var/log }
+        - name: config
+          configMap: { name: fluent-bit-config }
