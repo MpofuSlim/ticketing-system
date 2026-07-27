@@ -66,6 +66,6 @@ spec:
             - { name: MFA_ISSUER, value: "InnBucks" }
           resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }
           readinessProbe: { httpGet: { path: /actuator/health, port: 8081 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
-          livenessProbe:  { httpGet: { path: /actuator/health, port: 8081 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
+          livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8081 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
           volumeMounts: [ { name: tmp, mountPath: /tmp } ]
       volumes: [ { name: tmp, emptyDir: {} } ]
