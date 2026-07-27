@@ -14,8 +14,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class PasswordEncoderTest {
 
-    // Build the bean exactly as SecurityConfig does (jwtFilter is unused here).
-    private final PasswordEncoder encoder = new SecurityConfig(null).passwordEncoder();
+    // Build the bean exactly as SecurityConfig does (the jwtFilter and
+    // metricsScrapeAuthFilter collaborators are unused here).
+    private final PasswordEncoder encoder = new SecurityConfig(null, null).passwordEncoder();
 
     @Test
     void newPasswordsAreHashedWithArgon2id() {
