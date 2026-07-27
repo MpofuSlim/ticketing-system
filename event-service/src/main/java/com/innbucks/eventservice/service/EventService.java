@@ -846,7 +846,8 @@ public class EventService {
         // fallback via user-service). Only on a real state change — a repeated
         // activate on an already-live event must not re-send. Best-effort.
         if (!wasActive) {
-            organizerNotificationGateway.notifyEventActivated(saved.getTenantUserUuid(), saved.getTitle());
+            organizerNotificationGateway.notifyEventActivated(
+                    saved.getTenantUserUuid(), saved.getEventId(), saved.getTitle());
         }
         return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
     }

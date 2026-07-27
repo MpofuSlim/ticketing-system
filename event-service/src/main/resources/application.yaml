@@ -61,6 +61,11 @@ innbucks:
   country: ${INNBUCKS_COUNTRY:ZW}
   internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
 
+# Public site for the customer-facing ticketing product ("Ticketize"), used to
+# build the shareable event link in the organizer "now live" email.
+ticketize:
+  public-base-url: ${TICKETIZE_PUBLIC_BASE_URL:https://ticketize.innbucks.co.zw}
+
 server:
   port: 8082
   shutdown: graceful
