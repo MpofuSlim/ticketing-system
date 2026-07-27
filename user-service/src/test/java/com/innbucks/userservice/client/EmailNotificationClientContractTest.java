@@ -110,12 +110,12 @@ class EmailNotificationClientContractTest {
         client(wireMock.port(), true).sendEmail("staff@example.com",
                 "Your event is now live", "Hello,\n\nYour event is now live.", "EVT-1");
 
-        // With html-enabled the message is a full HTML document (not plain
-        // text): the doctype, the escaped body, and the footer all ride in the
-        // `message` field so a single test proves the toggle actually changes
-        // the wire shape.
+        // With html-enabled the message is branded HTML (a table fragment), not
+        // plain text: the table markup, the body copy, and the footer all ride
+        // in the `message` field so a single test proves the toggle actually
+        // changes the wire shape.
         wireMock.verify(postRequestedFor(urlEqualTo(EMAIL))
-                .withRequestBody(matchingJsonPath("$.message", containing("<!doctype html>")))
+                .withRequestBody(matchingJsonPath("$.message", containing("<table")))
                 .withRequestBody(matchingJsonPath("$.message", containing("Your event is now live")))
                 .withRequestBody(matchingJsonPath("$.message", containing("Deposit Protection Scheme"))));
     }

@@ -19,7 +19,11 @@ class BrandedEmailRendererTest {
                 "Hello,\n\nYour event \"Feli Nandi\" is now live.\n\nWe hope it's a great event!",
                 "https://www.innbucks.co.zw/logo.png");
 
-        assertThat(html).startsWith("<!doctype html>");
+        // A fragment (bare table), not a full document — safe to inject into the
+        // gateway's own HTML body without nesting an <html> element.
+        assertThat(html).startsWith("<table");
+        assertThat(html).doesNotContain("<html");
+        assertThat(html).doesNotContain("<!doctype");
         // Body content survives, split into paragraphs.
         assertThat(html).contains("is now live");
         assertThat(html).contains("<p style=");
@@ -45,14 +49,14 @@ class BrandedEmailRendererTest {
     }
 
     @Test
-    void escapesHtmlInBodyAndSubjectSoContentCannotInjectMarkup() {
+    void escapesHtmlInBodySoContentCannotInjectMarkup() {
         String html = BrandedEmailRenderer.render(
-                "Subject <script>", "Body with <b>tags</b> & an ampersand", "");
+                "s", "Body with <b>tags</b> & an ampersand and a <script>alert(1)</script>", "");
         assertThat(html).contains("&lt;b&gt;tags&lt;/b&gt;");
         assertThat(html).contains("&amp; an ampersand");
-        assertThat(html).contains("Subject &lt;script&gt;");
-        // The raw script tag from content must never appear unescaped.
+        // The raw script tag from message content must never appear unescaped.
         assertThat(html).doesNotContain("<script>");
+        assertThat(html).contains("&lt;script&gt;");
     }
 
     @Test

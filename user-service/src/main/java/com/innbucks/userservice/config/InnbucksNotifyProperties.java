@@ -29,16 +29,16 @@ public class InnbucksNotifyProperties {
     private Duration tokenTtl = Duration.ofMinutes(8);
 
     /**
-     * When true, outbound emails are sent as branded HTML in the {@code message}
-     * field instead of plain text. OFF by default: it is unconfirmed whether the
-     * notification gateway renders HTML in {@code message} (the payment rail's
-     * confirmation emails are HTML, but through the banking platform's own
-     * templates). Flip on in staging, send yourself one email, and check whether
-     * it renders as a formatted email or shows raw tags — if it renders, this is
-     * safe to enable in prod; if it shows tags, leave it off (plain text with the
-     * standard footer is the fallback) and the gateway needs a different HTML path.
+     * When true (the default), outbound emails are sent as branded HTML in the
+     * {@code message} field. Confirmed ON: the gateway renders the message field
+     * as HTML — observed in prod when a plain-text body's newlines collapsed into
+     * one run-on paragraph (HTML whitespace behaviour), which also proves the
+     * gateway treats the message as HTML regardless of any tags. Set to false
+     * only as a rollback to the plain-text-with-footer path (which, since the
+     * gateway renders HTML, renders as one run-on block — kept solely as a
+     * fail-safe).
      */
-    private boolean htmlEnabled = false;
+    private boolean htmlEnabled = true;
 
     /**
      * Public URL of the InnBucks logo shown in the HTML email header. Email
