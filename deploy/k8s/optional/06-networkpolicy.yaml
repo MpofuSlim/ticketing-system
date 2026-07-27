@@ -14,12 +14,12 @@
 # WHY OPT-IN: k3s enforces NetworkPolicy via its built-in kube-router controller
 # (unless started with --disable-network-policy). kube-router permits traffic
 # from the local node, so the kubelet's httpGet/tcpSocket health probes (incl.
-# the redis/kafka tcpSocket probes) keep working under a default-deny. That
+# the redis tcpSocket probes) keep working under a default-deny. That
 # behaviour can't be validated from this repo against the live single-node cell,
 # so segmentation is a deliberate operator step rather than an auto-applied
 # change that could sever probes on `kubectl apply`.
 #
-# DESIGN: ingress-only (egress stays open so DNS, the DB/Redis/Kafka clients,
+# DESIGN: ingress-only (egress stays open so DNS, the DB/Redis clients,
 # and external calls to InnBucks/veengu/SMS are unaffected). Net effect once
 # applied: pods accept traffic only from other pods in this namespace, except
 # the api-gateway which is the public edge.
@@ -38,7 +38,7 @@ spec:
 ---
 # 2) Allow any pod in the ticketing namespace to reach any other pod in it.
 #    This restores the intra-cell service mesh (gateway->services, service->
-#    service via discovery, services->postgres/redis/kafka, eureka registration)
+#    service via discovery, services->postgres/redis, eureka registration)
 #    while cross-namespace and external direct access stays denied.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

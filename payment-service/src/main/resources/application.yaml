@@ -27,9 +27,6 @@ spring:
     baseline-on-migrate: false
     locations: classpath:db/migration
 
-  kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
-
   data:
     redis:
       host: ${REDIS_HOST:localhost}
@@ -106,10 +103,6 @@ payment-service:
     interval: ${CODE_POLL_INTERVAL:PT20S}
   recon:
     cron: ${RECON_CRON:0 30 2 * * *}
-  kafka:
-    transaction-completed:
-      partitions: ${PAYMENT_TX_TOPIC_PARTITIONS:3}
-      replicas: ${PAYMENT_TX_TOPIC_REPLICAS:1}
 
 app:
   idempotency:

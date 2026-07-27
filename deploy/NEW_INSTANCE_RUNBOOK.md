@@ -16,7 +16,7 @@ On a fresh host the stack builds most of itself:
 |---|---|
 | The 6 per-service databases (`docker/postgres/init-databases.sql` runs once on the empty volume) | Secrets → `cell.<iso>.local.env` |
 | Every table schema (Flyway runs per service on first boot, `ddl-auto=validate`) | This host's IP in `cell.<iso>.env` (`INNBUCKS_GATEWAY_URL`) |
-| Redis / Kafka state (start empty) | A GHCR login to pull the private images |
+| Redis state (start empty) | A GHCR login to pull the private images |
 | The first `SUPER_ADMIN` row (only if `BOOTSTRAP_ADMIN_PASSWORD` is set) | DNS + TLS/edge cutover to the new host |
 
 So an empty DB is expected and correct — the only seeded row is the bootstrap
@@ -24,7 +24,7 @@ admin.
 
 ## 1. Provision the instance
 
-- **Size:** the cell runs 8 JVM services + Postgres + Redis + Kafka. Use
+- **Size:** the cell runs 8 JVM services + Postgres + Redis. Use
   **≥ 16 GB RAM**, 4 vCPU, 40 GB+ disk.
 - **Firewall / security group:**
   - `22` (SSH) — your IP only
@@ -219,5 +219,5 @@ heredoc already does this.)
 | `18080` | api-gateway (→ 8080) | **public** (front with edge/TLS) |
 | `8081–8086` | user / event / seat / booking / payment / loyalty | `127.0.0.1` |
 | `18761` / `18762` | discovery-server (Eureka) | `127.0.0.1` |
-| `5432` / `6379` / `29092` | Postgres / Redis / Kafka | `127.0.0.1` |
+| `5432` / `6379` | Postgres / Redis | `127.0.0.1` |
 | `19090` | gateway management/actuator | `127.0.0.1` |

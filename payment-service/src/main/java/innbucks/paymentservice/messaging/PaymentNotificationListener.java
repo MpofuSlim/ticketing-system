@@ -9,11 +9,10 @@ import org.springframework.transaction.event.TransactionalEventListener;
 
 /**
  * Sends the customer a WhatsApp payment confirmation once a transaction commits
- * SUCCEEDED. A second {@code @TransactionalEventListener(AFTER_COMMIT)}
- * alongside {@link TransactionEventPublisher} (which forwards the same event to
- * Kafka): decoupled from the money path, fires only after the ledger row
- * commits, and best-effort — a gateway failure is logged and never affects the
- * committed transaction.
+ * SUCCEEDED. A {@code @TransactionalEventListener(AFTER_COMMIT)} on
+ * {@link TransactionCompletedEvent}: decoupled from the money path, fires only
+ * after the ledger row commits, and best-effort — a gateway failure is logged
+ * and never affects the committed transaction.
  *
  * <p>Only SUCCEEDED is notified: failures already surfaced synchronously to the
  * caller as an error response, so a "your payment failed" WhatsApp would be

@@ -47,7 +47,7 @@ kubectl -n ticketing create configmap pg-init \
 ## 2. Apply the workloads (bottom-up)
 
 ```sh
-kubectl apply -f 01-infra.yaml        # postgres, redis, kafka (local-path PVCs)
+kubectl apply -f 01-infra.yaml        # postgres, redis (local-path PVCs)
 kubectl apply -f 02-discovery.yaml    # Eureka HA pair
 kubectl apply -f 03-user-service.yaml
 kubectl apply -f 04-services.yaml     # event, seat, booking, payment, loyalty
@@ -116,7 +116,7 @@ Every **application** Deployment (`02`–`05`) runs with a locked-down
 serving until the new one passes its probe), so a hardening regression stalls the
 rollout rather than causing downtime.
 
-The **infra** StatefulSets (`01-infra.yaml`: postgres/redis/kafka) are left
+The **infra** StatefulSets (`01-infra.yaml`: postgres/redis) are left
 un-hardened for now — a StatefulSet pod is replaced in place (no surge), and the
 official images' root-then-drop entrypoints need per-image validation, so
 hardening the data tier is a deliberately-scheduled follow-up rather than an
@@ -124,11 +124,6 @@ auto-applied change.
 
 ## Notes / gotchas
 
-- **Kafka** (`01-infra.yaml`): the `kafka` Service sets
-  `publishNotReadyAddresses: true`. KRaft's broker must resolve `kafka:9093`
-  (its own controller) *during* startup, but a headless Service withholds a
-  pod's DNS until it is Ready — a deadlock that crashloops the broker. Compose
-  never hit this because Docker DNS resolves the name regardless of health.
 - **Service discovery**: each JVM service sets `EUREKA_INSTANCE_HOSTNAME=<svc>`
   + `EUREKA_PREFER_IP_ADDRESS=false` and has a matching `Service`, so the gateway
   resolves `lb://<svc>` → `<svc>:<port>` → pod.
