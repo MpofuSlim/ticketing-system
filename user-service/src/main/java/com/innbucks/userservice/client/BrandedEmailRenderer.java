@@ -35,20 +35,20 @@ public final class BrandedEmailRenderer {
      * @param logoUrl  hosted logo image URL; blank → CSS roundel fallback
      */
     public static String render(String subject, String plainBody, String logoUrl) {
-        String heading = escape(subject == null ? "" : subject);
         String paragraphs = toParagraphs(plainBody);
         String logo = (logoUrl == null || logoUrl.isBlank())
                 ? cssRoundel()
                 : "<img src=\"" + escapeAttr(logoUrl) + "\" width=\"180\" alt=\"InnBucks\" "
                     + "style=\"display:block;border:0;outline:none;text-decoration:none;height:auto;\">";
 
-        return "<!doctype html>"
-            + "<html lang=\"en\"><head><meta charset=\"utf-8\">"
-            + "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
-            + "<title>" + heading + "</title></head>"
-            + "<body style=\"margin:0;padding:0;background:#eef1f5;\">"
-            + "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" "
-            +   "style=\"background:#eef1f5;\"><tr><td align=\"center\" style=\"padding:24px 12px;\">"
+        // A FRAGMENT, not a full <html> document: the notification gateway
+        // renders the message field as HTML and (per the payment-rail template)
+        // may inject it into its own <html><body>. Emitting a bare centred table
+        // renders correctly both when the gateway wraps it and when it doesn't —
+        // a nested <html> would be invalid. All styles inline, web-safe fonts,
+        // no external CSS/JS: the lowest common denominator Gmail/Outlook render.
+        return "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" "
+            +   "style=\"background:#eef1f5;margin:0;\"><tr><td align=\"center\" style=\"padding:24px 12px;\">"
             + "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" "
             +   "style=\"width:600px;max-width:100%;background:#ffffff;border-radius:12px;overflow:hidden;"
             +   "font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;\">"
@@ -80,7 +80,7 @@ public final class BrandedEmailRenderer {
             +     "InnBucks MicroBank Ltd is a registered Deposit-Taking Microfinance Bank and a member "
             +     "of the Deposit Protection Scheme.</div>"
             + "</td></tr>"
-            + "</table></td></tr></table></body></html>";
+            + "</table></td></tr></table>";
     }
 
     /** CSS/table-drawn four-dot roundel + wordmark when no hosted logo is set. */
