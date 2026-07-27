@@ -35,7 +35,8 @@ class OrganizerNotificationGatewayContractTest {
         wireMock = new WireMockServer(wireMockConfig().dynamicPort());
         wireMock.start();
         gateway = new OrganizerNotificationGateway(
-                restTemplate(), "http://localhost:" + wireMock.port(), "test-token");
+                restTemplate(), "http://localhost:" + wireMock.port(), "test-token",
+                "https://ticketize.example.test");
     }
 
     @AfterAll
@@ -74,18 +75,22 @@ class OrganizerNotificationGatewayContractTest {
     }
 
     @Test
-    @DisplayName("activated notify: subject says live, message carries the title")
+    @DisplayName("activated notify: Ticketize subject, title, and the shareable event link")
     void activated_verifiesOutboundContract() {
         UUID organizer = UUID.randomUUID();
+        UUID eventId = UUID.fromString("20c96393-8ac8-480a-93d0-ef89981c53e0");
         wireMock.stubFor(post(urlEqualTo("/users/internal/" + organizer + "/notify"))
                 .willReturn(aResponse().withStatus(202)));
 
-        gateway.notifyEventActivated(organizer, "Pink Fun Run");
+        gateway.notifyEventActivated(organizer, eventId, "Pink Fun Run");
 
         wireMock.verify(postRequestedFor(urlEqualTo("/users/internal/" + organizer + "/notify"))
                 .withHeader("X-Internal-Token", equalTo("test-token"))
-                .withRequestBody(matchingJsonPath("$.subject", equalTo("Your event is now live on InnBucks")))
-                .withRequestBody(matchingJsonPath("$.message", containing("Pink Fun Run"))));
+                .withRequestBody(matchingJsonPath("$.subject", equalTo("Your event is now live on Ticketize")))
+                .withRequestBody(matchingJsonPath("$.message", containing("Pink Fun Run")))
+                // The shareable public event link, built from the configured base URL.
+                .withRequestBody(matchingJsonPath("$.message",
+                        containing("https://ticketize.example.test/events/" + eventId))));
     }
 
     @Test
@@ -122,7 +127,7 @@ class OrganizerNotificationGatewayContractTest {
     @DisplayName("guard rail: null organizer uuid makes NO HTTP call (all four methods)")
     void nullUuid_noNetworkCall() {
         gateway.notifyEventApproved(null, "Summer Concert");
-        gateway.notifyEventActivated(null, "Summer Concert");
+        gateway.notifyEventActivated(null, UUID.randomUUID(), "Summer Concert");
         gateway.notifyEventDeactivated(null, "Summer Concert");
         gateway.notifyEventRejected(null, "Summer Concert");
 
@@ -160,7 +165,8 @@ class OrganizerNotificationGatewayContractTest {
             closedPort = s.getLocalPort();
         }
         OrganizerNotificationGateway dead = new OrganizerNotificationGateway(
-                restTemplate(), "http://localhost:" + closedPort, "test-token");
+                restTemplate(), "http://localhost:" + closedPort, "test-token",
+                "https://ticketize.example.test");
 
         assertDoesNotThrow(() -> dead.notifyEventApproved(UUID.randomUUID(), "Summer Concert"));
     }

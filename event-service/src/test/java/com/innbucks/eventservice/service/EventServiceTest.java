@@ -536,7 +536,7 @@ class EventServiceTest {
 
         service.activateEvent(TENANT_1, "ROLE_EVENT_ORGANIZER", eventId);
 
-        verify(orgNotify).notifyEventActivated(TENANT_1, "T");
+        verify(orgNotify).notifyEventActivated(TENANT_1, eventId, "T");
     }
 
     @Test
