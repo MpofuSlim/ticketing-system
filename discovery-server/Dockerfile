@@ -11,6 +11,7 @@ RUN chmod +x mvnw
 RUN for i in 1 2 3; do ./mvnw -B -ntp -version && break || sleep 15; done
 
 # Copy every module's pom so the Maven reactor can resolve; sources come later.
+COPY common/pom.xml common/
 COPY discovery-server/pom.xml discovery-server/
 COPY api-gateway/pom.xml api-gateway/
 COPY user-service/pom.xml user-service/
