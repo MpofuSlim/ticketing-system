@@ -1,4 +1,4 @@
-package com.innbucks.userservice.client;
+package com.innbucks.bookingservice.client;
 
 import org.junit.jupiter.api.Test;
 
