@@ -294,6 +294,27 @@ class GatewayRouteTableTest {
     }
 
     @Test
+    void preAuthAbuseRoutesAreIpKeyedNotBearerKeyed() {
+        // OTP, MFA and forgot/reset-password are pre-auth surfaces whose
+        // limiter exists to cap SMS cost / code brute force PER IP. The default
+        // gatewayKeyResolver keys on the raw (unvalidated) bearer when one is
+        // present, so an attacker rotating garbage Bearer headers mints a fresh
+        // bucket per request and the per-IP cap never engages. Pin the
+        // hardcoded-IP resolver on all three routes so a refactor that swaps
+        // the resolver back fails CI instead of reopening the bypass.
+        List.of("auth-otp-route", "auth-mfa-route", "auth-password-reset-route").forEach(id -> {
+            boolean usesPreAuthIpResolver = route(id).getFilters().stream()
+                    .filter(f -> "RequestRateLimiter".equals(f.getName()))
+                    .flatMap(f -> f.getArgs().values().stream())
+                    .anyMatch(v -> v != null && v.contains("preAuthIpKeyResolver"));
+            assertThat(usesPreAuthIpResolver)
+                    .as("%s must key its limiter by client IP (preAuthIpKeyResolver), "
+                            + "never by the attacker-controlled bearer string", id)
+                    .isTrue();
+        });
+    }
+
+    @Test
     void apiDocsProxiesAreScopedToApiDocsOnly() {
         // Guards the documented regression: a /** predicate here would let
         // /user-service/loyalty/internal/** etc. bypass edge-deny + limiter.
