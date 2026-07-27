@@ -125,6 +125,12 @@ innbucks-notify:
   # longer blocks any FE call.
   read-timeout-ms: ${BANK_API_READ_TIMEOUT_MS:30000}
   token-ttl: ${BANK_API_TOKEN_TTL:PT8M}
+  # Send branded HTML emails instead of plain text. OFF until it's confirmed
+  # the notification gateway renders HTML in the `message` field — flip on in
+  # staging, email yourself, and check it renders (not raw tags). LOGO_URL must
+  # be a hosted image (clients block data: URIs); blank = CSS-drawn logo.
+  html-enabled: ${NOTIFY_HTML_ENABLED:false}
+  logo-url: ${NOTIFY_LOGO_URL:}
 
 whatsapp:
   base-url: ${WHATSAPP_GATEWAY_URL:http://localhost:8089}

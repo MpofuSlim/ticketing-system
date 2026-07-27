@@ -84,7 +84,7 @@ class OrganizerNotificationGatewayContractTest {
 
         wireMock.verify(postRequestedFor(urlEqualTo("/users/internal/" + organizer + "/notify"))
                 .withHeader("X-Internal-Token", equalTo("test-token"))
-                .withRequestBody(matchingJsonPath("$.subject", equalTo("Your event is now live")))
+                .withRequestBody(matchingJsonPath("$.subject", equalTo("Your event is now live on InnBucks")))
                 .withRequestBody(matchingJsonPath("$.message", containing("Pink Fun Run"))));
     }
 

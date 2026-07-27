@@ -79,9 +79,16 @@ public class EmailNotificationClient {
                 ? reference
                 : "TKT-EMAIL-" + UUID.randomUUID();
 
+        // Branded HTML (when enabled + gateway confirmed to render it) or the
+        // plain-text body closed with the standard InnBucks footer. HTML is
+        // off by default — see InnbucksNotifyProperties.htmlEnabled.
+        String body = properties.isHtmlEnabled()
+                ? BrandedEmailRenderer.render(subject, message, properties.getLogoUrl())
+                : EmailSignature.appendTo(message);
+
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("subject", subject);
-        payload.put("message", message);
+        payload.put("message", body);
         payload.put("reference", ref);
         payload.put("destinationEmail", to);
 

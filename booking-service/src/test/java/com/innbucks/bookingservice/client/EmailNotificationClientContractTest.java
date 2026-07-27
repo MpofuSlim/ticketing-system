@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.web.client.RestClient;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
+import static com.github.tomakehurst.wiremock.client.WireMock.containing;
 import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
 import static com.github.tomakehurst.wiremock.client.WireMock.matching;
 import static com.github.tomakehurst.wiremock.client.WireMock.matchingJsonPath;
@@ -83,7 +84,12 @@ class EmailNotificationClientContractTest {
                 .withHeader("X-Api-Key", equalTo(API_KEY))
                 .withHeader("Authorization", equalTo("Bearer tok-abc"))
                 .withRequestBody(matchingJsonPath("$.subject", equalTo("Your InnBucks tickets")))
-                .withRequestBody(matchingJsonPath("$.message", equalTo("You have 2 tickets")))
+                // The caller's body is carried verbatim, then the standard
+                // InnBucks footer is appended (email channel only). Assert both
+                // so a regression that drops the body OR the footer fails here.
+                .withRequestBody(matchingJsonPath("$.message", containing("You have 2 tickets")))
+                .withRequestBody(matchingJsonPath("$.message", containing("The InnBucks Team")))
+                .withRequestBody(matchingJsonPath("$.message", containing("Deposit Protection Scheme")))
                 .withRequestBody(matchingJsonPath("$.destinationEmail", equalTo("rufaro@example.com")))
                 .withRequestBody(matchingJsonPath("$.reference", equalTo("BOOKING-CONFIRM-1"))));
     }
@@ -104,8 +110,10 @@ class EmailNotificationClientContractTest {
         wireMock.verify(postRequestedFor(urlEqualTo(EMAIL))
                 .withRequestBody(matchingJsonPath("$.subject",
                         equalTo("Your InnBucks tickets - booking INN-1")))
+                // Body keeps its em-dash (only the subject is transliterated);
+                // containing() because the standard footer is appended after it.
                 .withRequestBody(matchingJsonPath("$.message",
-                        equalTo("Body keeps typography \u2014 untouched"))));
+                        containing("Body keeps typography \u2014 untouched"))));
     }
 
     @Test

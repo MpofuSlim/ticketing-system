@@ -106,7 +106,9 @@ public class EmailNotificationClient {
         // flagged on the same sends, so only the subject is transliterated;
         // the body keeps its typography.
         payload.put("subject", SmsTextSanitizer.toGsmSafe(subject));
-        payload.put("message", message);
+        // Close every email with the standard InnBucks sign-off + contact +
+        // Deposit-Protection disclosure (email channel only — see EmailSignature).
+        payload.put("message", EmailSignature.appendTo(message));
         payload.put("reference", ref);
         payload.put("destinationEmail", to);
 

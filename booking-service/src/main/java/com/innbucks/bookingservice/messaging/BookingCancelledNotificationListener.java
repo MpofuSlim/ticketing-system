@@ -95,10 +95,9 @@ public class BookingCancelledNotificationListener {
         String ref = booking.getConfirmationNumber();
         if (refund) {
             return "Your booking " + ref + " has been cancelled. If a payment was taken, your refund is being "
-                    + "processed — please allow a few business days. Questions? Contact InnBucks support.\n\n"
-                    + "— The InnBucks Team";
+                    + "processed — please allow a few business days. Questions? Contact InnBucks support.";
         }
         return "Your booking " + ref + " has been cancelled and your reserved seats released. "
-                + "You can book again anytime.\n\n— The InnBucks Team";
+                + "You can book again anytime.";
     }
 }
