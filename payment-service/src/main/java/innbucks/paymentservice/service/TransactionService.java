@@ -125,10 +125,9 @@ public class TransactionService {
     }
 
     /**
-     * Map the persistent Transaction to its outbound event shape. Carries
-     * the full phone number unmasked — downstream consumers (the future
-     * notification service) need it to send the SMS / push. Kafka is
-     * internal-network only.
+     * Map the persistent Transaction to its in-process event shape. Carries
+     * the full phone number unmasked — the AFTER_COMMIT notification listener
+     * needs it to send the WhatsApp confirmation.
      */
     private static TransactionCompletedEvent toEvent(Transaction tx) {
         return new TransactionCompletedEvent(

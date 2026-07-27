@@ -8,28 +8,16 @@ import java.time.LocalDate;
 import java.util.UUID;
 
 /**
- * Domain event emitted by {@link innbucks.paymentservice.service.TransactionService}
- * once a ledger row reaches a terminal state (SUCCEEDED or FAILED). Used in
- * two ways:
+ * In-JVM domain event emitted by {@link innbucks.paymentservice.service.TransactionService}
+ * once a ledger row reaches a terminal state (SUCCEEDED or FAILED). Published
+ * via Spring's {@code ApplicationEventPublisher} from within the @Transactional
+ * method that flips the row; {@link PaymentNotificationListener} fires
+ * AFTER_COMMIT, so a confirmation is never sent for a row that ultimately
+ * rolled back.
  *
- * <ul>
- *   <li><b>Inside the JVM</b> — published via Spring's
- *       {@code ApplicationEventPublisher} from within the @Transactional
- *       method that flips the row. The
- *       {@code TransactionEventPublisher.publishToKafka} listener fires
- *       AFTER the transaction commits, so an event is never emitted for
- *       a row that ultimately rolled back.</li>
- *   <li><b>On Kafka</b> — serialised as JSON to the
- *       {@code payment.transaction.completed} topic. Keyed by transaction
- *       id so all events for one transaction go to the same partition
- *       (ordered consumption per tx).</li>
- * </ul>
- *
- * <p>Includes the customer's full phone number unmasked — downstream
- * consumers (the future notification service) need it to send the SMS /
- * push. Kafka is internal-network only; the consumers run inside our
- * security perimeter. The audit's log-masking rule applies to OBSERVABILITY
- * logs, not to internal messaging payloads.
+ * <p>Includes the customer's full phone number unmasked — the AFTER_COMMIT
+ * notification listener needs it to send the WhatsApp confirmation. The audit's
+ * log-masking rule applies to OBSERVABILITY logs, not to this in-process event.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record TransactionCompletedEvent(

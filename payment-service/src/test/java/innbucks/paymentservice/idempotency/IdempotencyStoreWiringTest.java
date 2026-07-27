@@ -27,7 +27,7 @@ import static org.mockito.Mockito.mock;
  *
  * <p>Uses a bare {@link AnnotationConfigApplicationContext} instead of {@code @SpringBootTest}
  * to keep the test fast and isolated from the rest of payment-service's autoconfig
- * (Hibernate, Flyway, Kafka, etc.) — none of which is relevant to the wiring question.
+ * (Hibernate, Flyway, etc.) — none of which is relevant to the wiring question.
  */
 class IdempotencyStoreWiringTest {
 

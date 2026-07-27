@@ -313,9 +313,31 @@ staged rollout, NOT a code-only PR**):
   HMAC secrets, and internal tokens. No rotation exists today (JWT has no `kid`;
   `MfaSecretCipher`'s `v1:` prefix already scaffolds multi-key).
 - **In-cluster TLS/mTLS.** Only the Cloudflare/nginx edge is encrypted; service↔
-  service, ↔Postgres (`sslmode=verify-full`), ↔Redis (TLS), ↔Kafka (`SASL_SSL`)
-  are plaintext behind the edge. `06-networkpolicy.yaml` is segmentation, not
-  encryption. Needs a mesh or per-hop TLS + cert management.
+  service, ↔Postgres (`sslmode=verify-full`), ↔Redis (TLS) are plaintext behind
+  the edge. `06-networkpolicy.yaml` is segmentation, not encryption. Needs a
+  mesh or per-hop TLS + cert management.
+
+## Messaging — no broker (Kafka removed)
+
+**There is no message broker.** Kafka was removed once the review found it was a
+**producer-only bus**: booking/payment published `booking.*` / `payment.*`
+events through an outbox + `KafkaTemplate`, but **nothing consumed any topic**
+(loyalty earn ran on a synchronous Feign call + a DB retry table instead). The
+broker (a StatefulSet + ~1.5GB/cell) was pure cost, so it was decommissioned —
+producer code, the booking transactional-outbox subsystem
+(`event/BookingEventPublisher`, `outbox/*`), the payment `TransactionEventPublisher`,
+`spring-kafka` deps, and the Kafka container/StatefulSet/NetworkPolicy entries all
+deleted. The **empty `event_outbox` table is left dormant** (harmless under
+`ddl-auto: validate`; no entity maps it) rather than dropped — drop it in a later
+migration if you want.
+
+Domain events are now **in-process only**: `ApplicationEventPublisher` +
+`@TransactionalEventListener(AFTER_COMMIT)` still drive the notification
+side-effects (`BookingConfirmed/Cancelled` → notifications, `TransactionCompletedEvent`
+→ payment WhatsApp), so a rolled-back tx never fires a ghost side-effect — there
+is just no cross-service bus. **Do not reintroduce a producer-only Kafka bus.**
+If a genuine event-consumer use case lands, add a broker deliberately *with real
+consumers* (and consumer-side idempotency), not a publish-only spike.
 
 ## Deploying to the EC2 k3s cell after a merge
 

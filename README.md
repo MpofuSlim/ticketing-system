@@ -2,8 +2,7 @@
 
 A microservices-based online ticketing platform built with Spring Boot 4 and
 Spring Cloud Gateway. Each service owns its own database; services find each
-other through a Eureka registry, communicate over REST, and publish domain
-events to Kafka.
+other through a Eureka registry and communicate over REST.
 
 ## Services
 
@@ -14,13 +13,13 @@ events to Kafka.
 | `user-service`     | 8081 | Auth: registration, login, JWT issuance, OTP, token revocation; admin & shop-staff users. |
 | `event-service`    | 8082 | Event catalogue and tenant-scoped event admin.                              |
 | `seat-service`     | 8083 | Seat inventory, categories, optimistic-locked holds.                        |
-| `booking-service`  | 8084 | Booking creation, idempotency, payment hand-off; publishes Kafka domain events. |
+| `booking-service`  | 8084 | Booking creation, idempotency, payment hand-off. |
 | `payment-service`  | 8085 | Booking payments + wallet transfers/withdrawals via the Oradian middleware. Opt-in (`payments` profile). |
 | `loyalty-service`  | 8086 | Loyalty & merchant platform: merchants, shops, vouchers, invoices, QR, points. |
 
 Shared infrastructure: PostgreSQL 16 (one database per service, schema owned by
 Flyway migrations), Redis 7 (distributed locks, idempotency, and the gateway's
-rate-limit buckets), and Kafka (single-node KRaft) for booking domain events.
+rate-limit buckets).
 
 ## Quick start
 
@@ -140,27 +139,21 @@ present, otherwise the client IP. Defaults: 50 req/s sustained,
 `RATE_LIMIT_BURST_CAPACITY`. Over-budget requests get HTTP 429 with
 `X-RateLimit-Remaining` and `Retry-After` headers.
 
-## Domain events (Kafka)
+## Domain events (in-process)
 
-`booking-service` publishes domain events as a side-effect of its existing
-flows; consumers can subscribe incrementally. Topics:
+`booking-service` and `payment-service` publish domain events via Spring's
+`ApplicationEventPublisher` and consume them with
+`@TransactionalEventListener` — **in-process only, no message broker**. This
+drives the side-effects that fire only after the owning transaction commits
+(e.g. the booking confirmation / cancellation notifications, the payment
+confirmation WhatsApp), so a rolled-back transaction never produces a ghost
+side-effect.
 
-| Topic                | When                              | Key         |
-|----------------------|-----------------------------------|-------------|
-| `booking.created`    | `POST /bookings` succeeds         | `bookingId` |
-| `booking.confirmed`  | `confirmBooking` succeeds         | `bookingId` |
-| `booking.cancelled`  | `cancelBooking` succeeds          | `bookingId` |
-
-Topic names are env-overridable (`BOOKING_CREATED_TOPIC`,
-`BOOKING_CONFIRMED_TOPIC`, `BOOKING_CANCELLED_TOPIC`). Events are emitted
-via `ApplicationEventPublisher` inside the transaction and forwarded to
-Kafka by a `@TransactionalEventListener(AFTER_COMMIT)`, so a rolled-back
-booking never produces a ghost event. Producer config: `acks=all` plus
-idempotence; payload is JSON.
-
-The local Kafka broker runs in single-node KRaft mode (no Zookeeper).
-Inside the Docker network it's reachable as `kafka:9092`; from your host
-it's `localhost:29092` for tools like `kafkacat`.
+> A Kafka bus was previously wired as a producer-only broker (nothing consumed
+> the topics; loyalty earn ran on a synchronous Feign + DB-retry path instead).
+> It was removed to shed the unused broker and its per-cell cost. If a real
+> event-consumer use case lands, reintroduce a broker deliberately with actual
+> consumers rather than a publish-only bus.
 
 ## Service discovery (Eureka)
 
@@ -206,7 +199,7 @@ GitHub Actions workflows in `.github/workflows/`:
 ├── user-service/          Auth + JWT + OTP
 ├── event-service/         Event catalogue
 ├── seat-service/          Seat inventory + holds
-├── booking-service/       Booking + idempotency + Kafka events
+├── booking-service/       Booking + idempotency
 ├── payment-service/       Booking payments + Oradian wallet transfers (opt-in)
 ├── loyalty-service/       Loyalty + merchant platform
 ├── prometheus/            Scrape config, alert rules, SLO doc

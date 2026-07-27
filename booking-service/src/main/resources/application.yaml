@@ -36,9 +36,6 @@ spring:
       repositories:
         enabled: false
 
-  kafka:
-    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:29092}
-
   lifecycle:
     timeout-per-shutdown-phase: 30s
 
@@ -162,20 +159,6 @@ app:
     reminder-cron: ${BOOKING_REMINDER_CRON:0 10 * * * *}
   idempotency:
     store: ${IDEMPOTENCY_STORE:memory}
-  events:
-    booking-created-topic: ${BOOKING_CREATED_TOPIC:booking.created}
-    booking-confirmed-topic: ${BOOKING_CONFIRMED_TOPIC:booking.confirmed}
-    booking-cancelled-topic: ${BOOKING_CANCELLED_TOPIC:booking.cancelled}
-  event-outbox:
-    batch-size: ${EVENT_OUTBOX_BATCH_SIZE:200}
-    max-attempts: ${EVENT_OUTBOX_MAX_ATTEMPTS:10}
-    interval-ms: ${EVENT_OUTBOX_INTERVAL_MS:5000}
-    initial-delay-ms: ${EVENT_OUTBOX_INITIAL_DELAY_MS:10000}
-    purge:
-      retention: ${EVENT_OUTBOX_PURGE_RETENTION:P7D}
-      batch-size: ${EVENT_OUTBOX_PURGE_BATCH_SIZE:1000}
-      interval-ms: ${EVENT_OUTBOX_PURGE_INTERVAL_MS:3600000}
-      initial-delay-ms: ${EVENT_OUTBOX_PURGE_INITIAL_DELAY_MS:60000}
   # Platform -> event-organizer commission invoicing. Rates are percentages
   # (10.0 = 10%); both are snapshotted onto every invoice at generation. The
   # generation + overdue jobs are ShedLock-guarded and run in the small hours UTC.

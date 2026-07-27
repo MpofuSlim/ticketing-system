@@ -158,7 +158,6 @@ spec:
             - { name: REDIS_HOST, value: "redis" }
             - { name: REDIS_PORT, value: "6379" }
             - { name: IDEMPOTENCY_STORE, value: "redis" }
-            - { name: KAFKA_BOOTSTRAP_SERVERS, value: "kafka:9092" }
             - { name: TICKETS_PUBLIC_BASE_URL, value: "https://dtx.innbucks.co.zw" }
             - { name: INVOICE_DEFAULT_COMMISSION_RATE, value: "10.0" }
             - { name: INVOICE_VAT_RATE, value: "15.0" }

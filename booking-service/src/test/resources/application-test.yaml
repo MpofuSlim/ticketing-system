@@ -18,7 +18,6 @@ spring:
 seat-service:
   url: http://localhost:0
 
-spring.kafka.bootstrap-servers: localhost:0
 
 jwt:
   secret: test-test-test-test-test-test-test-test
