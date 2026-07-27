@@ -1,0 +1,145 @@
+# Monitoring stack for the ticketing cell: Prometheus (scrape + rule
+# evaluation) and Alertmanager (dedupe/group/route to receivers).
+#
+# Apply with scripts/apply-monitoring.sh — NOT with a bare
+# `kubectl apply -f` of this file. The script first (re)generates the three
+# ConfigMaps and the scrape-token Secret this manifest mounts, from the
+# single source of truth under prometheus/ at the repo root:
+#   prometheus-config      <- prometheus/prometheus.yml
+#   prometheus-rules       <- prometheus/alerts.yaml
+#   alertmanager-config    <- prometheus/alertmanager.yml
+#   metrics-scrape-token   <- METRICS_SCRAPE_TOKEN (same value the app
+#                             services read via cell-zw-secrets)
+# Duplicating those configs inline here would drift from prometheus/ — the
+# exact failure mode that left the cell alertless before this stack existed.
+#
+# This dir is deliberately a SUBDIRECTORY of deploy/k8s: the runbook's
+# `kubectl apply -f ~/ticketing-system/deploy/k8s/` is non-recursive, so the
+# fleet apply cannot half-apply this stack before its ConfigMaps exist.
+#
+# In-cluster only: neither Deployment gets a NodePort/Ingress. Operators
+# reach the UIs with a port-forward:
+#   kubectl -n ticketing port-forward svc/prometheus 9091:9090
+#   kubectl -n ticketing port-forward svc/alertmanager 9093:9093
+---
+# ClusterIP-only Service for the gateway's management port. The main
+# api-gateway Service is type NodePort — adding 9090 there would mint a
+# public nodePort for the actuator; this Service keeps it in-cluster.
+apiVersion: v1
+kind: Service
+metadata: { name: api-gateway-mgmt, namespace: ticketing }
+spec:
+  selector: { app: api-gateway }
+  ports: [ { name: mgmt, port: 9090, targetPort: 9090 } ]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: prometheus-data, namespace: ticketing }
+spec:
+  accessModes: [ ReadWriteOnce ]
+  resources: { requests: { storage: 5Gi } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: prometheus, namespace: ticketing }
+spec:
+  selector: { app: prometheus }
+  ports: [ { name: http, port: 9090, targetPort: 9090 } ]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: prometheus, namespace: ticketing }
+spec:
+  replicas: 1
+  # Recreate, not RollingUpdate: the data PVC is ReadWriteOnce on single-node
+  # k3s — a rolling replacement pod would deadlock waiting for the volume.
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: prometheus } }
+  template:
+    metadata: { labels: { app: prometheus } }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        # prom images run as nobody; pin it explicitly per fleet convention.
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: prometheus
+          # v3+ required: the scrape config uses `http_headers` (X-Metrics-Token
+          # scrape auth), which older Prometheus rejects at config load.
+          image: prom/prometheus:v3.5.0
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time=15d
+          ports: [ { containerPort: 9090 } ]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources: { requests: { memory: 400Mi }, limits: { memory: 768Mi } }
+          readinessProbe: { httpGet: { path: /-/ready,   port: 9090 }, initialDelaySeconds: 10, periodSeconds: 10, failureThreshold: 6 }
+          livenessProbe:  { httpGet: { path: /-/healthy, port: 9090 }, initialDelaySeconds: 30, periodSeconds: 15, failureThreshold: 6 }
+          volumeMounts:
+            - { name: config,  mountPath: /etc/prometheus/prometheus.yml, subPath: prometheus.yml }
+            - { name: rules,   mountPath: /etc/prometheus/rules }
+            - { name: scrape-token, mountPath: /etc/prometheus/secrets, readOnly: true }
+            - { name: data,    mountPath: /prometheus }
+      volumes:
+        - { name: config, configMap: { name: prometheus-config } }
+        - { name: rules,  configMap: { name: prometheus-rules } }
+        - name: scrape-token
+          secret:
+            secretName: metrics-scrape-token
+            items: [ { key: token, path: metrics-scrape-token } ]
+        - { name: data, persistentVolumeClaim: { claimName: prometheus-data } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: alertmanager, namespace: ticketing }
+spec:
+  selector: { app: alertmanager }
+  ports: [ { name: http, port: 9093, targetPort: 9093 } ]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: alertmanager, namespace: ticketing }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: alertmanager } }
+  template:
+    metadata: { labels: { app: alertmanager } }
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: alertmanager
+          image: prom/alertmanager:v0.28.1
+          args:
+            - --config.file=/etc/alertmanager/alertmanager.yml
+            - --storage.path=/alertmanager
+          ports: [ { containerPort: 9093 } ]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          resources: { requests: { memory: 64Mi }, limits: { memory: 128Mi } }
+          readinessProbe: { httpGet: { path: /-/ready,   port: 9093 }, initialDelaySeconds: 5,  periodSeconds: 10, failureThreshold: 6 }
+          livenessProbe:  { httpGet: { path: /-/healthy, port: 9093 }, initialDelaySeconds: 15, periodSeconds: 15, failureThreshold: 6 }
+          volumeMounts:
+            - { name: config, mountPath: /etc/alertmanager/alertmanager.yml, subPath: alertmanager.yml }
+            # Silences/notification-log state. emptyDir is a deliberate
+            # trade-off: losing silences on a pod restart is annoying;
+            # losing ALERTS is what the Prometheus PVC prevents.
+            - { name: state,  mountPath: /alertmanager }
+      volumes:
+        - { name: config, configMap: { name: alertmanager-config } }
+        - { name: state,  emptyDir: {} }

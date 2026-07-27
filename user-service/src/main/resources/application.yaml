@@ -180,6 +180,15 @@ eureka:
     hostname: ${EUREKA_INSTANCE_HOSTNAME:localhost}
     instance-id: ${spring.application.name}:${random.uuid}
 
+
+# Static token the Prometheus scraper presents on X-Metrics-Token to read
+# /actuator/prometheus (see MetricsScrapeAuthFilter). Blank (the default)
+# fail-closes: the endpoint stays JWT-401 and scraping is off until the cell
+# provisions METRICS_SCRAPE_TOKEN (openssl rand -base64 48; same value fleet-
+# wide + in the Prometheus scrape config's header file).
+monitoring:
+  scrape-token: ${METRICS_SCRAPE_TOKEN:}
+
 management:
   endpoints:
     web:

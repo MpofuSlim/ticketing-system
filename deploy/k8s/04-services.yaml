@@ -52,7 +52,7 @@ spec:
             - { name: REDIS_PORT, value: "6379" }
           resources: { requests: { memory: 448Mi }, limits: { memory: 640Mi } }
           readinessProbe: { httpGet: { path: /actuator/health, port: 8082 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
-          livenessProbe:  { httpGet: { path: /actuator/health, port: 8082 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
+          livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8082 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
           volumeMounts: [ { name: tmp, mountPath: /tmp } ]
       volumes: [ { name: tmp, emptyDir: {} } ]
 ---
@@ -106,7 +106,7 @@ spec:
             - { name: LOCK_STORE, value: "redis" }
           resources: { requests: { memory: 448Mi }, limits: { memory: 640Mi } }
           readinessProbe: { httpGet: { path: /actuator/health, port: 8083 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
-          livenessProbe:  { httpGet: { path: /actuator/health, port: 8083 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
+          livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8083 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
           volumeMounts: [ { name: tmp, mountPath: /tmp } ]
       volumes: [ { name: tmp, emptyDir: {} } ]
 ---
@@ -167,7 +167,7 @@ spec:
             - { name: INVOICE_SCHEDULER_ENABLED, value: "true" }
           resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }
           readinessProbe: { httpGet: { path: /actuator/health, port: 8084 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
-          livenessProbe:  { httpGet: { path: /actuator/health, port: 8084 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
+          livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8084 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
           volumeMounts: [ { name: tmp, mountPath: /tmp } ]
       volumes: [ { name: tmp, emptyDir: {} } ]
 ---
@@ -223,7 +223,7 @@ spec:
             - { name: PAYMENTS_INNBUCKS_ENABLED, value: "true" }
           resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }
           readinessProbe: { httpGet: { path: /actuator/health, port: 8085 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
-          livenessProbe:  { httpGet: { path: /actuator/health, port: 8085 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
+          livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8085 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
           volumeMounts: [ { name: tmp, mountPath: /tmp } ]
       volumes: [ { name: tmp, emptyDir: {} } ]
 ---
@@ -276,6 +276,6 @@ spec:
             - { name: REDIS_PORT, value: "6379" }
           resources: { requests: { memory: 448Mi }, limits: { memory: 640Mi } }
           readinessProbe: { httpGet: { path: /actuator/health, port: 8086 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
-          livenessProbe:  { httpGet: { path: /actuator/health, port: 8086 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
+          livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8086 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
           volumeMounts: [ { name: tmp, mountPath: /tmp } ]
       volumes: [ { name: tmp, emptyDir: {} } ]

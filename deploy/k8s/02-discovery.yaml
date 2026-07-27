@@ -50,7 +50,7 @@ spec:
             - { name: EUREKA_PEER_URL, value: ",http://$(EUREKA_USERNAME):$(EUREKA_PASSWORD)@discovery-server-2:8761/eureka/" }
           resources: { requests: { memory: 320Mi }, limits: { memory: 512Mi } }
           readinessProbe: { httpGet: { path: /actuator/health, port: 8761 }, initialDelaySeconds: 30, periodSeconds: 10, failureThreshold: 15 }
-          livenessProbe:  { httpGet: { path: /actuator/health, port: 8761 }, initialDelaySeconds: 120, periodSeconds: 15, failureThreshold: 6 }
+          livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8761 }, initialDelaySeconds: 120, periodSeconds: 15, failureThreshold: 6 }
           volumeMounts: [ { name: tmp, mountPath: /tmp } ]
       volumes: [ { name: tmp, emptyDir: {} } ]
 ---
@@ -88,6 +88,6 @@ spec:
             - { name: EUREKA_PEER_URL, value: ",http://$(EUREKA_USERNAME):$(EUREKA_PASSWORD)@discovery-server:8761/eureka/" }
           resources: { requests: { memory: 320Mi }, limits: { memory: 512Mi } }
           readinessProbe: { httpGet: { path: /actuator/health, port: 8761 }, initialDelaySeconds: 30, periodSeconds: 10, failureThreshold: 15 }
-          livenessProbe:  { httpGet: { path: /actuator/health, port: 8761 }, initialDelaySeconds: 120, periodSeconds: 15, failureThreshold: 6 }
+          livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8761 }, initialDelaySeconds: 120, periodSeconds: 15, failureThreshold: 6 }
           volumeMounts: [ { name: tmp, mountPath: /tmp } ]
       volumes: [ { name: tmp, emptyDir: {} } ]

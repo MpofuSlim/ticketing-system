@@ -18,45 +18,75 @@ alerting:
     - static_configs:
         - targets: [ "alertmanager:9093" ]
 
+# Scrape auth: every app service guards /actuator/prometheus behind
+# .anyRequest().authenticated(), with a static-token side door for the
+# scraper (X-Metrics-Token, constant-time compare — see each service's
+# MetricsScrapeAuthFilter). The token is mounted from the metrics-scrape-token
+# Secret (same METRICS_SCRAPE_TOKEN value the services get via cell-zw-secrets;
+# scripts/apply-monitoring.sh creates it). `http_headers` needs Prometheus v3+
+# — the manifest pins one, don't downgrade the image below v3.
+#
+# The api-gateway is the exception twice over: its actuator lives on the
+# dedicated management port 9090 (NOT the routed 8080 — scraping 8080 hits
+# the route table and 404s), and it has no Spring Security filter chain, so
+# no token is needed. 9090 is deliberately NOT on the public NodePort
+# Service — the api-gateway-mgmt ClusterIP Service (deploy/k8s/monitoring/)
+# exposes it in-cluster only.
 scrape_configs:
 
   - job_name: api-gateway
     metrics_path: /actuator/prometheus
     static_configs:
-      - targets: [ "api-gateway:8080" ]
+      - targets: [ "api-gateway-mgmt:9090" ]
 
   - job_name: user-service
     metrics_path: /actuator/prometheus
+    http_headers:
+      X-Metrics-Token:
+        files: [ /etc/prometheus/secrets/metrics-scrape-token ]
     static_configs:
       - targets: [ "user-service:8081" ]
 
   - job_name: event-service
     metrics_path: /actuator/prometheus
+    http_headers:
+      X-Metrics-Token:
+        files: [ /etc/prometheus/secrets/metrics-scrape-token ]
     static_configs:
       - targets: [ "event-service:8082" ]
 
   - job_name: seat-service
     metrics_path: /actuator/prometheus
+    http_headers:
+      X-Metrics-Token:
+        files: [ /etc/prometheus/secrets/metrics-scrape-token ]
     static_configs:
       - targets: [ "seat-service:8083" ]
 
   - job_name: booking-service
     metrics_path: /actuator/prometheus
+    http_headers:
+      X-Metrics-Token:
+        files: [ /etc/prometheus/secrets/metrics-scrape-token ]
     static_configs:
       - targets: [ "booking-service:8084" ]
 
   - job_name: payment-service
     metrics_path: /actuator/prometheus
-    authorization:
-      type: Bearer
-      credentials_file: /etc/prometheus/secrets/payment-service-token
+    http_headers:
+      X-Metrics-Token:
+        files: [ /etc/prometheus/secrets/metrics-scrape-token ]
     static_configs:
       - targets: [ "payment-service:8085" ]
 
+  # loyalty-service lives in the MpofuSlim/InnRewards repo but runs in this
+  # cell and shares the METRICS_SCRAPE_TOKEN (its MetricsScrapeAuthFilter is
+  # the same pattern — keep the two repos in lock-step, per the extraction
+  # contract in both CLAUDE.mds).
   - job_name: loyalty-service
     metrics_path: /actuator/prometheus
-    authorization:
-      type: Bearer
-      credentials_file: /etc/prometheus/secrets/loyalty-service-token
+    http_headers:
+      X-Metrics-Token:
+        files: [ /etc/prometheus/secrets/metrics-scrape-token ]
     static_configs:
       - targets: [ "loyalty-service:8086" ]

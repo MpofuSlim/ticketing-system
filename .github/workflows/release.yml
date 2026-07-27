@@ -32,8 +32,54 @@ permissions:
   attestations: write
 
 jobs:
+  # Gate: no image is built, scanned, attested or pushed from a commit whose
+  # test suite is red. Without this job the Dockerfiles' -DskipTests build
+  # meant a master merge could publish a fully-attested :latest image that was
+  # never tested — the provenance attestation certified an untested artifact,
+  # and the deploy runbook's `rollout restart` would then pull it. Duplicates
+  # ci.yml's verify on purpose: Release triggers independently of CI (push,
+  # tags, workflow_dispatch), so gating on "CI happened to pass elsewhere"
+  # would leave those paths unguarded.
+  test:
+    name: Test (gates image build)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up JDK
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+
+      - name: Cache Maven wrapper distribution
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.m2/wrapper
+          key: ${{ runner.os }}-maven-wrapper-${{ hashFiles('.mvn/wrapper/maven-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-maven-wrapper-
+
+      - name: Bootstrap Maven wrapper (retry transient downloads)
+        run: |
+          for attempt in 1 2 3; do
+            ./mvnw -B -ntp -version && exit 0
+            echo "Maven wrapper bootstrap attempt ${attempt} failed; retrying in $((attempt * 10))s..."
+            sleep $((attempt * 10))
+          done
+          echo "::error::Maven wrapper bootstrap failed after 3 attempts (transient Maven Central download issue)."
+          exit 1
+
+      - name: Build + test + integration-test
+        run: ./mvnw -B -ntp verify
+
   build:
     name: Build, scan, push
+    needs: test
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

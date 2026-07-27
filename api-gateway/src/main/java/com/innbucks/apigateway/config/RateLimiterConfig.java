@@ -101,6 +101,36 @@ public class RateLimiterConfig {
     }
 
     /**
+     * IP-ONLY resolver for the pre-auth abuse-sensitive routes (OTP, MFA,
+     * forgot/reset-password). These routes were previously on the default
+     * {@link #gatewayKeyResolver}, on the assumption that pre-auth calls carry
+     * no bearer and therefore fall through to the IP arm. That assumption is
+     * attacker-controlled: the default resolver keys on the RAW Authorization
+     * header without validating it, so a caller who attaches a rotating
+     * garbage {@code Bearer} value mints a fresh bucket per request and the
+     * per-IP cap — the only fleet-level control on real-money SMS sends —
+     * never engages. Hardcoding IP-keying here closes that bypass the same way
+     * {@link #paymentsInnbucksIpKeyResolver} does for the public checkout
+     * route.
+     *
+     * <p>Trade-off (deliberate): callers behind one shared NAT share a bucket
+     * on these routes. They are low-frequency, human-paced actions and the
+     * replenish/burst is env-tunable ({@code AUTH_OTP_RATE_LIMIT_*}), so a
+     * shared office IP tripping the cap is throttled, not locked out — and the
+     * per-account / per-msisdn caps downstream are unaffected.
+     */
+    @Bean
+    public KeyResolver preAuthIpKeyResolver(RemoteAddressResolver gatewayRemoteAddressResolver) {
+        return exchange -> {
+            InetSocketAddress remote = gatewayRemoteAddressResolver.resolve(exchange);
+            if (remote != null && remote.getAddress() != null) {
+                return Mono.just("ip:" + remote.getAddress().getHostAddress());
+            }
+            return Mono.just("anonymous-pre-auth");
+        };
+    }
+
+    /**
      * Fail-SAFE rate limiter for the SMS-cost / payment routes (OWASP A04). It
      * wraps the auto-configured {@link RedisRateLimiter}: Redis stays the
      * cross-instance source of truth, but when Redis is unreachable — where the
