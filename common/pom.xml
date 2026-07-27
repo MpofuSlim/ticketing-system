@@ -26,6 +26,18 @@
     -->
     <description>Shared cross-cutting code for the ticketing services.</description>
 
+    <properties>
+        <!--
+          This is a plain library jar with no main class. The per-service
+          Dockerfiles build with `-pl <svc> -am ... spring-boot:repackage`,
+          which runs the repackage goal on EVERY reactor module they pull in.
+          user-service and booking-service pull `common` in (they depend on it),
+          so without this skip the CLI repackage goal fails on `common` with
+          "Unable to find main class". Scope the skip to this module only.
+        -->
+        <spring-boot.repackage.skip>true</spring-boot.repackage.skip>
+    </properties>
+
     <dependencies>
         <!-- Test-only; versions managed by the Spring Boot BOM imported in the parent. -->
         <dependency>
