@@ -79,9 +79,12 @@ public class EmailNotificationClient {
                 ? reference
                 : "TKT-EMAIL-" + UUID.randomUUID();
 
-        // Close every email with the standard InnBucks sign-off + contact +
-        // Deposit-Protection disclosure (email channel only — see EmailSignature).
-        String body = EmailSignature.appendTo(message);
+        // Branded HTML (when enabled + gateway confirmed to render it) or the
+        // plain-text body closed with the standard InnBucks footer. HTML is
+        // off by default — see InnbucksNotifyProperties.htmlEnabled.
+        String body = properties.isHtmlEnabled()
+                ? BrandedEmailRenderer.render(subject, message, properties.getLogoUrl())
+                : EmailSignature.appendTo(message);
 
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("subject", subject);

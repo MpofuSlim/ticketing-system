@@ -27,4 +27,25 @@ public class InnbucksNotifyProperties {
     private int readTimeoutMs = 20000;
     /** Fallback token lifetime when the JWT carries no parseable exp. */
     private Duration tokenTtl = Duration.ofMinutes(8);
+
+    /**
+     * When true, outbound emails are sent as branded HTML in the {@code message}
+     * field instead of plain text. OFF by default: it is unconfirmed whether the
+     * notification gateway renders HTML in {@code message} (the payment rail's
+     * confirmation emails are HTML, but through the banking platform's own
+     * templates). Flip on in staging, send yourself one email, and check whether
+     * it renders as a formatted email or shows raw tags — if it renders, this is
+     * safe to enable in prod; if it shows tags, leave it off (plain text with the
+     * standard footer is the fallback) and the gateway needs a different HTML path.
+     */
+    private boolean htmlEnabled = false;
+
+    /**
+     * Public URL of the InnBucks logo shown in the HTML email header. Email
+     * clients block {@code data:} URIs in {@code <img>}, so this must be a hosted
+     * image (e.g. https://www.innbucks.co.zw/…/logo.png). When blank, the HTML
+     * template falls back to a CSS-drawn roundel + wordmark so the email still
+     * renders branded without a hosted asset.
+     */
+    private String logoUrl = "";
 }

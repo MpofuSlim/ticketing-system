@@ -50,11 +50,16 @@ class EmailNotificationClientContractTest {
     }
 
     private static EmailNotificationClient client(int port) {
+        return client(port, false);
+    }
+
+    private static EmailNotificationClient client(int port, boolean htmlEnabled) {
         InnbucksNotifyProperties props = new InnbucksNotifyProperties();
         props.setBaseUrl("http://localhost:" + port);
         props.setApiKey(API_KEY);
         props.setUsername("test-user");
         props.setPassword("test-pass");
+        props.setHtmlEnabled(htmlEnabled);
         return new EmailNotificationClient(
                 RestClient.builder().baseUrl("http://localhost:" + port).build(),
                 props, new ObjectMapper());
@@ -94,6 +99,25 @@ class EmailNotificationClientContractTest {
                 .withRequestBody(matchingJsonPath("$.message", containing("Deposit Protection Scheme")))
                 .withRequestBody(matchingJsonPath("$.destinationEmail", equalTo("staff@example.com")))
                 .withRequestBody(matchingJsonPath("$.reference", equalTo("STAFF-ONBOARD-1"))));
+    }
+
+    @Test
+    @DisplayName("html-enabled: message field carries branded HTML with the body, footer and logo")
+    void sendEmail_htmlEnabled_putsBrandedHtmlOnTheWire() {
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).willReturn(okJson("{\"accessToken\":\"tok-abc\"}")));
+        wireMock.stubFor(post(urlEqualTo(EMAIL)).willReturn(aResponse().withStatus(200)));
+
+        client(wireMock.port(), true).sendEmail("staff@example.com",
+                "Your event is now live", "Hello,\n\nYour event is now live.", "EVT-1");
+
+        // With html-enabled the message is a full HTML document (not plain
+        // text): the doctype, the escaped body, and the footer all ride in the
+        // `message` field so a single test proves the toggle actually changes
+        // the wire shape.
+        wireMock.verify(postRequestedFor(urlEqualTo(EMAIL))
+                .withRequestBody(matchingJsonPath("$.message", containing("<!doctype html>")))
+                .withRequestBody(matchingJsonPath("$.message", containing("Your event is now live")))
+                .withRequestBody(matchingJsonPath("$.message", containing("Deposit Protection Scheme"))));
     }
 
     @Test
