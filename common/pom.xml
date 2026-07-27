@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.innbucks</groupId>
+        <artifactId>ticketing-system</artifactId>
+        <version>1.0.0</version>
+    </parent>
+
+    <artifactId>common</artifactId>
+    <name>common</name>
+    <!--
+      Shared cross-cutting code for the ticketing services, to retire the
+      copy-paste duplication the system review flagged. Deliberately a plain
+      library jar (no spring-boot-maven-plugin, so it is NOT repackaged) with
+      ZERO runtime dependencies — it holds pure, framework-free helpers only.
+
+      First slice: the branded-email helpers (EmailSignature, BrandedEmailRenderer),
+      which were byte-identical across user-service and booking-service. Migrate
+      further cross-cutting classes here incrementally, reconciling any drift
+      deliberately per class (ApiResult, SmsTextSanitizer, the JwtUtil/SecurityConfig
+      family). NOTE: loyalty-service lives in MpofuSlim/InnRewards (separate repo)
+      and cannot depend on this module — it keeps its own copies.
+    -->
+    <description>Shared cross-cutting code for the ticketing services.</description>
+
+    <dependencies>
+        <!-- Test-only; versions managed by the Spring Boot BOM imported in the parent. -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>

@@ -11,6 +11,8 @@
     <description>Innbucks Online Ticketing System</description>
 
     <modules>
+        <!-- Shared library (plain jar) — must build before the services that depend on it. -->
+        <module>common</module>
         <module>discovery-server</module>
         <module>api-gateway</module>
         <module>user-service</module>

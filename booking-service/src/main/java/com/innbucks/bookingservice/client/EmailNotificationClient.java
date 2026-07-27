@@ -1,6 +1,8 @@
 package com.innbucks.bookingservice.client;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.innbucks.common.email.BrandedEmailRenderer;
+import com.innbucks.common.email.EmailSignature;
 import com.innbucks.bookingservice.config.InnbucksNotifyProperties;
 import com.innbucks.bookingservice.util.SmsTextSanitizer;
 import lombok.extern.slf4j.Slf4j;

@@ -15,6 +15,13 @@
 
     <dependencies>
 
+        <!-- Shared cross-cutting helpers (branded-email utilities). -->
+        <dependency>
+            <groupId>com.innbucks</groupId>
+            <artifactId>common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+
         <!-- REST API -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
