@@ -10,6 +10,7 @@ COPY mvnw pom.xml ./
 RUN chmod +x mvnw
 RUN for i in 1 2 3; do ./mvnw -B -ntp -version && break || sleep 15; done
 
+COPY common/pom.xml common/
 COPY api-gateway/pom.xml api-gateway/
 COPY user-service/pom.xml user-service/
 COPY event-service/pom.xml event-service/
@@ -20,6 +21,7 @@ COPY discovery-server/pom.xml discovery-server/
 
 RUN ./mvnw -B -pl booking-service -am -DskipTests dependency:go-offline || true
 
+COPY common/src common/src
 COPY booking-service/src booking-service/src
 RUN ./mvnw -B -pl booking-service -am -DskipTests package spring-boot:repackage \
     && cp booking-service/target/booking-service-*.jar /workspace/app.jar

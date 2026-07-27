@@ -1,6 +1,8 @@
 package com.innbucks.userservice.client;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.innbucks.common.email.BrandedEmailRenderer;
+import com.innbucks.common.email.EmailSignature;
 import com.innbucks.userservice.config.InnbucksNotifyProperties;
 import com.innbucks.userservice.util.SmsTextSanitizer;
 import lombok.extern.slf4j.Slf4j;

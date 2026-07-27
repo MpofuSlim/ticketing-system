@@ -14,6 +14,12 @@
     <description>Manages bookings, confirmation numbers and ticket generation</description>
 
     <dependencies>
+        <!-- Shared cross-cutting helpers (branded-email utilities). -->
+        <dependency>
+            <groupId>com.innbucks</groupId>
+            <artifactId>common</artifactId>
+            <version>${project.version}</version>
+        </dependency>
         <dependency>
             <groupId>com.googlecode.libphonenumber</groupId>
             <artifactId>libphonenumber</artifactId>

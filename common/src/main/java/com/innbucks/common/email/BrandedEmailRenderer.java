@@ -1,4 +1,4 @@
-package com.innbucks.bookingservice.client;
+package com.innbucks.common.email;
 
 /**
  * Wraps a plain-text email body in the InnBucks branded HTML shell — logo

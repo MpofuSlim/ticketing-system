@@ -1,4 +1,4 @@
-package com.innbucks.userservice.client;
+package com.innbucks.common.email;
 
 import org.junit.jupiter.api.Test;
 

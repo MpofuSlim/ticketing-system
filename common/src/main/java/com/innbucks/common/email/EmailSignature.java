@@ -1,4 +1,4 @@
-package com.innbucks.bookingservice.client;
+package com.innbucks.common.email;
 
 /**
  * The standard InnBucks sign-off + contact + regulatory footer appended to

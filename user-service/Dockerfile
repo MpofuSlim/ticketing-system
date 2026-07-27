@@ -11,6 +11,7 @@ RUN chmod +x mvnw
 RUN for i in 1 2 3; do ./mvnw -B -ntp -version && break || sleep 15; done
 
 # Copy every module's pom so the Maven reactor can resolve; sources come later.
+COPY common/pom.xml common/
 COPY api-gateway/pom.xml api-gateway/
 COPY user-service/pom.xml user-service/
 COPY event-service/pom.xml event-service/
@@ -22,6 +23,7 @@ COPY discovery-server/pom.xml discovery-server/
 # Warm the dependency cache. Layer survives until a pom changes.
 RUN ./mvnw -B -pl user-service -am -DskipTests dependency:go-offline || true
 
+COPY common/src common/src
 COPY user-service/src user-service/src
 RUN ./mvnw -B -pl user-service -am -DskipTests package spring-boot:repackage \
     && cp user-service/target/user-service-*.jar /workspace/app.jar
