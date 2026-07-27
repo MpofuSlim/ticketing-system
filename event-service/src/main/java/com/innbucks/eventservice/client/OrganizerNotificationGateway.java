@@ -51,8 +51,11 @@ public class OrganizerNotificationGateway {
             return;
         }
         String subject = "Your event has been approved";
-        String message = "Your event \"" + safeTitle(eventTitle)
-                + "\" has been approved and is now ready to publish on InnBucks.";
+        String message = "Hello,\n\n"
+                + "Good news — your event \"" + safeTitle(eventTitle) + "\" has been approved. "
+                + "You can now publish it on InnBucks whenever you're ready, and it will go live "
+                + "for customers to discover and buy tickets.\n\n"
+                + "You can manage your event any time from your organizer dashboard.";
         notify(organizerUuid, subject, message);
     }
 
@@ -64,9 +67,12 @@ public class OrganizerNotificationGateway {
         if (organizerUuid == null) {
             return;
         }
-        String subject = "Your event is now live";
-        String message = "Your event \"" + safeTitle(eventTitle)
-                + "\" is now live on InnBucks and visible to customers.";
+        String subject = "Your event is now live on InnBucks";
+        String message = "Hello,\n\n"
+                + "Great news — your event \"" + safeTitle(eventTitle) + "\" is now live on InnBucks "
+                + "and visible to customers. Ticket sales are open.\n\n"
+                + "You can track bookings and revenue any time from your organizer dashboard. "
+                + "We hope it's a great event!";
         notify(organizerUuid, subject, message);
     }
 
@@ -79,9 +85,10 @@ public class OrganizerNotificationGateway {
             return;
         }
         String subject = "Your event has been deactivated";
-        String message = "Your event \"" + safeTitle(eventTitle)
-                + "\" has been deactivated and is no longer visible to customers on InnBucks. "
-                + "You can re-activate it from your dashboard when you're ready.";
+        String message = "Hello,\n\n"
+                + "Your event \"" + safeTitle(eventTitle) + "\" has been deactivated and is no longer "
+                + "visible to customers on InnBucks.\n\n"
+                + "You can re-activate it any time from your organizer dashboard when you're ready.";
         notify(organizerUuid, subject, message);
     }
 
@@ -94,10 +101,11 @@ public class OrganizerNotificationGateway {
             return;
         }
         String subject = "Your event was not approved";
-        String message = "Your event \"" + safeTitle(eventTitle)
-                + "\" was reviewed by an administrator and has not been approved, so it is not "
-                + "visible to customers on InnBucks. Please review the event details or contact "
-                + "support for more information.";
+        String message = "Hello,\n\n"
+                + "Your event \"" + safeTitle(eventTitle) + "\" has been reviewed and, on this occasion, "
+                + "was not approved, so it is not visible to customers on InnBucks.\n\n"
+                + "Please review your event details and resubmit, or contact our support team if you'd "
+                + "like help understanding what to change.";
         notify(organizerUuid, subject, message);
     }
 

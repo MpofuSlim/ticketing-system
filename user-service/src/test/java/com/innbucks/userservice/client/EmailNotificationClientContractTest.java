@@ -86,7 +86,12 @@ class EmailNotificationClientContractTest {
                 .withHeader("Authorization", equalTo("Bearer tok-abc"))
                 .withHeader("Accept", containing("application/json"))
                 .withRequestBody(matchingJsonPath("$.subject", equalTo("Welcome to SwiftInn — your account is ready")))
-                .withRequestBody(matchingJsonPath("$.message", equalTo("Temporary password: abc123")))
+                // The caller's body is carried verbatim, then the standard
+                // InnBucks footer is appended (email channel only). Assert both
+                // so a regression that drops the body OR the footer fails here.
+                .withRequestBody(matchingJsonPath("$.message", containing("Temporary password: abc123")))
+                .withRequestBody(matchingJsonPath("$.message", containing("The InnBucks Team")))
+                .withRequestBody(matchingJsonPath("$.message", containing("Deposit Protection Scheme")))
                 .withRequestBody(matchingJsonPath("$.destinationEmail", equalTo("staff@example.com")))
                 .withRequestBody(matchingJsonPath("$.reference", equalTo("STAFF-ONBOARD-1"))));
     }

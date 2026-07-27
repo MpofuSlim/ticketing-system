@@ -79,9 +79,13 @@ public class EmailNotificationClient {
                 ? reference
                 : "TKT-EMAIL-" + UUID.randomUUID();
 
+        // Close every email with the standard InnBucks sign-off + contact +
+        // Deposit-Protection disclosure (email channel only — see EmailSignature).
+        String body = EmailSignature.appendTo(message);
+
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("subject", subject);
-        payload.put("message", message);
+        payload.put("message", body);
         payload.put("reference", ref);
         payload.put("destinationEmail", to);
 

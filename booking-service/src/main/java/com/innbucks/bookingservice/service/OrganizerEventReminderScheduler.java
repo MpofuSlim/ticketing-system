@@ -148,8 +148,7 @@ public class OrganizerEventReminderScheduler {
                 + "  - Is your scanning team set up and their devices charged?\n"
                 + "  - Team members can scan tickets from their dashboard.\n"
                 + "  - Live sales and scan reports are in your organizer dashboard.\n\n"
-                + "Have a great event!\n\n"
-                + "- The InnBucks Team";
+                + "Have a great event!";
     }
 
     private String resolveOrganizerEmail(UUID organizerUuid) {

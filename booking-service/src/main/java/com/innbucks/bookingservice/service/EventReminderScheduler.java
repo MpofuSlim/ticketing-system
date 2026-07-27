@@ -239,8 +239,7 @@ public class EventReminderScheduler {
                 + "Booking reference: " + booking.getConfirmationNumber() + "\n\n"
                 + "Your scannable e-ticket was sent to your WhatsApp when you booked - "
                 + "present the QR at the gate. Need it again? Ask the organizer to resend it.\n\n"
-                + "See you there!\n\n"
-                + "- The InnBucks Team";
+                + "See you there!";
     }
 
     private EventLookupDTO lookupEvent(UUID eventId) {

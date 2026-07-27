@@ -243,8 +243,7 @@ public class TicketDeliveryService {
         }
         sb.append("\nYour scannable e-ticket")
                 .append(items.size() == 1 ? " has" : "s have")
-                .append(" been sent to your WhatsApp — present the QR at the gate.\n\n")
-                .append("— The InnBucks Team");
+                .append(" been sent to your WhatsApp — present the QR at the gate.");
         return sb.toString();
     }
 
