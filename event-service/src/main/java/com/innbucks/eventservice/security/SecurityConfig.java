@@ -15,6 +15,7 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class SecurityConfig {
 
     private final JwtFilter jwtFilter;
+    private final MetricsScrapeAuthFilter metricsScrapeAuthFilter;
 
     // CORS lives exclusively on the api-gateway (globalcors + RemoveResponseHeader
     // filters per PR #182). Browsers only ever talk to the gateway, so a per-service
@@ -71,7 +72,10 @@ public class SecurityConfig {
                                     "{\"code\":\"403 FORBIDDEN\",\"message\":\"Forbidden - you do not have the required role (EVENT_ORGANIZER or SUPER_ADMIN)\",\"data\":null}");
                         })
                 )
-                .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
+                .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
+                // Static-token auth for the Prometheus scraper on /actuator/prometheus
+                // (see MetricsScrapeAuthFilter). No-ops for every other request.
+                .addFilterBefore(metricsScrapeAuthFilter, UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }

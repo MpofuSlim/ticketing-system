@@ -83,6 +83,29 @@ kubectl -n ticketing get pods -w          # confirm all stay Ready
 # kubectl delete -f optional/06-networkpolicy.yaml
 ```
 
+## 5. Monitoring stack (Prometheus + Alertmanager)
+
+The alert rules in `prometheus/alerts.yaml` — including the payment-integrity
+and audit-tamper pages — only fire once this is running; **a cell without it
+pages nobody**. `deploy/k8s/monitoring/` is a subdirectory on purpose (the
+non-recursive fleet apply skips it) because its ConfigMaps/Secret must be
+generated first from the `prometheus/` source of truth:
+
+```sh
+# METRICS_SCRAPE_TOKEN must match the value in cell-zw-secrets (the services
+# verify it constant-time on X-Metrics-Token; see MetricsScrapeAuthFilter).
+./scripts/apply-monitoring.sh
+# then confirm every scrape target is UP:
+kubectl -n ticketing port-forward svc/prometheus 9091:9090 &
+# open http://localhost:9091/targets
+```
+
+Re-run the script after any edit to `prometheus/*.yml|yaml` — it re-renders
+the ConfigMaps and restarts the stack. Alert receivers are still webhook
+placeholders in `alertmanager.yml`; point them at your real Slack/PagerDuty/
+email integrations per cell (gitignored override), or the routed alerts
+terminate at a nonexistent `alert-sink`.
+
 ## Workload hardening (OWASP A05)
 
 Every **application** Deployment (`02`–`05`) runs with a locked-down

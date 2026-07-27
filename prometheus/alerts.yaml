@@ -134,15 +134,12 @@ groups:
           description: "Heap usage on {{ $labels.instance }} = {{ $value | humanizePercentage }} for 10m."
           runbook: "prometheus/slo.md#jvmheappressure"
 
-      - alert: OtelExportFailing
-        expr: increase(otlp_exporter_exported_spans_failed_total[10m]) > 0
-        for: 15m
-        labels:
-          severity: ticket
-        annotations:
-          summary: "OTLP span export failing on {{ $labels.job }}"
-          description: "{{ $value | humanize }} failed span exports in the last 10m. OTLP_ENDPOINT reachable?"
-          runbook: "prometheus/slo.md#otelexportfailing"
+      # (Removed) OtelExportFailing: it queried
+      # otlp_exporter_exported_spans_failed_total, a series nothing in the
+      # fleet produces (tracing is TRACING_ENABLED:false in the cell and the
+      # Micrometer OTLP exporter doesn't emit that metric name) — a
+      # permanently-green alert is worse than no alert. Re-add against the
+      # real exporter metrics when tracing is switched on with a collector.
 
   # OWASP A09 — security-abuse detection. Fed by user-service SecurityMetrics
   # (security.* counters, exported as security_*_total). Baselines for these are

@@ -30,6 +30,13 @@ public class PaymentMetrics {
         this.shopCheckoutDuration = Timer.builder("payment.shop_checkout.duration")
                 .description("End-to-end /payments/shop-checkout latency including the loyalty round-trip")
                 .publishPercentiles(0.5, 0.95, 0.99)
+                // Also publish the histogram _bucket series: the ShopCheckoutP95Slow /
+                // P99Slow page alerts (prometheus/alerts.yaml) compute quantiles
+                // server-side via histogram_quantile(), which reads
+                // payment_shop_checkout_duration_seconds_bucket. Without this the
+                // alert expressions evaluate against a series that never exists and
+                // the p95<1s checkout SLO silently cannot fire.
+                .publishPercentileHistogram()
                 .register(registry);
         // OWASP A09 tamper signal from the audit-log HMAC verifier. The invariant
         // is zero, so ANY increase is page-worthy — someone altered/deleted a
