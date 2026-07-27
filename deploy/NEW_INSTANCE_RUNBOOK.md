@@ -159,6 +159,28 @@ SMS/notification fallback path fails.
    the Cloudflare origin) to the new instance.
 4. Watch logs under real traffic, then **decommission the old instance.**
 
+## 12. Backups (NOT optional before real traffic)
+
+A cell is not production until `scripts/backup-postgres.sh` runs nightly with
+an **off-box destination** — Postgres is the system of record for payments,
+audit chains, users and loyalty balances, and a same-disk dump does not
+survive instance/volume loss.
+
+```sh
+# One-time: create an S3 bucket (+ lifecycle rule for retention), give the
+# instance role s3:PutObject on it, then:
+crontab -e
+# add:
+0 2 * * *  BACKUP_S3_URI=s3://<bucket>/ticketing-pg /home/<EC2_USER>/ticketing-system/scripts/backup-postgres.sh >> /var/log/innbucks-backup.log 2>&1
+```
+
+The script execs into the k3s `postgres-0` pod (it does NOT use `docker exec`
+— that stopped working at the k3s migration) and **fails loudly if the S3
+upload fails or `BACKUP_S3_URI` is unset**, so a misconfiguration surfaces in
+the cron log instead of silently degrading to same-disk-only. Restore
+procedure is documented in the script header — **run a test restore once
+after standup**; an untested restore is not a backup.
+
 ## Required-secret checklist
 
 The container fails to boot (a `${VAR:?}` guard fires) if any of these is
@@ -172,6 +194,15 @@ in the committed `cell.<iso>.env`:
 — plus `INNBUCKS_COUNTRY` (committed).
 
 ### Recommended (boots without it, but you should set it)
+
+`METRICS_SCRAPE_TOKEN` is not boot-guarded: without it every service's
+`/actuator/prometheus` stays 401 (fail-closed) and the monitoring stack
+scrapes nothing. Generate one (`openssl rand -base64 48`), add it to
+`cell.<iso>.local.env`, then stand up Prometheus/Alertmanager with
+`scripts/apply-monitoring.sh` (it wires the same token into the scraper).
+**A cell without the monitoring stack pages nobody** — the 25 alert rules
+in `prometheus/alerts.yaml`, including the payment-integrity and
+audit-tamper pages, only exist once this is running.
 
 `SWAGGER_PASSWORD` is **not** guarded by `${VAR:?}`, so the cell boots without
 it. Cells run the `prod` profile, so a blank password makes the gateway's
