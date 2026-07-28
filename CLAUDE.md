@@ -158,10 +158,20 @@ with the `Instant`/`timestamptz` services), we pin UTC two ways:
 A bare call on a non-UTC JVM silently stores local time into a
 zone-less column — the bug surfaces hours-off, days later.
 
-The proper long-term fix (LocalDateTime → Instant + `timestamptz`
-columns) is deferred: it changes the API wire format (`...T10:00:00`
-gains a `Z`), so it needs FE coordination. Until then, the UTC
-convention above keeps the dormant bug dormant.
+3. **Wire format** — every `LocalDateTime` the four services serialize
+   carries the explicit `Z` designator (`2026-07-27T07:19:00Z`), via each
+   service's `UtcJsonTimeConfig` Jackson module. Browsers/FEs parse it as
+   the UTC instant it is and render local time correctly (this fixed the
+   "times show 2h behind in Harare" bug). Inbound stays permissive —
+   `Z`-suffixed, `±HH:mm` offsets (normalized to UTC) and legacy zoneless
+   strings all parse — so S2S calls and in-flight FE code survive rolling
+   deploys. Contract pinned per service by `UtcJsonTimeConfigTest`. FE code
+   parsing dates should still guard (`s.endsWith('Z') ? s : s + 'Z'`) rather
+   than blindly appending.
+
+The remaining long-term step (LocalDateTime → Instant + `timestamptz`
+columns) is now invisible on the wire — the `Z` already ships — so it can
+be done per-service without FE coordination whenever convenient.
 
 ## Branching
 
