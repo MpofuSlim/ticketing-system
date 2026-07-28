@@ -158,8 +158,9 @@ class EventControllerTest {
                 .andExpect(jsonPath("$.data.content[0].eventId", is(saved.getEventId().toString())))
                 .andExpect(jsonPath("$.data.content[0].country", is("Zimbabwe")))
                 .andExpect(jsonPath("$.data.content[0].category", is("CONCERT")))
-                .andExpect(jsonPath("$.data.content[0].startDateTime", is("2030-04-18T10:30:00")))
-                .andExpect(jsonPath("$.data.content[0].endDateTime", is("2030-04-18T12:30:00")));
+                // UtcJsonTimeConfig: wire timestamps carry the explicit UTC designator.
+                .andExpect(jsonPath("$.data.content[0].startDateTime", is("2030-04-18T10:30:00Z")))
+                .andExpect(jsonPath("$.data.content[0].endDateTime", is("2030-04-18T12:30:00Z")));
     }
 
     @Test
@@ -314,8 +315,9 @@ class EventControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.title", is("Updated Title")))
                 .andExpect(jsonPath("$.data.venue", is("New Venue")))
-                .andExpect(jsonPath("$.data.startDateTime", is("2031-06-15T19:00:00")))
-                .andExpect(jsonPath("$.data.endDateTime", is("2031-06-15T22:00:00")));
+                // UtcJsonTimeConfig: wire timestamps carry the explicit UTC designator.
+                .andExpect(jsonPath("$.data.startDateTime", is("2031-06-15T19:00:00Z")))
+                .andExpect(jsonPath("$.data.endDateTime", is("2031-06-15T22:00:00Z")));
 
         Event reloaded = eventRepository.findById(saved.getEventId()).orElseThrow();
         org.junit.jupiter.api.Assertions.assertEquals("Updated Title", reloaded.getTitle());
