@@ -36,6 +36,15 @@ import java.time.temporal.ChronoUnit;
  * <p>This is the wire-format half of the LocalDateTime→Instant migration;
  * the column migration ({@code timestamptz}) can now follow later without
  * any further wire change.
+ *
+ * <p><b>Two Jackson stacks, two module beans.</b> Boot 4 serves HTTP JSON
+ * with Jackson 3 ({@code tools.jackson} — its auto-config collects
+ * {@link tools.jackson.databind.JacksonModule} beans), while the legacy
+ * Jackson 2 mapper ({@code spring-boot-jackson2}, kept for jjwt + existing
+ * code) collects {@link Module} beans. Registering only the Jackson 2
+ * module changes NOTHING on the HTTP wire — that was this config's first
+ * shipped bug — so both are registered and both are pinned by
+ * {@code UtcJsonTimeConfigTest}.
  */
 @Configuration
 public class UtcJsonTimeConfig {
@@ -44,12 +53,49 @@ public class UtcJsonTimeConfig {
     private static final DateTimeFormatter UTC_WIRE =
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'");
 
+    /** Jackson 3 module — the one the HTTP message converter actually uses. */
+    @Bean
+    public tools.jackson.databind.JacksonModule utcLocalDateTimeJackson3Module() {
+        tools.jackson.databind.module.SimpleModule module =
+                new tools.jackson.databind.module.SimpleModule("utc-local-date-time-j3");
+        module.addSerializer(LocalDateTime.class, new UtcLocalDateTimeSerializerJ3());
+        module.addDeserializer(LocalDateTime.class, new FlexibleUtcLocalDateTimeDeserializerJ3());
+        return module;
+    }
+
+    /** Jackson 2 module — the legacy mapper (jjwt, Feign, existing test code). */
     @Bean
     public Module utcLocalDateTimeModule() {
         SimpleModule module = new SimpleModule("utc-local-date-time");
         module.addSerializer(LocalDateTime.class, new UtcLocalDateTimeSerializer());
         module.addDeserializer(LocalDateTime.class, new FlexibleUtcLocalDateTimeDeserializer());
         return module;
+    }
+
+    static final class UtcLocalDateTimeSerializerJ3 extends tools.jackson.databind.ValueSerializer<LocalDateTime> {
+        @Override
+        public void serialize(LocalDateTime value, tools.jackson.core.JsonGenerator gen,
+                              tools.jackson.databind.SerializationContext ctxt) {
+            gen.writeString(UTC_WIRE.format(value.truncatedTo(ChronoUnit.SECONDS)));
+        }
+    }
+
+    static final class FlexibleUtcLocalDateTimeDeserializerJ3 extends tools.jackson.databind.ValueDeserializer<LocalDateTime> {
+        @Override
+        public LocalDateTime deserialize(tools.jackson.core.JsonParser p,
+                                         tools.jackson.databind.DeserializationContext ctxt) {
+            String value = p.getString();
+            if (value == null || value.isBlank()) {
+                return null;
+            }
+            try {
+                return OffsetDateTime.parse(value)
+                        .withOffsetSameInstant(ZoneOffset.UTC)
+                        .toLocalDateTime();
+            } catch (DateTimeParseException ignored) {
+                return LocalDateTime.parse(value);
+            }
+        }
     }
 
     static final class UtcLocalDateTimeSerializer extends JsonSerializer<LocalDateTime> {
