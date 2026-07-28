@@ -139,6 +139,17 @@ whatsapp:
   connect-timeout-ms: ${WHATSAPP_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${WHATSAPP_READ_TIMEOUT_MS:10000}
 
+# Inbound Fineract Message Gateway facade (/fineract-gateway/**): our Fineract
+# deployment's MESSAGE_GATEWAY external service points here (end_point=
+# fineract-gateway) and presents tenant-app-key as Fineract-Tenant-App-Key.
+# Provider ids listed in whatsapp-provider-ids route to the WhatsApp channel;
+# every other provider (and providerless triggered sends, e.g. Fineract 2FA
+# OTP) rides SMS.
+fineract-gateway:
+  tenant-id: ${FINERACT_GATEWAY_TENANT_ID:default}
+  tenant-app-key: ${FINERACT_GATEWAY_APP_KEY:change-me-fineract-gateway-app-key}
+  whatsapp-provider-ids: ${FINERACT_GATEWAY_WHATSAPP_PROVIDER_IDS:2}
+
 innbucks:
   country: ${INNBUCKS_COUNTRY:ZW}
   internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}

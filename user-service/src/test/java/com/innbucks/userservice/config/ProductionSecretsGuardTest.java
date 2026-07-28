@@ -46,6 +46,22 @@ class ProductionSecretsGuardTest {
     }
 
     @Test
+    void deploymentProfile_placeholderFineractGatewayKey_failsClosed() {
+        // The Fineract Message Gateway app key is the ONLY auth on
+        // /fineract-gateway/** — booting a deployment on its change-me default
+        // would leave the SMS/WhatsApp send rail open to anyone in-cluster.
+        Environment env = mock(Environment.class);
+        when(env.getActiveProfiles()).thenReturn(new String[]{"prod"});
+        when(env.getProperty("jwt.secret")).thenReturn(REAL_JWT);
+        when(env.getProperty("fineract-gateway.tenant-app-key"))
+                .thenReturn("change-me-fineract-gateway-app-key");
+
+        assertThatThrownBy(() -> guard(env).verifyNoPlaceholderSecrets())
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("fineract-gateway.tenant-app-key");
+    }
+
+    @Test
     void nonDeploymentProfile_withPlaceholders_skips() {
         Environment env = mock(Environment.class);
         when(env.getActiveProfiles()).thenReturn(new String[]{"test"});

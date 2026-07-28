@@ -38,6 +38,7 @@ public class ProductionSecretsGuard {
     //   - mfa.encryption-key           (env MFA_ENCRYPTION_KEY)       -> AES-GCM key encrypting TOTP secrets at rest
     //   - audit.hmac-secret            (env AUDIT_HMAC_SECRET)        -> keyed tamper-evidence tag on every audit_events row (A09)
     //   - otp.hmac-secret              (env OTP_HMAC_SECRET)          -> keyed hash protecting OTP codes at rest (A02)
+    //   - fineract-gateway.tenant-app-key (env FINERACT_GATEWAY_APP_KEY) -> S2S secret Fineract presents on /fineract-gateway/**
     private static final List<String> SECRETS_TO_CHECK = List.of(
             "jwt.secret",
             "innbucks.internal-api-token",
@@ -46,7 +47,8 @@ public class ProductionSecretsGuard {
             "national-id.hmac-secret",
             "mfa.encryption-key",
             "audit.hmac-secret",
-            "otp.hmac-secret"
+            "otp.hmac-secret",
+            "fineract-gateway.tenant-app-key"
     );
 
     private static final String PLACEHOLDER_MARKER = "change-me";

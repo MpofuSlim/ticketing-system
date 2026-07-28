@@ -54,6 +54,13 @@ public class SecurityConfig {
                         // so it's only reachable pod-to-pod. Must precede the
                         // catch-all authenticated() rule below.
                         .requestMatchers("/users/internal/**").permitAll()
+                        // Fineract Message Gateway facade. Authenticated by the
+                        // Fineract-Tenant-App-Key header checked inside
+                        // FineractMessageGatewayController (constant-time, via
+                        // FineractGatewayAuthorizer), not a user JWT — and
+                        // blocked at the gateway edge (fineract-gateway-deny
+                        // route) so it's only reachable pod-to-pod.
+                        .requestMatchers(HttpMethod.POST, "/fineract-gateway/**").permitAll()
                         // Public auth endpoints
                         .requestMatchers("/auth/**").permitAll()
                         // Public cell-lookup (step 7 — the mobile app calls

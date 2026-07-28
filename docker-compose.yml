@@ -153,6 +153,10 @@ services:
       # A02 OTP-code at-rest HMAC key (user-service only). Boot-required under
       # prod — ProductionSecretsGuard rejects the change-me default.
       OTP_HMAC_SECRET: ${OTP_HMAC_SECRET:?set OTP_HMAC_SECRET in .env (see .env.example)}
+      # S2S secret our Fineract deployment presents on /fineract-gateway/**
+      # (its MESSAGE_GATEWAY tenant_app_key). Boot-required under prod —
+      # ProductionSecretsGuard rejects the change-me default.
+      FINERACT_GATEWAY_APP_KEY: ${FINERACT_GATEWAY_APP_KEY:?set FINERACT_GATEWAY_APP_KEY in .env (see .env.example)}
       # Access-token TTL: 15 min (matches the application default). The FE
       # silently refreshes via the rotating refresh token, so a stolen/stale
       # access token is usable for at most 15 min instead of a full day.

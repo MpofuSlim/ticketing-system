@@ -179,6 +179,16 @@ spring:
               predicates:
                 - Path=/users/internal/**
 
+            # Fineract Message Gateway facade on user-service — S2S only
+            # (Fineract calls user-service pod-to-pod, never via the edge).
+            # No service route exists for this prefix, so unmatched traffic
+            # would 404 anyway; the explicit deny keeps the internal-surface
+            # inventory greppable and the intent unambiguous.
+            - id: fineract-gateway-deny
+              uri: forward:/__edge_deny__
+              predicates:
+                - Path=/fineract-gateway/**
+
             - id: user-self-route
               uri: lb://user-service
               predicates:

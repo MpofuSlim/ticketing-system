@@ -82,6 +82,15 @@ public class SecurityMetrics {
                 .increment();
     }
 
+    /** Fineract-Tenant-App-Key rejection on a /fineract-gateway/** endpoint, by reason. */
+    public void fineractGatewayAuthFailure(String reason) {
+        Counter.builder("security.auth.fineract_gateway.failure")
+                .description("Fineract Message Gateway app-key validation failures, grouped by reason")
+                .tag("reason", reason == null ? "unknown" : reason)
+                .register(registry)
+                .increment();
+    }
+
     /** Rate-limit threshold exceeded, tagged by the throttled endpoint. */
     public void rateLimited(String endpoint) {
         Counter.builder("security.auth.rate_limited")

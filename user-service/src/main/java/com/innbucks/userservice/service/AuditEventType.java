@@ -94,6 +94,18 @@ public enum AuditEventType {
      */
     AUTH_INTERNAL_TOKEN_FAILURE,
 
+    /**
+     * Fineract-Tenant-App-Key validation failed on a /fineract-gateway/**
+     * endpoint (the Message Gateway facade our Fineract deployment calls).
+     * Same trust boundary and probing signal as
+     * {@link #AUTH_INTERNAL_TOKEN_FAILURE}, but a distinct type because the
+     * caller, header and secret are different ({@code failure_reason}:
+     * {@code key_missing}, {@code key_mismatch}, {@code key_not_configured},
+     * {@code tenant_mismatch}). {@code metadata} carries {@code path} and
+     * {@code presentedKeyLength} — NEVER the key itself.
+     */
+    AUTH_FINERACT_GATEWAY_FAILURE,
+
     // --- A09 coverage additions -------------------------------------------
 
     /** /auth/reset-password (forgot-password) completed. Distinct from
