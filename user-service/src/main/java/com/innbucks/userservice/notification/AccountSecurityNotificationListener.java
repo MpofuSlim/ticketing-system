@@ -20,7 +20,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
  *
  * <p>{@code fallbackExecution = true} so the listener runs whether or not the
  * triggering login ran inside a transaction. Brand follows the audience —
- * InnBucks for customers, SwiftInn for system users.
+ * InnBucks for customers, InnBucks Foundry for system users.
  */
 @Component
 @Slf4j
@@ -42,7 +42,7 @@ public class AccountSecurityNotificationListener {
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onAccountLocked(AccountLockedEvent event) {
-        String brand = event.customer() ? "InnBucks" : "SwiftInn";
+        String brand = event.customer() ? "InnBucks" : "InnBucks Foundry";
         String ref = "ACCOUNT-LOCKED-" + event.userId();
         String subject = brand + " account security alert";
         String message = buildMessage(brand, event);
@@ -76,7 +76,7 @@ public class AccountSecurityNotificationListener {
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onSecurityAlert(AccountSecurityAlertEvent event) {
-        String brand = event.customer() ? "InnBucks" : "SwiftInn";
+        String brand = event.customer() ? "InnBucks" : "InnBucks Foundry";
         String ref = "SECURITY-" + event.type() + "-" + event.userId();
         String subject = brand + " account security alert";
         String message = buildSecurityMessage(brand, event);
@@ -110,7 +110,7 @@ public class AccountSecurityNotificationListener {
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onUserDeactivated(UserDeactivatedEvent event) {
-        String brand = event.customer() ? "InnBucks" : "SwiftInn";
+        String brand = event.customer() ? "InnBucks" : "InnBucks Foundry";
         String ref = "ACCOUNT-DEACTIVATED-" + event.userId();
         String subject = "Your " + brand + " account has been deactivated";
         String name = (event.firstName() != null && !event.firstName().isBlank())

@@ -95,7 +95,7 @@ class CredentialDeliveryListenerTest {
         listener.onCredentialDeliveryRequested(
                 event("a@b.com", "+263771234567", CredentialDeliveryRequested.Reason.ONBOARDING));
 
-        verify(email).sendEmail(eq("a@b.com"), contains("Welcome to SwiftInn"),
+        verify(email).sendEmail(eq("a@b.com"), contains("Welcome to InnBucks Foundry"),
                 contains("TEMP-abc-12345"), eq("STAFF-ONBOARD-42"));
         verify(userAdmin).markCredentialDelivered(42L);
         assertThat(counter("email_sent", "onboarding")).isEqualTo(1.0);

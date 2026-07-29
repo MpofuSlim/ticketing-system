@@ -6,7 +6,7 @@ package com.innbucks.userservice.event;
  * The async listener ({@code AccountSecurityNotificationListener}) tells the
  * user off the request thread, so a slow notification gateway can't stall — or
  * time out — the deactivate response after the row has already committed.
- * {@code customer} drives the brand (InnBucks for customers, SwiftInn for
+ * {@code customer} drives the brand (InnBucks for customers, InnBucks Foundry for
  * system users). Carries the contact fields so the listener never re-reads the
  * user.
  */
