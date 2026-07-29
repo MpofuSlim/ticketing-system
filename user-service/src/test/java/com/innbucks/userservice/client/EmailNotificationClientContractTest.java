@@ -90,7 +90,10 @@ class EmailNotificationClientContractTest {
                 .withHeader("X-Api-Key", equalTo(API_KEY))
                 .withHeader("Authorization", equalTo("Bearer tok-abc"))
                 .withHeader("Accept", containing("application/json"))
-                .withRequestBody(matchingJsonPath("$.subject", equalTo("Welcome to InnBucks Foundry — your account is ready")))
+                // The em-dash the caller passed is transliterated: that exact
+                // subject is what the API rejects with 400 "Invalid subject",
+                // so the wire must carry the ASCII form.
+                .withRequestBody(matchingJsonPath("$.subject", equalTo("Welcome to InnBucks Foundry - your account is ready")))
                 // The caller's body is carried verbatim, then the standard
                 // InnBucks footer is appended (email channel only). Assert both
                 // so a regression that drops the body OR the footer fails here.

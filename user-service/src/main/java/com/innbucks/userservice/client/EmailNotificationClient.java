@@ -125,7 +125,17 @@ public class EmailNotificationClient {
                 : "TKT-EMAIL-" + UUID.randomUUID();
 
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("subject", subject);
+        // The notification API charset-validates the SUBJECT and answers
+        // 400 {"errors":["Invalid subject"]} for anything outside plain ASCII.
+        // loyalty-service hit this live on 2026-07-29 (a tenant name with
+        // typographic punctuation) and booking-service on 2026-07-23 (an
+        // em-dash), each time silently demoting email to a fallback channel.
+        // These subjects are static ASCII today, but they are one interpolated
+        // name away from the same failure — transliterate defensively.
+        //
+        // The BODY is deliberately NOT sanitized: the endpoint accepts Unicode
+        // there, so branded copy keeps its typography.
+        payload.put("subject", com.innbucks.userservice.util.SmsTextSanitizer.toGsmSafe(subject));
         payload.put("message", body);
         payload.put("reference", ref);
         payload.put("destinationEmail", to);
