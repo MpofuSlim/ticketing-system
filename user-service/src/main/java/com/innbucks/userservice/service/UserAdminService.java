@@ -49,6 +49,7 @@ public class UserAdminService {
     private final PasswordEncoder passwordEncoder;
     private final AuditService auditService;
     private final ApplicationEventPublisher eventPublisher;
+    private final com.innbucks.userservice.repository.TenantProfileRepository tenantProfiles;
 
     /**
      * Backward-compatible overload used by unit tests / callers that don't have
@@ -238,8 +239,18 @@ public class UserAdminService {
     /** Fires the event the async listener picks up after this transaction commits. */
     private void publishCredentialDelivery(User user, String tempPassword,
                                            CredentialDeliveryRequested.Reason reason) {
+        // Name the business in the copy when the account has a tenant profile:
+        // "Your Fast Jet tenant account has been approved" tells the recipient
+        // which of their accounts this is, where the generic wording does not.
+        String organisation = tenantProfiles.findByUserId(user.getId())
+                .map(com.innbucks.userservice.entity.TenantProfile::getBusinessName)
+                // No null check needed: Optional.map already yields empty when
+                // getBusinessName() returns null, so only blankness is left to
+                // screen out.
+                .filter(n -> !n.isBlank())
+                .orElse(null);
         eventPublisher.publishEvent(new CredentialDeliveryRequested(
                 user.getId(), user.getFirstName(), user.getEmail(),
-                user.getPhoneNumber(), tempPassword, reason));
+                user.getPhoneNumber(), tempPassword, reason, organisation));
     }
 }

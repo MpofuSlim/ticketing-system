@@ -65,11 +65,11 @@ public class CredentialDeliveryListener {
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onCredentialDeliveryRequested(CredentialDeliveryRequested event) {
         String ref = refPrefix(event.reason()) + event.userId();
-        String subject = subjectFor(event.reason());
-        String intro = introFor(event.reason());
+        String subject = subjectFor(event.reason(), event.organisationName());
+        String intro = introFor(event.reason(), event.organisationName());
         String emailBody = buildCredentialText(event.firstName(), event.email(),
                 event.tempPassword(), intro);
-        String smsBody = buildSmsBody(event.reason(), event.tempPassword());
+        String smsBody = buildSmsBody(event.reason(), event.tempPassword(), event.organisationName());
 
         String outcome = tryDeliver(event, ref, subject, emailBody, smsBody);
 
@@ -134,9 +134,14 @@ public class CredentialDeliveryListener {
         };
     }
 
-    private static String subjectFor(CredentialDeliveryRequested.Reason reason) {
+    private static String subjectFor(CredentialDeliveryRequested.Reason reason, String organisation) {
         return switch (reason) {
-            case APPROVAL -> "Your InnBucks Foundry account has been approved";
+            // Name the business when we know it: a recipient who administers
+            // several accounts can tell which one this is from the subject line
+            // alone, where the generic wording tells them nothing.
+            case APPROVAL -> named(organisation)
+                    ? "Your " + organisation + " tenant account has been approved"
+                    : "Your InnBucks Foundry account has been approved";
             case RESET -> "Your InnBucks Foundry temporary password has been reset";
             // ASCII only: a non-ASCII em-dash here produced a malformed MIME
             // Subject header at the notification gateway (subjects need RFC-2047
@@ -147,17 +152,29 @@ public class CredentialDeliveryListener {
         };
     }
 
-    private static String introFor(CredentialDeliveryRequested.Reason reason) {
+    private static String introFor(CredentialDeliveryRequested.Reason reason, String organisation) {
         return switch (reason) {
-            case APPROVAL -> "Good news — your InnBucks Foundry account has been approved and is now active.";
+            case APPROVAL -> named(organisation)
+                    ? "Good news — your " + organisation + " tenant account has been approved by the "
+                            + "InnBucks Foundry team and is now active."
+                    : "Good news — your InnBucks Foundry account has been approved and is now active.";
             case RESET -> "Your InnBucks Foundry temporary password has been reset by an administrator.";
             case ONBOARDING -> "An InnBucks Foundry account has been created for you and is ready to use.";
         };
     }
 
-    private static String buildSmsBody(CredentialDeliveryRequested.Reason reason, String tempPassword) {
+    /** True when we have a business name worth putting in front of the reader. */
+    private static boolean named(String organisation) {
+        return organisation != null && !organisation.isBlank();
+    }
+
+    private static String buildSmsBody(CredentialDeliveryRequested.Reason reason, String tempPassword,
+                                       String organisation) {
         return switch (reason) {
-            case APPROVAL -> "Your InnBucks Foundry account has been approved. Your temporary password is "
+            case APPROVAL -> (named(organisation)
+                    ? "Your " + organisation + " tenant account has been approved by the InnBucks Foundry team. "
+                    : "Your InnBucks Foundry account has been approved. ")
+                    + "Your temporary password is "
                     + tempPassword + ". Please log in and change it immediately.";
             case RESET -> "Your InnBucks Foundry temporary password has been reset to "
                     + tempPassword + ". Please log in and change it immediately.";

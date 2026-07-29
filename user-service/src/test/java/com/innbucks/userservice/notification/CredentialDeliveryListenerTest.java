@@ -184,4 +184,32 @@ class CredentialDeliveryListenerTest {
         verify(userAdmin, never()).markCredentialDelivered(42L);
         assertThat(counter("all_failed", "approval")).isEqualTo(1.0);
     }
+
+    @Test
+    void approval_namesTheTenantAndTheApprovingTeam() {
+        // "Your Fast Jet tenant account has been approved by the InnBucks
+        // Foundry team" — a recipient who administers several accounts can tell
+        // which one this is; the old generic wording told them nothing.
+        listener.onCredentialDeliveryRequested(new CredentialDeliveryRequested(
+                7L, "Tawanda", "a@b.com", "+263771234567", "TempPass1!",
+                CredentialDeliveryRequested.Reason.APPROVAL, "Fast Jet"));
+
+        verify(email).sendEmail(eq("a@b.com"),
+                eq("Your Fast Jet tenant account has been approved"),
+                contains("approved by the InnBucks Foundry team"),
+                anyString());
+    }
+
+    @Test
+    void approval_withoutATenant_keepsTheGenericWording() {
+        // Staff and other non-tenant accounts have no business name; naming a
+        // blank one would read as "Your  tenant account".
+        listener.onCredentialDeliveryRequested(new CredentialDeliveryRequested(
+                8L, "Tawanda", "c@d.com", "+263771234567", "TempPass1!",
+                CredentialDeliveryRequested.Reason.APPROVAL, null));
+
+        verify(email).sendEmail(eq("c@d.com"),
+                eq("Your InnBucks Foundry account has been approved"),
+                anyString(), anyString());
+    }
 }

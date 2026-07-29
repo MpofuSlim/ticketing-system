@@ -18,8 +18,21 @@ public record CredentialDeliveryRequested(
         String email,
         String phoneNumber,
         String tempPassword,
-        Reason reason
+        Reason reason,
+        /**
+         * The business/tenant this account belongs to, when it has one — used
+         * to name it in the approval copy ("Your Fast Jet tenant account has
+         * been approved"). Null for accounts with no tenant profile, and the
+         * copy falls back to the generic wording.
+         */
+        String organisationName
 ) {
+    /** Back-compat constructor for publishers that carry no organisation. */
+    public CredentialDeliveryRequested(Long userId, String firstName, String email,
+                                       String phoneNumber, String tempPassword, Reason reason) {
+        this(userId, firstName, email, phoneNumber, tempPassword, reason, null);
+    }
+
     public enum Reason {
         /** SUPER_ADMIN approved the account (first activation). */
         APPROVAL,

@@ -43,8 +43,13 @@ class UserAdminServiceTest {
         final PasswordEncoder encoder = mock(PasswordEncoder.class);
         final AuditService audit = mock(AuditService.class);
         final ApplicationEventPublisher publisher = mock(ApplicationEventPublisher.class);
+        // Approval copy names the business, so the service resolves the tenant
+        // profile. Default mock -> Optional.empty -> the generic wording, which
+        // is what every case in this class asserts.
+        final com.innbucks.userservice.repository.TenantProfileRepository tenantProfiles =
+                mock(com.innbucks.userservice.repository.TenantProfileRepository.class);
         final UserAdminService service = new UserAdminService(
-                userRepo, encoder, audit, publisher);
+                userRepo, encoder, audit, publisher, tenantProfiles);
     }
 
     /** Capture the plaintext handed to encode() — it's the generated temp password. */
