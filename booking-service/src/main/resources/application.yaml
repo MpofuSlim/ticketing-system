@@ -257,3 +257,37 @@ springdoc:
     enabled: true
   swagger-ui:
     enabled: false
+
+---
+# -- Email transport (Amazon SES over SMTP) -----------------------------------
+# The InnBucks notification API composes the From header itself, so every
+# product riding it lands in the inbox under the same display name. Sending our
+# own SMTP message is what lets this service present its own identity.
+#
+# Its own YAML document (no on-profile) so it applies to every profile without
+# colliding with the top-level spring:/app: keys above — a duplicate key in one
+# document is a parse error.
+#
+# Inactive by default twice over: Spring only auto-configures a JavaMailSender
+# when spring.mail.host is set, and SmtpEmailSender also requires
+# app.mail.enabled=true. With both unset, delivery is unchanged (notification
+# API), so merging this is a no-op until a cell provisions SES credentials.
+spring:
+  mail:
+    host: ${MAIL_HOST:}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+            required: true
+app:
+  mail:
+    enabled: ${MAIL_ENABLED:false}
+    # Must be an SES-verified identity for the region or SES rejects the send.
+    from: ${MAIL_FROM:banking@innbucks.co.zw}
+    sender-name: ${MAIL_SENDER_NAME:Ticketize}
