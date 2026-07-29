@@ -244,7 +244,10 @@ public class UserAdminService {
         // which of their accounts this is, where the generic wording does not.
         String organisation = tenantProfiles.findByUserId(user.getId())
                 .map(com.innbucks.userservice.entity.TenantProfile::getBusinessName)
-                .filter(n -> n != null && !n.isBlank())
+                // No null check needed: Optional.map already yields empty when
+                // getBusinessName() returns null, so only blankness is left to
+                // screen out.
+                .filter(n -> !n.isBlank())
                 .orElse(null);
         eventPublisher.publishEvent(new CredentialDeliveryRequested(
                 user.getId(), user.getFirstName(), user.getEmail(),
