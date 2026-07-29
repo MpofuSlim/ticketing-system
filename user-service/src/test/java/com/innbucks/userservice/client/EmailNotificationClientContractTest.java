@@ -72,7 +72,7 @@ class EmailNotificationClientContractTest {
         wireMock.stubFor(post(urlEqualTo(EMAIL)).willReturn(aResponse().withStatus(200)));
 
         client(wireMock.port()).sendEmail("staff@example.com",
-                "Welcome to SwiftInn — your account is ready",
+                "Welcome to InnBucks Foundry — your account is ready",
                 "Temporary password: abc123", "STAFF-ONBOARD-1");
 
         // Accept: application/json on both calls — the InnBucks gateway in front
@@ -90,7 +90,7 @@ class EmailNotificationClientContractTest {
                 .withHeader("X-Api-Key", equalTo(API_KEY))
                 .withHeader("Authorization", equalTo("Bearer tok-abc"))
                 .withHeader("Accept", containing("application/json"))
-                .withRequestBody(matchingJsonPath("$.subject", equalTo("Welcome to SwiftInn — your account is ready")))
+                .withRequestBody(matchingJsonPath("$.subject", equalTo("Welcome to InnBucks Foundry — your account is ready")))
                 // The caller's body is carried verbatim, then the standard
                 // InnBucks footer is appended (email channel only). Assert both
                 // so a regression that drops the body OR the footer fails here.

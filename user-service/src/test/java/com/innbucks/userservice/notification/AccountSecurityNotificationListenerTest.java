@@ -49,10 +49,10 @@ class AccountSecurityNotificationListenerTest {
     }
 
     @Test
-    void systemUserLock_usesSwiftInnBrand() {
+    void systemUserLock_usesFoundryBrand() {
         listener.onAccountLocked(event(false, "ops@b.com", null));
 
-        verify(email).sendEmail(eq("ops@b.com"), contains("SwiftInn"), contains("SwiftInn"), anyString());
+        verify(email).sendEmail(eq("ops@b.com"), contains("InnBucks Foundry"), contains("InnBucks Foundry"), anyString());
         verify(sms, never()).sendSms(anyString(), anyString(), anyString());
     }
 
@@ -94,11 +94,11 @@ class AccountSecurityNotificationListenerTest {
     }
 
     @Test
-    void passwordReset_systemUser_usesSwiftInnBrand() {
+    void passwordReset_systemUser_usesFoundryBrand() {
         listener.onSecurityAlert(alert(false, "ops@b.com", null,
                 AccountSecurityAlertEvent.Type.PASSWORD_RESET));
 
-        verify(email).sendEmail(eq("ops@b.com"), contains("SwiftInn"), contains("SwiftInn"),
+        verify(email).sendEmail(eq("ops@b.com"), contains("InnBucks Foundry"), contains("InnBucks Foundry"),
                 eq("SECURITY-PASSWORD_RESET-7"));
         verify(sms, never()).sendSms(anyString(), anyString(), anyString());
     }
@@ -144,7 +144,7 @@ class AccountSecurityNotificationListenerTest {
         listener.onUserDeactivated(
                 new UserDeactivatedEvent(9L, "Tariro", "a@b.com", "+263771234567", false));
 
-        verify(email).sendEmail(eq("a@b.com"), contains("deactivated"), contains("SwiftInn"),
+        verify(email).sendEmail(eq("a@b.com"), contains("deactivated"), contains("InnBucks Foundry"),
                 startsWith("ACCOUNT-DEACTIVATED-"));
         // Email succeeded → SMS fallback must not fire.
         verify(sms, never()).sendSms(anyString(), anyString(), anyString());

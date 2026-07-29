@@ -136,32 +136,32 @@ public class CredentialDeliveryListener {
 
     private static String subjectFor(CredentialDeliveryRequested.Reason reason) {
         return switch (reason) {
-            case APPROVAL -> "Your SwiftInn account has been approved";
-            case RESET -> "Your SwiftInn temporary password has been reset";
+            case APPROVAL -> "Your InnBucks Foundry account has been approved";
+            case RESET -> "Your InnBucks Foundry temporary password has been reset";
             // ASCII only: a non-ASCII em-dash here produced a malformed MIME
             // Subject header at the notification gateway (subjects need RFC-2047
             // encoding; the gateway sent it raw), so the onboarding email was
             // rejected while the ASCII approval/reset subjects went through. The
             // body can keep UTF-8 punctuation — only the Subject header is strict.
-            case ONBOARDING -> "Welcome to SwiftInn, your account is ready";
+            case ONBOARDING -> "Welcome to InnBucks Foundry, your account is ready";
         };
     }
 
     private static String introFor(CredentialDeliveryRequested.Reason reason) {
         return switch (reason) {
-            case APPROVAL -> "Good news — your SwiftInn account has been approved and is now active.";
-            case RESET -> "Your SwiftInn temporary password has been reset by an administrator.";
-            case ONBOARDING -> "A SwiftInn account has been created for you and is ready to use.";
+            case APPROVAL -> "Good news — your InnBucks Foundry account has been approved and is now active.";
+            case RESET -> "Your InnBucks Foundry temporary password has been reset by an administrator.";
+            case ONBOARDING -> "An InnBucks Foundry account has been created for you and is ready to use.";
         };
     }
 
     private static String buildSmsBody(CredentialDeliveryRequested.Reason reason, String tempPassword) {
         return switch (reason) {
-            case APPROVAL -> "Your SwiftInn account has been approved. Your temporary password is "
+            case APPROVAL -> "Your InnBucks Foundry account has been approved. Your temporary password is "
                     + tempPassword + ". Please log in and change it immediately.";
-            case RESET -> "Your SwiftInn temporary password has been reset to "
+            case RESET -> "Your InnBucks Foundry temporary password has been reset to "
                     + tempPassword + ". Please log in and change it immediately.";
-            case ONBOARDING -> "Welcome to SwiftInn. Your account is ready. Your temporary password is "
+            case ONBOARDING -> "Welcome to InnBucks Foundry. Your account is ready. Your temporary password is "
                     + tempPassword + ". Please log in and change it immediately.";
         };
     }
@@ -177,6 +177,6 @@ public class CredentialDeliveryListener {
                 + "Username: " + email + "\n"
                 + "Temporary password: " + tempPassword + "\n\n"
                 + "For your security, please log in and change your password immediately.\n\n"
-                + "— The SwiftInn Team";
+                + "— The InnBucks Foundry Team";
     }
 }

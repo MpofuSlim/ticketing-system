@@ -230,7 +230,7 @@ class UserAdminServiceTest {
         verify(f.publisher).publishEvent(ev.capture());
         assertEquals(12L, ev.getValue().userId());
         assertEquals("staff@acme.co.zw", ev.getValue().email());
-        assertFalse(ev.getValue().customer());   // SHOP_ADMIN => system user => SwiftInn brand
+        assertFalse(ev.getValue().customer());   // SHOP_ADMIN => system user => InnBucks Foundry brand
     }
 
     @Test

@@ -16,8 +16,8 @@ import java.util.UUID;
 /**
  * Emails an event organizer their freshly-issued commission invoice. The
  * organizer's email is their business email, resolved from user-service's
- * {@code /users/internal/tenants/lookup-by-uuid} (an organizer is a SwiftInn
- * system user, so the copy is SwiftInn-branded).
+ * {@code /users/internal/tenants/lookup-by-uuid} (an organizer is an InnBucks Foundry
+ * system user, so the copy is InnBucks Foundry-branded).
  *
  * <p>Entirely best-effort: any lookup/delivery failure is swallowed to a log
  * line — the invoice is already persisted and readable via the API, so a missing
@@ -104,34 +104,34 @@ public class InvoiceNotifier {
     }
 
     private static String dueSoonSubject(EventInvoice i) {
-        return "Reminder: SwiftInn commission invoice " + i.getInvoiceNumber()
+        return "Reminder: InnBucks Foundry commission invoice " + i.getInvoiceNumber()
                 + " is due on " + i.getDueAt().toLocalDate();
     }
 
     private static String dueSoonBody(EventInvoice i) {
         return "Hi,\n\n"
-                + "A friendly reminder that your SwiftInn commission invoice "
+                + "A friendly reminder that your InnBucks Foundry commission invoice "
                 + i.getInvoiceNumber() + " for " + i.getCurrency() + " "
                 + i.getTotalAmount().toPlainString() + " is due on "
                 + i.getDueAt().toLocalDate() + ".\n\n"
                 + "Settling it before the due date keeps your account in good "
                 + "standing. If you have already paid, please disregard this email.\n\n"
-                + "Thank you,\nSwiftInn";
+                + "Thank you,\nInnBucks Foundry";
     }
 
     private static String overdueSubject(EventInvoice i) {
-        return "Overdue: SwiftInn commission invoice " + i.getInvoiceNumber()
+        return "Overdue: InnBucks Foundry commission invoice " + i.getInvoiceNumber()
                 + " (" + i.getCurrency() + " " + i.getTotalAmount().toPlainString() + ")";
     }
 
     private static String overdueBody(EventInvoice i) {
         return "Hi,\n\n"
-                + "Your SwiftInn commission invoice " + i.getInvoiceNumber() + " for "
+                + "Your InnBucks Foundry commission invoice " + i.getInvoiceNumber() + " for "
                 + i.getCurrency() + " " + i.getTotalAmount().toPlainString()
                 + " is now past its due date and has been marked overdue.\n\n"
                 + "Please arrange payment at your earliest convenience, or contact "
-                + "SwiftInn support if you believe this is in error or have already paid.\n\n"
-                + "Thank you,\nSwiftInn";
+                + "InnBucks Foundry support if you believe this is in error or have already paid.\n\n"
+                + "Thank you,\nInnBucks Foundry";
     }
 
     private String resolveOrganizerEmail(UUID organizerUuid) {
@@ -149,7 +149,7 @@ public class InvoiceNotifier {
     }
 
     private static String subject(EventInvoice i) {
-        return "Your SwiftInn commission invoice " + i.getInvoiceNumber()
+        return "Your InnBucks Foundry commission invoice " + i.getInvoiceNumber()
                 + " (" + i.getCurrency() + " " + i.getTotalAmount().toPlainString() + " due)";
     }
 
@@ -167,6 +167,6 @@ public class InvoiceNotifier {
                 + "Total due: " + cur + " " + i.getTotalAmount().toPlainString() + "\n"
                 + "Due date: " + i.getDueAt().toLocalDate() + "\n\n"
                 + "View the full per-event breakdown in your organizer dashboard.\n\n"
-                + "— The SwiftInn Team";
+                + "— The InnBucks Foundry Team";
     }
 }

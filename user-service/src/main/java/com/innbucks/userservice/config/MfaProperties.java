@@ -15,7 +15,7 @@ import java.time.Duration;
  * ProductionSecretsGuard refuses {@code change-me-*} under the prod profile.
  *
  * <p>{@code issuer} is the label authenticator apps show next to the account
- * (e.g. "InnBucks" or "SwiftInn") — purely cosmetic, no security consequence.
+ * (e.g. "InnBucks" or "InnBucks Foundry") — purely cosmetic, no security consequence.
  *
  * <p>{@code mfaTokenTtl} bounds how long a step-1 login (password OK, awaiting
  * the TOTP code) stays valid before the FE has to start over.
