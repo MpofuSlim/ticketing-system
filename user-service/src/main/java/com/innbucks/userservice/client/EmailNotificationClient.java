@@ -48,16 +48,35 @@ public class EmailNotificationClient {
     private final RestClient restClient;
     private final InnbucksNotifyProperties properties;
     private final ObjectMapper objectMapper;
+    /**
+     * Own-SMTP delivery (SES). When enabled it replaces the notification
+     * API for EMAIL only — SMS keeps riding the API either way.
+     */
+    private final SmtpEmailSender smtpEmailSender;
 
     private String accessToken;
     private Instant tokenExpiry = Instant.EPOCH;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public EmailNotificationClient(@Qualifier("innbucksNotifyRestClient") RestClient restClient,
                                    InnbucksNotifyProperties properties,
-                                   ObjectMapper objectMapper) {
+                                   ObjectMapper objectMapper,
+                                   SmtpEmailSender smtpEmailSender) {
         this.restClient = restClient;
         this.properties = properties;
         this.objectMapper = objectMapper;
+        this.smtpEmailSender = smtpEmailSender;
+    }
+
+    /**
+     * Notification-API-only constructor: no SMTP sender, so
+     * {@link #sendEmail} always takes the API path. Used by the contract
+     * tests, which pin that wire format.
+     */
+    public EmailNotificationClient(@Qualifier("innbucksNotifyRestClient") RestClient restClient,
+                                   InnbucksNotifyProperties properties,
+                                   ObjectMapper objectMapper) {
+        this(restClient, properties, objectMapper, null);
     }
 
     /**
@@ -76,11 +95,6 @@ public class EmailNotificationClient {
         if (message == null || message.isBlank()) {
             throw new NotificationDeliveryException("Email message is blank");
         }
-        requireConfigured();
-        String ref = (reference != null && !reference.isBlank())
-                ? reference
-                : "TKT-EMAIL-" + UUID.randomUUID();
-
         // Branded HTML (when enabled + gateway confirmed to render it) or the
         // plain-text body closed with the standard InnBucks footer. HTML is
         // off by default — see InnbucksNotifyProperties.htmlEnabled.
@@ -88,8 +102,40 @@ public class EmailNotificationClient {
                 ? BrandedEmailRenderer.render(subject, message, properties.getLogoUrl())
                 : EmailSignature.appendTo(message);
 
+        // Own-SMTP first when this cell is configured for it (app.mail.enabled).
+        // It is the only path where WE compose the From header, so it is the
+        // only way the message can present its own display name (e.g.
+        // "Ticketize") instead of whatever the shared notification API stamps
+        // on every product's mail. The API stays as the fallback below, so a
+        // broken SES config degrades to the previous behaviour rather than
+        // silently dropping the message.
+        if (smtpEmailSender != null && smtpEmailSender.isEnabled()) {
+            try {
+                smtpEmailSender.send(to, subject, body, properties.isHtmlEnabled());
+                log.info("Email delivered via SMTP");
+                return;
+            } catch (RuntimeException e) {
+                log.warn("SMTP email delivery failed, falling back to the notification API: {}",
+                        e.getMessage());
+            }
+        }
+        requireConfigured();
+        String ref = (reference != null && !reference.isBlank())
+                ? reference
+                : "TKT-EMAIL-" + UUID.randomUUID();
+
         Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("subject", subject);
+        // The notification API charset-validates the SUBJECT and answers
+        // 400 {"errors":["Invalid subject"]} for anything outside plain ASCII.
+        // loyalty-service hit this live on 2026-07-29 (a tenant name with
+        // typographic punctuation) and booking-service on 2026-07-23 (an
+        // em-dash), each time silently demoting email to a fallback channel.
+        // These subjects are static ASCII today, but they are one interpolated
+        // name away from the same failure — transliterate defensively.
+        //
+        // The BODY is deliberately NOT sanitized: the endpoint accepts Unicode
+        // there, so branded copy keeps its typography.
+        payload.put("subject", com.innbucks.userservice.util.SmsTextSanitizer.toGsmSafe(subject));
         payload.put("message", body);
         payload.put("reference", ref);
         payload.put("destinationEmail", to);

@@ -47,16 +47,35 @@ public class EmailNotificationClient {
     private final RestClient restClient;
     private final InnbucksNotifyProperties properties;
     private final ObjectMapper objectMapper;
+    /**
+     * Own-SMTP delivery (SES). When enabled it replaces the notification
+     * API for EMAIL only — SMS keeps riding the API either way.
+     */
+    private final SmtpEmailSender smtpEmailSender;
 
     private String accessToken;
     private Instant tokenExpiry = Instant.EPOCH;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public EmailNotificationClient(@Qualifier("innbucksNotifyRestClient") RestClient restClient,
                                    InnbucksNotifyProperties properties,
-                                   ObjectMapper objectMapper) {
+                                   ObjectMapper objectMapper,
+                                   SmtpEmailSender smtpEmailSender) {
         this.restClient = restClient;
         this.properties = properties;
         this.objectMapper = objectMapper;
+        this.smtpEmailSender = smtpEmailSender;
+    }
+
+    /**
+     * Notification-API-only constructor: no SMTP sender, so
+     * {@link #sendEmail} always takes the API path. Used by the contract
+     * tests, which pin that wire format.
+     */
+    public EmailNotificationClient(@Qualifier("innbucksNotifyRestClient") RestClient restClient,
+                                   InnbucksNotifyProperties properties,
+                                   ObjectMapper objectMapper) {
+        this(restClient, properties, objectMapper, null);
     }
 
     /**
@@ -74,6 +93,23 @@ public class EmailNotificationClient {
         }
         if (message == null || message.isBlank()) {
             throw new NotificationDeliveryException("Email message is blank");
+        }
+        // Own-SMTP first when this cell is configured for it (app.mail.enabled).
+        // It is the only path where WE compose the From header, so it is the
+        // only way the message can present its own display name (e.g.
+        // "Ticketize") instead of whatever the shared notification API stamps
+        // on every product's mail. The API stays as the fallback below, so a
+        // broken SES config degrades to the previous behaviour rather than
+        // silently dropping the message.
+        if (smtpEmailSender != null && smtpEmailSender.isEnabled()) {
+            try {
+                smtpEmailSender.send(to, subject, message, false);
+                log.info("Email delivered via SMTP");
+                return;
+            } catch (RuntimeException e) {
+                log.warn("SMTP email delivery failed, falling back to the notification API: {}",
+                        e.getMessage());
+            }
         }
         requireConfigured();
         String ref = (reference != null && !reference.isBlank())
