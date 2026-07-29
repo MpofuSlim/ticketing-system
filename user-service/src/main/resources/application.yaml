@@ -266,6 +266,18 @@ spring:
           starttls:
             enable: true
             required: true
+# Mail must NEVER gate readiness. The probe hits the AGGREGATE /actuator/health,
+# and Boot's MailHealthIndicator opens a real connection to spring.mail.host —
+# which is empty on a cell that has not provisioned SES, so the component
+# reports DOWN, the aggregate 503s and the pod never becomes ready (observed
+# 2026-07-29: user-service stuck 0/1 Running, no restarts, old pod held in
+# service). Even with SES configured this is the wrong signal: email delivery
+# is best-effort with a notification-API fallback, so an unreachable SMTP host
+# must not pull the service out of rotation.
+management:
+  health:
+    mail:
+      enabled: false
 app:
   mail:
     enabled: ${MAIL_ENABLED:false}
