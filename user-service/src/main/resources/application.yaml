@@ -271,4 +271,4 @@ app:
     enabled: ${MAIL_ENABLED:false}
     # Must be an SES-verified identity for the region or SES rejects the send.
     from: ${MAIL_FROM:banking@innbucks.co.zw}
-    sender-name: ${MAIL_SENDER_NAME:Ticketize}
+    sender-name: ${MAIL_SENDER_NAME:Foundry}
