@@ -110,7 +110,27 @@ jobs:
   # time before an image is even built, and covers every dependency manifest in
   # the repo (including any that don't produce a container image).
   dependency-review:
-    if: github.event_name == 'pull_request'
+    # dependency-review-action needs GitHub's Dependency Graph, which on a
+    # PRIVATE repo requires paid GitHub Advanced Security (it's free on public
+    # repos). This repo went private, so the action hard-errors "Dependency
+    # review is not supported on this repository" and reds every PR regardless
+    # of what the PR changes — PR #472 added no dependencies at all and still
+    # failed here.
+    #
+    # Two guards, belt-and-suspenders — this mirrors the fix already proven in
+    # the InnRewards repo, where a `visibility == 'public'` gate alone did NOT
+    # skip (the pull_request payload's repository.visibility read as truthy on
+    # a private repo, so the job ran and failed anyway):
+    #   1. `if` gates on the canonical `repository.private` boolean (reliable
+    #      where `visibility` is not) so the job cleanly SKIPS on a private repo
+    #      and auto-re-enables if it goes public again / GHAS is licensed;
+    #   2. `continue-on-error` on the step so that even if the payload metadata
+    #      is wrong again, the "not supported" error can never RED the PR.
+    # Called-out A08 exception (see CLAUDE.md) — NOT a silent removal:
+    # transitive/library CVEs stay covered by the Release Trivy image scan;
+    # only the PR-time direct-dependency advisory surface is dropped while
+    # private + no GHAS.
+    if: github.event_name == 'pull_request' && github.event.repository.private == false
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -120,6 +140,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Dependency review
+        continue-on-error: true
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high
