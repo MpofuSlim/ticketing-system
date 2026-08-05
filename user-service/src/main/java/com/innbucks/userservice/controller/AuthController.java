@@ -65,7 +65,7 @@ public class AuthController {
                     "activation via `PUT /admin/users/{id}/active`) the account is assigned a randomly-generated " +
                     "one-time temporary password (delivered to the user over email/SMS) and flagged to change " +
                     "it on first login. " +
-                    "The caller picks one or more `defaultServices` (`ticketing`, `loyalty`); the server derives " +
+                    "The caller picks one or more `defaultServices` (`ticketing`, `loyalty`, `marketplace`); the server derives " +
                     "the role and the underlying microservice access. `ticketing` -> EVENT_ORGANIZER " +
                     "(events/seats/bookings/payments). `loyalty` -> MERCHANT_ADMIN (loyalty/payments). Picking " +
                     "both grants both. When `isBusiness` is true, `businessName`, `businessAddress` and " +

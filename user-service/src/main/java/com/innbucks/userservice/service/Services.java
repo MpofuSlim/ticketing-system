@@ -22,8 +22,9 @@ import java.util.Set;
  */
 public final class Services {
 
-    public static final String TICKETING = "ticketing";
-    public static final String LOYALTY   = "loyalty";
+    public static final String TICKETING   = "ticketing";
+    public static final String LOYALTY     = "loyalty";
+    public static final String MARKETPLACE = "marketplace";
 
     /** Bundle definitions: bundle name -> microservices it grants access to. */
     public static final Map<String, List<String>> BUNDLES;
@@ -34,13 +35,20 @@ public final class Services {
 
     static {
         Map<String, List<String>> bundles = new LinkedHashMap<>();
-        bundles.put(TICKETING, List.of("events", "seats", "bookings", "payments"));
-        bundles.put(LOYALTY,   List.of("loyalty", "payments"));
+        bundles.put(TICKETING,   List.of("events", "seats", "bookings", "payments"));
+        bundles.put(LOYALTY,     List.of("loyalty", "payments"));
+        // marketplace-service (MpofuSlim/market-place) — sellers ride the same
+        // MERCHANT_ADMIN role + merchantId scoping as loyalty (owner decision,
+        // 2026-08-05: marketplace administration is MERCHANT_ADMIN-only). The
+        // role alone doesn't unlock selling: listing writes also need the
+        // merchantId claim, which comes from the merchant-assignment flow.
+        bundles.put(MARKETPLACE, List.of("marketplace", "payments"));
         BUNDLES = Map.copyOf(bundles);
 
         Map<String, User.Role> roles = new LinkedHashMap<>();
-        roles.put(TICKETING, User.Role.EVENT_ORGANIZER);
-        roles.put(LOYALTY,   User.Role.MERCHANT_ADMIN);
+        roles.put(TICKETING,   User.Role.EVENT_ORGANIZER);
+        roles.put(LOYALTY,     User.Role.MERCHANT_ADMIN);
+        roles.put(MARKETPLACE, User.Role.MERCHANT_ADMIN);
         BUNDLE_ROLES = Map.copyOf(roles);
 
         ALL_BUNDLES = List.copyOf(bundles.keySet());
