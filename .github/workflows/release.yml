@@ -226,9 +226,26 @@ jobs:
       # The RETRY step has NO continue-on-error, so a genuine attestation
       # failure still fails the job — the OWASP A08 provenance guarantee is
       # preserved, not weakened.
+      #
+      # Both steps are gated on the repo being PUBLIC. GitHub does not offer
+      # build-provenance attestations for user-owned PRIVATE repositories:
+      #   Failed to persist attestation: Feature not available for user-owned
+      #   private repositories. To enable this feature, please make this
+      #   repository public.
+      # That is a permanent capability gap, not a transient blip, so the retry
+      # wrapper above fails on EVERY run — which is what reds the whole Release
+      # workflow after the image has already been scanned and pushed (every one
+      # of the 7 service jobs failed this way on the #472 merge commit, at the
+      # last step, with the image sitting in GHCR).
+      #
+      # Called-out A08 note: this removes only the GITHUB-NATIVE attestation
+      # (`gh attestation verify oci://...`). The image is still pushed with
+      # buildx SLSA provenance (`provenance: mode=max`) and an SBOM attached in
+      # the registry, and Trivy still gates the push. Auto-re-enables if the
+      # repo goes public again or moves to an organisation.
       - name: Attest build provenance
         id: attest
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && github.event.repository.private == false
         continue-on-error: true
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
@@ -237,7 +254,7 @@ jobs:
           push-to-registry: true
 
       - name: Attest build provenance (retry on transient OIDC failure)
-        if: github.event_name != 'pull_request' && steps.attest.outcome == 'failure'
+        if: github.event_name != 'pull_request' && github.event.repository.private == false && steps.attest.outcome == 'failure'
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-name: ghcr.io/${{ github.repository_owner }}/${{ matrix.service }}

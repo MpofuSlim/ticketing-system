@@ -218,6 +218,21 @@ called-out reason, not a silent revert.**
   attestation + SBOM** (`provenance: mode=max`, `sbom: true`) and a GitHub-native
   signed build-provenance attestation. Verify a deployed digest with
   `gh attestation verify oci://ghcr.io/<owner>/<service>@<digest> --repo MpofuSlim/ticketing-system`.
+  **Called-out exception (this repo is now PRIVATE):** the two `attest-build-provenance`
+  steps are gated on `github.event.repository.private == false`. GitHub does not
+  offer build-provenance attestations for **user-owned private** repos — the step
+  fails `Failed to persist attestation: Feature not available for user-owned
+  private repositories`. That's a permanent capability gap, not the transient OIDC
+  blip the retry wrapper was built for, so the retry (which deliberately has no
+  `continue-on-error`) failed on every run and **red-lined the whole Release
+  workflow after the image was already scanned and pushed** — all 7 service jobs
+  on the #472 merge commit failed exactly this way, at the final step, with the
+  images sitting in GHCR. Only the GitHub-native attestation is lost: images still
+  ship with buildx SLSA provenance (`provenance: mode=max`) + SBOM, and Trivy still
+  gates the push. `gh attestation verify` will not work until the repo is public or
+  org-owned. **Watch for this failure mode:** a red Release run no longer implies
+  the image is missing — check whether the push step itself succeeded before
+  concluding a deploy is blocked.
 - **`.trivyignore` is a governed waiver list** — every entry needs an owner +
   reason + review-date comment (rules are in the file). Prefer fixing/upgrading
   over waiving; the root `pom.xml` carries the CVE version-overrides.
