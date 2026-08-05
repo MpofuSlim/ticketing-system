@@ -6,6 +6,7 @@ import innbucks.paymentservice.audit.AuditService;
 import innbucks.paymentservice.entity.Payment;
 import innbucks.paymentservice.entity.Payment.PaymentStatus;
 import innbucks.paymentservice.entity.PaymentEvent;
+import innbucks.paymentservice.order.OrderType;
 import innbucks.paymentservice.repository.PaymentEventRepository;
 import innbucks.paymentservice.repository.PaymentRepository;
 import lombok.RequiredArgsConstructor;
@@ -53,8 +54,8 @@ import java.util.UUID;
 public class PaymentRecordService {
 
     /**
-     * Statuses that occupy the booking's single payment slot (see the
-     * {@code uq_payment_active_booking} partial index — this set must stay
+     * Statuses that occupy the order's single payment slot (see the
+     * {@code uq_payment_active_order} partial index — this set must stay
      * the complement of that index's WHERE clause). Terminal failures free
      * the slot for a retry; everything else blocks a second payment.
      */
@@ -93,13 +94,13 @@ public class PaymentRecordService {
     private final AuditService auditService;
 
     /**
-     * UX pre-check companion to the DB's one-active-payment-per-booking
+     * UX pre-check companion to the DB's one-active-payment-per-order
      * index: lets the caller return a clean 409 instead of surfacing a
      * constraint violation. The index remains the arbiter under races.
      */
     @Transactional(readOnly = true)
-    public boolean hasActiveOrSucceededPayment(UUID bookingId) {
-        return repository.existsByBookingIdAndStatusIn(bookingId, ACTIVE_OR_SUCCEEDED);
+    public boolean hasActiveOrSucceededPayment(OrderType orderType, String orderRef) {
+        return repository.existsByOrderTypeAndOrderRefAndStatusIn(orderType, orderRef, ACTIVE_OR_SUCCEEDED);
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -110,8 +111,8 @@ public class PaymentRecordService {
         }
         Payment saved = repository.save(draft);
         recordEvent(saved, null, PaymentStatus.PENDING, "Ledger row opened before upstream call", null);
-        log.info("payment PENDING id={} paymentReference={} bookingId={} amount={} currency={}",
-                saved.getId(), saved.getPaymentReference(), saved.getBookingId(),
+        log.info("payment PENDING id={} paymentReference={} orderType={} orderRef={} amount={} currency={}",
+                saved.getId(), saved.getPaymentReference(), saved.getOrderType(), saved.getOrderRef(),
                 saved.getAmount(), saved.getCurrency());
         return saved;
     }
@@ -290,6 +291,8 @@ public class PaymentRecordService {
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("from", from == null ? null : from.name());
         metadata.put("to", to.name());
+        if (payment.getOrderType() != null) metadata.put("orderType", payment.getOrderType().name());
+        if (payment.getOrderRef() != null) metadata.put("orderRef", payment.getOrderRef());
         if (payment.getBookingId() != null) metadata.put("bookingId", payment.getBookingId().toString());
         if (payment.getAmount() != null) metadata.put("amount", String.valueOf(payment.getAmount()));
         if (payment.getCurrency() != null) metadata.put("currency", payment.getCurrency());

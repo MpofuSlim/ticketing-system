@@ -1,6 +1,7 @@
 package innbucks.paymentservice.repository;
 
 import innbucks.paymentservice.entity.Payment;
+import innbucks.paymentservice.order.OrderType;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
@@ -25,12 +26,13 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
     Optional<Payment> findByIdempotencyKey(String idempotencyKey);
 
     /**
-     * Pre-check companion to the {@code uq_payment_active_booking} partial
-     * unique index: lets the service refuse a second payment for a booking
+     * Pre-check companion to the {@code uq_payment_active_order} partial
+     * unique index: lets the service refuse a second payment for an order
      * with a clean 409 instead of a constraint violation. The INDEX remains
      * the source of truth under concurrency — this is UX, not enforcement.
      */
-    boolean existsByBookingIdAndStatusIn(UUID bookingId, Collection<Payment.PaymentStatus> statuses);
+    boolean existsByOrderTypeAndOrderRefAndStatusIn(
+            OrderType orderType, String orderRef, Collection<Payment.PaymentStatus> statuses);
 
     /**
      * Reconciler sweep: rows stuck in a non-terminal state (PENDING /
@@ -60,11 +62,11 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
             Payment.PaymentStatus status, Instant cutoff, Pageable pageable);
 
     /**
-     * Replay lookup for the public {@code POST /payments} entry: when a
-     * booking already has an active-or-successful payment, the endpoint
+     * Replay lookup for the public {@code POST /payments} entry: when an
+     * order already has an active-or-successful payment, the endpoint
      * returns THAT row's receipt (idempotent-replay semantics — a double-tap
      * must never surface as an error to the FE).
      */
-    Optional<Payment> findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(
-            UUID bookingId, Collection<Payment.PaymentStatus> statuses);
+    Optional<Payment> findFirstByOrderTypeAndOrderRefAndStatusInOrderByCreatedAtDesc(
+            OrderType orderType, String orderRef, Collection<Payment.PaymentStatus> statuses);
 }

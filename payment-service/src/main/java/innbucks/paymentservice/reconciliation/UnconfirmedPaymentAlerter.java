@@ -13,7 +13,7 @@ import java.time.Instant;
 /**
  * One-time human escalation for the paid-but-unconfirmable queue. When the
  * reconciler's confirm retry keeps failing for a {@code COMPLETED_UNCONFIRMED}
- * payment — money taken, booking not confirmable, no automatic reversal on the
+ * payment — money taken, order not confirmable, no automatic reversal on the
  * code rail — a metric alone leaves both the operator and the customer in the
  * dark. On the FIRST still-failing retry per payment this sends:
  *
@@ -22,7 +22,7 @@ import java.time.Instant;
  *       ({@code OPERATOR_ALERT_EMAIL}; blank = disabled) with the row's
  *       identifiers so it can be worked as a queue item, and</li>
  *   <li>a customer WhatsApp reassurance ("payment received, we're confirming
- *       your booking manually — no action needed") so silence doesn't turn
+ *       your order manually — no action needed") so silence doesn't turn
  *       into a chargeback call.</li>
  * </ul>
  *
@@ -70,15 +70,15 @@ public class UnconfirmedPaymentAlerter {
             return;
         }
         String subject = "Stuck payment needs manual confirmation: " + p.getPaymentReference();
-        String body = "A paid booking cannot be auto-confirmed and needs operator attention.\n\n"
+        String body = "A paid order cannot be auto-confirmed and needs operator attention.\n\n"
                 + "Payment reference: " + p.getPaymentReference() + "\n"
                 + "Payment id:        " + p.getId() + "\n"
-                + "Booking id:        " + p.getBookingId() + "\n"
+                + "Order:             " + orderDescription(p) + "\n"
                 + "Amount:            " + p.getCurrency() + " " + p.getAmount() + "\n"
                 + "Customer msisdn:   " + p.getCustomerMsisdn() + "\n"
                 + "Last failure:      " + reason + "\n\n"
                 + "The customer HAS paid (status COMPLETED_UNCONFIRMED); real-time reversal "
-                + "is not available on the code rail. Confirm the booking manually or contact "
+                + "is not available on the code rail. Confirm the order manually or contact "
                 + "the customer. The reconciler keeps retrying automatically; this alert is "
                 + "sent once per payment.";
         try {
@@ -90,13 +90,20 @@ public class UnconfirmedPaymentAlerter {
         }
     }
 
+    /** "BOOKING <uuid>" / "MARKETPLACE MKT-..."; pre-V12 fixtures fall back to bookingId. */
+    private static String orderDescription(Payment p) {
+        String type = p.getOrderType() != null ? p.getOrderType().name() : "BOOKING";
+        String ref = p.getOrderRef() != null ? p.getOrderRef() : String.valueOf(p.getBookingId());
+        return type + " " + ref;
+    }
+
     private void reassureCustomer(Payment p) {
         String msisdn = p.getCustomerMsisdn();
         if (msisdn == null || msisdn.isBlank()) {
             return;
         }
         String message = "We received your InnBucks payment " + p.getPaymentReference()
-                + " and are confirming your booking manually. No action is needed — "
+                + " and are confirming your order manually. No action is needed — "
                 + "you will get your confirmation shortly. Your payment is safe.";
         try {
             whatsApp.sendCustomNotification(msisdn, message);

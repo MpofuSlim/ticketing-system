@@ -8,6 +8,9 @@ import innbucks.paymentservice.client.InnbucksApiTransientException;
 import innbucks.paymentservice.dto.InnbucksPaymentResponse;
 import innbucks.paymentservice.dto.InnbucksPaymentResponse.Status;
 import innbucks.paymentservice.entity.Payment;
+import innbucks.paymentservice.order.BookingOrderGateway;
+import innbucks.paymentservice.order.OrderGatewayRegistry;
+import innbucks.paymentservice.order.OrderType;
 import innbucks.paymentservice.service.InnbucksPaymentService.InvalidPaymentRequestException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,6 +20,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -29,18 +33,21 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 /**
- * Pins the 2D-code flow's ledger + safety discipline:
+ * Pins the 2D-code flow's ledger + safety discipline, now running through the
+ * {@code OrderGatewayRegistry} with a REAL {@code BookingOrderGateway} over
+ * mocked booking/event clients (so the booking product's behaviour is
+ * asserted end to end through the generalized orchestration):
  * <ul>
  *   <li>happy path: PENDING → TOKEN_ISSUED with the code handles + QR
  *       echoed on the PROCESSING response — the FE renders both;</li>
- *   <li>amounts convert to CENTS exactly (sub-cent precision refused) and a
- *       mismatched amount echo kills the payment BEFORE the FE ever sees
- *       the code — the 100x guard;</li>
+ *   <li>amounts convert to CENTS exactly in the booking gateway (sub-cent
+ *       precision refused) and a mismatched amount echo kills the payment
+ *       BEFORE the FE ever sees the code — the 100x guard;</li>
  *   <li>generation failures (refusal/transient) close the row FAILED — no
  *       money moves on generate, the slot frees for a clean retry, and
  *       IN_DOUBT never arises in this flow;</li>
- *   <li>one active payment per booking: pre-check 409 + race-loser 409 on
- *       the unique-index violation.</li>
+ *   <li>one active payment per (orderType, orderRef): pre-check 409 +
+ *       race-loser 409 on the unique-index violation.</li>
  * </ul>
  *
  * <p>No notifier dependency — the response IS the delivery (FE shows the
@@ -68,14 +75,9 @@ class InnbucksPaymentServiceTest {
         // no eventId), which is what most cases here exercise.
         org.mockito.Mockito.when(events.getSettlementInfo(org.mockito.ArgumentMatchers.any()))
                 .thenReturn(java.util.Optional.empty());
-        resolution = new CodePaymentResolutionService(records, bookings,
-                new innbucks.paymentservice.config.PaymentMetrics(
-                        new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
-        service = new InnbucksPaymentService(records, innbucksApi, bookings, events, resolution);
-        ReflectionTestUtils.setField(service, "codeTtl", Duration.ofMinutes(10));
-        ReflectionTestUtils.setField(service, "cellCurrency", "USD");
+        service = serviceWith("USD");
 
-        lenient().when(records.hasActiveOrSucceededPayment(any())).thenReturn(false);
+        lenient().when(records.hasActiveOrSucceededPayment(any(), anyString())).thenReturn(false);
         lenient().when(bookings.getBooking(bookingId)).thenReturn(Map.of(
                 "totalAmount", new BigDecimal("50.00"), "currency", "USD"));
         lenient().when(records.openPending(any(Payment.class))).thenAnswer(inv -> {
@@ -84,6 +86,24 @@ class InnbucksPaymentServiceTest {
             p.setStatus(Payment.PaymentStatus.PENDING);
             return p;
         });
+    }
+
+    /** Service + REAL booking gateway (given cell currency) over the shared mocks. */
+    private InnbucksPaymentService serviceWith(String cellCurrency) {
+        BookingOrderGateway bookingGateway = new BookingOrderGateway(
+                bookings, events, cellCurrency, Duration.ofMinutes(10));
+        OrderGatewayRegistry registry = new OrderGatewayRegistry(List.of(bookingGateway));
+        resolution = new CodePaymentResolutionService(records, registry,
+                new innbucks.paymentservice.config.PaymentMetrics(
+                        new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
+        InnbucksPaymentService s = new InnbucksPaymentService(records, innbucksApi, registry, resolution);
+        ReflectionTestUtils.setField(s, "codeTtl", Duration.ofMinutes(10));
+        ReflectionTestUtils.setField(s, "cellCurrency", cellCurrency);
+        return s;
+    }
+
+    private InnbucksPaymentResponse processBooking(String msisdn) {
+        return service.processPayment(OrderType.BOOKING, bookingId.toString(), msisdn, null);
     }
 
     private static CodeGenerationResult approved(String code, String authNumber, Long echoCents) {
@@ -96,18 +116,37 @@ class InnbucksPaymentServiceTest {
         when(innbucksApi.generatePaymentCode(anyString(), anyString(), eq(5000L)))
                 .thenReturn(approved("701285660", "1616800", 5000L));
 
-        InnbucksPaymentResponse resp = service.processPayment(bookingId, "+263770000001", null);
+        InnbucksPaymentResponse resp = processBooking("+263770000001");
 
         assertEquals(Status.PROCESSING, resp.getStatus());
         assertEquals("701285660", resp.getPaymentCode());
         assertEquals("qr-base64-bytes", resp.getPaymentQrCode(),
                 "the InnBucks QR must ride along for Scan-to-Pay");
         assertNotNull(resp.getPaymentCodeExpiresAt());
+        // Additive order identity on the internal outcome.
+        assertEquals(OrderType.BOOKING, resp.getOrderType());
+        assertEquals(bookingId.toString(), resp.getOrderRef());
+        assertEquals(bookingId, resp.getBookingId(), "bookingId still echoed for BOOKING rows");
         // Ledger: code handles + QR + local deadline recorded on the transition.
         verify(records).markTokenIssued(any(UUID.class), eq("701285660"), eq("1616800"),
                 eq("qr-base64-bytes"), any(Instant.class));
         verify(records, never()).markFailed(any(), anyString(), anyString());
         verify(records, never()).markInDoubt(any(), anyString());
+    }
+
+    @Test
+    void bookingRow_carriesOrderIdentity_andBookingId() {
+        when(innbucksApi.generatePaymentCode(anyString(), anyString(), anyLong()))
+                .thenReturn(approved("701285660", "1616800", 5000L));
+
+        processBooking("+263770000001");
+
+        org.mockito.ArgumentCaptor<Payment> opened = org.mockito.ArgumentCaptor.forClass(Payment.class);
+        verify(records).openPending(opened.capture());
+        assertEquals(OrderType.BOOKING, opened.getValue().getOrderType());
+        assertEquals(bookingId.toString(), opened.getValue().getOrderRef());
+        assertEquals(bookingId, opened.getValue().getBookingId(),
+                "booking_id stays populated for BOOKING rows (legacy echo)");
     }
 
     @Test
@@ -122,7 +161,7 @@ class InnbucksPaymentServiceTest {
         when(innbucksApi.generatePaymentCode(anyString(), anyString(), anyLong()))
                 .thenReturn(approved("701285660", "1616800", 5000L));
 
-        service.processPayment(bookingId, "+263770000001", null);
+        processBooking("+263770000001");
 
         org.mockito.ArgumentCaptor<String> ref = org.mockito.ArgumentCaptor.forClass(String.class);
         org.mockito.ArgumentCaptor<String> narration = org.mockito.ArgumentCaptor.forClass(String.class);
@@ -143,7 +182,7 @@ class InnbucksPaymentServiceTest {
         when(innbucksApi.generatePaymentCode(anyString(), anyString(), anyLong()))
                 .thenReturn(approved("701285660", "1616800", 5000L));
 
-        InnbucksPaymentResponse resp = service.processPayment(bookingId, "+263770000001", null);
+        InnbucksPaymentResponse resp = processBooking("+263770000001");
 
         assertEquals(Status.PROCESSING, resp.getStatus());
         org.mockito.ArgumentCaptor<String> ref = org.mockito.ArgumentCaptor.forClass(String.class);
@@ -158,7 +197,7 @@ class InnbucksPaymentServiceTest {
         when(innbucksApi.generatePaymentCode(anyString(), anyString(), anyLong()))
                 .thenReturn(approved("701285660", "1616800", null));
 
-        service.processPayment(bookingId, "+263770000001", null);
+        processBooking("+263770000001");
 
         verify(innbucksApi).generatePaymentCode(anyString(), anyString(), eq(5000L));
     }
@@ -169,7 +208,7 @@ class InnbucksPaymentServiceTest {
                 "totalAmount", new BigDecimal("50.005"), "currency", "USD"));
 
         InvalidPaymentRequestException ex = assertThrows(InvalidPaymentRequestException.class,
-                () -> service.processPayment(bookingId, "+263770000001", null));
+                () -> processBooking("+263770000001"));
 
         assertEquals(422, ex.getStatusCode());
         verifyNoInteractions(innbucksApi);
@@ -183,7 +222,7 @@ class InnbucksPaymentServiceTest {
         when(innbucksApi.generatePaymentCode(anyString(), anyString(), eq(5000L)))
                 .thenReturn(approved("701285660", "1616800", 50L));
 
-        InnbucksPaymentResponse resp = service.processPayment(bookingId, "+263770000001", null);
+        InnbucksPaymentResponse resp = processBooking("+263770000001");
 
         assertEquals(Status.FAILED, resp.getStatus());
         assertEquals("amount_mismatch", resp.getUpstreamCode());
@@ -199,7 +238,7 @@ class InnbucksPaymentServiceTest {
                 .thenReturn(new CodeGenerationResult(false, null, null, null, null, null,
                         "96", "Request failed, please try again later"));
 
-        InnbucksPaymentResponse resp = service.processPayment(bookingId, "+263770000001", null);
+        InnbucksPaymentResponse resp = processBooking("+263770000001");
 
         assertEquals(Status.FAILED, resp.getStatus());
         assertEquals("96", resp.getUpstreamCode());
@@ -215,7 +254,7 @@ class InnbucksPaymentServiceTest {
                 .thenThrow(new InnbucksApiTransientException("innbucks 503", 503));
 
         InvalidPaymentRequestException ex = assertThrows(InvalidPaymentRequestException.class,
-                () -> service.processPayment(bookingId, "+263770000001", null));
+                () -> processBooking("+263770000001"));
 
         assertEquals(503, ex.getStatusCode());
         verify(records).markFailed(any(UUID.class), eq("innbucks_unreachable"), anyString());
@@ -228,7 +267,7 @@ class InnbucksPaymentServiceTest {
                 .thenThrow(new InnbucksApiException("credentials rejected", 401));
 
         InvalidPaymentRequestException ex = assertThrows(InvalidPaymentRequestException.class,
-                () -> service.processPayment(bookingId, "+263770000001", null));
+                () -> processBooking("+263770000001"));
 
         assertEquals(500, ex.getStatusCode());
         verify(records).markFailed(any(UUID.class), eq("innbucks_rejected"), anyString());
@@ -236,10 +275,11 @@ class InnbucksPaymentServiceTest {
 
     @Test
     void activePaymentExists_rejected409_beforeAnyUpstreamCall() {
-        when(records.hasActiveOrSucceededPayment(bookingId)).thenReturn(true);
+        when(records.hasActiveOrSucceededPayment(OrderType.BOOKING, bookingId.toString()))
+                .thenReturn(true);
 
         InvalidPaymentRequestException ex = assertThrows(InvalidPaymentRequestException.class,
-                () -> service.processPayment(bookingId, "+263770000001", null));
+                () -> processBooking("+263770000001"));
 
         assertEquals(409, ex.getStatusCode());
         verifyNoInteractions(innbucksApi);
@@ -249,10 +289,10 @@ class InnbucksPaymentServiceTest {
     @Test
     void raceLoserOnUniqueIndex_mapsTo409() {
         when(records.openPending(any(Payment.class)))
-                .thenThrow(new DataIntegrityViolationException("uq_payment_active_booking"));
+                .thenThrow(new DataIntegrityViolationException("uq_payment_active_order"));
 
         InvalidPaymentRequestException ex = assertThrows(InvalidPaymentRequestException.class,
-                () -> service.processPayment(bookingId, "+263770000001", null));
+                () -> processBooking("+263770000001"));
 
         assertEquals(409, ex.getStatusCode());
         verify(innbucksApi, never()).generatePaymentCode(anyString(), anyString(), anyLong());
@@ -260,12 +300,12 @@ class InnbucksPaymentServiceTest {
 
     @Test
     void toCents_exactConversions() {
-        assertEquals(5000L, InnbucksPaymentService.toCents(new BigDecimal("50.00")));
-        assertEquals(5000L, InnbucksPaymentService.toCents(new BigDecimal("50")));
-        assertEquals(1L, InnbucksPaymentService.toCents(new BigDecimal("0.01")));
-        assertEquals(123456789L, InnbucksPaymentService.toCents(new BigDecimal("1234567.89")));
+        assertEquals(5000L, BookingOrderGateway.toCents(new BigDecimal("50.00")));
+        assertEquals(5000L, BookingOrderGateway.toCents(new BigDecimal("50")));
+        assertEquals(1L, BookingOrderGateway.toCents(new BigDecimal("0.01")));
+        assertEquals(123456789L, BookingOrderGateway.toCents(new BigDecimal("1234567.89")));
         assertThrows(InvalidPaymentRequestException.class,
-                () -> InnbucksPaymentService.toCents(new BigDecimal("50.005")));
+                () -> BookingOrderGateway.toCents(new BigDecimal("50.005")));
     }
 
     @Test
@@ -274,7 +314,7 @@ class InnbucksPaymentServiceTest {
                 .when(bookings).extendHold(eq(bookingId), any(Instant.class));
 
         InvalidPaymentRequestException ex = assertThrows(InvalidPaymentRequestException.class,
-                () -> service.processPayment(bookingId, "+263770000001", null));
+                () -> processBooking("+263770000001"));
 
         assertEquals(409, ex.getStatusCode());
         // ZERO side effects: no ledger row, no code minted.
@@ -288,7 +328,7 @@ class InnbucksPaymentServiceTest {
                 .when(bookings).extendHold(eq(bookingId), any(Instant.class));
 
         InvalidPaymentRequestException ex = assertThrows(InvalidPaymentRequestException.class,
-                () -> service.processPayment(bookingId, "+263770000001", null));
+                () -> processBooking("+263770000001"));
 
         assertEquals(503, ex.getStatusCode());
         verify(records, never()).openPending(any());
@@ -300,13 +340,45 @@ class InnbucksPaymentServiceTest {
                 .thenReturn(approved("701285660", "1616800", 5000L));
 
         Instant before = Instant.now();
-        service.processPayment(bookingId, "+263770000001", null);
+        processBooking("+263770000001");
 
         org.mockito.ArgumentCaptor<Instant> until = org.mockito.ArgumentCaptor.forClass(Instant.class);
         verify(bookings).extendHold(eq(bookingId), until.capture());
         // ttl(10m) + margin(3m) = hold must reach >= now+13m (small clock slack).
         assertFalse(until.getValue().isBefore(before.plus(Duration.ofMinutes(13)).minusSeconds(5)),
                 "hold must outlive the code by the safety margin");
+    }
+
+    @Test
+    void noPayerMsisdn_anywhere_isRefused400_beforeHoldOrLedger() {
+        // No override AND no phoneNumber on the booking → nothing to record
+        // as the payer; refused before extend-hold, ledger or mint.
+        when(bookings.getBooking(bookingId)).thenReturn(Map.of(
+                "totalAmount", new BigDecimal("50.00"), "currency", "USD"));
+
+        InvalidPaymentRequestException ex = assertThrows(InvalidPaymentRequestException.class,
+                () -> service.processPayment(OrderType.BOOKING, bookingId.toString(), null, null));
+
+        assertEquals(400, ex.getStatusCode());
+        verify(bookings, never()).extendHold(any(), any());
+        verify(records, never()).openPending(any());
+        verifyNoInteractions(innbucksApi);
+    }
+
+    @Test
+    void payerMsisdn_fallsBackToTheBookingsPhone_whenNoOverride() {
+        when(bookings.getBooking(bookingId)).thenReturn(Map.of(
+                "totalAmount", new BigDecimal("50.00"), "currency", "USD",
+                "phoneNumber", "+263775550001"));
+        when(innbucksApi.generatePaymentCode(anyString(), anyString(), anyLong()))
+                .thenReturn(approved("701285660", "1616800", 5000L));
+
+        service.processPayment(OrderType.BOOKING, bookingId.toString(), null, null);
+
+        org.mockito.ArgumentCaptor<Payment> opened = org.mockito.ArgumentCaptor.forClass(Payment.class);
+        verify(records).openPending(opened.capture());
+        assertEquals("+263775550001", opened.getValue().getCustomerMsisdn(),
+                "guest entry: the payer is the phone captured on the order");
     }
 
     private Payment openCodeRow() {
@@ -378,12 +450,12 @@ class InnbucksPaymentServiceTest {
     void bookingWithoutCurrency_usesTheCellCurrency_notHardcodedUsd() {
         // KE cell: booking carries no currency (single-country, no column), so
         // the payment must inherit the cell currency (KES), never a hardcoded USD.
-        ReflectionTestUtils.setField(service, "cellCurrency", "KES");
+        service = serviceWith("KES");
         when(bookings.getBooking(bookingId)).thenReturn(Map.of("totalAmount", new BigDecimal("40.00")));
         when(innbucksApi.generatePaymentCode(anyString(), anyString(), anyLong()))
                 .thenReturn(approved("701285660", "1616800", 4000L));
 
-        InnbucksPaymentResponse resp = service.processPayment(bookingId, "+254712345678", null);
+        InnbucksPaymentResponse resp = processBooking("+254712345678");
 
         assertEquals("KES", resp.getCurrency());
         org.mockito.ArgumentCaptor<Payment> opened = org.mockito.ArgumentCaptor.forClass(Payment.class);
@@ -393,13 +465,13 @@ class InnbucksPaymentServiceTest {
 
     @Test
     void bookingWithExplicitCurrency_winsOverCellCurrency() {
-        ReflectionTestUtils.setField(service, "cellCurrency", "KES");
+        service = serviceWith("KES");
         when(bookings.getBooking(bookingId)).thenReturn(Map.of(
                 "totalAmount", new BigDecimal("40.00"), "currency", "USD"));
         when(innbucksApi.generatePaymentCode(anyString(), anyString(), anyLong()))
                 .thenReturn(approved("701285660", "1616800", 4000L));
 
-        InnbucksPaymentResponse resp = service.processPayment(bookingId, "+254712345678", null);
+        InnbucksPaymentResponse resp = processBooking("+254712345678");
 
         assertEquals("USD", resp.getCurrency(), "an explicit booking currency must win over the cell default");
     }

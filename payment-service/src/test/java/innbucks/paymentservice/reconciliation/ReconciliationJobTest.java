@@ -53,11 +53,20 @@ class ReconciliationJobTest {
         // answers return empty lists / false, so the payment sweeps are
         // no-ops in the transactions-ledger tests.
         return new ReconciliationJob(repo, mock(PaymentRepository.class),
-                mock(PaymentRecordService.class), mock(BookingServiceClient.class),
+                mock(PaymentRecordService.class),
                 mock(InnbucksApiClient.class), metrics,
                 mock(innbucks.paymentservice.service.CodePaymentResolutionService.class),
                 mock(UnconfirmedPaymentAlerter.class),
                 FIVE_MINUTES, batchSize);
+    }
+
+    /** Registry over a REAL BookingOrderGateway so gateway-mediated confirms
+     *  still land on the mocked BookingServiceClient exactly as before. */
+    private static innbucks.paymentservice.order.OrderGatewayRegistry registryOver(BookingServiceClient bookings) {
+        return new innbucks.paymentservice.order.OrderGatewayRegistry(List.of(
+                new innbucks.paymentservice.order.BookingOrderGateway(
+                        bookings, mock(innbucks.paymentservice.client.EventServiceClient.class),
+                        "USD", Duration.ofMinutes(10))));
     }
 
     private static ReconciliationJob newPaymentJob(PaymentRepository payments,
@@ -65,8 +74,9 @@ class ReconciliationJobTest {
                                                    BookingServiceClient bookings,
                                                    PaymentMetrics metrics) {
         return new ReconciliationJob(mock(TransactionRepository.class), payments,
-                records, bookings, mock(InnbucksApiClient.class), metrics,
-                new innbucks.paymentservice.service.CodePaymentResolutionService(records, bookings, metrics),
+                records, mock(InnbucksApiClient.class), metrics,
+                new innbucks.paymentservice.service.CodePaymentResolutionService(
+                        records, registryOver(bookings), metrics),
                 mock(UnconfirmedPaymentAlerter.class),
                 FIVE_MINUTES, 100);
     }
@@ -79,8 +89,9 @@ class ReconciliationJobTest {
         // REAL resolution service over the same mocks: poll tests keep
         // verifying confirm/markSucceeded/metrics exactly as before the extract.
         return new ReconciliationJob(mock(TransactionRepository.class), payments,
-                records, bookings, innbucksApi, metrics,
-                new innbucks.paymentservice.service.CodePaymentResolutionService(records, bookings, metrics),
+                records, innbucksApi, metrics,
+                new innbucks.paymentservice.service.CodePaymentResolutionService(
+                        records, registryOver(bookings), metrics),
                 mock(UnconfirmedPaymentAlerter.class),
                 FIVE_MINUTES, 100);
     }

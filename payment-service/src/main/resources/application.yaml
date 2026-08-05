@@ -55,6 +55,14 @@ loyalty-service:
   connect-timeout-ms: ${LOYALTY_SERVICE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${LOYALTY_SERVICE_READ_TIMEOUT_MS:5000}
 
+# Marketplace order surface (MarketplaceOrderClient → MarketplaceOrderGateway):
+# the second product on the InnBucks 2D-code rail. Resolved by name through
+# Eureka, same X-Internal-Token as the other internal S2S calls.
+marketplace-service:
+  base-url: http://marketplace-service
+  connect-timeout-ms: ${MARKETPLACE_SERVICE_CONNECT_TIMEOUT_MS:2000}
+  read-timeout-ms: ${MARKETPLACE_SERVICE_READ_TIMEOUT_MS:5000}
+
 oradian-middleware:
   base-url: ${ORADIAN_MIDDLEWARE_URL:http://localhost:8090}
   internal-token: ${ORADIAN_INTERNAL_TOKEN:change-me-internal-token-change-me-internal-token}

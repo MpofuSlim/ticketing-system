@@ -1,8 +1,6 @@
 package innbucks.paymentservice.service;
 
-import innbucks.paymentservice.client.BookingServiceClient;
 import innbucks.paymentservice.client.CodeGenerationResult;
-import innbucks.paymentservice.client.EventServiceClient;
 import innbucks.paymentservice.client.CodeStatusResult;
 import innbucks.paymentservice.client.InnbucksApiClient;
 import innbucks.paymentservice.client.InnbucksApiException;
@@ -10,6 +8,10 @@ import innbucks.paymentservice.client.InnbucksApiTransientException;
 import innbucks.paymentservice.dto.InnbucksPaymentResponse;
 import innbucks.paymentservice.dto.InnbucksPaymentResponse.Status;
 import innbucks.paymentservice.entity.Payment;
+import innbucks.paymentservice.order.OrderGateway;
+import innbucks.paymentservice.order.OrderGatewayRegistry;
+import innbucks.paymentservice.order.OrderSnapshot;
+import innbucks.paymentservice.order.OrderType;
 import innbucks.paymentservice.util.MsisdnMasking;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -21,18 +23,26 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
-import java.util.Map;
+import java.util.Locale;
 import java.util.Objects;
 import java.util.UUID;
 
 /**
- * Orchestrates an InnBucks <b>2D-code</b> ticket payment — the rail the
- * InnBucks team designated as the primary (and only) collection method:
+ * Orchestrates an InnBucks <b>2D-code</b> checkout payment — the rail the
+ * InnBucks team designated as the primary (and only) collection method. It
+ * serves ANY product wired behind an {@link OrderGateway} (ticket bookings,
+ * marketplace orders, ...); everything product-specific — where the amount
+ * comes from, unit conversion, settlement tagging, hold extension, confirm —
+ * lives in the gateway selected by {@link OrderType}:
  *
  * <pre>
- *   1. Fetch the booking's totalAmount + currency (booking-service GET)
- *   2. Open a PENDING payment ledger row (REQUIRES_NEW commit)
- *   3. POST /api/code/generate (type=PAYMENT, amount in CENTS,
+ *   1. gateway.fetch(orderRef): amount (ALREADY in cents — the gateway is the
+ *      product's single major↔minor conversion point), currency, payer
+ *      msisdn, settlement tag + narration, payable flag
+ *   2. gateway.extendHold(orderRef): the product-side hold provably outlives
+ *      the code (TTL + safety margin) BEFORE any ledger write or mint
+ *   3. Open a PENDING payment ledger row (REQUIRES_NEW commit)
+ *   4. POST /api/code/generate (type=PAYMENT, amount in CENTS,
  *      reference = our paymentReference)
  *      - approved        -> TOKEN_ISSUED (code + authNumber + local expiry)
  *      - refused         -> FAILED (no money moves on generate), FE sees the reason
@@ -40,25 +50,24 @@ import java.util.UUID;
  *        code is NOT delivered to the customer
  *      - transient/5xx   -> FAILED + 503 (safe: an orphaned upstream code is
  *        unreachable and simply expires; the slot frees for a clean retry)
- *   4. Return PROCESSING with the code + QR echoed on the response — the FE
+ *   5. Return PROCESSING with the code + QR echoed on the response — the FE
  *      renders both on the checkout screen so the customer approves them in
- *      their own InnBucks app (Scan-to-Pay, Pay by Code, or the deep link).
- *      No out-of-band delivery: the FE is the single source of truth for
- *      what the customer sees.
- *   5. The reconciler's status poller flips the row when InnBucks reports
- *      Paid (confirm booking -> SUCCEEDED) or Expired/Timed Out (-> EXPIRED,
- *      slot freed).
+ *      their own InnBucks app. No out-of-band delivery: the FE is the single
+ *      source of truth for what the customer sees.
+ *   6. The reconciler's status poller flips the row when InnBucks reports
+ *      Paid (confirm the order via its gateway -> SUCCEEDED) or Expired/Timed
+ *      Out (-> EXPIRED, slot freed).
  * </pre>
  *
  * <p>Ledger discipline carried over from the hardening pass: the PENDING row
  * commits before any upstream call; every transition is journaled; one
- * active-or-successful payment per booking is enforced by the
- * {@code uq_payment_active_booking} partial index (friendly 409 pre-check
- * here, index as the arbiter under races). Unlike the old server-side debit,
- * code <i>generation</i> moves no money — so generation failures may close
- * the row FAILED outright, and IN_DOUBT never arises in this flow. The
- * "money moved but unconfirmed" state still exists downstream: the POLLER
- * records COMPLETED_UNCONFIRMED when a paid code's booking confirm fails.
+ * active-or-successful payment per (order_type, order_ref) is enforced by the
+ * {@code uq_payment_active_order} partial index (friendly 409 pre-check
+ * here, index as the arbiter under races). Code <i>generation</i> moves no
+ * money — so generation failures may close the row FAILED outright, and
+ * IN_DOUBT never arises in this flow. The "money moved but unconfirmed"
+ * state still exists downstream: the POLLER records COMPLETED_UNCONFIRMED
+ * when a paid code's order confirm fails.
  */
 @Slf4j
 @Service
@@ -67,102 +76,104 @@ public class InnbucksPaymentService {
 
     private final PaymentRecordService paymentRecordService;
     private final InnbucksApiClient innbucksApiClient;
-    private final BookingServiceClient bookingServiceClient;
-    private final EventServiceClient eventServiceClient;
+    private final OrderGatewayRegistry orderGatewayRegistry;
     private final CodePaymentResolutionService codePaymentResolutionService;
 
     /**
-     * Extra slack the seat hold must have past the code's own TTL: one poll
-     * interval + the poller's expiry grace + processing margin. Guarantees a
-     * code paid at second 599 of its 10-minute life still confirms against a
-     * LIVE hold.
-     */
-    private static final Duration HOLD_SAFETY_MARGIN = Duration.ofMinutes(3);
-
-    /**
      * How long the customer has to approve the code. Must stay comfortably
-     * UNDER the booking hold window so a paid code can still confirm its
-     * booking; the InnBucks-side validity (~10 min per the doc's samples)
-     * is the upper bound.
+     * UNDER the product hold window (each gateway extends its hold to TTL +
+     * {@link OrderGateway#HOLD_SAFETY_MARGIN}) so a paid code can still
+     * confirm its order; the InnBucks-side validity (~10 min per the doc's
+     * samples) is the upper bound.
      */
     @Value("${payments.innbucks.code.ttl:PT10M}")
     private Duration codeTtl;
 
     /**
-     * This deployment's currency (ZW cell = USD, KE cell = KES, ...). Used when
-     * the booking doesn't carry its own currency — which is always today, since
-     * booking is single-country per cell and has no currency column. Was a
-     * hardcoded "USD" constant; per-cell now so a KE cell labels money KES.
+     * This deployment's currency (ZW cell = USD, KE cell = KES, ...).
+     * Defensive fallback when a product snapshot carries no currency —
+     * bookings are single-country per cell with no currency column, so their
+     * gateway already applies this; kept here as the last line.
      */
     @Value("${innbucks.currency:USD}")
     private String cellCurrency;
 
-    public InnbucksPaymentResponse processPayment(UUID bookingId,
-                                                  String customerMsisdn,
+    /**
+     * Run a 2D-code payment for any product order.
+     *
+     * @param orderType           selects the {@link OrderGateway}
+     * @param orderRef            the product-side reference (booking UUID
+     *                            text / MKT-... order ref)
+     * @param payerMsisdnOverride the authenticated caller's MSISDN when the
+     *                            entry point has one (the JWT variant) —
+     *                            wins over the snapshot's payer; null on the
+     *                            public guest entry, where the order's own
+     *                            payer contact is used
+     * @param idempotencyKey      the Idempotency-Key header value, when the
+     *                            entry point requires one
+     */
+    public InnbucksPaymentResponse processPayment(OrderType orderType,
+                                                  String orderRef,
+                                                  String payerMsisdnOverride,
                                                   String idempotencyKey) {
-        Objects.requireNonNull(bookingId, "bookingId");
-        Objects.requireNonNull(customerMsisdn, "customerMsisdn");
+        Objects.requireNonNull(orderType, "orderType");
+        Objects.requireNonNull(orderRef, "orderRef");
+        OrderGateway gateway = orderGatewayRegistry.forType(orderType);
+        String noun = productNoun(orderType);
 
-        // ---- Step 0: one active payment per booking ---------------------------
-        // Friendly pre-check; the uq_payment_active_booking partial index is
+        // ---- Step 0: one active payment per order -----------------------------
+        // Friendly pre-check; the uq_payment_active_order partial index is
         // the real arbiter under concurrency (the race-loser surfaces below
         // as a DataIntegrityViolation on openPending, mapped to the same 409).
-        if (paymentRecordService.hasActiveOrSucceededPayment(bookingId)) {
+        if (paymentRecordService.hasActiveOrSucceededPayment(orderType, orderRef)) {
             throw new InvalidPaymentRequestException(
-                    "A payment for this booking is already in progress or completed", 409);
+                    "A payment for this " + noun + " is already in progress or completed", 409);
         }
 
-        // ---- Step 1: fetch booking (amount + currency) ------------------------
-        Map<String, Object> booking = bookingServiceClient.getBooking(bookingId);
-        BigDecimal amount = asBigDecimal(booking.get("totalAmount"));
-        if (amount == null || amount.signum() <= 0) {
+        // ---- Step 1: fetch the order through its gateway ----------------------
+        // Amount arrives ALREADY in cents — the gateway is the single
+        // major<->minor conversion point for its product (booking dollars
+        // convert there; marketplace totals are cents natively).
+        OrderSnapshot snapshot = gateway.fetch(orderRef);
+        if (!snapshot.payable()) {
             throw new InvalidPaymentRequestException(
-                    "Booking has no positive totalAmount; cannot request payment", 422);
+                    "This " + noun + " is not awaiting payment — it may already be paid, cancelled or expired",
+                    409);
         }
-        String currency = asString(booking.get("currency"));
+        long amountCents = snapshot.amountCents();
+        if (amountCents <= 0) {
+            throw new InvalidPaymentRequestException(
+                    capitalize(noun) + " has no positive amount; cannot request payment", 422);
+        }
+        String currency = snapshot.currency();
         if (currency == null || currency.isBlank()) currency = cellCurrency;
-        long amountCents = toCents(amount);
 
-        // ---- Step 1.2: settlement tagging (best-effort) -----------------------
-        // The event's settlementCode goes into the InnBucks reference
-        // (TKZ-<CODE>-<id>) so the merchant statement groups per event; the
-        // title makes the statement narration human-readable. A failed lookup
-        // degrades to an event-id tag — it never blocks the payment.
-        UUID eventId = asUuid(booking.get("eventId"));
-        EventServiceClient.EventSettlementInfo eventInfo =
-                eventServiceClient.getSettlementInfo(eventId).orElse(null);
-
-        // ---- Step 1.5: make the seat hold outlive the code --------------------
-        // The hold (5 min from booking) is shorter than the code (10 min from
-        // NOW) — without this, any payment approved after the hold lapsed was
-        // money taken + confirm refused (the paid-but-no-ticket gap). Extend
-        // BEFORE any ledger write or code mint; a refusal means the booking is
-        // already expired/cancelled, so the customer rebooks with ZERO money
-        // moved.
-        try {
-            bookingServiceClient.extendHold(bookingId,
-                    Instant.now().plus(codeTtl).plus(HOLD_SAFETY_MARGIN));
-        } catch (BookingServiceClient.BookingConfirmationException e) {
-            if (e.getStatusCode() == 404 || e.getStatusCode() == 409 || e.getStatusCode() == 400) {
-                log.warn("[innbucks-payment] hold extension refused bookingId={} status={} — payment refused pre-mint: {}",
-                        bookingId, e.getStatusCode(), e.getMessage());
-                throw new InvalidPaymentRequestException(
-                        "Your booking has expired — please create a new booking and try again", 409);
-            }
-            log.warn("[innbucks-payment] hold extension unreachable bookingId={} status={} — refusing payment: {}",
-                    bookingId, e.getStatusCode(), e.getMessage());
+        // The payer is the order's phone (captured at order creation) unless
+        // the entry point authenticated one (JWT). The FE never supplies
+        // payment credentials.
+        String customerMsisdn = payerMsisdnOverride != null && !payerMsisdnOverride.isBlank()
+                ? payerMsisdnOverride : snapshot.payerMsisdn();
+        if (customerMsisdn == null || customerMsisdn.isBlank()) {
             throw new InvalidPaymentRequestException(
-                    "We could not secure your booking right now; please try again shortly", 503);
+                    capitalize(noun) + " has no payer phone number — create the " + noun
+                            + " with a phone number to pay via InnBucks", 400);
         }
+
+        // ---- Step 1.5: make the product hold outlive the code -----------------
+        // Extend BEFORE any ledger write or code mint; a refusal means the
+        // order is already expired/cancelled, so the customer re-orders with
+        // ZERO money moved. The gateway throws the customer-facing refusal.
+        gateway.extendHold(orderRef);
 
         // ---- Step 2: open PENDING ledger row ----------------------------------
-        String paymentReference = SettlementReference.build(
-                eventInfo != null ? eventInfo.settlementCode() : null, eventId);
+        String paymentReference = SettlementReference.forTag(snapshot.settlementTag());
         Payment draft = Payment.builder()
                 .paymentReference(paymentReference)
-                .bookingId(bookingId)
+                .orderType(orderType)
+                .orderRef(orderRef)
+                .bookingId(orderType == OrderType.BOOKING ? asUuid(orderRef) : null)
                 .customerMsisdn(customerMsisdn)
-                .amount(amount)
+                .amount(BigDecimal.valueOf(amountCents, 2))
                 .currency(currency)
                 .idempotencyKey(idempotencyKey)
                 .build();
@@ -170,12 +181,12 @@ public class InnbucksPaymentService {
         try {
             opened = paymentRecordService.openPending(draft);
         } catch (org.springframework.dao.DataIntegrityViolationException e) {
-            // Race loser against uq_payment_active_booking (two concurrent
-            // submits for the same booking): the other request's row stands.
-            log.warn("[innbucks-payment] concurrent payment refused by active-booking index bookingId={}",
-                    bookingId);
+            // Race loser against uq_payment_active_order (two concurrent
+            // submits for the same order): the other request's row stands.
+            log.warn("[innbucks-payment] concurrent payment refused by active-order index orderType={} orderRef={}",
+                    orderType, orderRef);
             throw new InvalidPaymentRequestException(
-                    "A payment for this booking is already in progress or completed", 409);
+                    "A payment for this " + noun + " is already in progress or completed", 409);
         }
 
         // ---- Step 3: mint the InnBucks PAYMENT code ----------------------------
@@ -183,7 +194,7 @@ public class InnbucksPaymentService {
         try {
             generated = innbucksApiClient.generatePaymentCode(
                     paymentReference,
-                    buildNarration(eventInfo != null ? eventInfo.title() : null, bookingId),
+                    snapshot.narration(),
                     amountCents);
         } catch (InnbucksApiTransientException e) {
             // Generation moves NO money. Worst case a code was minted upstream
@@ -240,11 +251,12 @@ public class InnbucksPaymentService {
         paymentRecordService.markTokenIssued(opened.getId(),
                 generated.code(), generated.authNumber(), generated.qrCodeBase64(), expiresAt);
 
-        log.info("[innbucks-payment] code issued paymentReference={} msisdn={} authNumber={} expiresAt={}",
-                paymentReference, MsisdnMasking.mask(customerMsisdn), generated.authNumber(), expiresAt);
+        log.info("[innbucks-payment] code issued paymentReference={} orderType={} msisdn={} authNumber={} expiresAt={}",
+                paymentReference, orderType, MsisdnMasking.mask(customerMsisdn),
+                generated.authNumber(), expiresAt);
         return buildResponse(opened, Status.PROCESSING,
                 generated.authNumber(), null,
-                "Approve the payment in your InnBucks app to complete your booking",
+                "Approve the payment in your InnBucks app to complete your " + noun,
                 generated.code(), generated.qrCodeBase64(), expiresAt);
     }
 
@@ -258,6 +270,8 @@ public class InnbucksPaymentService {
                                                   Instant codeExpiresAt) {
         return InnbucksPaymentResponse.builder()
                 .paymentReference(payment.getPaymentReference())
+                .orderType(payment.getOrderType())
+                .orderRef(payment.getOrderRef())
                 .bookingId(payment.getBookingId())
                 .status(status)
                 .amountPaid(payment.getAmount())
@@ -274,55 +288,23 @@ public class InnbucksPaymentService {
                 .build();
     }
 
-    /**
-     * Booking totals are decimal major units (e.g. 50.00 USD); the Merchant
-     * API takes CENTS. Anything with sub-cent precision is refused rather
-     * than silently rounded — a ledger must never charge an amount that
-     * differs from the booking by even a fraction.
-     */
-    static long toCents(BigDecimal amount) {
+    /** Customer-facing word for the product ("booking" / "order"). */
+    private static String productNoun(OrderType orderType) {
+        return orderType == OrderType.BOOKING ? "booking" : "order";
+    }
+
+    private static String capitalize(String s) {
+        return s.isEmpty() ? s : s.substring(0, 1).toUpperCase(Locale.ROOT) + s.substring(1);
+    }
+
+    private static UUID asUuid(String value) {
         try {
-            return amount.movePointRight(2).longValueExact();
-        } catch (ArithmeticException e) {
-            throw new InvalidPaymentRequestException(
-                    "Booking totalAmount has sub-cent precision; cannot request payment", 422);
+            return UUID.fromString(value);
+        } catch (IllegalArgumentException e) {
+            // The booking gateway already refused a non-UUID ref in fetch();
+            // defensive only.
+            return null;
         }
-    }
-
-    private static String shortId(UUID id) {
-        return id.toString().substring(0, 8);
-    }
-
-    /**
-     * Statement narration: lead with the event title (truncated — narration is
-     * free text but statement columns aren't infinite) so a human scanning the
-     * merchant statement sees which event the money belongs to without decoding
-     * the reference. Falls back to the historical generic copy when the event
-     * lookup didn't resolve a title.
-     */
-    static String buildNarration(String eventTitle, UUID bookingId) {
-        if (eventTitle == null || eventTitle.isBlank()) {
-            return "InnBucks ticket booking " + shortId(bookingId);
-        }
-        String title = eventTitle.length() > 60 ? eventTitle.substring(0, 60) : eventTitle;
-        return "Ticketize " + title + " booking " + shortId(bookingId);
-    }
-
-    private static UUID asUuid(Object value) {
-        if (value instanceof UUID uuid) return uuid;
-        if (value == null) return null;
-        try { return UUID.fromString(value.toString()); } catch (IllegalArgumentException e) { return null; }
-    }
-
-    private static BigDecimal asBigDecimal(Object value) {
-        if (value == null) return null;
-        if (value instanceof BigDecimal bd) return bd;
-        if (value instanceof Number n) return BigDecimal.valueOf(n.doubleValue());
-        try { return new BigDecimal(value.toString()); } catch (NumberFormatException e) { return null; }
-    }
-
-    private static String asString(Object value) {
-        return value == null ? null : value.toString();
     }
 
     /** Outcome of a customer-triggered instant status check on an open code. */

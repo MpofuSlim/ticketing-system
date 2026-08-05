@@ -1,11 +1,13 @@
 package innbucks.paymentservice.controller;
 
 import innbucks.paymentservice.client.BookingServiceClient.BookingConfirmationException;
+import innbucks.paymentservice.controller.OrderKeys.OrderKey;
 import innbucks.paymentservice.dto.ApiResult;
 import innbucks.paymentservice.dto.InnbucksPaymentRequest;
 import innbucks.paymentservice.dto.InnbucksPaymentResponse;
-import innbucks.paymentservice.dto.InnbucksPaymentResponse.Status;
+import innbucks.paymentservice.exception.BadRequestException;
 import innbucks.paymentservice.idempotency.IdempotencyFilter;
+import innbucks.paymentservice.order.OrderType;
 import innbucks.paymentservice.service.InnbucksPaymentService;
 import innbucks.paymentservice.service.InnbucksPaymentService.InvalidPaymentRequestException;
 import innbucks.paymentservice.util.BookingIdMasking;
@@ -75,12 +77,14 @@ public class InnbucksPaymentController {
     @PostMapping("/innbucks")
     @Operation(
             summary = "Process payment via InnBucks 2D-code (authenticated)",
-            description = "Issues an InnBucks PAYMENT code for the booking's totalAmount and delivers it to the " +
-                    "authenticated customer's phone (MSISDN derived from the JWT, never from the body); the " +
-                    "customer approves it in their own InnBucks app/USSD and the status poller confirms the " +
-                    "booking. Normal response is 202 PROCESSING with the `paymentCode` echoed. " +
-                    "Requires the `Idempotency-Key` header; duplicate keys with the same body return the cached " +
-                    "response, duplicate keys with a different body return 422 idempotency_conflict."
+            description = "Issues an InnBucks PAYMENT code for the order's total. Identify the order EXACTLY " +
+                    "one way: `bookingId` (ticket bookings — the historical shape, implies orderType BOOKING) " +
+                    "OR `orderType` + `orderRef` (additive; e.g. MARKETPLACE + the MKT-... reference). The " +
+                    "payer MSISDN is derived from the JWT, never from the body; the customer approves the code " +
+                    "in their own InnBucks app/USSD and the status poller confirms the order. Normal response " +
+                    "is 202 PROCESSING with the `paymentCode` echoed. Requires the `Idempotency-Key` header; " +
+                    "duplicate keys with the same body return the cached response, duplicate keys with a " +
+                    "different body return 422 idempotency_conflict."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -96,6 +100,8 @@ public class InnbucksPaymentController {
                                       "data": {
                                         "paymentReference": "TKT-PMT-f0e1d2c3-4567-890a-bcde-f01234567890",
                                         "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                        "orderType": "BOOKING",
+                                        "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
                                         "status": "SUCCESS",
                                         "amountPaid": 100.00,
                                         "currency": "USD",
@@ -107,22 +113,42 @@ public class InnbucksPaymentController {
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "202",
-                    description = "Payment accepted by InnBucks, outcome not yet authoritative (poll booking status)",
+                    description = "Payment accepted by InnBucks, outcome not yet authoritative (poll the order's status)",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(name = "Processing", value = """
-                                    {
-                                      "code": "202 ACCEPTED",
-                                      "message": "Payment accepted by InnBucks; awaiting confirmation",
-                                      "data": {
-                                        "paymentReference": "TKT-PMT-...",
-                                        "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
-                                        "status": "PROCESSING",
-                                        "amountPaid": 100.00,
-                                        "currency": "USD",
-                                        "processedAt": "2026-06-08T15:48:00"
-                                      }
-                                    }
-                                    """))),
+                            examples = {
+                                    @ExampleObject(name = "Processing (booking)", value = """
+                                            {
+                                              "code": "202 ACCEPTED",
+                                              "message": "Payment accepted by InnBucks; awaiting confirmation",
+                                              "data": {
+                                                "paymentReference": "TKT-PMT-...",
+                                                "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "orderType": "BOOKING",
+                                                "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "status": "PROCESSING",
+                                                "amountPaid": 100.00,
+                                                "currency": "USD",
+                                                "processedAt": "2026-06-08T15:48:00"
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Processing (marketplace order — request: {\"orderType\":\"MARKETPLACE\",\"orderRef\":\"MKT-4F9A1C22B7D3\"})", value = """
+                                            {
+                                              "code": "202 ACCEPTED",
+                                              "message": "Payment accepted by InnBucks; awaiting confirmation",
+                                              "data": {
+                                                "paymentReference": "TKZ-MKT-4F3A2B1C0D9E",
+                                                "bookingId": null,
+                                                "orderType": "MARKETPLACE",
+                                                "orderRef": "MKT-4F9A1C22B7D3",
+                                                "status": "PROCESSING",
+                                                "amountPaid": 35.50,
+                                                "currency": "USD",
+                                                "processedAt": "2026-08-05T10:30:00"
+                                              }
+                                            }
+                                            """)
+                            })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "422",
                     description = "Terminal rejection by veengu (insufficient funds, account locked, etc.)",
@@ -193,19 +219,34 @@ public class InnbucksPaymentController {
                             .build());
         }
 
-        // bookingId is the public-ticket access token; logs use the first-8 mask
-        // so a log leak isn't an out-of-band confirmation / ticket dump.
-        log.info("POST /payments/innbucks bookingId={} msisdn={} idempotencyKey={}",
-                BookingIdMasking.mask(request.getBookingId()), MsisdnMasking.mask(msisdn), idempotencyKey);
+        // Exactly one of bookingId / (orderType + orderRef); bookingId
+        // implies BOOKING — same grammar as the public POST /payments.
+        OrderKey key;
+        try {
+            key = OrderKeys.resolve(request.getBookingId(), request.getOrderType(), request.getOrderRef());
+        } catch (BadRequestException e) {
+            return ResponseEntity.badRequest().body(
+                    ApiResult.<InnbucksPaymentResponse>builder()
+                            .code("400 BAD_REQUEST")
+                            .message(e.getMessage())
+                            .data(null)
+                            .build());
+        }
+
+        // A booking ref is the public-ticket access token; logs use the
+        // first-8 mask so a log leak isn't an out-of-band confirmation /
+        // ticket dump. Marketplace refs are opaque and log as-is.
+        log.info("POST /payments/innbucks orderType={} orderRef={} msisdn={} idempotencyKey={}",
+                key.type(), maskRef(key), MsisdnMasking.mask(msisdn), idempotencyKey);
 
         InnbucksPaymentResponse response;
         try {
-            response = paymentService.processPayment(request.getBookingId(), msisdn, idempotencyKey);
+            response = paymentService.processPayment(key.type(), key.ref(), msisdn, idempotencyKey);
         } catch (BookingConfirmationException e) {
             HttpStatus status = HttpStatus.resolve(e.getStatusCode());
             if (status == null) status = HttpStatus.BAD_GATEWAY;
-            log.warn("InnBucks payment booking fetch/confirm failed bookingId={} status={} reason={}",
-                    BookingIdMasking.mask(request.getBookingId()), status.value(), e.getMessage());
+            log.warn("InnBucks payment order fetch/confirm failed orderType={} orderRef={} status={} reason={}",
+                    key.type(), maskRef(key), status.value(), e.getMessage());
             return ResponseEntity.status(status).body(
                     ApiResult.<InnbucksPaymentResponse>builder()
                             .code(status.value() + " " + status.name())
@@ -215,8 +256,8 @@ public class InnbucksPaymentController {
         } catch (InvalidPaymentRequestException e) {
             HttpStatus status = HttpStatus.resolve(e.getStatusCode());
             if (status == null) status = HttpStatus.UNPROCESSABLE_ENTITY;
-            log.warn("InnBucks payment validation failed bookingId={} reason={}",
-                    BookingIdMasking.mask(request.getBookingId()), e.getMessage());
+            log.warn("InnBucks payment validation failed orderType={} orderRef={} reason={}",
+                    key.type(), maskRef(key), e.getMessage());
             return ResponseEntity.status(status).body(
                     ApiResult.<InnbucksPaymentResponse>builder()
                             .code(status.value() + " " + status.name())
@@ -226,6 +267,14 @@ public class InnbucksPaymentController {
         }
 
         return toResponseEntity(response);
+    }
+
+    /** Booking refs (ticket access tokens) are masked in logs; marketplace refs are opaque. */
+    private static String maskRef(OrderKey key) {
+        if (key.type() == OrderType.BOOKING) {
+            return BookingIdMasking.mask(java.util.UUID.fromString(key.ref()));
+        }
+        return key.ref();
     }
 
     private static ResponseEntity<ApiResult<InnbucksPaymentResponse>> toResponseEntity(InnbucksPaymentResponse r) {

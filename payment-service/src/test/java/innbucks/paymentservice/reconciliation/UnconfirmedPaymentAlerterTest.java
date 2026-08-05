@@ -67,7 +67,7 @@ class UnconfirmedPaymentAlerterTest {
         verify(payments).save(p);
         verify(email).sendEmail(eq(OPS), contains("PAY-123"), contains("booking-service 503"),
                 eq("PAY-OPS-" + p.getId()));
-        verify(whatsApp).sendCustomNotification(eq("+263771234567"), contains("confirming your booking manually"));
+        verify(whatsApp).sendCustomNotification(eq("+263771234567"), contains("confirming your order manually"));
     }
 
     @Test

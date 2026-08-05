@@ -1,10 +1,10 @@
 package innbucks.paymentservice.controller;
 
-import innbucks.paymentservice.client.BookingServiceClient;
 import innbucks.paymentservice.client.BookingServiceClient.BookingConfirmationException;
 import innbucks.paymentservice.client.LoyaltyServiceClient;
 import innbucks.paymentservice.client.LoyaltyServiceClient.LoyaltyCheckoutException;
 import innbucks.paymentservice.config.PaymentMetrics;
+import innbucks.paymentservice.controller.OrderKeys.OrderKey;
 import innbucks.paymentservice.dto.ApiResult;
 import innbucks.paymentservice.dto.InnbucksPaymentResponse;
 import innbucks.paymentservice.dto.PaymentMethod;
@@ -14,6 +14,7 @@ import innbucks.paymentservice.dto.ShopCheckoutRequest;
 import innbucks.paymentservice.dto.ShopCheckoutResponse;
 import innbucks.paymentservice.entity.Payment;
 import innbucks.paymentservice.exception.BadRequestException;
+import innbucks.paymentservice.order.OrderType;
 import innbucks.paymentservice.repository.PaymentRepository;
 import innbucks.paymentservice.service.InnbucksPaymentService;
 import innbucks.paymentservice.service.InnbucksPaymentService.InvalidPaymentRequestException;
@@ -38,24 +39,25 @@ import org.springframework.web.bind.annotation.RestController;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
-import java.util.Map;
 import java.util.UUID;
 
 /**
  * Customer-facing payment endpoints.
  *
  * <ul>
- *   <li>{@code POST /payments} — ticket-purchase payment, the FE's public
- *       entry. <b>Collects real money</b> via the InnBucks 2D-code rail
- *       (Merchant API): an InnBucks PAYMENT code is issued for the booking's
- *       totalAmount and delivered to the BOOKING's phoneNumber (captured at
- *       booking time — the FE sends only {@code bookingId}, exactly the
- *       historical stub contract); the customer approves it in their own
- *       InnBucks app/USSD and the reconciler's poller confirms the booking.
- *       Request/response shapes stay stub-compatible; {@code PROCESSING} is
- *       the one additive status value and {@code paymentCode} /
- *       {@code paymentCodeExpiresAt} are additive fields. Idempotent replay:
- *       a double-tap on an already-paid/in-flight booking returns that
+ *   <li>{@code POST /payments} — checkout payment, the FE's public entry.
+ *       <b>Collects real money</b> via the InnBucks 2D-code rail (Merchant
+ *       API) for ANY product behind an {@code OrderGateway}: ticket bookings
+ *       (the historical {@code bookingId} contract, unchanged) and
+ *       marketplace orders (additive {@code orderType} + {@code orderRef}).
+ *       An InnBucks PAYMENT code is issued for the order's total and the
+ *       payer is the phone captured at order creation; the customer approves
+ *       it in their own InnBucks app/USSD and the reconciler's poller
+ *       confirms the order. Request/response shapes stay stub-compatible;
+ *       {@code PROCESSING} is the one additive status value and
+ *       {@code paymentCode} / {@code paymentCodeExpiresAt} /
+ *       {@code orderType} / {@code orderRef} are additive fields. Idempotent
+ *       replay: a double-tap on an already-paid/in-flight order returns that
  *       payment's receipt (with the live code if still awaiting approval),
  *       never an error.</li>
  *   <li>{@code POST /payments/shop-checkout} — pay at a shop with cash,
@@ -74,7 +76,6 @@ import java.util.UUID;
         + "InnBucks Bank API; shop checkout moves real loyalty points.")
 public class PaymentController {
 
-    private final BookingServiceClient bookingServiceClient;
     private final LoyaltyServiceClient loyaltyServiceClient;
     private final PaymentMetrics metrics;
     /** PENDING rows older than this with no code are crash leftovers, not in-flight requests. */
@@ -91,25 +92,28 @@ public class PaymentController {
 
     @PostMapping
     @Operation(
-            summary = "Pay for a ticket booking (InnBucks 2D-code)",
-            description = "Public endpoint (no login required — guest checkout). Body carries only " +
-                    "`bookingId`; amount and currency are read server-side from the booking. An InnBucks " +
-                    "PAYMENT code is issued for the booking's `totalAmount`; the customer approves it in their " +
-                    "own InnBucks app (Scan-to-Pay or Pay by Code). The normal response is `status=PROCESSING` " +
-                    "with `paymentCode`, `paymentCodeExpiresAt` and `paymentQrCode` — the FE renders both the " +
+            summary = "Pay for an order — ticket booking or marketplace order (InnBucks 2D-code)",
+            description = "Public endpoint (no login required — guest checkout). Identify the order EXACTLY " +
+                    "one way: `bookingId` (ticket bookings — the historical contract, unchanged) OR " +
+                    "`orderType` + `orderRef` (additive; e.g. `MARKETPLACE` + the `MKT-...` order reference). " +
+                    "Amount and currency are read server-side from the order. An InnBucks PAYMENT code is " +
+                    "issued for the order's total; the customer approves it in their own InnBucks app " +
+                    "(Scan-to-Pay or Pay by Code). The normal response is `status=PROCESSING` with " +
+                    "`paymentCode`, `paymentCodeExpiresAt` and `paymentQrCode` — the FE renders both the " +
                     "typed code and the InnBucks-rendered QR (base64) on the checkout screen. No out-of-band " +
                     "delivery: the response IS the delivery.\n\n" +
                     "**How the FE knows it's done (status lifecycle):** this endpoint returns `PROCESSING` " +
                     "immediately; it does NOT block until payment. The customer then approves the code in " +
-                    "their InnBucks app, and a background poller confirms the booking within ~20s. The FE " +
-                    "should **poll the booking** by the `bookingId` it created — " +
+                    "their InnBucks app, and a background poller confirms the order within ~20s. For " +
+                    "bookings, **poll the booking** by the `bookingId` it created — " +
                     "`GET /bookings/public/{id}` (guest, no login) or `GET /bookings/{id}` (logged-in) — " +
-                    "until its status flips to `CONFIRMED` (carrying the " +
-                    "confirmation number). Behind the scenes the InnBucks code moves New → Claimed/Paid " +
-                    "(both mean the customer paid) → booking CONFIRMED; or New → Expired/Timed Out (unpaid) " +
-                    "→ the code lapses and the FE can offer Pay again. Stop polling once the booking is " +
-                    "CONFIRMED, or shortly after `paymentCodeExpiresAt` passes while still unconfirmed.\n\n" +
-                    "Replay-safe: paying an already-paid or in-flight booking returns that payment's receipt, " +
+                    "until its status flips to `CONFIRMED` (carrying the confirmation number); for " +
+                    "marketplace orders, poll the order by its `orderRef` until it reports `PAID`. Behind " +
+                    "the scenes the InnBucks code moves New → Claimed/Paid (both mean the customer paid) → " +
+                    "order confirmed; or New → Expired/Timed Out (unpaid) → the code lapses and the FE can " +
+                    "offer Pay again. Stop polling once the order is confirmed, or shortly after " +
+                    "`paymentCodeExpiresAt` passes while still unconfirmed.\n\n" +
+                    "Replay-safe: paying an already-paid or in-flight order returns that payment's receipt, " +
                     "including the live code + QR while it's still awaiting approval. If the code expires " +
                     "unpaid, the payment closes and POSTing again issues a fresh code."
     )
@@ -121,13 +125,15 @@ public class PaymentController {
                             mediaType = "application/json",
                             schema = @Schema(implementation = PaymentResponse.class),
                             examples = {
-                                    @ExampleObject(name = "Code issued — awaiting customer approval", value = """
+                                    @ExampleObject(name = "Booking — code issued, awaiting customer approval", value = """
                                             {
                                               "code": "200 OK",
                                               "message": "Approve the payment in your InnBucks app to complete your booking",
                                               "data": {
                                                 "transactionId": "f0e1d2c3-4567-890a-bcde-f01234567890",
                                                 "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "orderType": "BOOKING",
+                                                "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
                                                 "status": "PROCESSING",
                                                 "amountPaid": 100.00,
                                                 "currency": "USD",
@@ -139,13 +145,15 @@ public class PaymentController {
                                               }
                                             }
                                             """),
-                                    @ExampleObject(name = "Replay after the customer approved", value = """
+                                    @ExampleObject(name = "Booking — replay after the customer approved", value = """
                                             {
                                               "code": "200 OK",
                                               "message": "Payment processed successfully",
                                               "data": {
                                                 "transactionId": "f0e1d2c3-4567-890a-bcde-f01234567890",
                                                 "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "orderType": "BOOKING",
+                                                "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
                                                 "status": "SUCCESS",
                                                 "amountPaid": 100.00,
                                                 "currency": "USD",
@@ -156,19 +164,48 @@ public class PaymentController {
                                                 "paymentQrCode": null
                                               }
                                             }
+                                            """),
+                                    @ExampleObject(name = "Marketplace order — code issued (request: {\"orderType\":\"MARKETPLACE\",\"orderRef\":\"MKT-4F9A1C22B7D3\"})", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Approve the payment in your InnBucks app to complete your order",
+                                              "data": {
+                                                "transactionId": "b7d3e8a1-9c2f-4e5d-8a6b-1f0c9d8e7a65",
+                                                "bookingId": null,
+                                                "orderType": "MARKETPLACE",
+                                                "orderRef": "MKT-4F9A1C22B7D3",
+                                                "status": "PROCESSING",
+                                                "amountPaid": 35.50,
+                                                "currency": "USD",
+                                                "confirmationNumber": null,
+                                                "processedAt": "2026-08-05T10:30:00",
+                                                "paymentCode": "701442918",
+                                                "paymentCodeExpiresAt": "2026-08-05T10:40:00",
+                                                "paymentQrCode": "iVBORw0KGgoAAAANSUhEUg..."
+                                              }
+                                            }
                                             """)
                             }
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
-                    description = "Validation error or booking-service rejected the confirm (e.g. hold expired)",
+                    description = "Validation error (order identification), a rejected payment (stub error "
+                            + "vocabulary: declines surface as 400 + reason), or the product service refused "
+                            + "the hold extension",
                     content = @Content(mediaType = "application/json",
                             examples = {
-                                    @ExampleObject(name = "Missing bookingId", value = """
+                                    @ExampleObject(name = "No order identified", value = """
                                             {
                                               "code": "400 BAD_REQUEST",
-                                              "message": "validation failed",
-                                              "data": { "bookingId": "bookingId is required" }
+                                              "message": "Provide exactly one of bookingId or orderType + orderRef (orderType and orderRef go together)",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Both shapes supplied", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Provide exactly one of bookingId or orderType + orderRef — not both",
+                                              "data": null
                                             }
                                             """),
                                     @ExampleObject(name = "Hold expired", value = """
@@ -180,17 +217,37 @@ public class PaymentController {
                                             """)
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
-                    description = "Booking not found in booking-service",
+                    description = "Order not found in its product service",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(name = "Unknown booking", value = """
+                            examples = {
+                                    @ExampleObject(name = "Unknown booking", value = """
+                                            {
+                                              "code": "404 NOT_FOUND",
+                                              "message": "Booking not found",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Unknown marketplace order", value = """
+                                            {
+                                              "code": "404 NOT_FOUND",
+                                              "message": "Order not found",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
+                    description = "The order is not awaiting payment (already paid, cancelled or expired) "
+                            + "and no replayable payment row exists",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Not payable", value = """
                                     {
-                                      "code": "404 NOT_FOUND",
-                                      "message": "Booking not found",
+                                      "code": "409 CONFLICT",
+                                      "message": "This order is not awaiting payment — it may already be paid, cancelled or expired",
                                       "data": null
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503",
-                    description = "booking-service unreachable",
+                    description = "The product service (booking-service / marketplace-service) is unreachable",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(name = "Downstream down", value = """
                                     {
@@ -203,13 +260,21 @@ public class PaymentController {
     public ResponseEntity<ApiResult<PaymentResponse>> processPayment(
             @Valid @RequestBody PaymentRequest request
     ) {
-        log.info("POST /payments bookingId={}", request.getBookingId());
+        // Exactly one of bookingId / (orderType + orderRef); bookingId
+        // implies BOOKING — the historical FE contract, unchanged.
+        OrderKey key;
+        try {
+            key = OrderKeys.resolve(request.getBookingId(), request.getOrderType(), request.getOrderRef());
+        } catch (BadRequestException e) {
+            return error(HttpStatus.BAD_REQUEST, e.getMessage());
+        }
+        log.info("POST /payments orderType={} orderRef={}", key.type(), key.ref());
 
-        // Replay semantics: an already-paid or in-flight booking returns the
+        // Replay semantics: an already-paid or in-flight order returns the
         // existing payment's receipt — a double-tap must never error (the old
         // stub re-confirmed idempotently; this is the real-money equivalent).
-        var existing = paymentRepository.findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(
-                request.getBookingId(), PaymentRecordService.ACTIVE_OR_SUCCEEDED);
+        var existing = paymentRepository.findFirstByOrderTypeAndOrderRefAndStatusInOrderByCreatedAtDesc(
+                key.type(), key.ref(), PaymentRecordService.ACTIVE_OR_SUCCEEDED);
         if (existing.isPresent()) {
             Payment p = existing.get();
             if (isOrphanedPending(p)) {
@@ -218,8 +283,8 @@ public class PaymentController {
                 // the row and recording the generate outcome). Replaying it
                 // would show the customer PROCESSING with nothing to pay —
                 // forever. Close it FAILED and run a fresh attempt right here.
-                log.warn("POST /payments replacing orphaned PENDING bookingId={} paymentReference={} ageSec={}",
-                        request.getBookingId(), p.getPaymentReference(),
+                log.warn("POST /payments replacing orphaned PENDING orderType={} orderRef={} paymentReference={} ageSec={}",
+                        key.type(), key.ref(), p.getPaymentReference(),
                         java.time.Duration.between(p.getCreatedAt(), java.time.Instant.now()).toSeconds());
                 paymentRecordService.markFailed(p.getId(), "stale_pending",
                         "Orphaned PENDING row (no code recorded) replaced by a fresh attempt on customer retry");
@@ -231,47 +296,33 @@ public class PaymentController {
                 var check = innbucksPaymentService.tryResolveOpenCode(p);
                 if (check == InnbucksPaymentService.InstantCheckOutcome.PAID) {
                     Payment resolved = paymentRepository.findById(p.getId()).orElse(p);
-                    log.info("POST /payments instant-check PAID bookingId={} paymentReference={}",
-                            request.getBookingId(), p.getPaymentReference());
-                    return toReplayResponse(resolved, request);
+                    log.info("POST /payments instant-check PAID orderType={} orderRef={} paymentReference={}",
+                            key.type(), key.ref(), p.getPaymentReference());
+                    return toReplayResponse(resolved, key);
                 }
                 if (check == InnbucksPaymentService.InstantCheckOutcome.EXPIRED) {
                     // Row just went terminal (EXPIRED, slot freed) — fall
                     // through and mint a FRESH code in this same request.
-                    log.info("POST /payments instant-check EXPIRED bookingId={} — minting a fresh code",
-                            request.getBookingId());
+                    log.info("POST /payments instant-check EXPIRED orderType={} orderRef={} — minting a fresh code",
+                            key.type(), key.ref());
                 } else {
-                    log.info("POST /payments replay after instant check (still pending upstream) bookingId={} paymentReference={}",
-                            request.getBookingId(), p.getPaymentReference());
-                    return toReplayResponse(p, request);
+                    log.info("POST /payments replay after instant check (still pending upstream) orderType={} orderRef={} paymentReference={}",
+                            key.type(), key.ref(), p.getPaymentReference());
+                    return toReplayResponse(p, key);
                 }
             } else {
-                log.info("POST /payments replay bookingId={} existing paymentReference={} status={}",
-                        request.getBookingId(), p.getPaymentReference(), p.getStatus());
-                return toReplayResponse(p, request);
+                log.info("POST /payments replay orderType={} orderRef={} existing paymentReference={} status={}",
+                        key.type(), key.ref(), p.getPaymentReference(), p.getStatus());
+                return toReplayResponse(p, key);
             }
         }
 
-        // The payer is the booking's phone — captured at booking creation
-        // (JWT or guest flow). The FE never supplies payment credentials.
-        Map<String, Object> booking;
-        try {
-            booking = bookingServiceClient.getBooking(request.getBookingId());
-        } catch (BookingConfirmationException e) {
-            HttpStatus status = HttpStatus.resolve(e.getStatusCode());
-            if (status == null) status = HttpStatus.BAD_GATEWAY;
-            return error(status, e.getMessage());
-        }
-        String payerMsisdn = asString(booking.get("phoneNumber"));
-        if (payerMsisdn == null || payerMsisdn.isBlank()) {
-            return error(HttpStatus.BAD_REQUEST,
-                    "Booking has no payer phone number — create the booking with a phoneNumber to pay via InnBucks");
-        }
-
+        // The payer is the order's phone — captured at order creation (JWT or
+        // guest flow), resolved from the gateway snapshot inside the service.
+        // The FE never supplies payment credentials.
         InnbucksPaymentResponse outcome;
         try {
-            outcome = innbucksPaymentService.processPayment(
-                    request.getBookingId(), payerMsisdn, null);
+            outcome = innbucksPaymentService.processPayment(key.type(), key.ref(), null, null);
         } catch (BookingConfirmationException e) {
             HttpStatus status = HttpStatus.resolve(e.getStatusCode());
             if (status == null) status = HttpStatus.BAD_GATEWAY;
@@ -279,9 +330,9 @@ public class PaymentController {
         } catch (InvalidPaymentRequestException e) {
             // 409 (already paying — race with another tap) degrades to replay.
             if (e.getStatusCode() == 409) {
-                return paymentRepository.findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(
-                                request.getBookingId(), PaymentRecordService.ACTIVE_OR_SUCCEEDED)
-                        .map(p -> toReplayResponse(p, request))
+                return paymentRepository.findFirstByOrderTypeAndOrderRefAndStatusInOrderByCreatedAtDesc(
+                                key.type(), key.ref(), PaymentRecordService.ACTIVE_OR_SUCCEEDED)
+                        .map(p -> toReplayResponse(p, key))
                         .orElseGet(() -> error(HttpStatus.CONFLICT, e.getMessage()));
             }
             HttpStatus status = HttpStatus.resolve(e.getStatusCode());
@@ -293,12 +344,12 @@ public class PaymentController {
             return error(status, e.getMessage());
         }
 
-        return toStubShapedResponse(outcome, request);
+        return toStubShapedResponse(outcome, key);
     }
 
     /** Map the real-money outcome onto the stub's exact response contract. */
     private ResponseEntity<ApiResult<PaymentResponse>> toStubShapedResponse(
-            InnbucksPaymentResponse outcome, PaymentRequest request) {
+            InnbucksPaymentResponse outcome, OrderKey key) {
         PaymentResponse.Status status = switch (outcome.getStatus()) {
             case SUCCESS -> PaymentResponse.Status.SUCCESS;
             case PROCESSING -> PaymentResponse.Status.PROCESSING;
@@ -313,9 +364,11 @@ public class PaymentController {
         PaymentResponse response = PaymentResponse.builder()
                 .transactionId(transactionIdFrom(outcome.getPaymentReference()))
                 .bookingId(outcome.getBookingId())
+                .orderType(key.type())
+                .orderRef(key.ref())
                 .status(status)
                 .amountPaid(outcome.getAmountPaid())
-                // Currency is always the booking/cell's — never client-supplied.
+                // Currency is always the order/cell's — never client-supplied.
                 .currency(outcome.getCurrency() != null ? outcome.getCurrency() : cellCurrency)
                 .confirmationNumber(outcome.getConfirmationNumber())
                 .processedAt(LocalDateTime.now(ZoneOffset.UTC))
@@ -326,18 +379,19 @@ public class PaymentController {
         String message = status == PaymentResponse.Status.SUCCESS
                 ? "Payment processed successfully"
                 : (outcome.getUpstreamMessage() != null ? outcome.getUpstreamMessage()
-                        : "Payment received; booking confirmation will follow shortly");
-        log.info("Payment processed transactionId={} bookingId={} status={} confirmation={} amountPaid={}",
-                response.getTransactionId(), response.getBookingId(), status,
+                        : "Payment received; confirmation will follow shortly");
+        log.info("Payment processed transactionId={} orderType={} orderRef={} status={} confirmation={} amountPaid={}",
+                response.getTransactionId(), key.type(), key.ref(), status,
                 response.getConfirmationNumber(), response.getAmountPaid());
         return ResponseEntity.ok(ApiResult.ok(message, response));
     }
 
-    private ResponseEntity<ApiResult<PaymentResponse>> toReplayResponse(Payment p, PaymentRequest request) {
+    private ResponseEntity<ApiResult<PaymentResponse>> toReplayResponse(Payment p, OrderKey key) {
         PaymentResponse.Status status = switch (p.getStatus()) {
             case SUCCEEDED -> PaymentResponse.Status.SUCCESS;
             default -> PaymentResponse.Status.PROCESSING;
         };
+        String noun = key.type() == OrderType.BOOKING ? "booking" : "order";
         // Only a LIVE awaiting-approval code is re-surfaced (page-refresh
         // recovery). A code past its local deadline is never advertised
         // again — the customer would scan/type a dead code; the poller
@@ -352,6 +406,8 @@ public class PaymentController {
         PaymentResponse response = PaymentResponse.builder()
                 .transactionId(p.getId())
                 .bookingId(p.getBookingId())
+                .orderType(key.type())
+                .orderRef(key.ref())
                 .status(status)
                 .amountPaid(p.getAmount())
                 .currency(p.getCurrency())
@@ -366,11 +422,11 @@ public class PaymentController {
         if (status == PaymentResponse.Status.SUCCESS) {
             message = "Payment processed successfully";
         } else if (awaitingApproval) {
-            message = "Approve the payment in your InnBucks app to complete your booking";
+            message = "Approve the payment in your InnBucks app to complete your " + noun;
         } else if (p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED) {
             message = "Your previous payment code expired — tap Pay again in a moment to get a fresh one";
         } else if (p.getStatus() == Payment.PaymentStatus.COMPLETED_UNCONFIRMED) {
-            message = "Payment received; your booking is being confirmed";
+            message = "Payment received; your " + noun + " is being confirmed";
         } else if (p.getStatus() == Payment.PaymentStatus.PENDING) {
             message = "Your payment is already being processed — please retry in a moment";
         } else {
@@ -640,14 +696,4 @@ public class PaymentController {
         }
     }
 
-    private static BigDecimal asBigDecimal(Object value) {
-        if (value == null) return null;
-        if (value instanceof BigDecimal bd) return bd;
-        if (value instanceof Number n) return BigDecimal.valueOf(n.doubleValue());
-        try { return new BigDecimal(value.toString()); } catch (NumberFormatException e) { return null; }
-    }
-
-    private static String asString(Object value) {
-        return value == null ? null : value.toString();
-    }
 }

@@ -1,5 +1,6 @@
 package innbucks.paymentservice.entity;
 
+import innbucks.paymentservice.order.OrderType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -62,7 +63,31 @@ public class Payment {
     @Column(name = "payment_reference", nullable = false, unique = true, length = 64)
     private String paymentReference;
 
-    @Column(name = "booking_id", nullable = false)
+    /**
+     * Which product this payment collects money for. Selects the
+     * {@code OrderGateway} the reconciler/resolution paths confirm through.
+     * Defaults to BOOKING (every pre-V12 row is one).
+     */
+    @Column(name = "order_type", nullable = false, length = 16)
+    @Enumerated(EnumType.STRING)
+    private OrderType orderType;
+
+    /**
+     * The product-side order reference — the ledger's order identity since
+     * V12 (one active payment per (order_type, order_ref), enforced by the
+     * {@code uq_payment_active_order} partial index). BOOKING rows carry the
+     * booking UUID in canonical text form; MARKETPLACE rows the opaque
+     * {@code MKT-...} ref.
+     */
+    @Column(name = "order_ref", nullable = false, length = 64)
+    private String orderRef;
+
+    /**
+     * Legacy identity column: still populated for BOOKING rows (response
+     * echo / back-compat, {@code idx_payment_booking} lookups) but NULL for
+     * every other product since V12.
+     */
+    @Column(name = "booking_id")
     private UUID bookingId;
 
     @Column(name = "customer_msisdn", nullable = false, length = 32)
@@ -172,6 +197,15 @@ public class Payment {
         }
         if (status == null) {
             status = PaymentStatus.PENDING;
+        }
+        // Order-identity defaults, mirroring the V12 backfill: a row built
+        // the pre-generalization way (bookingId only) is a BOOKING payment
+        // whose order ref is the booking UUID's canonical text form.
+        if (orderType == null) {
+            orderType = OrderType.BOOKING;
+        }
+        if (orderRef == null && bookingId != null) {
+            orderRef = bookingId.toString();
         }
     }
 
