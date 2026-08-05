@@ -55,9 +55,11 @@ class GatewayRouteTableTest {
             "payment-internal-deny", "payment-service-read-route",
             "payments-innbucks-write-route", "payment-service-write-route",
             "loyalty-internal-deny", "loyalty-service-route",
+            "marketplace-internal-deny", "marketplace-service-route",
             "user-service-proxy-route", "event-service-proxy-route",
             "seat-service-proxy-route", "booking-service-proxy-route",
-            "payment-service-proxy-route", "loyalty-service-proxy-route");
+            "payment-service-proxy-route", "loyalty-service-proxy-route",
+            "marketplace-service-proxy-route");
 
     // Single-prefix routes whose loss or typo = a silent 404 for real clients.
     // Map.of caps at 10 entries — switched to Map.ofEntries when we added
@@ -75,7 +77,8 @@ class GatewayRouteTableTest {
             Map.entry("booking-invoices-route", "/invoices/**"),
             Map.entry("booking-tickets-route", "/tickets/**"),
             Map.entry("scans-route", "/scans/**"),
-            Map.entry("loyalty-service-route", "/loyalty/**"));
+            Map.entry("loyalty-service-route", "/loyalty/**"),
+            Map.entry("marketplace-service-route", "/marketplace/**"));
 
     private static final List<String> RATE_LIMITED_ROUTES = List.of(
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
@@ -86,12 +89,13 @@ class GatewayRouteTableTest {
             "booking-service-route", "booking-invoices-route", "booking-tickets-route",
             "scans-route", "brand-assets-route",
             "payment-service-read-route", "payments-innbucks-write-route", "payment-service-write-route",
-            "loyalty-service-route");
+            "loyalty-service-route", "marketplace-service-route");
 
     private static final List<String> API_DOCS_PROXY_ROUTES = List.of(
             "user-service-proxy-route", "event-service-proxy-route",
             "seat-service-proxy-route", "booking-service-proxy-route",
-            "payment-service-proxy-route", "loyalty-service-proxy-route");
+            "payment-service-proxy-route", "loyalty-service-proxy-route",
+            "marketplace-service-proxy-route");
 
     // OWASP A04: the SMS-cost / payment abuse surfaces that MUST keep throttling
     // when Redis is down, so they are pinned to the in-memory-fallback limiter
@@ -158,6 +162,13 @@ class GatewayRouteTableTest {
         assertThat(order.indexOf("loyalty-internal-deny"))
                 .as("loyalty-internal-deny must match before /loyalty/**")
                 .isBetween(0, order.indexOf("loyalty-service-route") - 1);
+        // marketplace-service lives in MpofuSlim/market-place; its internal
+        // S2S surface (/marketplace/internal/orders/*) must be edge-denied
+        // before the /marketplace/** catch-all or it becomes internet-reachable
+        // (the cross-repo three-files-must-agree leg).
+        assertThat(order.indexOf("marketplace-internal-deny"))
+                .as("marketplace-internal-deny must match before /marketplace/**")
+                .isBetween(0, order.indexOf("marketplace-service-route") - 1);
         assertThat(order.indexOf("user-internal-deny"))
                 .as("user-internal-deny must match before /users/**")
                 .isBetween(0, order.indexOf("user-self-route") - 1);
@@ -207,6 +218,8 @@ class GatewayRouteTableTest {
         assertThat(predicateArgs("user-internal-deny", "Path")).containsExactly("/users/internal/**");
         assertThat(route("booking-internal-deny").getUri()).hasToString("forward:/__edge_deny__");
         assertThat(predicateArgs("booking-internal-deny", "Path")).containsExactly("/bookings/internal/**");
+        assertThat(route("marketplace-internal-deny").getUri()).hasToString("forward:/__edge_deny__");
+        assertThat(predicateArgs("marketplace-internal-deny", "Path")).containsExactly("/marketplace/internal/**");
     }
 
     @Test
