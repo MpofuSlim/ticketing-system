@@ -295,11 +295,17 @@ public class UserAdminService {
 
         // EnumSet.copyOf(Collection) throws on an empty non-EnumSet argument, so
         // build the copies by hand — `previous` is legitimately empty on a row
-        // that somehow carries no roles, and that must not blow up the audit.
+        // that carries no roles, and that must not blow up the audit.
+        //
+        // No null-guard on getRoles(): the field is initialised at its
+        // declaration (@Builder.Default EnumSet.noneOf) and Hibernate always
+        // injects a collection wrapper for an @ElementCollection, so it is
+        // non-null on every path into here. Qodana flagged the guard as dead.
         Set<User.Role> requested = EnumSet.noneOf(User.Role.class);
         requested.addAll(roles);
+        Set<User.Role> current = user.getRoles();
         Set<User.Role> previous = EnumSet.noneOf(User.Role.class);
-        if (user.getRoles() != null) previous.addAll(user.getRoles());
+        previous.addAll(current);
 
         // Idempotent: re-submitting the current set is a no-op. Skipping the
         // token bump here matters — otherwise a UI that PUTs on every save would
@@ -312,11 +318,8 @@ public class UserAdminService {
         // Mutate the mapped collection in place rather than swapping the
         // reference: `roles` is an @ElementCollection, and Hibernate tracks the
         // instance it loaded.
-        if (user.getRoles() == null) {
-            user.setRoles(EnumSet.noneOf(User.Role.class));
-        }
-        user.getRoles().clear();
-        user.getRoles().addAll(requested);
+        current.clear();
+        current.addAll(requested);
         user.setTokenVersion(user.getTokenVersion() + 1);
         User saved = userRepository.save(user);
 

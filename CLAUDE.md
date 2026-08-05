@@ -224,6 +224,19 @@ called-out reason, not a silent revert.**
 - **PR-time SCA**: `ci.yml`'s `dependency-review` job flags any *new* High/Critical
   direct dependency a PR introduces (diff-scoped — it won't fail on the existing
   baseline). Transitive/library CVEs are caught by the Release Trivy image scan.
+  **Called-out exception (this repo is now PRIVATE):** the job is gated to public
+  repos (`github.event.repository.private == false`) AND its step carries
+  `continue-on-error: true`. The action needs GitHub's Dependency Graph, which on
+  a private repo requires paid GitHub Advanced Security; without it the action
+  hard-errors `Dependency review is not supported on this repository` and reds
+  **every** PR regardless of its contents (PR #472 introduced no dependencies at
+  all and still failed). Same fix, same rationale as InnRewards — where an
+  earlier gate on `repository.visibility == 'public'` did NOT skip (that payload
+  field reads as truthy on a private repo), which is why the `if` uses the
+  canonical `repository.private` boolean AND `continue-on-error` as a second
+  guard. This drops only the PR-time *direct-dependency* advisory surface;
+  transitive/library CVEs remain covered by the Release Trivy image scan. The job
+  auto-re-enables if the repo goes public again or GHAS is licensed.
 - **`innbucks-core-gateway` was retired** (A06) — it was an EOL Spring Boot
   3.2.4 connectivity spike, not a reactor module and not containerized, so
   nothing built or scanned it. It has been deleted from the repo. If the
