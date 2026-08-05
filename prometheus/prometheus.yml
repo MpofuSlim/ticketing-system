@@ -90,3 +90,15 @@ scrape_configs:
         files: [ /etc/prometheus/secrets/metrics-scrape-token ]
     static_configs:
       - targets: [ "loyalty-service:8086" ]
+
+  # marketplace-service lives in the MpofuSlim/market-place repo but runs in
+  # this cell and shares the METRICS_SCRAPE_TOKEN (same MetricsScrapeAuthFilter
+  # pattern — keep the two repos in lock-step, per docs/fleet-wiring.md in the
+  # market-place repo).
+  - job_name: marketplace-service
+    metrics_path: /actuator/prometheus
+    http_headers:
+      X-Metrics-Token:
+        files: [ /etc/prometheus/secrets/metrics-scrape-token ]
+    static_configs:
+      - targets: [ "marketplace-service:8087" ]

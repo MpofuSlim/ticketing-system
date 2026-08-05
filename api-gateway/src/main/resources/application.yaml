@@ -351,6 +351,29 @@ spring:
                     # Fail-SAFE: payment mutation (money path) — keep throttling if Redis is down.
                     rate-limiter: "#{@resilientRedisRateLimiter}"
 
+            # marketplace-service (MpofuSlim/market-place repo — joins the
+            # fleet the same way loyalty-service/InnRewards does). Internal
+            # S2S surface (/marketplace/internal/orders/*: read, extend-expiry,
+            # confirm-payment — consumed by payment-service once the payments
+            # generalization lands) is edge-denied BEFORE the service route
+            # per the three-files-must-agree rule.
+            - id: marketplace-internal-deny
+              uri: forward:/__edge_deny__
+              predicates:
+                - Path=/marketplace/internal/**
+
+            - id: marketplace-service-route
+              uri: lb://marketplace-service
+              predicates:
+                - Path=/marketplace/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
+
             - id: loyalty-internal-deny
               uri: forward:/__edge_deny__
               predicates:
@@ -437,6 +460,19 @@ spring:
               uri: lb://loyalty-service
               predicates:
                 - Path=/loyalty-service/v3/api-docs,/loyalty-service/v3/api-docs/**
+              filters:
+                - StripPrefix=1
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
+
+            - id: marketplace-service-proxy-route
+              uri: lb://marketplace-service
+              predicates:
+                - Path=/marketplace-service/v3/api-docs,/marketplace-service/v3/api-docs/**
               filters:
                 - StripPrefix=1
                 - name: RequestRateLimiter
@@ -574,6 +610,8 @@ springdoc:
         url: ${PUBLIC_API_PREFIX:}/payment-service/v3/api-docs
       - name: loyalty-service
         url: ${PUBLIC_API_PREFIX:}/loyalty-service/v3/api-docs
+      - name: marketplace-service
+        url: ${PUBLIC_API_PREFIX:}/marketplace-service/v3/api-docs
 
 # HTTP Basic credentials guarding the Swagger UI above (see
 # SwaggerSecurityConfig). With a blank password Swagger fails closed under the
