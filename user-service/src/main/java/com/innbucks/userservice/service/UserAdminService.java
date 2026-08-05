@@ -17,7 +17,9 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
+import java.util.EnumSet;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Service-layer home for SUPER_ADMIN-scoped user-administration operations.
@@ -50,6 +52,14 @@ public class UserAdminService {
     private final AuditService auditService;
     private final ApplicationEventPublisher eventPublisher;
     private final com.innbucks.userservice.repository.TenantProfileRepository tenantProfiles;
+    /**
+     * Cross-service session-supersession publisher (OWASP A07 / CWE-613), needed
+     * by {@link #setRoles} so a demotion takes effect fleet-wide immediately.
+     * AuthService field-injects this one instead, purely so its many test
+     * construction sites don't widen; this class has a single construction site,
+     * so a plain constructor dependency is both clearer and easier to assert on.
+     */
+    private final com.innbucks.userservice.security.TokenVersionPublisher tokenVersionPublisher;
 
     /**
      * Backward-compatible overload used by unit tests / callers that don't have
@@ -204,6 +214,131 @@ public class UserAdminService {
                 auditContext == null ? AuditContext.none() : auditContext);
 
         publishCredentialDelivery(saved, tempPassword, CredentialDeliveryRequested.Reason.RESET);
+        return saved;
+    }
+
+    /**
+     * Replace a user's entire role set (SUPER_ADMIN-only, {@code PUT /admin/users/{id}/roles}).
+     *
+     * <p><b>Replace, not merge.</b> The submitted set becomes the account's
+     * complete role set. A merge endpoint can only ever add privilege, so
+     * revoking one would need a second endpoint and the two would drift; one
+     * idempotent replace keeps the surface honest — the caller states the end
+     * state they want and gets exactly it.
+     *
+     * <p><b>The token bump is the point, not a side-effect.</b> Roles are baked
+     * into the JWT at login, and {@code JwtFilter} authorizes from the token's
+     * claims — not from a per-request DB read. So demoting a user in Postgres
+     * alone leaves their existing access token carrying the OLD roles until it
+     * expires: a revoked MERCHANT_ADMIN would keep acting as one for the rest of
+     * the token's life. Bumping {@code token_version} (and mirroring it to the
+     * shared Redis, exactly as logout does) makes every service reject that token
+     * on the next request, so the demotion is effective immediately. The user
+     * re-authenticates — or silently rotates via {@code /auth/refresh}, which
+     * rebuilds claims from this freshly-written row — and picks up the new roles.
+     *
+     * <p>Refuses to touch a SUPER_ADMIN target and refuses to GRANT SUPER_ADMIN.
+     * The first would let an admin strip the platform-owner account (which no
+     * other role can restore); the second would turn this endpoint into a
+     * self-service privilege-escalation path — any SUPER_ADMIN could mint more
+     * of them, and the seeded owner would lose its "one account, one credential,
+     * managed by BOOTSTRAP_ADMIN_PASSWORD" property.
+     */
+    @Transactional
+    public User setRoles(Long id, Set<User.Role> roles, String adminEmail, AuditContext auditContext) {
+        User user = userRepository.findById(id)
+                .orElseThrow(() -> new NotFoundException("User not found: " + id));
+
+        // Bean validation (@NotEmpty) already covers the HTTP path; this keeps
+        // the invariant on any programmatic caller. An account with no roles
+        // could authenticate but authorize for nothing — a silent brick, not a
+        // state any caller means to reach.
+        if (roles == null || roles.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "roles must contain at least one role");
+        }
+
+        if (user.hasRole(User.Role.SUPER_ADMIN)) {
+            log.warn("setRoles refused on SUPER_ADMIN target userId={} by={} requested={}",
+                    id, adminEmail == null ? "system" : adminEmail, roles);
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "The SUPER_ADMIN account's roles cannot be changed.");
+        }
+
+        if (roles.contains(User.Role.SUPER_ADMIN)) {
+            log.warn("setRoles refused SUPER_ADMIN grant userId={} by={}",
+                    id, adminEmail == null ? "system" : adminEmail);
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "SUPER_ADMIN cannot be granted through this endpoint; that account is seeded "
+                            + "once via BOOTSTRAP_ADMIN_PASSWORD.");
+        }
+
+        // Scope guards. SHOP_ADMIN / SHOP_USER authorize off the loyaltyShopId
+        // baked into their JWT, and TEAM_MEMBER off its parent organizer's uuid.
+        // Granting one of those roles to an account that was never stamped with
+        // the matching scope mints a login that passes @PreAuthorize and then
+        // fails inside every handler ("caller's JWT has no shopId") — a broken
+        // account that looks correctly provisioned. Refuse up front and name the
+        // endpoint that does the stamping.
+        if ((roles.contains(User.Role.SHOP_ADMIN) || roles.contains(User.Role.SHOP_USER))
+                && (user.getLoyaltyMerchantId() == null || user.getLoyaltyShopId() == null)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "SHOP_ADMIN and SHOP_USER require the account to be scoped to a loyalty "
+                            + "merchant and shop; create shop staff via POST /admin/shop-staff/admins "
+                            + "or POST /admin/shop-staff/users instead.");
+        }
+        if (roles.contains(User.Role.TEAM_MEMBER) && user.getCreatedByOrganizerUuid() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "TEAM_MEMBER requires the account to be stamped with its parent EVENT_ORGANIZER; "
+                            + "create team members via POST /event-organizer/team-members instead.");
+        }
+
+        // EnumSet.copyOf(Collection) throws on an empty non-EnumSet argument, so
+        // build the copies by hand — `previous` is legitimately empty on a row
+        // that somehow carries no roles, and that must not blow up the audit.
+        Set<User.Role> requested = EnumSet.noneOf(User.Role.class);
+        requested.addAll(roles);
+        Set<User.Role> previous = EnumSet.noneOf(User.Role.class);
+        if (user.getRoles() != null) previous.addAll(user.getRoles());
+
+        // Idempotent: re-submitting the current set is a no-op. Skipping the
+        // token bump here matters — otherwise a UI that PUTs on every save would
+        // log the user out for a change that didn't happen.
+        if (previous.equals(requested)) {
+            log.info("setRoles no-op userId={} roles={}", id, requested);
+            return user;
+        }
+
+        // Mutate the mapped collection in place rather than swapping the
+        // reference: `roles` is an @ElementCollection, and Hibernate tracks the
+        // instance it loaded.
+        if (user.getRoles() == null) {
+            user.setRoles(EnumSet.noneOf(User.Role.class));
+        }
+        user.getRoles().clear();
+        user.getRoles().addAll(requested);
+        user.setTokenVersion(user.getTokenVersion() + 1);
+        User saved = userRepository.save(user);
+
+        // Best-effort, never throws — Postgres stays the source of truth and
+        // user-service's own JwtFilter reads token_version from it directly.
+        tokenVersionPublisher.publish(saved.getUserUuid(), saved.getTokenVersion());
+
+        log.info("Roles changed userId={} from={} to={} newTokenVersion={} by={}",
+                id, previous, requested, saved.getTokenVersion(),
+                adminEmail == null ? "system" : adminEmail);
+
+        auditService.recordSuccess(
+                AuditEventType.USER_ROLES_CHANGED,
+                adminEmail == null ? "system" : adminEmail,
+                adminEmail == null ? AuditService.ACTOR_TYPE_SYSTEM : AuditService.ACTOR_TYPE_USER,
+                String.valueOf(saved.getId()), AuditService.TARGET_TYPE_USER,
+                Map.of(
+                        "targetEmail", saved.getEmail() == null ? "" : saved.getEmail(),
+                        "previousRoles", previous.stream().map(Enum::name).sorted().toList(),
+                        "newRoles", requested.stream().map(Enum::name).sorted().toList()),
+                auditContext == null ? AuditContext.none() : auditContext);
+
         return saved;
     }
 

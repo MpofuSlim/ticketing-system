@@ -12,7 +12,12 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.*;
@@ -48,8 +53,13 @@ class UserAdminServiceTest {
         // is what every case in this class asserts.
         final com.innbucks.userservice.repository.TenantProfileRepository tenantProfiles =
                 mock(com.innbucks.userservice.repository.TenantProfileRepository.class);
+        // Role changes bump token_version and mirror it to the shared Redis so a
+        // demotion takes effect fleet-wide immediately; mocked so the assertions
+        // can prove the publish happened without a Redis.
+        final com.innbucks.userservice.security.TokenVersionPublisher tokenVersions =
+                mock(com.innbucks.userservice.security.TokenVersionPublisher.class);
         final UserAdminService service = new UserAdminService(
-                userRepo, encoder, audit, publisher, tenantProfiles);
+                userRepo, encoder, audit, publisher, tenantProfiles, tokenVersions);
     }
 
     /** Capture the plaintext handed to encode() — it's the generated temp password. */
@@ -441,5 +451,185 @@ class UserAdminServiceTest {
                 eq("11"), eq(AuditService.TARGET_TYPE_USER),
                 anyMap(),
                 eq(AuditContext.none()));
+    }
+
+    // -- setRoles -------------------------------------------------------------
+
+    /** A user carrying whatever roles are passed, with a uuid so the
+     *  token-version publish has a key to assert on. */
+    private static User userWithRoles(long id, User.Role... roles) {
+        return User.builder().id(id).userUuid(UUID.randomUUID())
+                .email("u" + id + "@innbucks.co.zw").password("pw").active(true).approved(true)
+                .roles(roles.length == 0 ? EnumSet.noneOf(User.Role.class) : EnumSet.copyOf(Set.of(roles)))
+                .build();
+    }
+
+    @Test
+    void setRoles_replacesTheWholeSet_notMergesIntoIt() {
+        Fixture f = new Fixture();
+        User user = userWithRoles(50L, User.Role.CUSTOMER, User.Role.EVENT_ORGANIZER);
+        when(f.userRepo.findById(50L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        User result = f.service.setRoles(50L, Set.of(User.Role.CUSTOMER),
+                "admin@innbucks.co.zw", AuditContext.none());
+
+        // EVENT_ORGANIZER is gone — a merge would have kept it.
+        assertThat(result.getRoles()).containsExactly(User.Role.CUSTOMER);
+    }
+
+    @Test
+    void setRoles_bumpsTokenVersion_andPublishesIt_soADemotionTakesEffectImmediately() {
+        Fixture f = new Fixture();
+        User user = userWithRoles(51L, User.Role.MERCHANT_ADMIN);
+        user.setTokenVersion(7);
+        when(f.userRepo.findById(51L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        User result = f.service.setRoles(51L, Set.of(User.Role.CUSTOMER),
+                "admin@innbucks.co.zw", AuditContext.none());
+
+        // Without the bump the demoted user's existing JWT would keep asserting
+        // MERCHANT_ADMIN until it expired.
+        assertEquals(8, result.getTokenVersion());
+        verify(f.tokenVersions).publish(user.getUserUuid(), 8L);
+    }
+
+    @Test
+    void setRoles_recordsUSER_ROLES_CHANGED_withBothSidesOfTheChange() {
+        Fixture f = new Fixture();
+        User user = userWithRoles(52L, User.Role.EVENT_ORGANIZER);
+        when(f.userRepo.findById(52L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        AuditContext ctx = new AuditContext("10.0.0.9", "curl/8.4");
+
+        f.service.setRoles(52L, Set.of(User.Role.CUSTOMER), "admin@innbucks.co.zw", ctx);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> meta = ArgumentCaptor.forClass(Map.class);
+        verify(f.audit).recordSuccess(
+                eq(AuditEventType.USER_ROLES_CHANGED),
+                eq("admin@innbucks.co.zw"), eq(AuditService.ACTOR_TYPE_USER),
+                eq("52"), eq(AuditService.TARGET_TYPE_USER),
+                meta.capture(),
+                eq(ctx));
+        assertThat(meta.getValue()).containsEntry("previousRoles", List.of("EVENT_ORGANIZER"));
+        assertThat(meta.getValue()).containsEntry("newRoles", List.of("CUSTOMER"));
+    }
+
+    @Test
+    void setRoles_isANoOp_whenTheSubmittedSetMatchesTheCurrentOne() {
+        Fixture f = new Fixture();
+        User user = userWithRoles(53L, User.Role.CUSTOMER, User.Role.EVENT_ORGANIZER);
+        user.setTokenVersion(3);
+        when(f.userRepo.findById(53L)).thenReturn(Optional.of(user));
+
+        User result = f.service.setRoles(53L,
+                Set.of(User.Role.EVENT_ORGANIZER, User.Role.CUSTOMER),
+                "admin@innbucks.co.zw", AuditContext.none());
+
+        // No bump: a UI that PUTs on every save must not log the user out for a
+        // change that didn't happen.
+        assertEquals(3, result.getTokenVersion());
+        verify(f.userRepo, never()).save(any(User.class));
+        verifyNoInteractions(f.audit);
+        verifyNoInteractions(f.tokenVersions);
+    }
+
+    @Test
+    void setRoles_refusesSuperAdminTarget_403() {
+        Fixture f = new Fixture();
+        User owner = userWithRoles(1L, User.Role.SUPER_ADMIN);
+        when(f.userRepo.findById(1L)).thenReturn(Optional.of(owner));
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> f.service.setRoles(1L, Set.of(User.Role.CUSTOMER),
+                        "admin@innbucks.co.zw", AuditContext.none()));
+
+        assertEquals(403, ex.getStatusCode().value());
+        assertThat(owner.getRoles()).containsExactly(User.Role.SUPER_ADMIN);
+        verify(f.userRepo, never()).save(any(User.class));
+    }
+
+    @Test
+    void setRoles_refusesGrantingSuperAdmin_403() {
+        Fixture f = new Fixture();
+        User user = userWithRoles(54L, User.Role.CUSTOMER);
+        when(f.userRepo.findById(54L)).thenReturn(Optional.of(user));
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> f.service.setRoles(54L, Set.of(User.Role.SUPER_ADMIN),
+                        "admin@innbucks.co.zw", AuditContext.none()));
+
+        assertEquals(403, ex.getStatusCode().value());
+        verify(f.userRepo, never()).save(any(User.class));
+    }
+
+    @Test
+    void setRoles_refusesShopRole_whenTheAccountCarriesNoShopScope() {
+        Fixture f = new Fixture();
+        User user = userWithRoles(55L, User.Role.CUSTOMER);
+        when(f.userRepo.findById(55L)).thenReturn(Optional.of(user));
+
+        // This is the "caller's JWT has no shopId" account: it would log in fine
+        // and then fail inside every shop-scoped handler.
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> f.service.setRoles(55L, Set.of(User.Role.SHOP_USER),
+                        "admin@innbucks.co.zw", AuditContext.none()));
+
+        assertEquals(400, ex.getStatusCode().value());
+        verify(f.userRepo, never()).save(any(User.class));
+    }
+
+    @Test
+    void setRoles_allowsShopRole_whenTheAccountIsAlreadyScopedToAShop() {
+        Fixture f = new Fixture();
+        User user = userWithRoles(56L, User.Role.SHOP_USER);
+        user.setLoyaltyMerchantId(UUID.randomUUID());
+        user.setLoyaltyShopId(UUID.randomUUID());
+        when(f.userRepo.findById(56L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        User result = f.service.setRoles(56L, Set.of(User.Role.SHOP_ADMIN),
+                "admin@innbucks.co.zw", AuditContext.none());
+
+        assertThat(result.getRoles()).containsExactly(User.Role.SHOP_ADMIN);
+    }
+
+    @Test
+    void setRoles_refusesTeamMember_whenTheAccountHasNoParentOrganizer() {
+        Fixture f = new Fixture();
+        User user = userWithRoles(57L, User.Role.CUSTOMER);
+        when(f.userRepo.findById(57L)).thenReturn(Optional.of(user));
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> f.service.setRoles(57L, Set.of(User.Role.TEAM_MEMBER),
+                        "admin@innbucks.co.zw", AuditContext.none()));
+
+        assertEquals(400, ex.getStatusCode().value());
+        verify(f.userRepo, never()).save(any(User.class));
+    }
+
+    @Test
+    void setRoles_rejectsAnEmptyRoleSet_ratherThanBrickingTheAccount() {
+        Fixture f = new Fixture();
+        User user = userWithRoles(58L, User.Role.CUSTOMER);
+        when(f.userRepo.findById(58L)).thenReturn(Optional.of(user));
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> f.service.setRoles(58L, Set.of(), "admin@innbucks.co.zw", AuditContext.none()));
+
+        assertEquals(400, ex.getStatusCode().value());
+        verify(f.userRepo, never()).save(any(User.class));
+    }
+
+    @Test
+    void setRoles_throwsNotFound_whenUserMissing() {
+        Fixture f = new Fixture();
+        when(f.userRepo.findById(999L)).thenReturn(Optional.empty());
+
+        assertThrows(NotFoundException.class,
+                () -> f.service.setRoles(999L, Set.of(User.Role.CUSTOMER),
+                        "admin@innbucks.co.zw", AuditContext.none()));
     }
 }

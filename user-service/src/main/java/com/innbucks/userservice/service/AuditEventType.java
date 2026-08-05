@@ -79,6 +79,17 @@ public enum AuditEventType {
      * target (that credential is owned by the bootstrap env seed).
      */
     USER_TEMP_PASSWORD_RESET,
+    /**
+     * SUPER_ADMIN replaced a user's role set via {@code PUT /admin/users/{id}/roles}.
+     * Privilege-change events are the ones an auditor reads first, so the metadata
+     * carries both sides of the change ({@code previousRoles} / {@code newRoles})
+     * rather than just the end state — "who became a MERCHANT_ADMIN, and what were
+     * they before" is not reconstructable from the end state alone.
+     *
+     * <p>Never fired for a SUPER_ADMIN target and never fired for a change that
+     * grants SUPER_ADMIN — both are refused before the write.
+     */
+    USER_ROLES_CHANGED,
 
     /**
      * X-Internal-Token validation failed on a /users/internal/** endpoint.
