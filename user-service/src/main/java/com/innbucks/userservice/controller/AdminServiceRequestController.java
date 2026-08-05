@@ -45,6 +45,16 @@ public class AdminServiceRequestController {
                                       "message": "Pending service requests retrieved",
                                       "data": [
                                         {
+                                          "id": 14,
+                                          "userId": 42,
+                                          "userEmail": "alice@innbucks.co.zw",
+                                          "userFullName": "Alice Moyo",
+                                          "service": "marketplace",
+                                          "reason": "We want to sell our products on the InnBucks marketplace.",
+                                          "status": "PENDING",
+                                          "createdAt": "2026-08-05T18:45:00"
+                                        },
+                                        {
                                           "id": 12,
                                           "userId": 42,
                                           "userEmail": "alice@innbucks.co.zw",
@@ -82,12 +92,12 @@ public class AdminServiceRequestController {
                                       "code": "200 OK",
                                       "message": "Service request approved",
                                       "data": {
-                                        "id": 12,
+                                        "id": 14,
                                         "userId": 42,
-                                        "service": "loyalty",
+                                        "service": "marketplace",
                                         "status": "APPROVED",
-                                        "createdAt": "2026-05-07T10:30:00",
-                                        "reviewedAt": "2026-05-08T09:15:00",
+                                        "createdAt": "2026-08-05T18:45:00",
+                                        "reviewedAt": "2026-08-05T19:15:00",
                                         "reviewedBy": 1
                                       }
                                     }

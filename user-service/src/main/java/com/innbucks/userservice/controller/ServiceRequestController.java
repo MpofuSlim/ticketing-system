@@ -53,6 +53,16 @@ public class ServiceRequestController {
                                       "message": "Service requests retrieved",
                                       "data": [
                                         {
+                                          "id": 14,
+                                          "userId": 42,
+                                          "userEmail": "alice@innbucks.co.zw",
+                                          "userFullName": "Alice Moyo",
+                                          "service": "marketplace",
+                                          "reason": "We want to sell our products on the InnBucks marketplace.",
+                                          "status": "PENDING",
+                                          "createdAt": "2026-08-05T18:45:00"
+                                        },
+                                        {
                                           "id": 12,
                                           "userId": 42,
                                           "userEmail": "alice@innbucks.co.zw",
@@ -86,7 +96,7 @@ public class ServiceRequestController {
     @PostMapping
     @Operation(
             summary = "Request access to an additional default service",
-            description = "Submits a request to be granted access to a service bundle (e.g. 'loyalty'). " +
+            description = "Submits a request to be granted access to a service bundle ('ticketing', 'loyalty' or 'marketplace'). " +
                     "Includes a free-text reason shown to the SUPER_ADMIN reviewing the request. " +
                     "The bundle must not already be granted to the user, and there must not already be a pending request for the same bundle."
     )
@@ -99,14 +109,14 @@ public class ServiceRequestController {
                                       "code": "201 CREATED",
                                       "message": "Service request submitted",
                                       "data": {
-                                        "id": 12,
+                                        "id": 14,
                                         "userId": 42,
                                         "userEmail": "alice@innbucks.co.zw",
                                         "userFullName": "Alice Moyo",
-                                        "service": "loyalty",
-                                        "reason": "We are launching a rewards programme.",
+                                        "service": "marketplace",
+                                        "reason": "We want to sell our products on the InnBucks marketplace.",
                                         "status": "PENDING",
-                                        "createdAt": "2026-05-07T10:30:00"
+                                        "createdAt": "2026-08-05T18:45:00"
                                       }
                                     }
                                     """))),
