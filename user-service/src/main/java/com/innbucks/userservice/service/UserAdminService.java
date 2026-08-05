@@ -249,23 +249,31 @@ public class UserAdminService {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new NotFoundException("User not found: " + id));
 
-        // Bean validation (@NotEmpty) already covers the HTTP path; this keeps
-        // the invariant on any programmatic caller. An account with no roles
-        // could authenticate but authorize for nothing — a silent brick, not a
-        // state any caller means to reach.
-        if (roles == null || roles.isEmpty()) {
+        // Normalize the input up front: copy into an EnumSet, tolerating a null
+        // from a programmatic caller, and validate the COPY. Everything below
+        // then reads one well-typed set instead of the raw argument.
+        // (EnumSet.copyOf(Collection) can't do this — it throws on an empty
+        // non-EnumSet argument, which is precisely the case being rejected.)
+        //
+        // Bean validation (@NotEmpty) already covers the HTTP path; the empty
+        // check keeps the invariant for any programmatic caller. An account with
+        // no roles could authenticate but authorize for nothing — a silent
+        // brick, not a state any caller means to reach.
+        Set<User.Role> requested = EnumSet.noneOf(User.Role.class);
+        if (roles != null) requested.addAll(roles);
+        if (requested.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "roles must contain at least one role");
         }
 
         if (user.hasRole(User.Role.SUPER_ADMIN)) {
             log.warn("setRoles refused on SUPER_ADMIN target userId={} by={} requested={}",
-                    id, adminEmail == null ? "system" : adminEmail, roles);
+                    id, adminEmail == null ? "system" : adminEmail, requested);
             throw new ResponseStatusException(HttpStatus.FORBIDDEN,
                     "The SUPER_ADMIN account's roles cannot be changed.");
         }
 
-        if (roles.contains(User.Role.SUPER_ADMIN)) {
+        if (requested.contains(User.Role.SUPER_ADMIN)) {
             log.warn("setRoles refused SUPER_ADMIN grant userId={} by={}",
                     id, adminEmail == null ? "system" : adminEmail);
             throw new ResponseStatusException(HttpStatus.FORBIDDEN,
@@ -280,14 +288,14 @@ public class UserAdminService {
         // fails inside every handler ("caller's JWT has no shopId") — a broken
         // account that looks correctly provisioned. Refuse up front and name the
         // endpoint that does the stamping.
-        if ((roles.contains(User.Role.SHOP_ADMIN) || roles.contains(User.Role.SHOP_USER))
+        if ((requested.contains(User.Role.SHOP_ADMIN) || requested.contains(User.Role.SHOP_USER))
                 && (user.getLoyaltyMerchantId() == null || user.getLoyaltyShopId() == null)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "SHOP_ADMIN and SHOP_USER require the account to be scoped to a loyalty "
                             + "merchant and shop; create shop staff via POST /admin/shop-staff/admins "
                             + "or POST /admin/shop-staff/users instead.");
         }
-        if (roles.contains(User.Role.TEAM_MEMBER) && user.getCreatedByOrganizerUuid() == null) {
+        if (requested.contains(User.Role.TEAM_MEMBER) && user.getCreatedByOrganizerUuid() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "TEAM_MEMBER requires the account to be stamped with its parent EVENT_ORGANIZER; "
                             + "create team members via POST /event-organizer/team-members instead.");
@@ -295,11 +303,15 @@ public class UserAdminService {
 
         // EnumSet.copyOf(Collection) throws on an empty non-EnumSet argument, so
         // build the copies by hand — `previous` is legitimately empty on a row
-        // that somehow carries no roles, and that must not blow up the audit.
-        Set<User.Role> requested = EnumSet.noneOf(User.Role.class);
-        requested.addAll(roles);
+        // that carries no roles, and that must not blow up the audit.
+        //
+        // No null-guard on getRoles(): the field is initialised at its
+        // declaration (@Builder.Default EnumSet.noneOf) and Hibernate always
+        // injects a collection wrapper for an @ElementCollection, so it is
+        // non-null on every path into here. Qodana flagged the guard as dead.
+        Set<User.Role> current = user.getRoles();
         Set<User.Role> previous = EnumSet.noneOf(User.Role.class);
-        if (user.getRoles() != null) previous.addAll(user.getRoles());
+        previous.addAll(current);
 
         // Idempotent: re-submitting the current set is a no-op. Skipping the
         // token bump here matters — otherwise a UI that PUTs on every save would
@@ -312,11 +324,8 @@ public class UserAdminService {
         // Mutate the mapped collection in place rather than swapping the
         // reference: `roles` is an @ElementCollection, and Hibernate tracks the
         // instance it loaded.
-        if (user.getRoles() == null) {
-            user.setRoles(EnumSet.noneOf(User.Role.class));
-        }
-        user.getRoles().clear();
-        user.getRoles().addAll(requested);
+        current.clear();
+        current.addAll(requested);
         user.setTokenVersion(user.getTokenVersion() + 1);
         User saved = userRepository.save(user);
 

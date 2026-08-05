@@ -113,15 +113,19 @@ jobs:
     # dependency-review-action needs GitHub's Dependency Graph, which on a
     # PRIVATE repo requires paid GitHub Advanced Security (it's free on public
     # repos). This repo went private, so the action hard-errors "Dependency
-    # review is not supported on this repository" and reds every PR (first
-    # seen on PR #474). Same belt-and-suspenders guard as InnRewards'
-    # ci.yml (its CLAUDE.md documents that a `visibility == 'public'` gate
-    # alone did NOT skip there):
-    #   1. `if` gates on the canonical `repository.private` boolean so the
-    #      job cleanly SKIPS on a private repo and auto-re-enables if the
-    #      repo goes public / GHAS is licensed;
-    #   2. `continue-on-error` on the step so a wrong payload boolean can
-    #      never RED the PR on the "not supported" error.
+    # review is not supported on this repository" and reds every PR regardless
+    # of what the PR changes — PR #472 added no dependencies at all and still
+    # failed here.
+    #
+    # Two guards, belt-and-suspenders — this mirrors the fix already proven in
+    # the InnRewards repo, where a `visibility == 'public'` gate alone did NOT
+    # skip (the pull_request payload's repository.visibility read as truthy on
+    # a private repo, so the job ran and failed anyway):
+    #   1. `if` gates on the canonical `repository.private` boolean (reliable
+    #      where `visibility` is not) so the job cleanly SKIPS on a private repo
+    #      and auto-re-enables if it goes public again / GHAS is licensed;
+    #   2. `continue-on-error` on the step so that even if the payload metadata
+    #      is wrong again, the "not supported" error can never RED the PR.
     # Called-out A08 exception (see CLAUDE.md) — NOT a silent removal:
     # transitive/library CVEs stay covered by the Release Trivy image scan;
     # only the PR-time direct-dependency advisory surface is dropped while
