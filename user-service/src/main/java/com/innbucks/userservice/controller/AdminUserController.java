@@ -2,6 +2,7 @@ package com.innbucks.userservice.controller;
 
 import com.innbucks.userservice.dto.ApiResult;
 import com.innbucks.userservice.dto.UpdateActiveStatusDTO;
+import com.innbucks.userservice.dto.UpdateRolesDTO;
 import com.innbucks.userservice.dto.UserResponseDTO;
 import com.innbucks.userservice.entity.TenantProfile;
 import com.innbucks.userservice.entity.User;
@@ -345,6 +346,131 @@ public class AdminUserController {
 
         String action = request.getActive() ? "activated" : "deactivated";
         return ResponseEntity.ok(ApiResult.ok("User " + action, UserResponseDTO.from(user)));
+    }
+
+    @PutMapping("/{id}/roles")
+    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @Operation(
+            summary = "Replace a user's roles",
+            description = """
+                    Sets the complete role set on the specified account. This is a **replace, not a
+                    merge** — the submitted array becomes the account's entire role set, so include
+                    every role the user should keep. Re-submitting the roles the user already has is
+                    an idempotent no-op (no audit row, no session change).
+
+                    ### The seven platform roles
+
+                    | Role | What it is | How it is normally assigned |
+                    |---|---|---|
+                    | `SUPER_ADMIN` | Platform owner. Full access to every admin endpoint. | Seeded once from `BOOTSTRAP_ADMIN_PASSWORD`. **Never grantable or revocable here.** |
+                    | `EVENT_ORGANIZER` | Runs ticketed events — owns events, invoices, settlements and team members. | Self-registration as a business account, then `PUT /admin/users/{id}/active` to approve. |
+                    | `TEAM_MEMBER` | Gate staff / scanner operator working for one EVENT_ORGANIZER. Their JWT carries the parent organizer's uuid so booking-service can authorize ticket scans. | `POST /event-organizer/team-members` |
+                    | `MERCHANT_ADMIN` | Runs a loyalty merchant — manages that merchant's shops, staff and rules. | `POST /loyalty/merchants` plus the merchant-admin account. |
+                    | `SHOP_ADMIN` | Manages staff at one loyalty shop. | `POST /admin/shop-staff/admins` |
+                    | `SHOP_USER` | Operates the POS at one loyalty shop — records purchases and redemptions. | `POST /admin/shop-staff/users` |
+                    | `CUSTOMER` | End user — earns and redeems loyalty points, buys tickets. | Self-registration. |
+
+                    ### Session impact
+
+                    Roles are baked into the JWT at login and every service authorizes from the token's
+                    claims, so a role change **bumps the account's `token_version`**. That immediately
+                    invalidates the user's existing access token fleet-wide — otherwise a demoted user
+                    would keep their old privileges until the token expired. The user picks up the new
+                    roles on their next login, or silently via `POST /auth/refresh`.
+
+                    ### Refusals
+
+                    * The target already being a `SUPER_ADMIN`, or `SUPER_ADMIN` appearing in the
+                      submitted set — **403** either way.
+                    * `SHOP_ADMIN` / `SHOP_USER` on an account with no loyalty merchant + shop, or
+                      `TEAM_MEMBER` on an account with no parent organizer — **400**. Those roles
+                      authorize off scope baked in at creation time; granting one without it produces
+                      an account that logs in and then fails inside every handler.
+
+                    Requires **SUPER_ADMIN** role.
+                    """)
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "Roles replaced; the user's existing sessions are invalidated",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Roles updated",
+                                      "data": {
+                                        "id": 42,
+                                        "firstName": "Alice",
+                                        "lastName": "Moyo",
+                                        "email": "alice@innbucks.co.zw",
+                                        "roles": ["EVENT_ORGANIZER", "CUSTOMER"],
+                                        "active": true,
+                                        "createdAt": "2026-01-15T10:30:00"
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "Empty role set, an unrecognised role name, or a role whose required scope is missing",
+                    content = @Content(mediaType = "application/json",
+                            examples = {
+                                    @ExampleObject(name = "Empty role set", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "roles must contain at least one role",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Shop role without a shop", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "SHOP_ADMIN and SHOP_USER require the account to be scoped to a loyalty merchant and shop; create shop staff via POST /admin/shop-staff/admins or POST /admin/shop-staff/users instead.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Team member without an organizer", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "TEAM_MEMBER requires the account to be stamped with its parent EVENT_ORGANIZER; create team members via POST /event-organizer/team-members instead.",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403",
+                    description = "Caller is not a SUPER_ADMIN, target IS a SUPER_ADMIN, or SUPER_ADMIN was requested",
+                    content = @Content(mediaType = "application/json",
+                            examples = {
+                                    @ExampleObject(name = "Target is the platform owner", value = """
+                                            {
+                                              "code": "403 FORBIDDEN",
+                                              "message": "The SUPER_ADMIN account's roles cannot be changed.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Escalation attempt", value = """
+                                            {
+                                              "code": "403 FORBIDDEN",
+                                              "message": "SUPER_ADMIN cannot be granted through this endpoint; that account is seeded once via BOOTSTRAP_ADMIN_PASSWORD.",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "User not found")
+    })
+    public ResponseEntity<ApiResult<UserResponseDTO>> updateRoles(
+            @PathVariable Long id,
+            @Valid @RequestBody UpdateRolesDTO request,
+            Authentication authentication,
+            HttpServletRequest httpRequest) {
+
+        // @PreAuthorize already enforced SUPER_ADMIN, so authentication is non-null.
+        String adminEmail = authentication.getName();
+        AuditContext auditContext = new AuditContext(clientIp(httpRequest),
+                httpRequest.getHeader("User-Agent"));
+
+        User user = userAdminService.setRoles(id, request.getRoles(), adminEmail, auditContext);
+        log.info("PUT /admin/users/{}/roles by={} roles={}", id, adminEmail, request.getRoles());
+        return ResponseEntity.ok(ApiResult.ok("Roles updated", UserResponseDTO.from(user)));
     }
 
     @PostMapping("/{id}/reset-temp-password")
