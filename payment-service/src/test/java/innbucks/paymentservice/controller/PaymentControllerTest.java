@@ -1,6 +1,5 @@
 package innbucks.paymentservice.controller;
 
-import innbucks.paymentservice.client.BookingServiceClient;
 import innbucks.paymentservice.client.BookingServiceClient.BookingConfirmationException;
 import innbucks.paymentservice.client.LoyaltyServiceClient;
 import innbucks.paymentservice.client.LoyaltyServiceClient.LoyaltyCheckoutException;
@@ -14,6 +13,7 @@ import innbucks.paymentservice.dto.InnbucksPaymentResponse;
 import innbucks.paymentservice.dto.ShopCheckoutRequest;
 import innbucks.paymentservice.dto.ShopCheckoutResponse;
 import innbucks.paymentservice.entity.Payment;
+import innbucks.paymentservice.order.OrderType;
 import innbucks.paymentservice.repository.PaymentRepository;
 import innbucks.paymentservice.service.InnbucksPaymentService;
 import innbucks.paymentservice.service.InnbucksPaymentService.InvalidPaymentRequestException;
@@ -25,7 +25,6 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.Authentication;
 
 import java.math.BigDecimal;
-import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -55,25 +54,38 @@ class PaymentControllerTest {
         return r;
     }
 
+    private PaymentRequest marketplacePayment(String orderRef) {
+        PaymentRequest r = new PaymentRequest();
+        r.setOrderType(OrderType.MARKETPLACE);
+        r.setOrderRef(orderRef);
+        return r;
+    }
+
     /** Controller with mockable real-flow collaborators. */
-    private record Fixture(PaymentController controller, BookingServiceClient bookings,
+    private record Fixture(PaymentController controller,
                            InnbucksPaymentService innbucks, PaymentRepository payments,
                            PaymentRecordService records) {}
 
     private static Fixture fixture() {
-        BookingServiceClient bookings = mock(BookingServiceClient.class);
         InnbucksPaymentService innbucks = mock(InnbucksPaymentService.class);
         PaymentRepository payments = mock(PaymentRepository.class);
         PaymentRecordService records = mock(PaymentRecordService.class);
         PaymentController controller = new PaymentController(
-                bookings, mock(LoyaltyServiceClient.class), newMetrics(),
+                mock(LoyaltyServiceClient.class), newMetrics(),
                 innbucks, records, payments);
         org.springframework.test.util.ReflectionTestUtils.setField(controller, "cellCurrency", "USD");
         // Default: the instant check reports PENDING (poller stays authoritative)
         // so replay tests exercise the plain replay path unless they say otherwise.
         lenient().when(innbucks.tryResolveOpenCode(any()))
                 .thenReturn(InnbucksPaymentService.InstantCheckOutcome.PENDING);
-        return new Fixture(controller, bookings, innbucks, payments, records);
+        return new Fixture(controller, innbucks, payments, records);
+    }
+
+    /** Stubs the repository's replay lookup for a BOOKING order key. */
+    private static org.mockito.stubbing.OngoingStubbing<Optional<Payment>> replayLookup(
+            Fixture f, UUID bookingId) {
+        return when(f.payments().findFirstByOrderTypeAndOrderRefAndStatusInOrderByCreatedAtDesc(
+                eq(OrderType.BOOKING), eq(bookingId.toString()), any()));
     }
 
     private static InnbucksPaymentResponse outcome(UUID bookingId, InnbucksPaymentResponse.Status status,
@@ -81,6 +93,8 @@ class PaymentControllerTest {
         return InnbucksPaymentResponse.builder()
                 .paymentReference(paymentReference)
                 .bookingId(bookingId)
+                .orderType(OrderType.BOOKING)
+                .orderRef(bookingId.toString())
                 .status(status)
                 .amountPaid(new BigDecimal("100.00"))
                 .currency("USD")
@@ -93,11 +107,8 @@ class PaymentControllerTest {
         Fixture f = fixture();
         UUID bookingId = UUID.randomUUID();
         UUID refUuid = UUID.randomUUID();
-        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
-                .thenReturn(Optional.empty());
-        when(f.bookings().getBooking(bookingId)).thenReturn(Map.of(
-                "phoneNumber", "+263770000001", "totalAmount", 100.00));
-        when(f.innbucks().processPayment(eq(bookingId), eq("+263770000001"), isNull()))
+        replayLookup(f, bookingId).thenReturn(Optional.empty());
+        when(f.innbucks().processPayment(eq(OrderType.BOOKING), eq(bookingId.toString()), isNull(), isNull()))
                 .thenReturn(outcome(bookingId, InnbucksPaymentResponse.Status.SUCCESS,
                         "TKT-PMT-" + refUuid, "INN-20260502-AB12CD"));
 
@@ -114,6 +125,9 @@ class PaymentControllerTest {
         // transactionId is the UUID inside our TKT-PMT-<uuid> reference — stable, not random.
         assertEquals(refUuid, data.getTransactionId());
         assertNotNull(data.getProcessedAt());
+        // Additive order identity — booking rows still echo bookingId.
+        assertEquals(OrderType.BOOKING, data.getOrderType());
+        assertEquals(bookingId.toString(), data.getOrderRef());
     }
 
     @Test
@@ -121,14 +135,13 @@ class PaymentControllerTest {
         Fixture f = fixture();
         UUID bookingId = UUID.randomUUID();
         java.time.LocalDateTime expiresAt = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).plusMinutes(10);
-        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
-                .thenReturn(Optional.empty());
-        when(f.bookings().getBooking(bookingId)).thenReturn(Map.of(
-                "phoneNumber", "+263770000001", "totalAmount", 100.00));
-        when(f.innbucks().processPayment(eq(bookingId), eq("+263770000001"), isNull()))
+        replayLookup(f, bookingId).thenReturn(Optional.empty());
+        when(f.innbucks().processPayment(eq(OrderType.BOOKING), eq(bookingId.toString()), isNull(), isNull()))
                 .thenReturn(InnbucksPaymentResponse.builder()
                         .paymentReference("TKT-PMT-" + UUID.randomUUID())
                         .bookingId(bookingId)
+                        .orderType(OrderType.BOOKING)
+                        .orderRef(bookingId.toString())
                         .status(InnbucksPaymentResponse.Status.PROCESSING)
                         .amountPaid(new BigDecimal("100.00"))
                         .currency("USD")
@@ -145,8 +158,7 @@ class PaymentControllerTest {
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         PaymentResponse data = resp.getBody().getData();
         assertEquals(PaymentResponse.Status.PROCESSING, data.getStatus());
-        // Additive fields: the code rides along for a future FE / debugging,
-        // while delivery to the customer happens via WhatsApp/SMS.
+        // Additive fields: the code rides along; the FE renders code + QR.
         assertEquals("701285660", data.getPaymentCode());
         assertEquals(expiresAt, data.getPaymentCodeExpiresAt());
         assertEquals("qr-base64-bytes", data.getPaymentQrCode());
@@ -154,14 +166,122 @@ class PaymentControllerTest {
     }
 
     @Test
+    void processPayment_marketplaceOrder_flowsThroughTheGatewayKey() {
+        Fixture f = fixture();
+        String orderRef = "MKT-4F9A1C22B7D3";
+        when(f.payments().findFirstByOrderTypeAndOrderRefAndStatusInOrderByCreatedAtDesc(
+                eq(OrderType.MARKETPLACE), eq(orderRef), any()))
+                .thenReturn(Optional.empty());
+        when(f.innbucks().processPayment(eq(OrderType.MARKETPLACE), eq(orderRef), isNull(), isNull()))
+                .thenReturn(InnbucksPaymentResponse.builder()
+                        .paymentReference("TKZ-MKT-4F3A2B1C0D9E")
+                        .orderType(OrderType.MARKETPLACE)
+                        .orderRef(orderRef)
+                        .status(InnbucksPaymentResponse.Status.PROCESSING)
+                        .amountPaid(new BigDecimal("35.50"))
+                        .currency("USD")
+                        .paymentCode("701442918")
+                        .build());
+
+        ResponseEntity<ApiResult<PaymentResponse>> resp =
+                f.controller().processPayment(marketplacePayment(orderRef));
+
+        assertEquals(HttpStatus.OK, resp.getStatusCode());
+        PaymentResponse data = resp.getBody().getData();
+        assertEquals(PaymentResponse.Status.PROCESSING, data.getStatus());
+        assertEquals(OrderType.MARKETPLACE, data.getOrderType());
+        assertEquals(orderRef, data.getOrderRef());
+        assertNull(data.getBookingId(), "marketplace payments carry no bookingId");
+        assertEquals("701442918", data.getPaymentCode());
+    }
+
+    @Test
+    void processPayment_marketplaceReplay_returnsExistingReceipt() {
+        Fixture f = fixture();
+        String orderRef = "MKT-4F9A1C22B7D3";
+        Payment paid = Payment.builder()
+                .id(UUID.randomUUID()).paymentReference("TKZ-MKT-" + "AABBCCDDEEFF")
+                .orderType(OrderType.MARKETPLACE).orderRef(orderRef)
+                .customerMsisdn("+263770000001")
+                .amount(new BigDecimal("35.50")).currency("USD")
+                .status(Payment.PaymentStatus.SUCCEEDED)
+                .confirmationNumber(orderRef)
+                .build();
+        when(f.payments().findFirstByOrderTypeAndOrderRefAndStatusInOrderByCreatedAtDesc(
+                eq(OrderType.MARKETPLACE), eq(orderRef), any()))
+                .thenReturn(Optional.of(paid));
+
+        ResponseEntity<ApiResult<PaymentResponse>> resp =
+                f.controller().processPayment(marketplacePayment(orderRef));
+
+        assertEquals(HttpStatus.OK, resp.getStatusCode());
+        assertEquals(PaymentResponse.Status.SUCCESS, resp.getBody().getData().getStatus());
+        assertEquals(OrderType.MARKETPLACE, resp.getBody().getData().getOrderType());
+        assertEquals(orderRef, resp.getBody().getData().getOrderRef());
+        verifyNoInteractions(f.innbucks());
+    }
+
+    // ---- request validation: exactly one of bookingId / (orderType+orderRef) ----
+
+    @Test
+    void processPayment_noOrderIdentityAtAll_is400() {
+        Fixture f = fixture();
+
+        ResponseEntity<ApiResult<PaymentResponse>> resp =
+                f.controller().processPayment(new PaymentRequest());
+
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
+        assertTrue(resp.getBody().getMessage().contains("exactly one of bookingId or orderType + orderRef"));
+        verifyNoInteractions(f.innbucks(), f.payments());
+    }
+
+    @Test
+    void processPayment_bothBookingIdAndOrderPair_is400() {
+        Fixture f = fixture();
+        PaymentRequest r = new PaymentRequest();
+        r.setBookingId(UUID.randomUUID());
+        r.setOrderType(OrderType.MARKETPLACE);
+        r.setOrderRef("MKT-1");
+
+        ResponseEntity<ApiResult<PaymentResponse>> resp = f.controller().processPayment(r);
+
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
+        assertTrue(resp.getBody().getMessage().contains("not both"));
+        verifyNoInteractions(f.innbucks(), f.payments());
+    }
+
+    @Test
+    void processPayment_orderTypeWithoutOrderRef_is400() {
+        Fixture f = fixture();
+        PaymentRequest r = new PaymentRequest();
+        r.setOrderType(OrderType.MARKETPLACE);
+
+        ResponseEntity<ApiResult<PaymentResponse>> resp = f.controller().processPayment(r);
+
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
+        verifyNoInteractions(f.innbucks(), f.payments());
+    }
+
+    @Test
+    void processPayment_bookingOrderTypeWithNonUuidRef_is400() {
+        Fixture f = fixture();
+        PaymentRequest r = new PaymentRequest();
+        r.setOrderType(OrderType.BOOKING);
+        r.setOrderRef("not-a-uuid");
+
+        ResponseEntity<ApiResult<PaymentResponse>> resp = f.controller().processPayment(r);
+
+        assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
+        assertTrue(resp.getBody().getMessage().contains("booking UUID"));
+        verifyNoInteractions(f.innbucks(), f.payments());
+    }
+
+    @Test
     void processPayment_decline_surfacesAs400WithReason() {
         Fixture f = fixture();
         UUID bookingId = UUID.randomUUID();
-        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
-                .thenReturn(Optional.empty());
-        when(f.bookings().getBooking(bookingId)).thenReturn(Map.of(
-                "phoneNumber", "+263770000001", "totalAmount", 100.00));
-        when(f.innbucks().processPayment(eq(bookingId), eq("+263770000001"), isNull()))
+        replayLookup(f, bookingId).thenReturn(Optional.empty());
+        when(f.innbucks().processPayment(eq(OrderType.BOOKING), eq(bookingId.toString()), isNull(), isNull()))
                 .thenThrow(new InvalidPaymentRequestException(
                         "Insufficient balance in your InnBucks wallet", 422));
 
@@ -185,8 +305,7 @@ class PaymentControllerTest {
                 .status(Payment.PaymentStatus.SUCCEEDED)
                 .confirmationNumber("INN-REPLAY-1")
                 .build();
-        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
-                .thenReturn(Optional.of(paid));
+        replayLookup(f, bookingId).thenReturn(Optional.of(paid));
 
         ResponseEntity<ApiResult<PaymentResponse>> resp =
                 f.controller().processPayment(paymentFor(bookingId));
@@ -215,11 +334,8 @@ class PaymentControllerTest {
                 .status(Payment.PaymentStatus.PENDING)
                 .createdAt(java.time.Instant.now().minusSeconds(120))
                 .build();
-        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
-                .thenReturn(Optional.of(orphan));
-        when(f.bookings().getBooking(bookingId)).thenReturn(Map.of(
-                "phoneNumber", "+263770000001", "totalAmount", 10.00));
-        when(f.innbucks().processPayment(eq(bookingId), eq("+263770000001"), isNull()))
+        replayLookup(f, bookingId).thenReturn(Optional.of(orphan));
+        when(f.innbucks().processPayment(eq(OrderType.BOOKING), eq(bookingId.toString()), isNull(), isNull()))
                 .thenReturn(InnbucksPaymentResponse.builder()
                         .paymentReference("TKT-PMT-" + UUID.randomUUID())
                         .bookingId(bookingId)
@@ -232,7 +348,7 @@ class PaymentControllerTest {
                 f.controller().processPayment(paymentFor(bookingId));
 
         verify(f.records()).markFailed(eq(orphan.getId()), eq("stale_pending"), anyString());
-        verify(f.innbucks()).processPayment(eq(bookingId), eq("+263770000001"), isNull());
+        verify(f.innbucks()).processPayment(eq(OrderType.BOOKING), eq(bookingId.toString()), isNull(), isNull());
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertEquals("701999000", resp.getBody().getData().getPaymentCode(),
                 "the customer must get the FRESH code, not the orphan's nothing");
@@ -251,8 +367,7 @@ class PaymentControllerTest {
                 .status(Payment.PaymentStatus.PENDING)
                 .createdAt(java.time.Instant.now().minusSeconds(3))
                 .build();
-        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
-                .thenReturn(Optional.of(inFlight));
+        replayLookup(f, bookingId).thenReturn(Optional.of(inFlight));
 
         ResponseEntity<ApiResult<PaymentResponse>> resp =
                 f.controller().processPayment(paymentFor(bookingId));
@@ -278,8 +393,7 @@ class PaymentControllerTest {
                 .codeExpiresAt(java.time.Instant.now().minusSeconds(60))
                 .createdAt(java.time.Instant.now().minusSeconds(700))
                 .build();
-        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
-                .thenReturn(Optional.of(expired));
+        replayLookup(f, bookingId).thenReturn(Optional.of(expired));
 
         ResponseEntity<ApiResult<PaymentResponse>> resp =
                 f.controller().processPayment(paymentFor(bookingId));
@@ -291,7 +405,7 @@ class PaymentControllerTest {
         assertTrue(resp.getBody().getMessage().contains("expired"));
         // The instant check MAY consult InnBucks; what must never happen is a
         // fresh generation from a replay of a locally-expired code.
-        verify(f.innbucks(), never()).processPayment(any(), anyString(), any());
+        verify(f.innbucks(), never()).processPayment(any(), anyString(), any(), any());
     }
 
     @Test
@@ -307,8 +421,7 @@ class PaymentControllerTest {
                 .codeExpiresAt(java.time.Instant.now().plusSeconds(300))
                 .createdAt(java.time.Instant.now().minusSeconds(60))
                 .build();
-        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
-                .thenReturn(Optional.of(cu));
+        replayLookup(f, bookingId).thenReturn(Optional.of(cu));
 
         ResponseEntity<ApiResult<PaymentResponse>> resp =
                 f.controller().processPayment(paymentFor(bookingId));
@@ -336,8 +449,7 @@ class PaymentControllerTest {
                 .codeQrBase64("qr-base64-bytes")
                 .codeExpiresAt(expiresAt)
                 .build();
-        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
-                .thenReturn(Optional.of(open));
+        replayLookup(f, bookingId).thenReturn(Optional.of(open));
 
         ResponseEntity<ApiResult<PaymentResponse>> resp =
                 f.controller().processPayment(paymentFor(bookingId));
@@ -350,32 +462,34 @@ class PaymentControllerTest {
                 "replay must re-surface the QR too");
         assertEquals(java.time.LocalDateTime.ofInstant(expiresAt, java.time.ZoneOffset.UTC),
                 data.getPaymentCodeExpiresAt());
-        verify(f.innbucks(), never()).processPayment(any(), anyString(), any());
+        verify(f.innbucks(), never()).processPayment(any(), anyString(), any(), any());
     }
 
     @Test
-    void processPayment_bookingWithoutPhone_returns400() {
+    void processPayment_bookingWithoutPhone_surfacesTheServices400() {
         Fixture f = fixture();
         UUID bookingId = UUID.randomUUID();
-        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
-                .thenReturn(Optional.empty());
-        when(f.bookings().getBooking(bookingId)).thenReturn(Map.of("totalAmount", 100.00));
+        replayLookup(f, bookingId).thenReturn(Optional.empty());
+        // The payer resolution moved into the service (gateway snapshot); the
+        // controller must relay its 400 verbatim, data null.
+        when(f.innbucks().processPayment(eq(OrderType.BOOKING), eq(bookingId.toString()), isNull(), isNull()))
+                .thenThrow(new InvalidPaymentRequestException(
+                        "Booking has no payer phone number — create the booking with a phone number to pay via InnBucks",
+                        400));
 
         ResponseEntity<ApiResult<PaymentResponse>> resp =
                 f.controller().processPayment(paymentFor(bookingId));
 
         assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
         assertNull(resp.getBody().getData());
-        verifyNoInteractions(f.innbucks());
     }
 
     @Test
     void processPayment_surfacesBookingServiceErrorMessage() {
         Fixture f = fixture();
         UUID bookingId = UUID.randomUUID();
-        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
-                .thenReturn(Optional.empty());
-        when(f.bookings().getBooking(bookingId))
+        replayLookup(f, bookingId).thenReturn(Optional.empty());
+        when(f.innbucks().processPayment(eq(OrderType.BOOKING), eq(bookingId.toString()), isNull(), isNull()))
                 .thenThrow(new BookingConfirmationException("Booking not found", 404));
 
         ResponseEntity<ApiResult<PaymentResponse>> resp =
@@ -417,7 +531,7 @@ class PaymentControllerTest {
         req.setCashAmount(new BigDecimal("10.00"));
 
         ResponseEntity<ApiResult<ShopCheckoutResponse>> resp = new PaymentController(
-                mock(BookingServiceClient.class), loyalty, newMetrics(), mock(InnbucksPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class)).shopCheckout(req, AUTH_0712345678);
+                loyalty, newMetrics(), mock(InnbucksPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class)).shopCheckout(req, AUTH_0712345678);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         ShopCheckoutResponse data = resp.getBody().getData();
@@ -445,7 +559,7 @@ class PaymentControllerTest {
                         UUID.randomUUID(), UUID.randomUUID()));
 
         ResponseEntity<ApiResult<ShopCheckoutResponse>> resp = new PaymentController(
-                mock(BookingServiceClient.class), loyalty, newMetrics(), mock(InnbucksPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class)).shopCheckout(cashAndPoints(shopId), AUTH_0712345678);
+                loyalty, newMetrics(), mock(InnbucksPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class)).shopCheckout(cashAndPoints(shopId), AUTH_0712345678);
 
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         ShopCheckoutResponse data = resp.getBody().getData();
@@ -468,7 +582,7 @@ class PaymentControllerTest {
         req.setPointsAmount(new BigDecimal("200")); // illegal mix
 
         ResponseEntity<ApiResult<ShopCheckoutResponse>> resp = new PaymentController(
-                mock(BookingServiceClient.class), mock(LoyaltyServiceClient.class), newMetrics(), mock(InnbucksPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class)).shopCheckout(req, AUTH_0712345678);
+                mock(LoyaltyServiceClient.class), newMetrics(), mock(InnbucksPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class)).shopCheckout(req, AUTH_0712345678);
 
         assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
         assertTrue(resp.getBody().getMessage().contains("CASH"));
@@ -483,7 +597,7 @@ class PaymentControllerTest {
         // no pointsAmount → invalid
 
         ResponseEntity<ApiResult<ShopCheckoutResponse>> resp = new PaymentController(
-                mock(BookingServiceClient.class), mock(LoyaltyServiceClient.class), newMetrics(), mock(InnbucksPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class)).shopCheckout(req, AUTH_0712345678);
+                mock(LoyaltyServiceClient.class), newMetrics(), mock(InnbucksPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class)).shopCheckout(req, AUTH_0712345678);
 
         assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
     }
@@ -495,7 +609,7 @@ class PaymentControllerTest {
                 .thenThrow(new LoyaltyCheckoutException("merchant is not active; no loyalty operations will run", 400));
 
         ResponseEntity<ApiResult<ShopCheckoutResponse>> resp = new PaymentController(
-                mock(BookingServiceClient.class), loyalty, newMetrics(), mock(InnbucksPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class)).shopCheckout(cashAndPoints(UUID.randomUUID()), AUTH_0712345678);
+                loyalty, newMetrics(), mock(InnbucksPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class)).shopCheckout(cashAndPoints(UUID.randomUUID()), AUTH_0712345678);
 
         assertEquals(HttpStatus.BAD_REQUEST, resp.getStatusCode());
         assertTrue(resp.getBody().getMessage().contains("merchant is not active"));
@@ -512,7 +626,7 @@ class PaymentControllerTest {
                         new BigDecimal("12.5"), new BigDecimal("1612.5"),
                         UUID.randomUUID(), UUID.randomUUID()));
         PaymentMetrics m = newMetrics();
-        new PaymentController(mock(BookingServiceClient.class), loyalty, m, mock(InnbucksPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class))
+        new PaymentController(loyalty, m, mock(InnbucksPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class))
                 .shopCheckout(cashAndPoints(shopId), AUTH_0712345678);
 
         double success = m.shopCheckoutDuration().count() > 0
@@ -527,7 +641,7 @@ class PaymentControllerTest {
         when(loyalty.shopCheckout(any(), any(), any(), any(), any()))
                 .thenThrow(new LoyaltyCheckoutException("Unable to reach loyalty-service for checkout", 503));
         PaymentMetrics m = newMetrics();
-        new PaymentController(mock(BookingServiceClient.class), loyalty, m, mock(InnbucksPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class))
+        new PaymentController(loyalty, m, mock(InnbucksPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class))
                 .shopCheckout(cashAndPoints(UUID.randomUUID()), AUTH_0712345678);
 
         assertEquals(1.0, counter(m, "outcome", "loyalty_unavailable", "mode", "mixed"));
@@ -542,7 +656,7 @@ class PaymentControllerTest {
         req.setCashAmount(new BigDecimal("10"));
         req.setPointsAmount(new BigDecimal("200"));
         PaymentMetrics m = newMetrics();
-        new PaymentController(mock(BookingServiceClient.class), mock(LoyaltyServiceClient.class), m, mock(InnbucksPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class))
+        new PaymentController(mock(LoyaltyServiceClient.class), m, mock(InnbucksPaymentService.class), mock(PaymentRecordService.class), mock(PaymentRepository.class))
                 .shopCheckout(req, AUTH_0712345678);
 
         assertEquals(1.0, counter(m, "outcome", "validation_failed", "mode", "cash"));
@@ -560,9 +674,8 @@ class PaymentControllerTest {
     void processPayment_returns503EquivalentWhenBookingServiceIsUnreachable() {
         UUID bookingId = UUID.randomUUID();
         Fixture f = fixture();
-        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
-                .thenReturn(Optional.empty());
-        when(f.bookings().getBooking(bookingId))
+        replayLookup(f, bookingId).thenReturn(Optional.empty());
+        when(f.innbucks().processPayment(eq(OrderType.BOOKING), eq(bookingId.toString()), isNull(), isNull()))
                 .thenThrow(new BookingConfirmationException(
                         "Unable to reach booking-service to confirm the booking", 503));
 
@@ -595,8 +708,7 @@ class PaymentControllerTest {
                 .confirmationNumber("INN-20260612-OK")
                 .createdAt(open.getCreatedAt())
                 .build();
-        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
-                .thenReturn(Optional.of(open));
+        replayLookup(f, bookingId).thenReturn(Optional.of(open));
         when(f.innbucks().tryResolveOpenCode(open))
                 .thenReturn(InnbucksPaymentService.InstantCheckOutcome.PAID);
         when(f.payments().findById(open.getId())).thenReturn(Optional.of(promoted));
@@ -608,7 +720,7 @@ class PaymentControllerTest {
         assertEquals(PaymentResponse.Status.SUCCESS, resp.getBody().getData().getStatus());
         assertEquals("INN-20260612-OK", resp.getBody().getData().getConfirmationNumber());
         // No fresh payment was started — this resolved the existing one.
-        verify(f.innbucks(), never()).processPayment(any(), anyString(), any());
+        verify(f.innbucks(), never()).processPayment(any(), anyString(), any(), any());
     }
 
     @Test
@@ -623,13 +735,10 @@ class PaymentControllerTest {
                 .innbucksCode("701285660").codeAuthNumber("1616800")
                 .createdAt(java.time.Instant.now().minusSeconds(700))
                 .build();
-        when(f.payments().findFirstByBookingIdAndStatusInOrderByCreatedAtDesc(eq(bookingId), any()))
-                .thenReturn(Optional.of(open));
+        replayLookup(f, bookingId).thenReturn(Optional.of(open));
         when(f.innbucks().tryResolveOpenCode(open))
                 .thenReturn(InnbucksPaymentService.InstantCheckOutcome.EXPIRED);
-        when(f.bookings().getBooking(bookingId)).thenReturn(Map.of(
-                "phoneNumber", "+263770000001", "totalAmount", 10.00));
-        when(f.innbucks().processPayment(eq(bookingId), eq("+263770000001"), isNull()))
+        when(f.innbucks().processPayment(eq(OrderType.BOOKING), eq(bookingId.toString()), isNull(), isNull()))
                 .thenReturn(InnbucksPaymentResponse.builder()
                         .paymentReference("TKT-PMT-" + UUID.randomUUID())
                         .bookingId(bookingId)

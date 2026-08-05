@@ -23,7 +23,20 @@ public class PaymentResponse {
     public enum Status { SUCCESS, PROCESSING, FAILED }
 
     private UUID transactionId;
+
+    /**
+     * Legacy echo, populated for BOOKING payments only (the historical stub
+     * contract). MARKETPLACE payments carry {@code null} here and identify
+     * the order via the additive {@link #orderType}/{@link #orderRef} pair.
+     */
     private UUID bookingId;
+
+    /** Additive: which product this payment collects for (BOOKING / MARKETPLACE). */
+    private innbucks.paymentservice.order.OrderType orderType;
+
+    /** Additive: the product-side order reference (booking UUID text / MKT-... ref). */
+    private String orderRef;
+
     private Status status;
     private BigDecimal amountPaid;
     private String currency;

@@ -94,6 +94,8 @@ public class PaymentOpsController {
             UUID paymentId,
             String paymentReference,
             UUID bookingId,
+            String orderType,
+            String orderRef,
             String status,
             BigDecimal amount,
             String currency,
@@ -144,6 +146,8 @@ public class PaymentOpsController {
                                             "paymentId": "f0e1d2c3-4567-890a-bcde-f01234567890",
                                             "paymentReference": "TKT-PMT-f0e1d2c3-4567-890a-bcde-f01234567890",
                                             "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                            "orderType": "BOOKING",
+                                            "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
                                             "status": "COMPLETED_UNCONFIRMED",
                                             "amount": 40.00,
                                             "currency": "USD",
@@ -352,6 +356,7 @@ public class PaymentOpsController {
                 : ageMinutes >= 24 * 60 ? AgeBucket.H24_TO_72H
                 : AgeBucket.UNDER_24H;
         return new ExceptionItem(p.getId(), p.getPaymentReference(), p.getBookingId(),
+                p.getOrderType() == null ? null : p.getOrderType().name(), p.getOrderRef(),
                 p.getStatus().name(), p.getAmount(), p.getCurrency(),
                 MsisdnMasking.mask(p.getCustomerMsisdn()), p.getCodeAuthNumber(),
                 p.getCreatedAt(), ageMinutes, bucket, why);

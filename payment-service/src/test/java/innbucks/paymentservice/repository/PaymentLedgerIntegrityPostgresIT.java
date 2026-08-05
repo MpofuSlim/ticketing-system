@@ -152,6 +152,66 @@ class PaymentLedgerIntegrityPostgresIT extends PostgresIntegrationTestBase {
         assertNull(reloaded.getMerchantAccount());
     }
 
+    private static Payment marketplaceRow(String orderRef, PaymentStatus status) {
+        return Payment.builder()
+                .id(UUID.randomUUID())
+                .paymentReference("TKZ-MKT-" + UUID.randomUUID().toString().substring(0, 12))
+                .orderType(innbucks.paymentservice.order.OrderType.MARKETPLACE)
+                .orderRef(orderRef)
+                .customerMsisdn("+263771234567")
+                .amount(new BigDecimal("35.50"))
+                .currency("USD")
+                .status(status)
+                .build();
+    }
+
+    @Test
+    void marketplaceRow_roundTripsThroughV12_withNullBookingId() {
+        // V12: booking_id dropped NOT NULL; (order_type, order_ref) is the
+        // ledger's order identity. A MARKETPLACE row stores no booking at all.
+        Payment p = payments.saveAndFlush(marketplaceRow("MKT-4F9A1C22B7D3", PaymentStatus.PENDING));
+
+        Payment reloaded = payments.findById(p.getId()).orElseThrow();
+        assertEquals(innbucks.paymentservice.order.OrderType.MARKETPLACE, reloaded.getOrderType());
+        assertEquals("MKT-4F9A1C22B7D3", reloaded.getOrderRef());
+        assertNull(reloaded.getBookingId());
+    }
+
+    @Test
+    void secondActivePaymentForSameMarketplaceOrder_isRefusedByTheOrderIndex() {
+        String ref = "MKT-" + UUID.randomUUID().toString().substring(0, 12);
+        payments.saveAndFlush(marketplaceRow(ref, PaymentStatus.TOKEN_ISSUED));
+
+        assertThrows(DataIntegrityViolationException.class,
+                () -> payments.saveAndFlush(marketplaceRow(ref, PaymentStatus.PENDING)),
+                "uq_payment_active_order must arbitrate marketplace orders exactly like bookings");
+    }
+
+    @Test
+    void sameRefDifferentOrderType_doesNotCollide() {
+        // The identity is (order_type, order_ref) — a booking UUID and a
+        // marketplace ref that happened to collide textually must not block
+        // each other.
+        UUID sharedText = UUID.randomUUID();
+        payments.saveAndFlush(row(sharedText, PaymentStatus.PENDING));
+
+        assertDoesNotThrow(() -> payments.saveAndFlush(
+                marketplaceRow(sharedText.toString(), PaymentStatus.PENDING)));
+    }
+
+    @Test
+    void bookingRow_prePersistBackfillsOrderIdentity() {
+        // A row built the pre-generalization way (bookingId only) lands as
+        // BOOKING + the booking UUID's canonical text — mirroring the V12
+        // backfill, so replay lookups by (order_type, order_ref) find it.
+        UUID bookingId = UUID.randomUUID();
+        Payment p = payments.saveAndFlush(row(bookingId, PaymentStatus.PENDING));
+
+        Payment reloaded = payments.findById(p.getId()).orElseThrow();
+        assertEquals(innbucks.paymentservice.order.OrderType.BOOKING, reloaded.getOrderType());
+        assertEquals(bookingId.toString(), reloaded.getOrderRef());
+    }
+
     @Test
     void reconRun_roundTripsThroughV8() {
         innbucks.paymentservice.entity.ReconRun run = recons.saveAndFlush(

@@ -37,9 +37,20 @@ public class InnbucksPaymentResponse {
             example = "TKZ-PINKRUN26-4F3A2B1C0D9E")
     private String paymentReference;
 
-    @Schema(description = "Booking the payment belongs to (echoed from the request).",
+    @Schema(description = "Booking the payment belongs to — populated for BOOKING payments only "
+            + "(legacy echo); null for MARKETPLACE payments, which identify the order via "
+            + "orderType/orderRef.",
             example = "a3b9c1d2-1234-5678-9abc-def012345678")
     private UUID bookingId;
+
+    @Schema(description = "Which product this payment collects for (additive field).",
+            example = "BOOKING")
+    private innbucks.paymentservice.order.OrderType orderType;
+
+    @Schema(description = "The product-side order reference (additive field): the booking UUID in text "
+            + "form for BOOKING, the MKT-... order reference for MARKETPLACE.",
+            example = "a3b9c1d2-1234-5678-9abc-def012345678")
+    private String orderRef;
 
     @Schema(description = "Final or interim outcome.")
     private Status status;
