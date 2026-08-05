@@ -110,7 +110,23 @@ jobs:
   # time before an image is even built, and covers every dependency manifest in
   # the repo (including any that don't produce a container image).
   dependency-review:
-    if: github.event_name == 'pull_request'
+    # dependency-review-action needs GitHub's Dependency Graph, which on a
+    # PRIVATE repo requires paid GitHub Advanced Security (it's free on public
+    # repos). This repo went private, so the action hard-errors "Dependency
+    # review is not supported on this repository" and reds every PR (first
+    # seen on PR #474). Same belt-and-suspenders guard as InnRewards'
+    # ci.yml (its CLAUDE.md documents that a `visibility == 'public'` gate
+    # alone did NOT skip there):
+    #   1. `if` gates on the canonical `repository.private` boolean so the
+    #      job cleanly SKIPS on a private repo and auto-re-enables if the
+    #      repo goes public / GHAS is licensed;
+    #   2. `continue-on-error` on the step so a wrong payload boolean can
+    #      never RED the PR on the "not supported" error.
+    # Called-out A08 exception (see CLAUDE.md) — NOT a silent removal:
+    # transitive/library CVEs stay covered by the Release Trivy image scan;
+    # only the PR-time direct-dependency advisory surface is dropped while
+    # private + no GHAS.
+    if: github.event_name == 'pull_request' && github.event.repository.private == false
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -120,6 +136,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Dependency review
+        continue-on-error: true
         uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high
