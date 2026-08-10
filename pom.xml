@@ -66,7 +66,7 @@
              4.2.15.Final fixes all four. The netty-bom imported below pins every
              netty-* artifact to ${netty.version}, so this single property bump
              cascades cleanly to every service. -->
-        <netty.version>4.2.16.Final</netty.version>
+        <netty.version>4.2.17.Final</netty.version>
         <spring.cloud.version>2025.1.2</spring.cloud.version>
         <springdoc.version>3.0.3</springdoc.version>
         <testcontainers.version>1.21.3</testcontainers.version>
