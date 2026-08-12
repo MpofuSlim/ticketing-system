@@ -68,7 +68,7 @@
              cascades cleanly to every service. -->
         <netty.version>4.2.16.Final</netty.version>
         <spring.cloud.version>2025.1.2</spring.cloud.version>
-        <springdoc.version>3.0.3</springdoc.version>
+        <springdoc.version>3.1.0</springdoc.version>
         <testcontainers.version>1.21.3</testcontainers.version>
         <!-- jjwt centralized here so all five JWT-using services stay aligned.
              0.12.x cleans up Java 17/21 compatibility, tightens algorithm
