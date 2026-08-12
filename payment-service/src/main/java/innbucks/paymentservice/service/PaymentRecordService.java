@@ -79,9 +79,17 @@ public class PaymentRecordService {
                     PaymentStatus.TOKEN_ISSUED,
                     PaymentStatus.SUCCEEDED, PaymentStatus.FAILED,
                     PaymentStatus.IN_DOUBT, PaymentStatus.COMPLETED_UNCONFIRMED),
+            // TOKEN_ISSUED -> IN_DOUBT is the card rail's amount-mismatch
+            // parking: the status read says PAID but echoes a different
+            // amount/currency than the ledger — money moved, but auto-
+            // confirming the order (COMPLETED_UNCONFIRMED's sweep would)
+            // could hand out goods against a disputed charge. IN_DOUBT has
+            // no auto-resolver, which is exactly the point: an operator
+            // reads the gateway's records and resolves by hand.
             PaymentStatus.TOKEN_ISSUED, EnumSet.of(
                     PaymentStatus.SUCCEEDED, PaymentStatus.COMPLETED_UNCONFIRMED,
-                    PaymentStatus.FAILED, PaymentStatus.EXPIRED),
+                    PaymentStatus.FAILED, PaymentStatus.EXPIRED,
+                    PaymentStatus.IN_DOUBT),
             PaymentStatus.IN_DOUBT, EnumSet.of(
                     PaymentStatus.SUCCEEDED, PaymentStatus.FAILED,
                     PaymentStatus.COMPLETED_UNCONFIRMED),
@@ -149,6 +157,54 @@ public class PaymentRecordService {
                     payment.setCodeQrBase64(qrCodeBase64);
                     payment.setCodeExpiresAt(expiresAt);
                 });
+    }
+
+    /**
+     * Card flow: a ZimSwitch COPYandPAY checkout was prepared. Records the
+     * checkoutId (the widget/status handle) + the SRI digest for the widget
+     * script, plus our local deadline, in the same transaction as the
+     * PENDING → TOKEN_ISSUED transition. The card rail's twin of
+     * {@link #markTokenIssued}.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markCardCheckoutIssued(UUID id, String checkoutId,
+                                       String integrity, Instant expiresAt) {
+        transition(id, PaymentStatus.TOKEN_ISSUED,
+                "ZimSwitch card checkout prepared; awaiting shopper card entry", checkoutId,
+                payment -> {
+                    payment.setCheckoutId(checkoutId);
+                    payment.setCheckoutIntegrity(integrity);
+                    payment.setCodeExpiresAt(expiresAt);
+                });
+    }
+
+    /**
+     * Stamp when the COPYandPAY status endpoint was queried for this row —
+     * the persisted gate that keeps the poller + instant check inside the
+     * gateway's two-reads-per-checkout-per-minute throttle. Deliberately NOT
+     * a {@code transition()}: no status change, and a journal row per poll
+     * would flood {@code payment_event} with noise.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void stampCardStatusChecked(UUID id) {
+        repository.findById(id).ifPresent(payment -> {
+            payment.setCardStatusCheckedAt(Instant.now());
+            repository.save(payment);
+        });
+    }
+
+    /**
+     * Card flow: the status response's echo verification caught the shopper's
+     * brand (informational; part of the doc-recommended ID/amount/currency/
+     * brand/type comparison). Same no-journal rationale as the stamp.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void recordCardBrand(UUID id, String brand) {
+        if (brand == null || brand.isBlank()) return;
+        repository.findById(id).ifPresent(payment -> {
+            payment.setCardBrand(truncate(brand, 32));
+            repository.save(payment);
+        });
     }
 
     /**

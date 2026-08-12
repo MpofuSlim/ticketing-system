@@ -1,6 +1,7 @@
 package innbucks.paymentservice.repository;
 
 import innbucks.paymentservice.entity.Payment;
+import innbucks.paymentservice.entity.PaymentRail;
 import innbucks.paymentservice.order.OrderType;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -43,6 +44,15 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
 
     /** Reconciler sweep: money-moved-but-booking-unconfirmed rows to retry. */
     List<Payment> findByStatus(Payment.PaymentStatus status, Pageable pageable);
+
+    /**
+     * Rail-scoped poller sweeps: the code poller resolves only
+     * INNBUCKS_CODE rows (via the code-inquiry endpoint) and the card
+     * poller only ZIMSWITCH_CARD rows (via the COPYandPAY status endpoint)
+     * — each rail's open rows are opaque to the other's upstream.
+     */
+    List<Payment> findByStatusAndPaymentRail(
+            Payment.PaymentStatus status, PaymentRail paymentRail, Pageable pageable);
 
     /**
      * Settlement reconciliation: every code-bearing row created in the

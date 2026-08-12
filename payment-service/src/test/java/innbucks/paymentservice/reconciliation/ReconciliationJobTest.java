@@ -56,7 +56,9 @@ class ReconciliationJobTest {
                 mock(PaymentRecordService.class),
                 mock(InnbucksApiClient.class), metrics,
                 mock(innbucks.paymentservice.service.CodePaymentResolutionService.class),
+                mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class),
                 mock(UnconfirmedPaymentAlerter.class),
+                new innbucks.paymentservice.client.ZimswitchProperties(),
                 FIVE_MINUTES, batchSize);
     }
 
@@ -77,7 +79,9 @@ class ReconciliationJobTest {
                 records, mock(InnbucksApiClient.class), metrics,
                 new innbucks.paymentservice.service.CodePaymentResolutionService(
                         records, registryOver(bookings), metrics),
+                mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class),
                 mock(UnconfirmedPaymentAlerter.class),
+                new innbucks.paymentservice.client.ZimswitchProperties(),
                 FIVE_MINUTES, 100);
     }
 
@@ -92,7 +96,9 @@ class ReconciliationJobTest {
                 records, innbucksApi, metrics,
                 new innbucks.paymentservice.service.CodePaymentResolutionService(
                         records, registryOver(bookings), metrics),
+                mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class),
                 mock(UnconfirmedPaymentAlerter.class),
+                new innbucks.paymentservice.client.ZimswitchProperties(),
                 FIVE_MINUTES, 100);
     }
 
@@ -290,7 +296,7 @@ class ReconciliationJobTest {
         InnbucksApiClient innbucksApi = mock(InnbucksApiClient.class);
         PaymentMetrics metrics = new PaymentMetrics(new SimpleMeterRegistry());
         Payment open = tokenIssuedRow(Instant.now().plus(Duration.ofMinutes(8)));
-        when(payments.findByStatus(eq(Payment.PaymentStatus.TOKEN_ISSUED), any(Pageable.class)))
+        when(payments.findByStatusAndPaymentRail(eq(Payment.PaymentStatus.TOKEN_ISSUED), eq(innbucks.paymentservice.entity.PaymentRail.INNBUCKS_CODE), any(Pageable.class)))
                 .thenReturn(List.of(open));
         when(innbucksApi.isConfigured()).thenReturn(true);
         when(innbucksApi.inquireCodeStatus("701285660")).thenReturn(status(CodeStatusResult.Status.PAID));
@@ -310,7 +316,7 @@ class ReconciliationJobTest {
         BookingServiceClient bookings = mock(BookingServiceClient.class);
         InnbucksApiClient innbucksApi = mock(InnbucksApiClient.class);
         Payment open = tokenIssuedRow(Instant.now().plus(Duration.ofMinutes(8)));
-        when(payments.findByStatus(eq(Payment.PaymentStatus.TOKEN_ISSUED), any(Pageable.class)))
+        when(payments.findByStatusAndPaymentRail(eq(Payment.PaymentStatus.TOKEN_ISSUED), eq(innbucks.paymentservice.entity.PaymentRail.INNBUCKS_CODE), any(Pageable.class)))
                 .thenReturn(List.of(open));
         when(innbucksApi.isConfigured()).thenReturn(true);
         when(innbucksApi.inquireCodeStatus("701285660")).thenReturn(status(CodeStatusResult.Status.CLAIMED));
@@ -334,7 +340,7 @@ class ReconciliationJobTest {
         InnbucksApiClient innbucksApi = mock(InnbucksApiClient.class);
         PaymentMetrics metrics = new PaymentMetrics(new SimpleMeterRegistry());
         Payment open = tokenIssuedRow(Instant.now().plus(Duration.ofMinutes(8)));
-        when(payments.findByStatus(eq(Payment.PaymentStatus.TOKEN_ISSUED), any(Pageable.class)))
+        when(payments.findByStatusAndPaymentRail(eq(Payment.PaymentStatus.TOKEN_ISSUED), eq(innbucks.paymentservice.entity.PaymentRail.INNBUCKS_CODE), any(Pageable.class)))
                 .thenReturn(List.of(open));
         when(innbucksApi.isConfigured()).thenReturn(true);
         when(innbucksApi.inquireCodeStatus("701285660")).thenReturn(status(CodeStatusResult.Status.PAID));
@@ -357,7 +363,7 @@ class ReconciliationJobTest {
         PaymentMetrics metrics = new PaymentMetrics(new SimpleMeterRegistry());
         Payment expired = tokenIssuedRow(Instant.now().minus(Duration.ofMinutes(1)));
         Payment timedOut = tokenIssuedRow(Instant.now().minus(Duration.ofMinutes(2)));
-        when(payments.findByStatus(eq(Payment.PaymentStatus.TOKEN_ISSUED), any(Pageable.class)))
+        when(payments.findByStatusAndPaymentRail(eq(Payment.PaymentStatus.TOKEN_ISSUED), eq(innbucks.paymentservice.entity.PaymentRail.INNBUCKS_CODE), any(Pageable.class)))
                 .thenReturn(List.of(expired, timedOut));
         when(innbucksApi.isConfigured()).thenReturn(true);
         when(innbucksApi.inquireCodeStatus(expired.getInnbucksCode()))
@@ -378,7 +384,7 @@ class ReconciliationJobTest {
         InnbucksApiClient innbucksApi = mock(InnbucksApiClient.class);
         PaymentMetrics metrics = new PaymentMetrics(new SimpleMeterRegistry());
         Payment open = tokenIssuedRow(Instant.now().plus(Duration.ofMinutes(8)));
-        when(payments.findByStatus(eq(Payment.PaymentStatus.TOKEN_ISSUED), any(Pageable.class)))
+        when(payments.findByStatusAndPaymentRail(eq(Payment.PaymentStatus.TOKEN_ISSUED), eq(innbucks.paymentservice.entity.PaymentRail.INNBUCKS_CODE), any(Pageable.class)))
                 .thenReturn(List.of(open));
         when(innbucksApi.isConfigured()).thenReturn(true);
         when(innbucksApi.inquireCodeStatus("701285660")).thenReturn(status(CodeStatusResult.Status.NEW));
@@ -397,7 +403,7 @@ class ReconciliationJobTest {
         InnbucksApiClient innbucksApi = mock(InnbucksApiClient.class);
         // Deadline 10 minutes ago — far past the 2-minute grace.
         Payment open = tokenIssuedRow(Instant.now().minus(Duration.ofMinutes(10)));
-        when(payments.findByStatus(eq(Payment.PaymentStatus.TOKEN_ISSUED), any(Pageable.class)))
+        when(payments.findByStatusAndPaymentRail(eq(Payment.PaymentStatus.TOKEN_ISSUED), eq(innbucks.paymentservice.entity.PaymentRail.INNBUCKS_CODE), any(Pageable.class)))
                 .thenReturn(List.of(open));
         when(innbucksApi.isConfigured()).thenReturn(true);
         when(innbucksApi.inquireCodeStatus("701285660")).thenReturn(status(CodeStatusResult.Status.NEW));
@@ -420,7 +426,7 @@ class ReconciliationJobTest {
         PaymentMetrics metrics = new PaymentMetrics(new SimpleMeterRegistry());
         Payment unknown = tokenIssuedRow(Instant.now().minus(Duration.ofHours(2)));
         Payment erroring = tokenIssuedRow(Instant.now().minus(Duration.ofHours(3)));
-        when(payments.findByStatus(eq(Payment.PaymentStatus.TOKEN_ISSUED), any(Pageable.class)))
+        when(payments.findByStatusAndPaymentRail(eq(Payment.PaymentStatus.TOKEN_ISSUED), eq(innbucks.paymentservice.entity.PaymentRail.INNBUCKS_CODE), any(Pageable.class)))
                 .thenReturn(List.of(unknown, erroring));
         when(innbucksApi.isConfigured()).thenReturn(true);
         when(innbucksApi.inquireCodeStatus(unknown.getInnbucksCode()))
@@ -442,7 +448,7 @@ class ReconciliationJobTest {
         PaymentRecordService records = mock(PaymentRecordService.class);
         InnbucksApiClient innbucksApi = mock(InnbucksApiClient.class);
         Payment open = tokenIssuedRow(Instant.now().plus(Duration.ofMinutes(8)));
-        when(payments.findByStatus(eq(Payment.PaymentStatus.TOKEN_ISSUED), any(Pageable.class)))
+        when(payments.findByStatusAndPaymentRail(eq(Payment.PaymentStatus.TOKEN_ISSUED), eq(innbucks.paymentservice.entity.PaymentRail.INNBUCKS_CODE), any(Pageable.class)))
                 .thenReturn(List.of(open));
         when(innbucksApi.isConfigured()).thenReturn(false);
 

@@ -54,4 +54,36 @@ public class PaymentResponse {
     private String paymentCode;
     private LocalDateTime paymentCodeExpiresAt;
     private String paymentQrCode;
+
+    /**
+     * Additive: which rail this payment runs on ({@code INNBUCKS_CODE} —
+     * render the code/QR fields above — or {@code ZIMSWITCH_CARD} — render
+     * the COPYandPAY widget from the checkout fields below).
+     */
+    private innbucks.paymentservice.entity.PaymentRail paymentRail;
+
+    /**
+     * ZimSwitch COPYandPAY widget artifacts, present while a card checkout
+     * is open ({@code status=PROCESSING}, rail {@code ZIMSWITCH_CARD}). The
+     * FE renders:
+     * <pre>
+     *   &lt;script src="{checkoutScriptUrl}" integrity="{checkoutIntegrity}"
+     *           crossorigin="anonymous"&gt;&lt;/script&gt;
+     *   &lt;form action="{shopperResultUrl}" class="paymentWidgets"
+     *         data-brands="{checkoutBrands}"&gt;&lt;/form&gt;
+     * </pre>
+     * Card data goes browser → gateway; it never touches our servers. On
+     * landing back on {@code shopperResultUrl} the FE IGNORES the
+     * {@code resourcePath} query parameter and simply re-POSTs
+     * {@code /payments} with the same order key — the backend resolves the
+     * status server-side and answers SUCCESS / PROCESSING accordingly.
+     * {@code checkoutExpiresAt} is the deadline after which the checkout
+     * lapses and a fresh POST mints a new one.
+     */
+    private String checkoutId;
+    private String checkoutScriptUrl;
+    private String checkoutIntegrity;
+    private String checkoutBrands;
+    private String shopperResultUrl;
+    private LocalDateTime checkoutExpiresAt;
 }

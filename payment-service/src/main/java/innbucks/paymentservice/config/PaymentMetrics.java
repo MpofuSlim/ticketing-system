@@ -143,6 +143,41 @@ public class PaymentMetrics {
     }
 
     /**
+     * ZimSwitch card-checkout preparation outcomes (the card rail's entry
+     * point). outcome={prepared, prepare_refused, prepare_rejected,
+     * prepare_transient, unconfigured}. `prepared` is the top of the card
+     * funnel; a spike on `prepare_transient` means the gateway is degraded
+     * and card customers can't start paying; `unconfigured` in prod means
+     * the FE offers a rail the cell hasn't provisioned.
+     */
+    public void incCardCheckout(String outcome) {
+        Counter.builder("payment.payments.card_checkout")
+                .description("ZimSwitch card checkout preparations, by outcome")
+                .tag("outcome", outcome)
+                .register(registry)
+                .increment();
+    }
+
+    /**
+     * Outcome of each card-status resolution pass over a TOKEN_ISSUED card
+     * row (poller or customer-triggered instant check).
+     * outcome={paid, paid_unconfirmed, declined_noted, still_pending,
+     * not_found_pending, expired, throttled_skip, echo_mismatch, error}.
+     * `paid` is the conversion signal; `expired` the abandon rate;
+     * `echo_mismatch` is page-NOW territory (a paid read whose
+     * amount/currency/reference echo disagrees with the ledger is parked
+     * IN_DOUBT for an operator); a sustained `error` drip means the status
+     * contract broke WHILE customer money may be waiting.
+     */
+    public void incCardResolution(String outcome) {
+        Counter.builder("payment.payments.card_resolution")
+                .description("Card-status resolutions of TOKEN_ISSUED ZimSwitch payments, by outcome")
+                .tag("outcome", outcome)
+                .register(registry)
+                .increment();
+    }
+
+    /**
      * Settlement-reconciliation run outcomes. status={clean, discrepant,
      * failed, skipped}. Anything other than a daily `clean` is actionable:
      * `discrepant` → read the recon_run row; `failed` → the statement fetch

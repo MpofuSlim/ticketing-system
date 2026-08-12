@@ -87,15 +87,28 @@ public class PaymentController {
     private String cellCurrency;
 
     private final InnbucksPaymentService innbucksPaymentService;
+    private final innbucks.paymentservice.service.ZimswitchCardPaymentService zimswitchCardPaymentService;
+    private final innbucks.paymentservice.client.ZimswitchProperties zimswitchProperties;
     private final PaymentRecordService paymentRecordService;
     private final PaymentRepository paymentRepository;
 
     @PostMapping
     @Operation(
-            summary = "Pay for an order — ticket booking or marketplace order (InnBucks 2D-code)",
+            summary = "Pay for an order — InnBucks 2D-code (default) or ZimSwitch card",
             description = "Public endpoint (no login required — guest checkout). Identify the order EXACTLY " +
                     "one way: `bookingId` (ticket bookings — the historical contract, unchanged) OR " +
                     "`orderType` + `orderRef` (additive; e.g. `MARKETPLACE` + the `MKT-...` order reference). " +
+                    "\n\n**Rail selection (additive):** omit `paymentRail` (or send `INNBUCKS_CODE`) for the " +
+                    "historical InnBucks code/QR flow described below. Send `paymentRail=ZIMSWITCH_CARD` to " +
+                    "pay by card: the response carries COPYandPAY widget artifacts (`checkoutId`, " +
+                    "`checkoutScriptUrl`, `checkoutIntegrity`, `checkoutBrands`, `shopperResultUrl`) — render " +
+                    "the script + `<form class=\"paymentWidgets\" data-brands=\"{checkoutBrands}\" " +
+                    "action=\"{shopperResultUrl}\">`; card data goes browser→gateway and never touches this " +
+                    "API. After the shopper lands back on `shopperResultUrl`, IGNORE its `resourcePath` query " +
+                    "parameter and re-POST this endpoint with the same order key — the backend verifies the " +
+                    "payment server-side (never trust the redirect as proof) and replies SUCCESS/PROCESSING. " +
+                    "One active payment per order across BOTH rails: while an attempt is open on one rail, " +
+                    "POSTing with the other returns the open attempt unchanged; switch rails once it lapses. " +
                     "Amount and currency are read server-side from the order. An InnBucks PAYMENT code is " +
                     "issued for the order's total; the customer approves it in their own InnBucks app " +
                     "(Scan-to-Pay or Pay by Code). The normal response is `status=PROCESSING` with " +
@@ -162,6 +175,30 @@ public class PaymentController {
                                                 "paymentCode": null,
                                                 "paymentCodeExpiresAt": null,
                                                 "paymentQrCode": null
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Booking — card checkout issued (request: {\"bookingId\":\"a3b9c1d2-...\",\"paymentRail\":\"ZIMSWITCH_CARD\"})", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Enter your card details to complete your booking",
+                                              "data": {
+                                                "transactionId": "f0e1d2c3-4567-890a-bcde-f01234567890",
+                                                "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "orderType": "BOOKING",
+                                                "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "status": "PROCESSING",
+                                                "amountPaid": 100.00,
+                                                "currency": "USD",
+                                                "confirmationNumber": null,
+                                                "processedAt": "2026-06-11T15:48:00",
+                                                "paymentRail": "ZIMSWITCH_CARD",
+                                                "checkoutId": "8a82944a4cc25ebf014cc2c782423202",
+                                                "checkoutScriptUrl": "https://eu-test.oppwa.com/v1/paymentWidgets.js?checkoutId=8a82944a4cc25ebf014cc2c782423202",
+                                                "checkoutIntegrity": "sha384-3phAZzHTYFuLtHT2AzM5PIYjPLGtqcBQXAq7fbQw0QHIhJEQZUJEG52uV6uWBSQE",
+                                                "checkoutBrands": "VISA MASTER",
+                                                "shopperResultUrl": "https://tickets.example.co.zw/checkout/card-result",
+                                                "checkoutExpiresAt": "2026-06-11T16:16:00"
                                               }
                                             }
                                             """),
@@ -289,6 +326,30 @@ public class PaymentController {
                 paymentRecordService.markFailed(p.getId(), "stale_pending",
                         "Orphaned PENDING row (no code recorded) replaced by a fresh attempt on customer retry");
             } else if (p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED
+                    && p.getPaymentRail() == innbucks.paymentservice.entity.PaymentRail.ZIMSWITCH_CARD
+                    && p.getCheckoutId() != null) {
+                // Card twin of the instant check below: the shopper just
+                // landed back on the result page (or refreshed) — ask the
+                // gateway NOW, inside the per-checkout throttle share.
+                var cardCheck = zimswitchCardPaymentService.resolveOpenCheckout(
+                        p, zimswitchProperties.getInstantCheckMinGap());
+                if (cardCheck == innbucks.paymentservice.service.ZimswitchCardPaymentService.CardCheckOutcome.PAID) {
+                    Payment resolved = paymentRepository.findById(p.getId()).orElse(p);
+                    log.info("POST /payments card instant-check PAID orderType={} orderRef={} paymentReference={}",
+                            key.type(), key.ref(), p.getPaymentReference());
+                    return toReplayResponse(resolved, key);
+                }
+                if (cardCheck == innbucks.paymentservice.service.ZimswitchCardPaymentService.CardCheckOutcome.EXPIRED) {
+                    // Row just went terminal (EXPIRED, slot freed) — fall
+                    // through and start a FRESH attempt in this same request.
+                    log.info("POST /payments card instant-check EXPIRED orderType={} orderRef={} — starting fresh",
+                            key.type(), key.ref());
+                } else {
+                    log.info("POST /payments card replay after instant check orderType={} orderRef={} paymentReference={}",
+                            key.type(), key.ref(), p.getPaymentReference());
+                    return toReplayResponse(p, key);
+                }
+            } else if (p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED
                     && p.getInnbucksCode() != null) {
                 // Customer-triggered instant check ("I've paid" / page refresh):
                 // ask InnBucks NOW instead of replaying blindly — confirmation
@@ -320,8 +381,18 @@ public class PaymentController {
         // The payer is the order's phone — captured at order creation (JWT or
         // guest flow), resolved from the gateway snapshot inside the service.
         // The FE never supplies payment credentials.
+        //
+        // Rail dispatch (additive contract): omitted/null = the historical
+        // InnBucks 2D-code flow; ZIMSWITCH_CARD = COPYandPAY widget checkout.
+        innbucks.paymentservice.entity.PaymentRail rail =
+                request.getPaymentRail() != null ? request.getPaymentRail()
+                        : innbucks.paymentservice.entity.PaymentRail.INNBUCKS_CODE;
         InnbucksPaymentResponse outcome;
         try {
+            if (rail == innbucks.paymentservice.entity.PaymentRail.ZIMSWITCH_CARD) {
+                return toCardResponse(
+                        zimswitchCardPaymentService.startCheckout(key.type(), key.ref()), key);
+            }
             outcome = innbucksPaymentService.processPayment(key.type(), key.ref(), null, null);
         } catch (BookingConfirmationException e) {
             HttpStatus status = HttpStatus.resolve(e.getStatusCode());
@@ -386,6 +457,43 @@ public class PaymentController {
         return ResponseEntity.ok(ApiResult.ok(message, response));
     }
 
+    /** Map a fresh card-checkout outcome onto the stub's response contract. */
+    private ResponseEntity<ApiResult<PaymentResponse>> toCardResponse(
+            innbucks.paymentservice.service.ZimswitchCardPaymentService.CardCheckoutOutcome outcome,
+            OrderKey key) {
+        if (outcome.failed()) {
+            // Stub error vocabulary: non-200 + reason, data null (same as a
+            // 2D-code refusal).
+            String message = outcome.upstreamMessage() != null
+                    ? outcome.upstreamMessage() : "Payment was rejected";
+            return error(HttpStatus.BAD_REQUEST, message);
+        }
+        Payment p = outcome.payment();
+        String noun = key.type() == OrderType.BOOKING ? "booking" : "order";
+        PaymentResponse response = PaymentResponse.builder()
+                .transactionId(transactionIdFrom(p.getPaymentReference()))
+                .bookingId(p.getBookingId())
+                .orderType(key.type())
+                .orderRef(key.ref())
+                .status(PaymentResponse.Status.PROCESSING)
+                .amountPaid(p.getAmount())
+                .currency(p.getCurrency() != null ? p.getCurrency() : cellCurrency)
+                .processedAt(LocalDateTime.now(ZoneOffset.UTC))
+                .paymentRail(innbucks.paymentservice.entity.PaymentRail.ZIMSWITCH_CARD)
+                .checkoutId(outcome.checkoutId())
+                .checkoutScriptUrl(outcome.widgetScriptUrl())
+                .checkoutIntegrity(outcome.checkoutIntegrity())
+                .checkoutBrands(outcome.brands())
+                .shopperResultUrl(outcome.shopperResultUrl())
+                .checkoutExpiresAt(outcome.checkoutExpiresAt() == null ? null
+                        : LocalDateTime.ofInstant(outcome.checkoutExpiresAt(), ZoneOffset.UTC))
+                .build();
+        log.info("Card checkout issued transactionId={} orderType={} orderRef={} checkoutId={}",
+                response.getTransactionId(), key.type(), key.ref(), outcome.checkoutId());
+        return ResponseEntity.ok(ApiResult.ok(
+                "Enter your card details to complete your " + noun, response));
+    }
+
     private ResponseEntity<ApiResult<PaymentResponse>> toReplayResponse(Payment p, OrderKey key) {
         PaymentResponse.Status status = switch (p.getStatus()) {
             case SUCCEEDED -> PaymentResponse.Status.SUCCESS;
@@ -398,11 +506,17 @@ public class PaymentController {
         // resolves the row (Expired upstream frees the slot within one
         // interval) and the next Pay tap mints a fresh one. Paid-but-
         // unconfirmed rows keep their code hidden too: that code is spent.
+        boolean cardRow = p.getPaymentRail() == innbucks.paymentservice.entity.PaymentRail.ZIMSWITCH_CARD;
         boolean codeStillLive = p.getCodeExpiresAt() == null
                 || p.getCodeExpiresAt().isAfter(java.time.Instant.now());
         boolean awaitingApproval = p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED
-                && p.getInnbucksCode() != null
-                && codeStillLive;
+                && codeStillLive
+                && (cardRow ? p.getCheckoutId() != null : p.getInnbucksCode() != null);
+        // Card rows re-surface the SAME open checkout (the gateway's
+        // documented reuse model — reload/back-button/declined-retry all
+        // re-render one checkout); code rows re-surface the live code + QR.
+        var cardArtifacts = cardRow && awaitingApproval
+                ? zimswitchCardPaymentService.replayOpenCheckout(p) : null;
         PaymentResponse response = PaymentResponse.builder()
                 .transactionId(p.getId())
                 .bookingId(p.getBookingId())
@@ -413,18 +527,30 @@ public class PaymentController {
                 .currency(p.getCurrency())
                 .confirmationNumber(p.getConfirmationNumber())
                 .processedAt(LocalDateTime.now(ZoneOffset.UTC))
-                .paymentCode(awaitingApproval ? p.getInnbucksCode() : null)
-                .paymentCodeExpiresAt(awaitingApproval && p.getCodeExpiresAt() != null
+                .paymentRail(p.getPaymentRail())
+                .paymentCode(!cardRow && awaitingApproval ? p.getInnbucksCode() : null)
+                .paymentCodeExpiresAt(!cardRow && awaitingApproval && p.getCodeExpiresAt() != null
                         ? LocalDateTime.ofInstant(p.getCodeExpiresAt(), ZoneOffset.UTC) : null)
-                .paymentQrCode(awaitingApproval ? p.getCodeQrBase64() : null)
+                .paymentQrCode(!cardRow && awaitingApproval ? p.getCodeQrBase64() : null)
+                .checkoutId(cardArtifacts != null ? cardArtifacts.checkoutId() : null)
+                .checkoutScriptUrl(cardArtifacts != null ? cardArtifacts.widgetScriptUrl() : null)
+                .checkoutIntegrity(cardArtifacts != null ? cardArtifacts.checkoutIntegrity() : null)
+                .checkoutBrands(cardArtifacts != null ? cardArtifacts.brands() : null)
+                .shopperResultUrl(cardArtifacts != null ? cardArtifacts.shopperResultUrl() : null)
+                .checkoutExpiresAt(cardArtifacts != null && p.getCodeExpiresAt() != null
+                        ? LocalDateTime.ofInstant(p.getCodeExpiresAt(), ZoneOffset.UTC) : null)
                 .build();
         String message;
         if (status == PaymentResponse.Status.SUCCESS) {
             message = "Payment processed successfully";
         } else if (awaitingApproval) {
-            message = "Approve the payment in your InnBucks app to complete your " + noun;
+            message = cardRow
+                    ? "Enter your card details to complete your " + noun
+                    : "Approve the payment in your InnBucks app to complete your " + noun;
         } else if (p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED) {
-            message = "Your previous payment code expired — tap Pay again in a moment to get a fresh one";
+            message = cardRow
+                    ? "Your previous card checkout expired — tap Pay again to start a new one"
+                    : "Your previous payment code expired — tap Pay again in a moment to get a fresh one";
         } else if (p.getStatus() == Payment.PaymentStatus.COMPLETED_UNCONFIRMED) {
             message = "Payment received; your " + noun + " is being confirmed";
         } else if (p.getStatus() == Payment.PaymentStatus.PENDING) {
