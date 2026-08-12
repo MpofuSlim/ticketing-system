@@ -29,4 +29,13 @@ public class PaymentRequest {
             description = "The product-side order reference — the marketplace order ref for MARKETPLACE, "
                     + "or a booking UUID for BOOKING. Required together with orderType.")
     private String orderRef;
+
+    @Schema(example = "ZIMSWITCH_CARD",
+            description = "Additive: which rail to collect on. Omitted/null = INNBUCKS_CODE (the "
+                    + "historical contract — an InnBucks code/QR the customer approves in their app). "
+                    + "ZIMSWITCH_CARD returns COPYandPAY widget artifacts (checkoutId + script URL + "
+                    + "integrity) for card entry instead. One active payment per order across BOTH "
+                    + "rails: while an attempt is open on one rail, POSTing with the other returns "
+                    + "the open attempt's receipt unchanged (switch rails after it lapses).")
+    private innbucks.paymentservice.entity.PaymentRail paymentRail;
 }

@@ -32,6 +32,18 @@ public enum ZimswitchResultCode {
     /** Still open upstream. Poll again; never auto-fail. */
     PENDING,
 
+    /**
+     * {@code 200.300.404} on a status read: the gateway has NO payment for
+     * this checkout. Emphatically not a decline — it is the NORMAL answer
+     * while the shopper still has the form open (or abandoned it without
+     * submitting), and also what a dead checkout answers after its one
+     * successful status read was consumed. The poller treats it as
+     * still-pending before the checkout deadline and as positively-unpaid
+     * after it (the gateway's 30-minute ceiling guarantees no new
+     * transaction can appear on the checkout by then).
+     */
+    CHECKOUT_NOT_FOUND,
+
     /** Declined, rejected, or invalid. No money moved. */
     REJECTED;
 
@@ -54,6 +66,9 @@ public enum ZimswitchResultCode {
      */
     public static final String CHECKOUT_CREATED = "000.200.100";
 
+    /** Status-read code for "no payment session found for this checkout". */
+    public static final String NO_PAYMENT_FOUND = "200.300.404";
+
     /**
      * Classify a payment-status {@code result.code}.
      *
@@ -74,16 +89,14 @@ public enum ZimswitchResultCode {
         if (PENDING_PATTERN.matcher(code).find()) {
             return PENDING;
         }
+        if (NO_PAYMENT_FOUND.equals(code)) {
+            return CHECKOUT_NOT_FOUND;
+        }
         return REJECTED;
     }
 
     /** True when money moved (either success flavour). */
     public boolean isPaid() {
         return this == SUCCESS || this == SUCCESS_MANUAL_REVIEW;
-    }
-
-    /** True when the outcome is settled — safe to write a terminal state. */
-    public boolean isTerminal() {
-        return this != PENDING;
     }
 }

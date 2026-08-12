@@ -115,6 +115,16 @@ public class Payment {
     @Enumerated(EnumType.STRING)
     private PaymentStatus status;
 
+    /**
+     * Which collection rail this row runs on (V13). Selects the client the
+     * reconciler polls with and the artifact set the FE renders (code + QR
+     * vs card checkout widget). Defaults to INNBUCKS_CODE — every pre-V13
+     * row is a 2D-code payment.
+     */
+    @Column(name = "payment_rail", nullable = false, length = 16)
+    @Enumerated(EnumType.STRING)
+    private PaymentRail paymentRail;
+
     /** Veengu's internal transaction id, populated on terminal SUCCEEDED. */
     @Column(name = "veengu_transaction_id", length = 64)
     private String veenguTransactionId;
@@ -154,8 +164,12 @@ public class Payment {
     private String codeAuthNumber;
 
     /**
-     * Our local deadline for the code (issue time + configured TTL). The
-     * poller expires a still-New code shortly after this passes; rows whose
+     * Our local deadline for the open payment instrument — the InnBucks code
+     * (issue time + configured TTL) or, on the card rail, the ZimSwitch
+     * checkout (issue time + checkout TTL, under the gateway's 30-minute
+     * ceiling). One column for both rails so the staleness sweeps and the
+     * exception workbasket cover them identically. The poller expires a
+     * positively-unpaid instrument shortly after this passes; rows whose
      * upstream status can't be read are NEVER auto-expired (see
      * ReconciliationJob — an UNKNOWN row might already be paid).
      */
@@ -173,6 +187,38 @@ public class Payment {
      */
     @Column(name = "code_qr_base64", columnDefinition = "text")
     private String codeQrBase64;
+
+    /**
+     * ZimSwitch COPYandPAY checkout handle ({@code id} from
+     * {@code POST /v1/checkouts}) — the card rail's twin of
+     * {@link #codeAuthNumber}: the FE widget loads with it and every status
+     * query keys on it. The status URL is ALWAYS rebuilt from this stored
+     * value, never from a browser-supplied {@code resourcePath} (SSRF guard
+     * — see docs/api/zimswitch-copyandpay.md).
+     */
+    @Column(name = "checkout_id", length = 64)
+    private String checkoutId;
+
+    /**
+     * SRI digest for the widget script tag (returned when the checkout is
+     * prepared with {@code integrity=true}). Persisted so a replay
+     * re-surfaces the exact pinned script the FE first rendered.
+     */
+    @Column(name = "checkout_integrity", length = 128)
+    private String checkoutIntegrity;
+
+    /** Card brand the shopper actually paid with (status-response echo). */
+    @Column(name = "card_brand", length = 32)
+    private String cardBrand;
+
+    /**
+     * When the COPYandPAY status endpoint was last queried for this row.
+     * The gateway allows TWO status reads per checkout per minute; the
+     * reconciler poll and the customer-triggered instant check both gate on
+     * this stamp so their combined rate stays inside that budget.
+     */
+    @Column(name = "card_status_checked_at")
+    private Instant cardStatusCheckedAt;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
@@ -197,6 +243,11 @@ public class Payment {
         }
         if (status == null) {
             status = PaymentStatus.PENDING;
+        }
+        // Rail default mirrors the V13 backfill: a row built without an
+        // explicit rail is an InnBucks 2D-code payment.
+        if (paymentRail == null) {
+            paymentRail = PaymentRail.INNBUCKS_CODE;
         }
         // Order-identity defaults, mirroring the V12 backfill: a row built
         // the pre-generalization way (bookingId only) is a BOOKING payment

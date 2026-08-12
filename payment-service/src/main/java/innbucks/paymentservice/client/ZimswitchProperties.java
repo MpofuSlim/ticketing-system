@@ -67,9 +67,6 @@ public class ZimswitchProperties {
      */
     private boolean requestIntegrity = true;
 
-    /** Currency sent to the gateway. Per-cell, never client-supplied. */
-    private String currency = "USD";
-
     private int connectTimeoutMs = 3000;
     private int readTimeoutMs = 15000;
 
@@ -89,4 +86,14 @@ public class ZimswitchProperties {
      * customer-triggered instant check on the same row.
      */
     private Duration statusPollMinInterval = Duration.ofSeconds(30);
+
+    /**
+     * Minimum gap before a CUSTOMER-triggered instant check ("I've paid" /
+     * landing back on the result page) re-reads the same checkout's status.
+     * Shorter than the poller's gap so the shopper's return usually resolves
+     * immediately; the brief worst case of three reads in a minute is
+     * absorbed by the gateway refusing the extra call, which the resolver
+     * treats as a transient error and leaves for the next poll.
+     */
+    private Duration instantCheckMinGap = Duration.ofSeconds(15);
 }

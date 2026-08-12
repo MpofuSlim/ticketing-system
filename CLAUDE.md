@@ -441,14 +441,18 @@ kubectl -n ticketing rollout restart deployment/<service>
   never worked against the k3s cell and has been **removed**; use the `kubectl`
   procedure above.
 
-## InnBucks Merchant API — the ticket-payment rail (2D code)
+## InnBucks Merchant API — the primary ticket-payment rail (2D code)
 
-**Ticket payments (`POST /payments` in payment-service) run EXCLUSIVELY on
-the InnBucks 2D-code rail.** The canonical spec is
-`docs/api/InnBucks_Merchant_Api_Doc_v1.0.9.pdf`, distilled (greppable) at
-`docs/api/innbucks-merchant-api.md`. The earlier server-side wallet debit
+**Ticket payments (`POST /payments` in payment-service) run on TWO rails
+since the ZimSwitch integration: the InnBucks 2D-code rail (the default —
+`paymentRail` omitted) and the ZimSwitch COPYandPAY card rail (additive,
+`paymentRail=ZIMSWITCH_CARD`; see the next section).** The earlier
+"exclusively InnBucks" wording predates the card rail; what remains
+non-negotiable is that the earlier server-side wallet debit
 (`/bank/api/payment`) was removed at the InnBucks team's direction — do not
-reintroduce it.
+reintroduce it. The InnBucks canonical spec is
+`docs/api/InnBucks_Merchant_Api_Doc_v1.0.9.pdf`, distilled (greppable) at
+`docs/api/innbucks-merchant-api.md`.
 
 Non-negotiables when touching this integration:
 
@@ -472,6 +476,44 @@ Non-negotiables when touching this integration:
 - Refunds: real-time reversals are NOT available for code-based transactions
   (doc §10) — paid-but-unconfirmable bookings are an operator queue, watch
   `payment.payments.unconfirmed_retry{outcome=still_failing}`.
+
+## ZimSwitch Online (COPYandPAY) — the card rail
+
+**The second collection rail on `POST /payments`** (`paymentRail=ZIMSWITCH_CARD`,
+additive — the InnBucks 2D code stays the default). Spec distilled at
+`docs/api/zimswitch-copyandpay.md`; read it before touching the integration —
+it pins the four wire facts that are easy to get wrong. Non-negotiables:
+
+- **Amounts are MAJOR units** (`"92.00"`) on this rail — the OPPOSITE of the
+  InnBucks Merchant API's cents. `ZimswitchCopyPayClient` owns the one
+  cents→major rendering; `ZimswitchCardPaymentService.echoMismatch` is the
+  100x guard (a paid status read whose amount/currency/merchantTransactionId
+  echo disagrees with the ledger parks the row IN_DOUBT for an operator —
+  never confirmed, never guessed).
+- **Prepare-checkout is NEVER retried** (a retry can mint a second live
+  checkout); the status GET is the only retried call. The status URL is
+  ALWAYS rebuilt from OUR stored checkoutId — a browser-supplied
+  `resourcePath` is never accepted (SSRF: it would splice attacker input
+  into a Bearer-authenticated server-side URL).
+- **The status read of a final outcome is ONE-SHOT** (the checkoutId dies
+  after it), so on a paid read the money fact is persisted FIRST
+  (`COMPLETED_UNCONFIRMED`) and the order confirm runs after — the inverse
+  of the code rail's confirm-then-mark order. Status reads are throttled
+  upstream to two per checkout per minute, enforced through the persisted
+  `card_status_checked_at` stamp shared by poller and instant check.
+- **A decline does not close the row**: the checkout stays alive upstream
+  for a shopper retry (documented multi-transaction reuse); `200.300.404`
+  ("no payment for this checkout") is the NORMAL pre-submission answer and
+  only counts as positively-unpaid once the checkout's 30-minute ceiling has
+  passed.
+- Credentials (`ZIMSWITCH_ENTITY_ID` / `ZIMSWITCH_ACCESS_TOKEN`) are
+  env-only secrets; blank = rail disabled (503 on card attempts). The
+  Bearer token can create checkouts against the merchant — same custody
+  rules as every other credential (A02).
+- Card-not-present refunds ARE supported by the platform
+  (`paymentType=RF`) but are NOT modelled yet — refunds remain an operator
+  procedure; see the spec doc's "Not yet modelled" list (also: webhooks,
+  Transaction Reports, settlement recon for card rows).
 
 ## Veengu API reference — source of truth for payment integrations
 

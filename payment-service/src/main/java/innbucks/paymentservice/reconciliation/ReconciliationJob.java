@@ -6,6 +6,7 @@ import innbucks.paymentservice.order.ConfirmOutcome;
 import innbucks.paymentservice.config.PaymentMetrics;
 import innbucks.paymentservice.entity.Payment;
 import innbucks.paymentservice.entity.Payment.PaymentStatus;
+import innbucks.paymentservice.entity.PaymentRail;
 import innbucks.paymentservice.entity.Transaction;
 import innbucks.paymentservice.repository.PaymentRepository;
 import innbucks.paymentservice.repository.TransactionRepository;
@@ -80,8 +81,10 @@ public class ReconciliationJob {
     private final InnbucksApiClient innbucksApiClient;
     private final PaymentMetrics metrics;
     private final innbucks.paymentservice.service.CodePaymentResolutionService resolutionService;
+    private final innbucks.paymentservice.service.ZimswitchCardPaymentService zimswitchCardPaymentService;
     private final UnconfirmedPaymentAlerter unconfirmedAlerter;
     private final Duration stalePendingThreshold;
+    private final Duration cardPollMinInterval;
     private final int batchSize;
 
     public ReconciliationJob(
@@ -91,7 +94,9 @@ public class ReconciliationJob {
             InnbucksApiClient innbucksApiClient,
             PaymentMetrics metrics,
             innbucks.paymentservice.service.CodePaymentResolutionService resolutionService,
+            innbucks.paymentservice.service.ZimswitchCardPaymentService zimswitchCardPaymentService,
             UnconfirmedPaymentAlerter unconfirmedAlerter,
+            innbucks.paymentservice.client.ZimswitchProperties zimswitchProperties,
             @Value("${payment-service.reconciliation.stale-pending-threshold:PT5M}") Duration stalePendingThreshold,
             @Value("${payment-service.reconciliation.batch-size:100}") int batchSize) {
         this.repository = repository;
@@ -100,7 +105,11 @@ public class ReconciliationJob {
         this.innbucksApiClient = innbucksApiClient;
         this.metrics = metrics;
         this.resolutionService = resolutionService;
+        this.zimswitchCardPaymentService = zimswitchCardPaymentService;
         this.unconfirmedAlerter = unconfirmedAlerter;
+        // The poller's share of the two-reads-per-checkout-per-minute budget
+        // — one value with the client config so they can't drift apart.
+        this.cardPollMinInterval = zimswitchProperties.getStatusPollMinInterval();
         this.stalePendingThreshold = stalePendingThreshold;
         this.batchSize = batchSize;
     }
@@ -153,8 +162,10 @@ public class ReconciliationJob {
      */
     @Scheduled(fixedDelayString = "${payment-service.code-poll.interval:PT20S}")
     public void pollCodePayments() {
-        List<Payment> open = paymentRepository.findByStatus(
-                PaymentStatus.TOKEN_ISSUED, PageRequest.of(0, batchSize));
+        // Rail-scoped: card rows are resolved by pollCardPayments below —
+        // their open state is opaque to the InnBucks code-inquiry endpoint.
+        List<Payment> open = paymentRepository.findByStatusAndPaymentRail(
+                PaymentStatus.TOKEN_ISSUED, PaymentRail.INNBUCKS_CODE, PageRequest.of(0, batchSize));
         if (open.isEmpty()) {
             return;
         }
@@ -219,6 +230,47 @@ public class ReconciliationJob {
         }
     }
 
+
+    /**
+     * The card-rail resolver: polls open ZimSwitch COPYandPAY checkouts.
+     * Wider cadence than the code poll because the gateway throttles status
+     * reads to TWO per checkout per minute — the per-row
+     * {@code card_status_checked_at} gate inside
+     * {@code resolveOpenCheckout} is the real budget-keeper (it also
+     * arbitrates with the customer-triggered instant check), this interval
+     * just sets how often the sweep offers each row a chance.
+     *
+     * <p>All money rules live in
+     * {@link innbucks.paymentservice.service.ZimswitchCardPaymentService#resolveOpenCheckout}
+     * — the SAME implementation the instant check uses: paid → confirm →
+     * SUCCEEDED (echo mismatch parks IN_DOUBT; confirm failure leaves
+     * COMPLETED_UNCONFIRMED for the shared retry sweep); declines keep the
+     * checkout open for a shopper retry; NOT_FOUND past the checkout
+     * ceiling is the positive never-paid answer that frees the slot.
+     */
+    @Scheduled(fixedDelayString = "${payment-service.card-poll.interval:PT30S}")
+    public void pollCardPayments() {
+        List<Payment> open = paymentRepository.findByStatusAndPaymentRail(
+                PaymentStatus.TOKEN_ISSUED, PaymentRail.ZIMSWITCH_CARD, PageRequest.of(0, batchSize));
+        if (open.isEmpty()) {
+            return;
+        }
+        if (!zimswitchCardPaymentService.isRailConfigured()) {
+            log.warn("Card poll: {} TOKEN_ISSUED card rows but ZimSwitch is not configured — cannot resolve",
+                    open.size());
+            return;
+        }
+        for (Payment p : open) {
+            // Per-row isolation: one checkout's failure must not stall the rest.
+            try {
+                zimswitchCardPaymentService.resolveOpenCheckout(p, cardPollMinInterval);
+            } catch (RuntimeException e) {
+                metrics.incCardResolution("error");
+                log.warn("Card poll failed for paymentReference={} — leaving row for next pass: {}",
+                        p.getPaymentReference(), e.getMessage());
+            }
+        }
+    }
 
     /** Code-payment ledger sweeps (stale watch + unconfirmed self-heal). */
     @Scheduled(fixedDelayString = "${payment-service.reconciliation.scan-interval:PT1M}")

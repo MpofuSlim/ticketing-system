@@ -109,6 +109,12 @@ payment-service:
     batch-size: ${RECONCILIATION_BATCH_SIZE:100}
   code-poll:
     interval: ${CODE_POLL_INTERVAL:PT20S}
+  # Card-status sweep cadence (ZimSwitch rail). The REAL rate limiter is the
+  # per-row card_status_checked_at gate (zimswitch.status-poll-min-interval)
+  # — the gateway allows two status reads per checkout per minute; this just
+  # sets how often the sweep offers each open row a chance.
+  card-poll:
+    interval: ${CARD_POLL_INTERVAL:PT30S}
   recon:
     cron: ${RECON_CRON:0 30 2 * * *}
 
@@ -150,6 +156,15 @@ resilience4j:
         exponential-backoff-multiplier: 2
         retry-exceptions:
           - innbucks.paymentservice.client.InnbucksApiTransientException
+      # Retries apply to the read-only status GET only — prepare-checkout is
+      # invoked outside the retry decorator (never retried; see the client).
+      zimswitch:
+        max-attempts: 3
+        wait-duration: 500ms
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2
+        retry-exceptions:
+          - innbucks.paymentservice.client.ZimswitchApiTransientException
   circuitbreaker:
     instances:
       oradian-middleware:
@@ -174,6 +189,17 @@ resilience4j:
         automatic-transition-from-open-to-half-open-enabled: true
         record-exceptions:
           - innbucks.paymentservice.client.InnbucksApiTransientException
+      zimswitch:
+        register-health-indicator: true
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+        record-exceptions:
+          - innbucks.paymentservice.client.ZimswitchApiTransientException
 
 innbucks-api:
   base-url: ${BANK_API_URL:https://staging.innbucks.co.zw}
@@ -183,6 +209,28 @@ innbucks-api:
   connect-timeout-ms: ${BANK_API_CONNECT_TIMEOUT_MS:3000}
   read-timeout-ms: ${BANK_API_READ_TIMEOUT_MS:20000}
   token-ttl: ${BANK_API_TOKEN_TTL:PT8M}
+
+# ZimSwitch Online (COPYandPAY) — the CARD rail beside the InnBucks 2D code.
+# Spec: docs/api/zimswitch-copyandpay.md. Blank entity-id/access-token =
+# rail disabled (POST /payments with paymentRail=ZIMSWITCH_CARD answers 503);
+# both are secrets — env-only, never committed. UAT host is eu-test.oppwa.com
+# with testMode=EXTERNAL; production gets its own host + credentials from
+# ZimSwitch and leaves test-mode blank (the parameter is then omitted).
+# brands = the data-brands value for the FE widget form; TICKETIZE's
+# "Private label" brand code goes here once ZimSwitch confirms it.
+zimswitch:
+  base-url: ${ZIMSWITCH_BASE_URL:https://eu-test.oppwa.com}
+  entity-id: ${ZIMSWITCH_ENTITY_ID:}
+  access-token: ${ZIMSWITCH_ACCESS_TOKEN:}
+  brands: ${ZIMSWITCH_BRANDS:VISA MASTER}
+  test-mode: ${ZIMSWITCH_TEST_MODE:}
+  shopper-result-url: ${ZIMSWITCH_SHOPPER_RESULT_URL:}
+  request-integrity: ${ZIMSWITCH_REQUEST_INTEGRITY:true}
+  connect-timeout-ms: ${ZIMSWITCH_CONNECT_TIMEOUT_MS:3000}
+  read-timeout-ms: ${ZIMSWITCH_READ_TIMEOUT_MS:15000}
+  checkout-ttl: ${ZIMSWITCH_CHECKOUT_TTL:PT28M}
+  status-poll-min-interval: ${ZIMSWITCH_STATUS_POLL_MIN_INTERVAL:PT30S}
+  instant-check-min-gap: ${ZIMSWITCH_INSTANT_CHECK_MIN_GAP:PT15S}
 
 payments:
   innbucks:

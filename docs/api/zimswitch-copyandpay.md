@@ -147,6 +147,16 @@ status path writes through `PaymentRecordService` before doing anything else,
 and why a failed order-confirm lands in `COMPLETED_UNCONFIRMED` (the reconciler
 then retries the *confirm*, never the status read).
 
+**Accepted residual risk:** the outcome can still be lost between the gateway
+sending the success response and our first ledger write — a crash in that
+millisecond window, or a read TIMEOUT on the very request that consumed the
+one-shot answer (the retry then sees `200.300.404`). Such a row expires via
+the NOT_FOUND-past-deadline rule even though the customer paid. The safety
+net is ZimSwitch-side records: the Transaction Reports endpoint / settlement
+recon for card rows (both on the "Not yet modelled" list) — until then it is
+an operator query against the gateway portal, keyed by our
+`merchantTransactionId`.
+
 ### Throttle
 
 > Per checkout, it is allowed to send two get payment requests in a minute.
@@ -165,35 +175,102 @@ now has two rails with opposite unit conventions.
 
 Classified by regex on `result.code` (`ZimswitchResultCode`):
 
-| Meaning | Pattern | Ledger outcome |
+| Meaning | Pattern | Resolution behaviour |
 |---|---|---|
-| Success | `^(000\.000\.\|000\.100\.1\|000\.[36])` | `SUCCEEDED` |
-| Success, needs manual fraud review | `^(000\.400\.0[^3]\|000\.400\.100)` | `SUCCEEDED` + flagged |
+| Success | `^(000\.000\.\|000\.100\.1\|000\.[36])` | echo-verify → money fact persisted (`COMPLETED_UNCONFIRMED`) → order confirm → `SUCCEEDED` |
+| Success, needs manual fraud review | `^(000\.400\.0[^3]\|000\.400\.100)` | as above, plus a journal note with the review flag |
 | Pending / still open | `^(000\.200)` | stays `TOKEN_ISSUED`, poll again |
-| Everything else | — | `FAILED` (declined / rejected / invalid) |
+| No payment for this checkout | exactly `200.300.404` | `CHECKOUT_NOT_FOUND` — see below |
+| Everything else | — | decline: journalled, row **stays open** (see below) |
 
-Pending codes mean an open session in the background: it resolves within
-~30 minutes or times out. A pending row is **never** auto-failed early —
-blocked slot beats double charge, same rule as the InnBucks rail.
+Nuances the classifier table can't carry:
+
+- **`200.300.404` is the NORMAL answer while the shopper still has the form
+  open** (nothing submitted yet), and also what a dead checkout answers.
+  Before the local deadline it means "keep waiting"; after the deadline +
+  grace (past the gateway's own 30-minute ceiling, when no new transaction
+  can exist) it is a POSITIVE never-paid answer and the row is `EXPIRED`,
+  freeing the order's payment slot.
+- **A decline does NOT close the row.** The checkout stays alive upstream
+  and the shopper can retry another card on the same checkout (the
+  documented multi-transaction reuse). The decline is journalled verbatim;
+  an unpaid row lapses via the `200.300.404`-past-deadline rule.
+- A pending row is **never** auto-failed early — blocked slot beats double
+  charge, same rule as the InnBucks rail.
+- An unmatched code classifies as a decline, never as success — the success
+  families (`000.*`) are the stable part of the OPPWA taxonomy.
 
 `000.200.100` ("successfully created checkout") is a *prepare-checkout*
 success, not a payment success — do not feed it through the payment
 classifier.
 
+## How it lands in payment-service
+
+- One `payment` ledger row per attempt, `payment_rail=ZIMSWITCH_CARD` (V13);
+  `checkout_id`/`checkout_integrity` are the card twins of the InnBucks
+  `code_auth_number`/QR columns and `code_expires_at` doubles as the checkout
+  deadline, so the staleness sweeps and workbasket cover both rails
+  unchanged.
+- `ZimswitchCardPaymentService.startCheckout` mirrors
+  `InnbucksPaymentService.processPayment` step for step (slot check → gateway
+  fetch → hold extension → PENDING row → upstream call → `TOKEN_ISSUED`).
+- Resolution (`resolveOpenCheckout`) is shared verbatim by the reconciler's
+  card poll and the customer-triggered instant check on replay; the
+  `card_status_checked_at` stamp keeps their combined rate inside the
+  2-per-minute throttle.
+- A paid read persists `COMPLETED_UNCONFIRMED` BEFORE confirming the order
+  (the one-shot read means a crash after confirm-first would lose the money
+  fact); the existing confirm-retry sweep then promotes to `SUCCEEDED`.
+- An echo mismatch on a paid read parks `IN_DOUBT` (a transition added to
+  the legal map for exactly this) — no auto-resolver, operator only.
+
+## FE contract (additive to the historical stub shape)
+
+Request: `POST /payments` with the usual order key plus
+`"paymentRail": "ZIMSWITCH_CARD"`. Response (`status=PROCESSING`) carries
+`checkoutId`, `checkoutScriptUrl`, `checkoutIntegrity`, `checkoutBrands`,
+`shopperResultUrl`, `checkoutExpiresAt`; render:
+
+```html
+<script src="{checkoutScriptUrl}" integrity="{checkoutIntegrity}"
+        crossorigin="anonymous"></script>
+<form action="{shopperResultUrl}" class="paymentWidgets"
+      data-brands="{checkoutBrands}"></form>
+```
+
+On landing back on `shopperResultUrl`, IGNORE the `resourcePath` query
+parameter and re-POST `/payments` with the same order key — the backend
+verifies server-side (the redirect is never proof of payment) and replies
+SUCCESS / PROCESSING; bookings then confirm exactly like the code rail
+(poll the booking). A re-POST while the checkout is open replays the SAME
+checkout (reload/decline-retry); after `checkoutExpiresAt` it mints a fresh
+one. One active payment per order across BOTH rails — switching rails needs
+the open attempt to lapse first.
+
 ## Configuration
 
 | Property | Env var | Notes |
 |---|---|---|
-| `zimswitch.base-url` | `ZIMSWITCH_BASE_URL` | UAT `https://eu-test.oppwa.com` |
-| `zimswitch.entity-id` | `ZIMSWITCH_ENTITY_ID` | channel id |
-| `zimswitch.access-token` | `ZIMSWITCH_ACCESS_TOKEN` | Bearer token; secret |
+| `zimswitch.base-url` | `ZIMSWITCH_BASE_URL` | default `https://eu-test.oppwa.com` (UAT) |
+| `zimswitch.entity-id` | `ZIMSWITCH_ENTITY_ID` | channel id; blank = rail disabled |
+| `zimswitch.access-token` | `ZIMSWITCH_ACCESS_TOKEN` | Bearer token; SECRET; blank = rail disabled |
 | `zimswitch.brands` | `ZIMSWITCH_BRANDS` | `data-brands` value (see UNVERIFIED above) |
-| `zimswitch.test-mode` | `ZIMSWITCH_TEST_MODE` | `EXTERNAL` in UAT, blank in prod |
-| `zimswitch.shopper-result-url` | `ZIMSWITCH_SHOPPER_RESULT_URL` | FE landing page |
+| `zimswitch.test-mode` | `ZIMSWITCH_TEST_MODE` | `EXTERNAL` in UAT; blank in prod (param omitted) |
+| `zimswitch.shopper-result-url` | `ZIMSWITCH_SHOPPER_RESULT_URL` | FE result page; echoed to the FE as the widget form action |
+| `zimswitch.request-integrity` | `ZIMSWITCH_REQUEST_INTEGRITY` | default `true` — SRI digest for the widget script |
+| `zimswitch.checkout-ttl` | `ZIMSWITCH_CHECKOUT_TTL` | default `PT28M`, just under the gateway's 30-min ceiling |
+| `zimswitch.status-poll-min-interval` | `ZIMSWITCH_STATUS_POLL_MIN_INTERVAL` | default `PT30S` — the poller's share of the 2/min throttle |
+| `zimswitch.instant-check-min-gap` | `ZIMSWITCH_INSTANT_CHECK_MIN_GAP` | default `PT15S` — the customer instant check's share |
+| `payment-service.card-poll.interval` | `CARD_POLL_INTERVAL` | default `PT30S` — sweep cadence |
 
-The access token is a secret: env-only, never committed, and guarded by
-`ProductionSecretsGuard` under deployment profiles like every other credential
-in this service.
+Amount/currency always come from the ORDER (gateway snapshot / cell config)
+— deliberately no ZimSwitch-side currency setting, so the two rails cannot
+disagree about what an order costs.
+
+Blank credentials = the card rail is OFF (card attempts answer 503; the
+poller logs and skips). There is no committed placeholder for the token, so
+`ProductionSecretsGuard` has nothing to catch — the fail-safe is the
+isConfigured() gate, mirroring the `BANK_API_*` credential pattern.
 
 ## Not yet modelled
 
