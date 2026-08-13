@@ -21,10 +21,25 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Contract test for {@link ZimswitchCopyPayClient} against ZimSwitch Online
- * (COPYandPAY — spec pinned at {@code docs/api/zimswitch-copyandpay.md},
- * transcribed from zimswitch.docs.oppwa.com). The stubs mirror the doc's
- * sample shapes; when UAT responses diverge, update the doc, these stubs and
- * the classifier together — a contract drift fails the build, not production.
+ * (COPYandPAY — spec pinned at {@code docs/api/zimswitch-copyandpay.md}).
+ * When UAT responses diverge, update the doc, these stubs and the classifier
+ * together — a contract drift fails the build, not production.
+ *
+ * <p><b>Stub provenance</b> (the convention is: every stub either transcribes
+ * a real response or matches a serializer read out of the upstream source —
+ * say which):
+ * <ul>
+ *   <li>{@link #PREPARED_OBSERVED} and {@link #NO_PAYMENT_SESSION_OBSERVED}
+ *       are <b>transcribed from a live playground run against
+ *       eu-test.oppwa.com on 2026-08-12</b> (opaque digests abbreviated).
+ *       That run used the DOC'S DEMO ENTITY, not TICKETIZE's — so the
+ *       platform contract is observed, but nothing entity-specific is.</li>
+ *   <li>The remaining stubs are constructed from the documented shapes for
+ *       response families we have not yet driven end to end (declines,
+ *       pending, 5xx). They pin OUR classification of those families, not an
+ *       observation — a real decline in UAT should be transcribed over the
+ *       top of the constructed one.</li>
+ * </ul>
  *
  * <p>Pure JUnit + WireMock, no Spring context. Retry registry uses a real
  * 2-attempt config so the read-only retry policy is observable: the status
@@ -78,6 +93,40 @@ class ZimswitchCopyPayClientContractTest {
               "ndc": "ndc-123",
               "id": "8a82944a4cc25ebf014cc2c782423202",
               "integrity": "sha384-3phAZzHTYFuLtHT2AzM5PIYjPLGtqcBQXAq7fbQw0QHIhJEQZUJEG52uV6uWBSQE"
+            }
+            """;
+
+    /**
+     * The REAL checkout id shape, observed 2026-08-12: 32 uppercase-ish hex
+     * chars plus a dotted node suffix — NOT the bare hex the doc's prose
+     * examples show. 46 chars, containing '.' and '-'.
+     */
+    private static final String OBSERVED_CHECKOUT_ID = "67b6338009845562954024F5A44FC2AE.uat01-vm-tx04";
+
+    /** TRANSCRIBED from the 2026-08-12 live run (opaque values abbreviated). */
+    private static final String PREPARED_OBSERVED = """
+            {
+              "result": { "code": "000.200.100", "description": "successfully created checkout" },
+              "buildNumber": "73sd4ed6995712...2026-08-06 10:13:44 +0000",
+              "timestamp": "2026-08-12 15:20:06+0000",
+              "ndc": "67D6B36080984556...4FC2AE.uat01-vm-tx04",
+              "id": "67b6338009845562954024F5A44FC2AE.uat01-vm-tx04",
+              "integrity": "sha384-GLce9JQ/CDxNkrPz2mLliLQc+/p6jqgJCIzoYWMlGWlLSZJ0FUkexJUcJ3bvKQpc"
+            }
+            """;
+
+    /**
+     * TRANSCRIBED from the same run: the status read of a prepared-but-unpaid
+     * checkout. Note it arrives wrapped in a non-2xx, and the wording is about
+     * the PAYMENT session, not the checkout id being wrong.
+     */
+    private static final String NO_PAYMENT_SESSION_OBSERVED = """
+            {
+              "result": { "code": "200.300.404",
+                          "description": "invalid or missing parameter - (opp) no payment session found for the requested id" },
+              "buildNumber": "73sd4ed6995712...",
+              "timestamp": "2026-08-12 15:19:34+0000",
+              "ndc": "8ac7a4c79394bdc8019397...ada7d1f1"
             }
             """;
 
@@ -302,6 +351,50 @@ class ZimswitchCopyPayClientContractTest {
 
         wireMock.verify(0, postRequestedFor(urlEqualTo("/v1/checkouts")));
         wireMock.verify(0, getRequestedFor(urlPathMatching("/v1/checkouts/.*")));
+    }
+
+    @Test
+    @DisplayName("OBSERVED 2026-08-12: prepare returns a dotted/suffixed checkout id — parsed intact, not truncated at the dot")
+    void prepare_parsesObservedSuffixedCheckoutId() {
+        wireMock.stubFor(post(urlEqualTo("/v1/checkouts"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody(PREPARED_OBSERVED)));
+
+        CheckoutPreparation prepared = newClient("http://localhost:" + wireMock.port())
+                .prepareCheckout("TKZ-PINKRUN26-4F3A2B1C0D9E", 9200, "USD");
+
+        assertThat(prepared.created()).isTrue();
+        assertThat(prepared.checkoutId()).isEqualTo(OBSERVED_CHECKOUT_ID);
+        // The real id is 46 chars — comfortably inside payment.checkout_id
+        // VARCHAR(64), but far past the 32 the doc's prose examples imply.
+        assertThat(prepared.checkoutId()).hasSize(46).contains(".").contains("-");
+        // ndc is a DIFFERENT value from id and must not be conflated with it.
+        assertThat(prepared.ndc()).isNotEqualTo(prepared.checkoutId());
+    }
+
+    @Test
+    @DisplayName("OBSERVED 2026-08-12 (SSRF guard, POSITIVE case): the real dotted id passes validation and reaches the wire")
+    void status_acceptsObservedSuffixedCheckoutId() {
+        // This is the case that would have broken the rail outright had the
+        // guard been written hex-only or length-32: every REAL checkout id
+        // carries a dotted node suffix.
+        String observedStatusPath =
+                "/v1/checkouts/" + OBSERVED_CHECKOUT_ID + "/payment?entityId=test-entity";
+        wireMock.stubFor(get(urlEqualTo(observedStatusPath))
+                .willReturn(aResponse().withStatus(400)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody(NO_PAYMENT_SESSION_OBSERVED)));
+
+        CardPaymentStatus status = newClient("http://localhost:" + wireMock.port())
+                .getPaymentStatus(OBSERVED_CHECKOUT_ID);
+
+        assertThat(status.outcome()).isEqualTo(ZimswitchResultCode.CHECKOUT_NOT_FOUND);
+        assertThat(status.resultCode()).isEqualTo("200.300.404");
+        // The dot/hyphen id must survive into the path UNESCAPED — a client
+        // that percent-encoded them would 404 against a different resource.
+        wireMock.verify(getRequestedFor(urlEqualTo(observedStatusPath))
+                .withHeader("Authorization", equalTo("Bearer test-bearer-token")));
     }
 
     @Test
