@@ -13,8 +13,19 @@ wire shape observed in UAT/production diverges, update this file **and** the
 > **Provenance.** The three-step flow, the `integrity` parameter, the
 > `baseUrl + resourcePath` status call, the checkout-reuse semantics, the
 > one-shot status read and the 2-calls-per-minute throttle are transcribed
-> from the ZimSwitch widget page. Anything marked **UNVERIFIED** below was
-> not on the pages read and must be confirmed before go-live.
+> from the ZimSwitch widget page.
+>
+> The prepare-checkout and status-read response bodies quoted below are
+> **transcribed from a live playground run against `eu-test.oppwa.com` on
+> 2026-08-12** (build `73...`, `timestamp 2026-08-12 15:20:06+0000`), not
+> invented. Caveat: that run used the **documentation's demo entity**
+> (`8ac7a4c79394bdc801939736f17e063d`), not TICKETIZE's
+> (`8ac7a4c79f67c903019f69f46a80021c`). So the PLATFORM contract is
+> observed; anything **entity-specific** — above all the private-label
+> brand — is still unconfirmed for our channel.
+>
+> Anything still marked **UNVERIFIED** below was not on the pages read, was
+> not exercised by that run, and must be confirmed before go-live.
 
 **This is the CARD rail — additive, not a replacement.** Ticket payments keep
 the InnBucks 2D-code rail (`docs/api/innbucks-merchant-api.md`); COPYandPAY
@@ -57,20 +68,46 @@ entityId=<entity>&amount=92.00&currency=USD&paymentType=DB&integrity=true
 - `merchantTransactionId` — our `TKT-PMT-<uuid>` payment reference. This is the
   handle that ties a gateway transaction back to a ledger row; always send it.
 
-Response (`200`):
+Response (`200`) — shape observed in the 2026-08-12 playground run (the opaque
+`buildNumber` / `ndc` / digest values are abbreviated here; only their shape
+matters):
 
 ```json
 {
   "result": { "code": "000.200.100", "description": "successfully created checkout" },
-  "buildNumber": "...",
-  "timestamp": "...",
-  "ndc": "...",
-  "id": "8a82944a4cc25ebf014cc2c782423202",
-  "integrity": "sha384-..."
+  "buildNumber": "73sd4ed6995712...2026-08-06 10:13:44 +0000",
+  "timestamp": "2026-08-12 15:20:06+0000",
+  "ndc": "67D6B36080984556...4FC2AE.uat01-vm-tx04",
+  "id": "67b6338009845562954024F5A44FC2AE.uat01-vm-tx04",
+  "integrity": "sha384-GLce9JQ/CDxNkrPz2mLliLQc+/p6jqgJCIzoYWMlGWlLSZJ0FUkexJUcJ3bvKQpc"
 }
 ```
 
 `000.200.100` = checkout created. The `id` is the **checkoutId**.
+
+### The checkoutId format — do not assume plain hex
+
+**Observed (2026-08-12):** the id is NOT the bare 32-char hex the doc's prose
+examples suggest. It is an uppercase-hex body plus a dotted node suffix:
+
+```
+67b6338009845562954024F5A44FC2AE.uat01-vm-tx04
+└──────── 32 hex ────────────────┘└─ node/env suffix ─┘
+```
+
+46 characters, mixed case, containing `.` and `-`. Two places this matters and
+both are already sized for it — keep them that way:
+
+- `ZimswitchCopyPayClient.CHECKOUT_ID_SHAPE` (`^[A-Za-z0-9.\-]{8,64}$`), the
+  SSRF guard on the status path. A hex-only or length-32 pattern would reject
+  every REAL checkout and break the rail outright.
+- `payment.checkout_id VARCHAR(64)`. The suffix is environment-derived, so a
+  differently-named production node could be longer than UAT's `uat01-vm-tx04`
+  — 64 leaves ample headroom, but do not shrink the column.
+
+`ndc` carries the same suffix and is a different value from `id` — do not
+conflate them; `id` is the checkout handle, `ndc` is the support correlation
+handle.
 
 ## 2. Create the payment form (browser)
 
@@ -87,10 +124,27 @@ Response (`200`):
   log, or server-side-post card fields, ever.
 - Multiple `<form>` elements with different `data-brands` render separate
   branded forms.
-- **UNVERIFIED — the `data-brands` value for TICKETIZE's `Private label`
-  payment mode.** The doc's examples are all `VISA MASTER AMEX`; the
-  supported-brand list was collapsed on the page read. Configured as
-  `zimswitch.brands` so it is a config change, not a code change.
+- **Verified 2026-08-12:** the widget renders against the test gateway with
+  `data-brands="VISA MASTER AMEX"`, so standard card brands are a working
+  starting value for UAT.
+- **STILL UNVERIFIED — the `data-brands` value for TICKETIZE's `Private label`
+  payment mode.** The full supported-brands table HAS now been read (Card
+  Account / Virtual Account / Bank Account brands, each with its sync-vs-async
+  workflow) and contains **no ZimSwitch domestic-scheme entry**. The nearest
+  structural analogue is `PMICHAELS_PLCC` — a US store card, PLCC = *private
+  label credit card* — which confirms the platform models private-label
+  schemes as their own named brand codes, but that specific code is obviously
+  not ours. Conclusion: if ZimSwitch provisioned a private-label brand for
+  TICKETIZE it is a **custom code the generic catalog does not list**, and
+  only ZimSwitch (or a playground run against OUR entity) can supply it.
+  Carried as `zimswitch.brands` / `ZIMSWITCH_BRANDS` so landing the real value
+  is a config change with no code change and no FE deploy — the FE reads it
+  from the payment response.
+- Brands differ in **sync vs async workflow**: async brands (3-D Secure and
+  friends) bounce the shopper through an extra redirect before returning to
+  `shopperResultUrl`. This needs no special handling here — the return path
+  never trusts the redirect and always re-verifies server-side — but it is why
+  the FE result page must tolerate "arrived with no payment yet".
 
 ### Checkout id lifetime — read this before touching retry logic
 
@@ -122,6 +176,28 @@ and the documented call is `GET {{baseUrl}} + resourcePath`:
 GET {{baseUrl}}/v1/checkouts/{checkoutId}/payment?entityId=<entity>
 Authorization: Bearer <token>
 ```
+
+Observed (2026-08-12) for a checkout that was prepared but never paid — the
+gateway answers with an envelope, not an empty body:
+
+```json
+{
+  "result": {
+    "code": "200.300.404",
+    "description": "invalid or missing parameter - (opp) no payment session found for the requested id"
+  },
+  "buildNumber": "73sd4ed6995712...",
+  "timestamp": "2026-08-12 15:19:34+0000",
+  "ndc": "8ac7a4c79394bdc8019397...ada7d1f1"
+}
+```
+
+This confirms the classifier's most load-bearing special case: `200.300.404`
+is the NORMAL pre-submission answer, wrapped in a non-2xx status, and must be
+read as `CHECKOUT_NOT_FOUND` (still waiting / already consumed) rather than a
+decline. Note the wording says "no payment session found for the requested
+id" — it is about the PAYMENT, not the checkout, so it does not mean our
+checkout id was wrong.
 
 > **SECURITY — do not follow the documented happy path literally.**
 > `resourcePath` arrives as a query parameter on a browser redirect, i.e. it is
@@ -254,7 +330,7 @@ the open attempt to lapse first.
 | `zimswitch.base-url` | `ZIMSWITCH_BASE_URL` | default `https://eu-test.oppwa.com` (UAT) |
 | `zimswitch.entity-id` | `ZIMSWITCH_ENTITY_ID` | channel id; blank = rail disabled |
 | `zimswitch.access-token` | `ZIMSWITCH_ACCESS_TOKEN` | Bearer token; SECRET; blank = rail disabled |
-| `zimswitch.brands` | `ZIMSWITCH_BRANDS` | `data-brands` value (see UNVERIFIED above) |
+| `zimswitch.brands` | `ZIMSWITCH_BRANDS` | `data-brands` value; `VISA MASTER` works on the test gateway, the private-label code is still pending (see §2) |
 | `zimswitch.test-mode` | `ZIMSWITCH_TEST_MODE` | `EXTERNAL` in UAT; blank in prod (param omitted) |
 | `zimswitch.shopper-result-url` | `ZIMSWITCH_SHOPPER_RESULT_URL` | FE result page; echoed to the FE as the widget form action |
 | `zimswitch.request-integrity` | `ZIMSWITCH_REQUEST_INTEGRITY` | default `true` — SRI digest for the widget script |
@@ -282,3 +358,19 @@ isConfigured() gate, mirroring the `BANK_API_*` credential pattern.
   ZimSwitch, because a customer who closes the tab after paying currently
   resolves only via the reconciler poll.
 - **Refunds / reversals** (`POST /v1/payments/{id}` with `paymentType=RF`).
+
+## Open questions for ZimSwitch (UAT blockers)
+
+Tracked here so the answers land in-tree with the code they affect:
+
+1. **Private-label `data-brands` code** for TICKETIZE's entity — see §2. The
+   generic supported-brands catalog does not list a ZimSwitch domestic scheme,
+   so this must come from ZimSwitch or from a playground run against our own
+   entity + Bearer.
+2. **Test cards** (and any 3-D Secure test credentials) for a `testMode=EXTERNAL`
+   entity, to drive approved/declined UAT cases.
+3. **Webhooks** — available on our entity? See "Not yet modelled" above.
+
+Until (1) is answered, `ZIMSWITCH_BRANDS` stays at its `VISA MASTER` default,
+which is sufficient for UAT on the test gateway but is NOT assumed correct for
+the live private-label channel.
