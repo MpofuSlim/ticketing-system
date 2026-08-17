@@ -251,7 +251,12 @@ class PaymentControllerTest {
                 b -> b.innbucksCode("701285660")
                         .codeExpiresAt(java.time.Instant.now().minusSeconds(60)));
         assertEquals(PaymentResponse.Stage.INSTRUMENT_EXPIRED, expired.getStage());
-        assertEquals(Boolean.FALSE, expired.getFundsCaptured());
+        // null, NOT false. A row is only SEEN in this state while the
+        // reconciler has not yet concluded the instrument went unpaid — and
+        // it deliberately refuses to conclude that when the upstream status
+        // is unreadable, because the customer may have paid. A row proven
+        // unpaid becomes terminal EXPIRED and stops being replayed at all.
+        assertNull(expired.getFundsCaptured());
 
         // Nothing charged — request in flight, no instrument minted yet.
         PaymentResponse pending = replayInState(fixture(), UUID.randomUUID(),

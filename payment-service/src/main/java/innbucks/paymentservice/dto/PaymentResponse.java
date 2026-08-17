@@ -47,8 +47,25 @@ public class PaymentResponse {
          */
         IN_PROGRESS,
         /**
-         * The instrument lapsed unpaid. Nothing charged, and the order's
-         * payment slot is free — offer "Pay again", which mints a fresh one.
+         * Our LOCAL deadline for the instrument has passed and the ledger has
+         * NOT yet concluded what happened upstream.
+         *
+         * <p>Read that carefully: this is not "confirmed unpaid". A row only
+         * leaves this state as positively-unpaid when the gateway SAYS so
+         * (code rail: Expired/Timed Out; card rail: {@code 200.300.404} past
+         * the 30-minute ceiling), and at that point it becomes terminal
+         * EXPIRED and stops being replayed at all. So every row a client
+         * actually sees here is one the reconciler has not resolved —
+         * usually for a few seconds, but indefinitely when the upstream
+         * status is unreadable, which is exactly the case the poller refuses
+         * to guess about ("the customer may have paid").
+         *
+         * <p>Hence {@code fundsCaptured} is {@code null}, not {@code false}.
+         * The stage is still useful for UI ("that took too long — we're
+         * checking"), but do NOT tell the customer they were not charged, and
+         * note the order's payment slot is still HELD: re-POSTing returns this
+         * same state rather than minting a fresh instrument, until the
+         * reconciler resolves the row.
          */
         INSTRUMENT_EXPIRED,
         /**
@@ -78,29 +95,36 @@ public class PaymentResponse {
 
         /**
          * The money question, answered from the stage alone — the ONE place
-         * the mapping lives, so {@code stage} and {@code fundsCaptured} can
-         * never disagree.
+         * the mapping lives.
          *
-         * <p>The default is deliberately {@code null} (unknown) rather than
-         * {@code false}: a stage added later without updating this switch
-         * should fail SAFE by admitting ignorance, not by asserting that no
-         * money moved.
+         * <p>Only two stages assert capture, and only ONE asserts non-capture
+         * on the strength of an upstream verdict. Everything whose upstream
+         * outcome we have not positively established answers {@code null}:
+         * {@code false} is a claim ("you were not charged") and this service's
+         * standing rule is that an unresolved payment is never guessed in
+         * either direction.
+         *
+         * <p>The switch is deliberately EXHAUSTIVE with no {@code default}
+         * arm: adding a stage without deciding its money answer is then a
+         * COMPILE error, which is a stronger guarantee than any runtime
+         * fallback could give.
          */
         public Boolean fundsCaptured() {
             return switch (this) {
+                // Money provably moved.
                 case PAYMENT_RECEIVED, COMPLETED -> Boolean.TRUE;
-                case AWAITING_PAYMENT, IN_PROGRESS, INSTRUMENT_EXPIRED, PAYMENT_UNAVAILABLE -> Boolean.FALSE;
-                case VERIFYING -> null;
+                // Money provably did NOT move: no instrument has been
+                // presented to the customer yet (IN_PROGRESS), or one is
+                // live and untouched (AWAITING_PAYMENT), or we never managed
+                // to present one at all (PAYMENT_UNAVAILABLE).
+                case AWAITING_PAYMENT, IN_PROGRESS, PAYMENT_UNAVAILABLE -> Boolean.FALSE;
+                // Genuinely unknown. INSTRUMENT_EXPIRED belongs here, not
+                // with the FALSE group: a client only ever sees it while the
+                // reconciler has NOT concluded the instrument went unpaid
+                // (see its javadoc), and the poller explicitly refuses to
+                // resolve unreadable rows because the customer may have paid.
+                case INSTRUMENT_EXPIRED, VERIFYING -> null;
             };
-        }
-    }
-
-    /** Set {@link #stage} and derive {@link #fundsCaptured} together. */
-    public static class PaymentResponseBuilder {
-        public PaymentResponseBuilder stage(Stage stage) {
-            this.stage = stage;
-            this.fundsCaptured = stage == null ? null : stage.fundsCaptured();
-            return this;
         }
     }
 
@@ -127,35 +151,42 @@ public class PaymentResponse {
     private Stage stage;
 
     /**
-     * <b>Has money actually left the customer?</b> Deliberately a nullable
-     * {@code Boolean}, not a primitive, because there are THREE honest
-     * answers and only two of them are booleans:
+     * <b>Has money actually left the customer?</b> Three honest answers, only
+     * two of which are booleans:
      *
      * <ul>
      *   <li>{@code true}  — captured ({@link Stage#PAYMENT_RECEIVED},
      *       {@link Stage#COMPLETED}).</li>
-     *   <li>{@code false} — definitively not captured (awaiting payment,
-     *       in progress, expired, unavailable).</li>
-     *   <li>{@code null}  — <b>UNKNOWN</b> ({@link Stage#VERIFYING}). The
-     *       row is parked for an operator. Returning {@code false} here would
-     *       tell a customer who may have paid that nothing was charged;
-     *       returning {@code true} would promise a ticket we cannot yet back.
-     *       Treat null as "don't claim either way".</li>
+     *   <li>{@code false} — provably not captured (no instrument presented
+     *       yet, one live and untouched, or none presentable at all).</li>
+     *   <li>{@code null}  — <b>UNKNOWN</b> ({@link Stage#VERIFYING},
+     *       {@link Stage#INSTRUMENT_EXPIRED}). Returning {@code false} here
+     *       would tell a customer who may have paid that nothing was charged;
+     *       {@code true} would promise a ticket we cannot back. Treat null as
+     *       "don't claim either way".</li>
      * </ul>
      *
-     * Derived from {@link #stage} in one place so the two cannot drift.
+     * <p>This is a DERIVED, read-only property with no backing field: there
+     * is deliberately no setter and no builder method, so it cannot be set to
+     * something that contradicts {@link #stage}. (An earlier version stored it
+     * as a field and derived it inside the builder — but Lombok still
+     * generated a public {@code fundsCaptured(...)} builder method, which made
+     * the two order-dependently contradictable. Having no field at all is the
+     * only version of "cannot drift" that is actually true.)
      *
      * <p><b>{@code ALWAYS} is load-bearing, not decoration.</b> Several sibling
      * DTOs in this package carry {@code @JsonInclude(NON_NULL)} at class level,
      * so adding it here later would be the natural-looking change — and it
-     * would silently delete the key for exactly the VERIFYING case, leaving a
+     * would silently delete the key for exactly the unknown cases, leaving a
      * client unable to distinguish "we don't know" from "old server that
-     * doesn't send this field". Field-level inclusion beats class-level, so
+     * doesn't send this field". Member-level inclusion beats class-level, so
      * this survives that edit. {@code PaymentResponseSerializationTest} fails
      * if the key ever goes missing.
      */
     @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)
-    private Boolean fundsCaptured;
+    public Boolean getFundsCaptured() {
+        return stage == null ? null : stage.fundsCaptured();
+    }
 
     private BigDecimal amountPaid;
     private String currency;
