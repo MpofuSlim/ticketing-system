@@ -398,6 +398,23 @@ services:
       BANK_API_PASSWORD: ${BANK_API_PASSWORD:?set BANK_API_PASSWORD in .env}
       PAYMENTS_INNBUCKS_ENABLED: ${PAYMENTS_INNBUCKS_ENABLED:-true}
       PAYMENTS_INNBUCKS_MERCHANT_ACCOUNT: ${PAYMENTS_INNBUCKS_MERCHANT_ACCOUNT:-}
+      # ZimSwitch Online (COPYandPAY) — the CARD rail beside the InnBucks 2D
+      # code. Deliberately OPTIONAL (`:-`, never `:?`): blank entity-id or
+      # access-token disables the rail, so an existing .env keeps working and
+      # card attempts answer a clean 503. k8s does not need this block — every
+      # service there does `envFrom` the whole cell-zw ConfigMap/Secret, so new
+      # keys flow automatically; compose enumerates each var, which is why
+      # these have to be listed or a .env value silently never reaches the
+      # container. Spec: docs/api/zimswitch-copyandpay.md.
+      ZIMSWITCH_BASE_URL: ${ZIMSWITCH_BASE_URL:-https://eu-test.oppwa.com}
+      ZIMSWITCH_ENTITY_ID: ${ZIMSWITCH_ENTITY_ID:-}
+      ZIMSWITCH_ACCESS_TOKEN: ${ZIMSWITCH_ACCESS_TOKEN:-}
+      ZIMSWITCH_BRANDS: ${ZIMSWITCH_BRANDS:-VISA MASTER}
+      ZIMSWITCH_TEST_MODE: ${ZIMSWITCH_TEST_MODE:-}
+      # Absolute http(s) URL of the FE's card-result page. Blank (or relative)
+      # = the rail refuses to START a checkout (503) rather than minting one
+      # the FE cannot render — see ZimswitchCopyPayClient.canStartCheckout().
+      ZIMSWITCH_SHOPPER_RESULT_URL: ${ZIMSWITCH_SHOPPER_RESULT_URL:-}
     ports:
       - "127.0.0.1:8085:8085"
     healthcheck:
