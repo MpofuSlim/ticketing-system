@@ -370,9 +370,21 @@ public class PaymentController {
                     log.info("POST /payments card instant-check EXPIRED orderType={} orderRef={} — starting fresh",
                             key.type(), key.ref());
                 } else {
-                    log.info("POST /payments card replay after instant check orderType={} orderRef={} paymentReference={}",
-                            key.type(), key.ref(), p.getPaymentReference());
-                    return toReplayResponse(p, key);
+                    // RE-READ, do not reuse `p`. A PENDING verdict does NOT
+                    // mean the row is unchanged: an echo mismatch on a PAID
+                    // read parks the row IN_DOUBT and still reports PENDING
+                    // (the money outcome is unknown, so it is not a PAID
+                    // result). markInDoubt runs REQUIRES_NEW on its own loaded
+                    // instance, so this `p` still says TOKEN_ISSUED — replaying
+                    // it would answer stage=AWAITING_PAYMENT + fundsCaptured=
+                    // false and re-render the card widget for a payment that
+                    // may already have taken the customer's money. Both harms
+                    // point the wrong way: a false "you were not charged", and
+                    // an invitation to pay a second time.
+                    Payment afterCheck = paymentRepository.findById(p.getId()).orElse(p);
+                    log.info("POST /payments card replay after instant check orderType={} orderRef={} paymentReference={} status={}",
+                            key.type(), key.ref(), p.getPaymentReference(), afterCheck.getStatus());
+                    return toReplayResponse(afterCheck, key);
                 }
             } else if (p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED
                     && p.getInnbucksCode() != null) {
@@ -392,9 +404,20 @@ public class PaymentController {
                     log.info("POST /payments instant-check EXPIRED orderType={} orderRef={} — minting a fresh code",
                             key.type(), key.ref());
                 } else {
-                    log.info("POST /payments replay after instant check (still pending upstream) orderType={} orderRef={} paymentReference={}",
-                            key.type(), key.ref(), p.getPaymentReference());
-                    return toReplayResponse(p, key);
+                    // Re-read for the same reason as the card branch above.
+                    // DEFENSIVE here rather than a live bug: today
+                    // tryResolveOpenCode only mutates on PAID/EXPIRED and
+                    // leaves the row untouched when it reports PENDING. But
+                    // that was equally true of the card rail until a
+                    // mutating-and-still-PENDING path (echo mismatch → park
+                    // IN_DOUBT) was added, and the failure it produces is a
+                    // false "you were not charged" on a paid row. One query
+                    // on a path that just made a network call is a cheap way
+                    // to make the branch correct by construction.
+                    Payment afterCheck = paymentRepository.findById(p.getId()).orElse(p);
+                    log.info("POST /payments replay after instant check (still pending upstream) orderType={} orderRef={} paymentReference={} status={}",
+                            key.type(), key.ref(), p.getPaymentReference(), afterCheck.getStatus());
+                    return toReplayResponse(afterCheck, key);
                 }
             } else {
                 log.info("POST /payments replay orderType={} orderRef={} existing paymentReference={} status={}",
