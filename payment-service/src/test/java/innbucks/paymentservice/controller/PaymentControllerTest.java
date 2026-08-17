@@ -164,6 +164,13 @@ class PaymentControllerTest {
         assertEquals(expiresAt, data.getPaymentCodeExpiresAt());
         assertEquals("qr-base64-bytes", data.getPaymentQrCode());
         assertTrue(resp.getBody().getMessage().contains("InnBucks app"));
+        // The rail MUST be stated even on the default path. Clients branch on
+        // the rail they RECEIVE (an open attempt on the other rail comes back
+        // instead of the one requested), so a null here makes the DEFAULT,
+        // most-travelled response the one an FE with explicit per-rail arms
+        // cannot dispatch — and it only shows on the first response, because
+        // the replay path did populate it.
+        assertEquals(innbucks.paymentservice.entity.PaymentRail.INNBUCKS_CODE, data.getPaymentRail());
     }
 
     @Test

@@ -348,6 +348,28 @@ poller logs and skips). There is no committed placeholder for the token, so
 `ProductionSecretsGuard` has nothing to catch — the fail-safe is the
 isConfigured() gate, mirroring the `BANK_API_*` credential pattern.
 
+## Known limitations of the current card rail
+
+- **`checkoutIntegrity` can be null** while the rest of the widget artifacts
+  are populated: the gateway may omit the SRI digest even when
+  `integrity=true` was sent (the client logs a warning and still treats the
+  checkout as created — refusing would take the whole rail down over a
+  hardening nicety). **The FE must omit the `integrity`/`crossorigin`
+  attributes entirely in that case** — interpolating a null yields
+  `integrity="null"`, which fails SRI and blocks the card-entry script, so
+  the shopper sees no form while the checkout holds the order's slot. The
+  A08 cost of the fallback is an unpinned third-party script; that trade is
+  deliberate and is called out in the FE brief.
+- **`shopperResultUrl` is pinned upstream at mint time but read live from
+  config on every response.** It is sent as a prepare-checkout parameter (so
+  the gateway holds its own copy for async/3DS returns) but is NOT persisted
+  on the payment row. If the value changes while a checkout is open, the
+  gateway still holds the old one while our response advertises the new one.
+  Bounded by the ≤30-minute checkout life and only reachable via a config
+  change plus restart, so it is documented rather than fixed; persisting it
+  alongside `checkout_id` / `checkout_integrity` would be the clean fix if it
+  ever bites.
+
 ## Not yet modelled
 
 - **Transaction Reports** endpoint (the post-one-shot lookup path) — needed for

@@ -265,6 +265,21 @@ public class ZimswitchCardPaymentService {
      * declined-retry all re-render the SAME checkout.
      */
     public CardCheckoutOutcome replayOpenCheckout(Payment p) {
+        // Same rule as startCheckout, enforced on the OTHER path that emits
+        // widget artifacts. Without it the guard was half a guard: a row
+        // minted before the cell was fully provisioned (or by an old pod
+        // mid-rolling-deploy) would replay a full artifact set with an empty
+        // form action — precisely the unrenderable response the start gate
+        // exists to prevent. Returning null makes the caller render the
+        // honest "being processed" state instead of a dead payment form.
+        if (!zimswitchClient.canStartCheckout()) {
+            log.error("[zimswitch-card] cannot re-surface widget artifacts for paymentReference={} — "
+                            + "ZIMSWITCH_SHOPPER_RESULT_URL is blank or not an absolute http(s) URL. "
+                            + "This row holds the order's payment slot until it lapses.",
+                    p.getPaymentReference());
+            metrics.incCardResolution("replay_unrenderable");
+            return null;
+        }
         return widgetOutcome(p, p.getCheckoutId(), p.getCheckoutIntegrity(), p.getCodeExpiresAt());
     }
 
