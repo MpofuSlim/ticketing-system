@@ -25,6 +25,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
@@ -240,7 +241,7 @@ class ZimswitchCardPaymentServiceTest {
     @Test
     @DisplayName("unconfigured rail: refused with 503 BEFORE any slot/ledger/upstream interaction")
     void startCheckout_unconfiguredFailsFast() {
-        when(client.isConfigured()).thenReturn(false);
+        when(client.canStartCheckout()).thenReturn(false);
 
         assertThatThrownBy(() -> service.startCheckout(
                 innbucks.paymentservice.order.OrderType.BOOKING, UUID.randomUUID().toString()))
@@ -248,6 +249,39 @@ class ZimswitchCardPaymentServiceTest {
                 .satisfies(e -> assertThat(((InvalidPaymentRequestException) e).getStatusCode()).isEqualTo(503));
 
         verifyNoInteractions(records);
+    }
+
+    @Test
+    @DisplayName("HALF-PROVISIONED rail (credentials but no shopperResultUrl): 503 and NO payment slot burned")
+    void startCheckout_halfProvisionedNeverClaimsTheSlot() {
+        // The exact state a cell is in after credentials land but the FE's
+        // result URL has not been set. Before the canStartCheckout() split
+        // this sailed through, minted a REAL checkout upstream, and locked
+        // the order's only payment slot (both rails) for ~28 minutes.
+        when(client.canStartCheckout()).thenReturn(false);
+        when(client.isConfigured()).thenReturn(true);
+
+        assertThatThrownBy(() -> service.startCheckout(
+                innbucks.paymentservice.order.OrderType.BOOKING, UUID.randomUUID().toString()))
+                .isInstanceOf(InvalidPaymentRequestException.class)
+                .satisfies(e -> assertThat(((InvalidPaymentRequestException) e).getStatusCode()).isEqualTo(503));
+
+        // No ledger row opened => the order's payment slot is untouched, so
+        // the customer can still pay via the InnBucks code rail.
+        verifyNoInteractions(records);
+        // And critically: no checkout minted upstream.
+        verify(client, never()).prepareCheckout(anyString(), anyLong(), anyString());
+    }
+
+    @Test
+    @DisplayName("half-provisioned rail stays POLLABLE: open checkouts must still resolve")
+    void halfProvisionedRail_isStillPollable() {
+        // isRailConfigured() gates the reconciler sweep and must track
+        // gateway reachability only — otherwise a blank result URL would
+        // strand rows whose money may already have moved.
+        when(client.isConfigured()).thenReturn(true);
+
+        assertThat(service.isRailConfigured()).isTrue();
     }
 
     @Test

@@ -10,6 +10,9 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -52,11 +55,14 @@ class ZimswitchCopyPayClientContractTest {
 
     private static WireMockServer wireMock;
 
+    private static final String RESULT_URL = "https://tickets.example.co.zw/checkout/card-result";
+
     private static ZimswitchCopyPayClient newClient(String baseUrl) {
         ZimswitchProperties props = new ZimswitchProperties();
         props.setBaseUrl(baseUrl);
         props.setEntityId("test-entity");
         props.setAccessToken("test-bearer-token");
+        props.setShopperResultUrl(RESULT_URL);
         props.setTestMode("EXTERNAL");
         props.setConnectTimeoutMs(500);
         props.setReadTimeoutMs(2000);
@@ -158,6 +164,68 @@ class ZimswitchCopyPayClientContractTest {
                 .withRequestBody(containing("merchantTransactionId=TKZ-PINKRUN26-4F3A2B1C0D9E"))
                 .withRequestBody(containing("integrity=true"))
                 .withRequestBody(containing("testMode=EXTERNAL")));
+    }
+
+    @Test
+    @DisplayName("prepare: shopperResultUrl rides the body so ASYNC brands (3DS) can redirect the shopper back")
+    void prepare_sendsShopperResultUrl() {
+        wireMock.stubFor(post(urlEqualTo("/v1/checkouts"))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody(PREPARED_OK)));
+
+        newClient("http://localhost:" + wireMock.port())
+                .prepareCheckout("TKT-PMT-x", 100, "USD");
+
+        // Form-encoded, so the URL arrives percent-encoded in the body.
+        wireMock.verify(postRequestedFor(urlEqualTo("/v1/checkouts"))
+                .withRequestBody(containing("shopperResultUrl=" +
+                        java.net.URLEncoder.encode(RESULT_URL, java.nio.charset.StandardCharsets.UTF_8))));
+    }
+
+    @Test
+    @DisplayName("guard: credentials without a usable shopperResultUrl can TALK to the gateway but must not START a checkout")
+    void halfProvisionedRail_cannotStartButStaysPollable() {
+        ZimswitchProperties props = new ZimswitchProperties();
+        props.setBaseUrl("http://localhost:" + wireMock.port());
+        props.setEntityId("test-entity");
+        props.setAccessToken("test-bearer-token");
+        // shopperResultUrl deliberately unset — the half-provisioned cell.
+        ZimswitchCopyPayClient client = new ZimswitchCopyPayClient(props, new ObjectMapper(),
+                RetryRegistry.ofDefaults(), CircuitBreakerRegistry.ofDefaults());
+
+        // Pollable: an already-open checkout must stay resolvable, or a config
+        // slip would strand rows the customer may already have paid.
+        assertThat(client.isConfigured()).isTrue();
+        // But not startable: no form action means no payment form, while the
+        // ledger row would still hold the order's only payment slot.
+        assertThat(client.canStartCheckout()).isFalse();
+    }
+
+    @ParameterizedTest
+    @DisplayName("guard: only absolute http(s) URLs count as a usable shopper result URL")
+    @NullAndEmptySource
+    @ValueSource(strings = {
+            "   ",
+            "/checkout/card-result",                 // relative — no host for the gateway to redirect to
+            "checkout/card-result",                  // relative, no leading slash
+            "ftp://tickets.example.co.zw/result",    // wrong scheme
+            "javascript:alert(1)",                   // not a location at all
+            "https://",                              // scheme only, no host
+    })
+    void unusableResultUrls_areRejected(String url) {
+        assertThat(ZimswitchCopyPayClient.isUsableResultUrl(url)).isFalse();
+    }
+
+    @ParameterizedTest
+    @DisplayName("guard: real result URLs pass, including ports, paths and query strings")
+    @ValueSource(strings = {
+            "https://tickets.example.co.zw/checkout/card-result",
+            "http://localhost:5173/checkout/card-result",
+            "https://tickets.example.co.zw:8443/checkout/card-result?src=card",
+    })
+    void usableResultUrls_areAccepted(String url) {
+        assertThat(ZimswitchCopyPayClient.isUsableResultUrl(url)).isTrue();
     }
 
     @Test

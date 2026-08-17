@@ -131,8 +131,25 @@ public class ZimswitchCardPaymentService {
         // Fail BEFORE claiming the order's payment slot when the rail can't
         // work at all — an unconfigured cell must refuse cleanly, not burn
         // the slot on a row that can only fail.
-        if (!zimswitchClient.isConfigured()) {
-            metrics.incCardCheckout("unconfigured");
+        //
+        // canStartCheckout(), not isConfigured(): credentials alone are not
+        // enough. Without a usable shopperResultUrl the FE has no form action
+        // and cannot render a payment form, yet the checkout we would mint is
+        // real and its ledger row holds the order's ONLY payment slot (across
+        // both rails) for ~28 minutes — locking the customer out of the
+        // InnBucks code rail too. The two are split so the reconciler can keep
+        // resolving already-open checkouts on isConfigured() alone.
+        if (!zimswitchClient.canStartCheckout()) {
+            // Distinct tag: "credentials missing" and "result URL missing" are
+            // different operator fixes, and the second is invisible from the
+            // outside (the rail looks provisioned).
+            metrics.incCardCheckout(zimswitchClient.isConfigured()
+                    ? "no_shopper_result_url" : "unconfigured");
+            if (zimswitchClient.isConfigured()) {
+                log.error("[zimswitch-card] card checkout refused: ZIMSWITCH_SHOPPER_RESULT_URL is blank or "
+                        + "not an absolute http(s) URL. Credentials ARE present, so the rail looks provisioned "
+                        + "but no shopper can complete a payment. Set it to the FE's card-result page.");
+            }
             throw new InvalidPaymentRequestException(
                     "Card payments are not available on this deployment", 503);
         }
