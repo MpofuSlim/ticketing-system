@@ -204,6 +204,44 @@ public class PaymentController {
                                               }
                                             }
                                             """),
+                                    @ExampleObject(name = "Money IS in, order confirming — the confident receipt screen", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Payment received; your booking is being confirmed",
+                                              "data": {
+                                                "transactionId": "f0e1d2c3-4567-890a-bcde-f01234567890",
+                                                "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "orderType": "BOOKING",
+                                                "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "status": "PROCESSING",
+                                                "stage": "PAYMENT_RECEIVED",
+                                                "fundsCaptured": true,
+                                                "amountPaid": 100.00,
+                                                "currency": "USD",
+                                                "confirmationNumber": null,
+                                                "processedAt": "2026-06-11T15:52:00Z"
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Outcome UNKNOWN — fundsCaptured is an explicit null, never coerce it to false", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Your payment is being verified — contact support if this persists",
+                                              "data": {
+                                                "transactionId": "f0e1d2c3-4567-890a-bcde-f01234567890",
+                                                "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "orderType": "BOOKING",
+                                                "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "status": "PROCESSING",
+                                                "stage": "VERIFYING",
+                                                "fundsCaptured": null,
+                                                "amountPaid": 100.00,
+                                                "currency": "USD",
+                                                "confirmationNumber": null,
+                                                "processedAt": "2026-06-11T15:52:00Z"
+                                              }
+                                            }
+                                            """),
                                     @ExampleObject(name = "Booking — card checkout issued (request: {\"bookingId\":\"a3b9c1d2-...\",\"paymentRail\":\"ZIMSWITCH_CARD\"})", value = """
                                             {
                                               "code": "200 OK",
@@ -486,7 +524,7 @@ public class PaymentController {
             return error(HttpStatus.BAD_REQUEST, message);
         }
         PaymentResponse response = PaymentResponse.builder()
-                .transactionId(transactionIdFrom(outcome.getPaymentReference()))
+                .transactionId(outcome.getPaymentId())
                 .bookingId(outcome.getBookingId())
                 .orderType(key.type())
                 .orderRef(key.ref())
@@ -537,7 +575,7 @@ public class PaymentController {
         Payment p = outcome.payment();
         String noun = key.type() == OrderType.BOOKING ? "booking" : "order";
         PaymentResponse response = PaymentResponse.builder()
-                .transactionId(transactionIdFrom(p.getPaymentReference()))
+                .transactionId(p.getId())
                 .bookingId(p.getBookingId())
                 .orderType(key.type())
                 .orderRef(key.ref())
@@ -681,14 +719,15 @@ public class PaymentController {
                 && p.getCreatedAt().isBefore(java.time.Instant.now().minus(PENDING_REPLAY_GRACE));
     }
 
-    /** Stable receipt id: the UUID inside our TKT-PMT-<uuid> reference. */
-    private static UUID transactionIdFrom(String paymentReference) {
-        try {
-            return UUID.fromString(paymentReference.substring("TKT-PMT-".length()));
-        } catch (Exception e) {
-            return UUID.randomUUID();
-        }
-    }
+    // transactionIdFrom(paymentReference) was removed. It parsed a UUID out of
+    // the legacy TKT-PMT-<uuid> reference, but SettlementReference has since
+    // emitted TKZ-<TAG>-<12 hex> whenever a settlement tag exists (i.e. the
+    // normal case) — which has no UUID in it, so the parse threw and the
+    // catch returned UUID.randomUUID(). The first response therefore carried a
+    // RANDOM transactionId that changed on every call and never matched the
+    // replay response's (which used the ledger row id). Every path now echoes
+    // the row id, which is what the field was always documented to be: a
+    // stable receipt id.
 
     private static ResponseEntity<ApiResult<PaymentResponse>> error(HttpStatus status, String message) {
         return ResponseEntity.status(status).body(

@@ -54,6 +54,28 @@ class PaymentResponseSerializationTest {
     }
 
     @Test
+    @DisplayName("the key survives a NON_NULL default mapper — this is what @JsonInclude(ALWAYS) is FOR")
+    void surviveNonNullDefaultInclusion() throws Exception {
+        // The previous test passes even with the annotation deleted, because
+        // Jackson's own default is ALWAYS — so it proves the behaviour but
+        // not the protection. THIS one configures the mapper exactly the way
+        // the sibling DTOs in this package are annotated (NON_NULL), which is
+        // the realistic way the key would vanish, and fails if the member-level
+        // ALWAYS is ever removed.
+        ObjectMapper nonNullMapper = new ObjectMapper()
+                .setSerializationInclusion(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL);
+
+        String json = nonNullMapper.writeValueAsString(PaymentResponse.builder()
+                .stage(PaymentResponse.Stage.VERIFYING)
+                .build());
+
+        assertThat(json)
+                .as("member-level ALWAYS must beat a NON_NULL default, or 'unknown' becomes invisible")
+                .contains("\"fundsCaptured\"");
+        assertThat(nonNullMapper.readTree(json).get("fundsCaptured").isNull()).isTrue();
+    }
+
+    @Test
     @DisplayName("stage serializes as its enum name — the value clients switch on")
     void stageSerializesAsName() throws Exception {
         for (PaymentResponse.Stage stage : PaymentResponse.Stage.values()) {

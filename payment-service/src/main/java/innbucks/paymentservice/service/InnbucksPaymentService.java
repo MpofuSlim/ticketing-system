@@ -269,6 +269,7 @@ public class InnbucksPaymentService {
                                                   String paymentQrCode,
                                                   Instant codeExpiresAt) {
         return InnbucksPaymentResponse.builder()
+                .paymentId(payment.getId())
                 .paymentReference(payment.getPaymentReference())
                 .orderType(payment.getOrderType())
                 .orderRef(payment.getOrderRef())

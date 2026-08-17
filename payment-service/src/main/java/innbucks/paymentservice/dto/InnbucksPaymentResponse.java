@@ -31,6 +31,12 @@ import java.util.UUID;
         description = "Outcome of an InnBucks/veengu-backed payment attempt.")
 public class InnbucksPaymentResponse {
 
+    @Schema(description = "The payment ledger row's id — the STABLE receipt id echoed to clients as "
+            + "`transactionId`. Carried explicitly because it cannot be derived from paymentReference: "
+            + "the modern TKZ-<TAG>-<hex> settlement format has no UUID in it.",
+            example = "f0e1d2c3-4567-890a-bcde-f01234567890")
+    private UUID paymentId;
+
     @Schema(description = "Stable reference for this payment; sent to InnBucks as the code-generation "
             + "reference and logged on every state transition. Shape: TKZ-<event settlement code>-<unique id>, "
             + "so the merchant bank statement can be grouped per event by prefix.",

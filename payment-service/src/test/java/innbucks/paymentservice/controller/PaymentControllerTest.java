@@ -93,7 +93,14 @@ class PaymentControllerTest {
 
     private static InnbucksPaymentResponse outcome(UUID bookingId, InnbucksPaymentResponse.Status status,
                                                    String paymentReference, String confirmation) {
+        return outcome(bookingId, status, paymentReference, confirmation, UUID.randomUUID());
+    }
+
+    private static InnbucksPaymentResponse outcome(UUID bookingId, InnbucksPaymentResponse.Status status,
+                                                   String paymentReference, String confirmation,
+                                                   UUID paymentId) {
         return InnbucksPaymentResponse.builder()
+                .paymentId(paymentId)
                 .paymentReference(paymentReference)
                 .bookingId(bookingId)
                 .orderType(OrderType.BOOKING)
@@ -109,11 +116,14 @@ class PaymentControllerTest {
     void processPayment_success_keepsStubReceiptShape() {
         Fixture f = fixture();
         UUID bookingId = UUID.randomUUID();
-        UUID refUuid = UUID.randomUUID();
+        UUID paymentRowId = UUID.randomUUID();
         replayLookup(f, bookingId).thenReturn(Optional.empty());
         when(f.innbucks().processPayment(eq(OrderType.BOOKING), eq(bookingId.toString()), isNull(), isNull()))
                 .thenReturn(outcome(bookingId, InnbucksPaymentResponse.Status.SUCCESS,
-                        "TKT-PMT-" + refUuid, "INN-20260502-AB12CD"));
+                        // The modern settlement format — TKZ-<TAG>-<hex>, no UUID
+                        // in it. transactionId must come from the ledger row id,
+                        // not from parsing this.
+                        "TKZ-PINKRUN26-4F3A2B1C0D9E", "INN-20260502-AB12CD", paymentRowId));
 
         ResponseEntity<ApiResult<PaymentResponse>> resp =
                 f.controller().processPayment(paymentFor(bookingId));
@@ -125,8 +135,11 @@ class PaymentControllerTest {
         assertEquals(0, new BigDecimal("100.00").compareTo(data.getAmountPaid()));
         assertEquals("USD", data.getCurrency());
         assertEquals("INN-20260502-AB12CD", data.getConfirmationNumber());
-        // transactionId is the UUID inside our TKT-PMT-<uuid> reference — stable, not random.
-        assertEquals(refUuid, data.getTransactionId());
+        // transactionId is the payment ROW id — stable across the first
+        // response and every replay. It used to be parsed out of the payment
+        // reference, which silently produced a fresh random UUID per call once
+        // references moved to the TKZ-<TAG>-<hex> format.
+        assertEquals(paymentRowId, data.getTransactionId());
         assertNotNull(data.getProcessedAt());
         // Additive order identity — booking rows still echo bookingId.
         assertEquals(OrderType.BOOKING, data.getOrderType());
