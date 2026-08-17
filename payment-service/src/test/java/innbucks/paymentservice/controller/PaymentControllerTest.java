@@ -203,6 +203,96 @@ class PaymentControllerTest {
         assertEquals("701442918", data.getPaymentCode());
     }
 
+    /** Replay a BOOKING row in the given ledger state and return the response. */
+    private PaymentResponse replayInState(Fixture f, UUID bookingId,
+                                          Payment.PaymentStatus state,
+                                          java.util.function.Consumer<Payment.PaymentBuilder> tweak) {
+        Payment.PaymentBuilder b = Payment.builder()
+                .id(UUID.randomUUID())
+                .paymentReference("TKT-PMT-" + UUID.randomUUID())
+                .orderType(OrderType.BOOKING).orderRef(bookingId.toString())
+                .bookingId(bookingId).customerMsisdn("+263770000001")
+                .amount(new BigDecimal("100.00")).currency("USD")
+                .paymentRail(innbucks.paymentservice.entity.PaymentRail.INNBUCKS_CODE)
+                .createdAt(java.time.Instant.now())
+                .status(state);
+        tweak.accept(b);
+        replayLookup(f, bookingId).thenReturn(Optional.of(b.build()));
+        return f.controller().processPayment(paymentFor(bookingId)).getBody().getData();
+    }
+
+    @Test
+    void replay_stageDiscriminatesTheSixProcessingStates_andAnswersTheMoneyQuestion() {
+        // `status` collapses all of these to PROCESSING; `stage` is what the
+        // FE branches on, and fundsCaptured is the money question. Reading
+        // the human-facing `message` was previously the ONLY discriminator.
+
+        // Money HAS moved — the confident "payment received, confirming" screen.
+        PaymentResponse unconfirmed = replayInState(fixture(), UUID.randomUUID(),
+                Payment.PaymentStatus.COMPLETED_UNCONFIRMED, b -> { });
+        assertEquals(PaymentResponse.Status.PROCESSING, unconfirmed.getStatus());
+        assertEquals(PaymentResponse.Stage.PAYMENT_RECEIVED, unconfirmed.getStage());
+        assertEquals(Boolean.TRUE, unconfirmed.getFundsCaptured());
+
+        // Nothing charged — a live code awaiting the customer.
+        PaymentResponse awaiting = replayInState(fixture(), UUID.randomUUID(),
+                Payment.PaymentStatus.TOKEN_ISSUED,
+                b -> b.innbucksCode("701285660")
+                        .codeExpiresAt(java.time.Instant.now().plusSeconds(300)));
+        assertEquals(PaymentResponse.Status.PROCESSING, awaiting.getStatus());
+        assertEquals(PaymentResponse.Stage.AWAITING_PAYMENT, awaiting.getStage());
+        assertEquals(Boolean.FALSE, awaiting.getFundsCaptured());
+
+        // Nothing charged — the code lapsed; retry mints a fresh one.
+        PaymentResponse expired = replayInState(fixture(), UUID.randomUUID(),
+                Payment.PaymentStatus.TOKEN_ISSUED,
+                b -> b.innbucksCode("701285660")
+                        .codeExpiresAt(java.time.Instant.now().minusSeconds(60)));
+        assertEquals(PaymentResponse.Stage.INSTRUMENT_EXPIRED, expired.getStage());
+        assertEquals(Boolean.FALSE, expired.getFundsCaptured());
+
+        // Nothing charged — request in flight, no instrument minted yet.
+        PaymentResponse pending = replayInState(fixture(), UUID.randomUUID(),
+                Payment.PaymentStatus.PENDING, b -> { });
+        assertEquals(PaymentResponse.Stage.IN_PROGRESS, pending.getStage());
+        assertEquals(Boolean.FALSE, pending.getFundsCaptured());
+
+        // UNKNOWN — never claim either way to the customer.
+        PaymentResponse inDoubt = replayInState(fixture(), UUID.randomUUID(),
+                Payment.PaymentStatus.IN_DOUBT, b -> { });
+        assertEquals(PaymentResponse.Stage.VERIFYING, inDoubt.getStage());
+        assertNull(inDoubt.getFundsCaptured(),
+                "IN_DOUBT must report null, not false — money may have moved");
+
+        // Terminal success.
+        PaymentResponse done = replayInState(fixture(), UUID.randomUUID(),
+                Payment.PaymentStatus.SUCCEEDED, b -> b.confirmationNumber("INN-1"));
+        assertEquals(PaymentResponse.Status.SUCCESS, done.getStatus());
+        assertEquals(PaymentResponse.Stage.COMPLETED, done.getStage());
+        assertEquals(Boolean.TRUE, done.getFundsCaptured());
+    }
+
+    @Test
+    void freshCodeIssue_isAwaitingPayment_notCaptured() {
+        Fixture f = fixture();
+        UUID bookingId = UUID.randomUUID();
+        replayLookup(f, bookingId).thenReturn(Optional.empty());
+        when(f.innbucks().processPayment(eq(OrderType.BOOKING), eq(bookingId.toString()), isNull(), isNull()))
+                .thenReturn(InnbucksPaymentResponse.builder()
+                        .paymentReference("TKT-PMT-" + UUID.randomUUID())
+                        .bookingId(bookingId).orderType(OrderType.BOOKING)
+                        .orderRef(bookingId.toString())
+                        .status(InnbucksPaymentResponse.Status.PROCESSING)
+                        .amountPaid(new BigDecimal("100.00")).currency("USD")
+                        .paymentCode("701285660")
+                        .build());
+
+        PaymentResponse data = f.controller().processPayment(paymentFor(bookingId)).getBody().getData();
+
+        assertEquals(PaymentResponse.Stage.AWAITING_PAYMENT, data.getStage());
+        assertEquals(Boolean.FALSE, data.getFundsCaptured());
+    }
+
     @Test
     void processPayment_marketplaceReplay_returnsExistingReceipt() {
         Fixture f = fixture();
