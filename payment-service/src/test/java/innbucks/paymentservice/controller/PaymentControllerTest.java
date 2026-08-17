@@ -64,22 +64,24 @@ class PaymentControllerTest {
     /** Controller with mockable real-flow collaborators. */
     private record Fixture(PaymentController controller,
                            InnbucksPaymentService innbucks, PaymentRepository payments,
-                           PaymentRecordService records) {}
+                           PaymentRecordService records,
+                           innbucks.paymentservice.service.ZimswitchCardPaymentService card) {}
 
     private static Fixture fixture() {
         InnbucksPaymentService innbucks = mock(InnbucksPaymentService.class);
         PaymentRepository payments = mock(PaymentRepository.class);
         PaymentRecordService records = mock(PaymentRecordService.class);
+        var card = mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class);
         PaymentController controller = new PaymentController(
                 mock(LoyaltyServiceClient.class), newMetrics(),
-                innbucks, mock(innbucks.paymentservice.service.ZimswitchCardPaymentService.class),
+                innbucks, card,
                 new innbucks.paymentservice.client.ZimswitchProperties(), records, payments);
         org.springframework.test.util.ReflectionTestUtils.setField(controller, "cellCurrency", "USD");
         // Default: the instant check reports PENDING (poller stays authoritative)
         // so replay tests exercise the plain replay path unless they say otherwise.
         lenient().when(innbucks.tryResolveOpenCode(any()))
                 .thenReturn(InnbucksPaymentService.InstantCheckOutcome.PENDING);
-        return new Fixture(controller, innbucks, payments, records);
+        return new Fixture(controller, innbucks, payments, records, card);
     }
 
     /** Stubs the repository's replay lookup for a BOOKING order key. */
@@ -249,7 +251,12 @@ class PaymentControllerTest {
                 b -> b.innbucksCode("701285660")
                         .codeExpiresAt(java.time.Instant.now().minusSeconds(60)));
         assertEquals(PaymentResponse.Stage.INSTRUMENT_EXPIRED, expired.getStage());
-        assertEquals(Boolean.FALSE, expired.getFundsCaptured());
+        // null, NOT false. A row is only SEEN in this state while the
+        // reconciler has not yet concluded the instrument went unpaid — and
+        // it deliberately refuses to conclude that when the upstream status
+        // is unreadable, because the customer may have paid. A row proven
+        // unpaid becomes terminal EXPIRED and stops being replayed at all.
+        assertNull(expired.getFundsCaptured());
 
         // Nothing charged — request in flight, no instrument minted yet.
         PaymentResponse pending = replayInState(fixture(), UUID.randomUUID(),
@@ -270,6 +277,52 @@ class PaymentControllerTest {
         assertEquals(PaymentResponse.Status.SUCCESS, done.getStatus());
         assertEquals(PaymentResponse.Stage.COMPLETED, done.getStage());
         assertEquals(Boolean.TRUE, done.getFundsCaptured());
+    }
+
+    @Test
+    void cardInstantCheck_echoMismatchParkedInDoubt_isNeverReportedAsNotCharged() {
+        // The instant check returns PENDING for an echo mismatch (the money
+        // outcome is UNKNOWN, so it is not a PAID result) but has ALREADY
+        // parked the row IN_DOUBT in its own REQUIRES_NEW transaction. The
+        // caller's in-memory row still says TOKEN_ISSUED, so replaying it
+        // would answer "awaiting payment / you were not charged" — and
+        // re-render the card widget — for a payment that may have taken the
+        // customer's money. The controller must re-read.
+        Fixture f = fixture();
+        UUID bookingId = UUID.randomUUID();
+        UUID paymentId = UUID.randomUUID();
+
+        Payment.PaymentBuilder base = Payment.builder()
+                .id(paymentId).paymentReference("TKZ-PINKRUN26-4F3A2B1C0D9E")
+                .orderType(OrderType.BOOKING).orderRef(bookingId.toString())
+                .bookingId(bookingId).customerMsisdn("+263770000001")
+                .amount(new BigDecimal("92.00")).currency("USD")
+                .paymentRail(innbucks.paymentservice.entity.PaymentRail.ZIMSWITCH_CARD)
+                .checkoutId("67b6338009845562954024F5A44FC2AE.uat01-vm-tx04")
+                .createdAt(java.time.Instant.now())
+                .codeExpiresAt(java.time.Instant.now().plusSeconds(600));
+
+        // What the replay lookup hands the controller: the STALE pre-check row.
+        replayLookup(f, bookingId).thenReturn(Optional.of(
+                base.status(Payment.PaymentStatus.TOKEN_ISSUED).build()));
+        // The instant check parks IN_DOUBT and reports PENDING.
+        when(f.card().resolveOpenCheckout(any(), any()))
+                .thenReturn(innbucks.paymentservice.service.ZimswitchCardPaymentService
+                        .CardCheckOutcome.PENDING);
+        // The DB now holds the parked row.
+        when(f.payments().findById(paymentId)).thenReturn(Optional.of(
+                base.status(Payment.PaymentStatus.IN_DOUBT).build()));
+
+        PaymentResponse data = f.controller().processPayment(paymentFor(bookingId)).getBody().getData();
+
+        assertEquals(PaymentResponse.Stage.VERIFYING, data.getStage(),
+                "a row parked IN_DOUBT must report VERIFYING, not AWAITING_PAYMENT");
+        assertNull(data.getFundsCaptured(),
+                "money may have moved — never answer false here");
+        // And critically: do not invite a second payment on that checkout.
+        assertNull(data.getCheckoutId());
+        assertNull(data.getCheckoutScriptUrl());
+        assertNull(data.getShopperResultUrl());
     }
 
     @Test

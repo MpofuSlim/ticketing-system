@@ -124,14 +124,19 @@ public class PaymentController {
                     "|---|---|---|\n" +
                     "| `AWAITING_PAYMENT` | `false` | instrument live — render the code/QR or the card widget |\n" +
                     "| `IN_PROGRESS` | `false` | request in flight, no instrument yet — retry shortly |\n" +
-                    "| `INSTRUMENT_EXPIRED` | `false` | lapsed unpaid — offer Pay again (mints a fresh one) |\n" +
+                    "| `INSTRUMENT_EXPIRED` | `null` | our deadline passed, upstream outcome NOT yet resolved — slot still held |\n" +
                     "| `PAYMENT_UNAVAILABLE` | `false` | cannot present an instrument (config/outage) — do NOT auto-retry |\n" +
                     "| `PAYMENT_RECEIVED` | `true` | **money captured**, order confirming — the confident receipt screen |\n" +
                     "| `COMPLETED` | `true` | captured AND confirmed (pairs with `status=SUCCESS`) |\n" +
                     "| `VERIFYING` | `null` | **UNKNOWN** — money may or may not have moved; direct to support |\n\n" +
                     "`fundsCaptured` is deliberately nullable: `null` means we genuinely do not know, and " +
                     "reporting `false` there would tell a customer who may have paid that nothing was " +
-                    "charged. Treat unrecognised `stage` values as `IN_PROGRESS`.\n\n" +
+                    "charged. Note `INSTRUMENT_EXPIRED` is `null`, not `false` — a client only ever sees " +
+                    "it while the reconciler has not concluded the instrument went unpaid (a row proven " +
+                    "unpaid goes terminal and is not replayed), and the order's payment slot is still " +
+                    "held, so re-POSTing returns the same state rather than minting a fresh instrument. " +
+                    "For an unrecognised `stage`, do NOT assume a money answer — read `fundsCaptured` and " +
+                    "treat `null` as unknown.\n\n" +
                     "**How the FE knows it's done (status lifecycle):** this endpoint returns `PROCESSING` " +
                     "immediately; it does NOT block until payment. The customer then approves the code in " +
                     "their InnBucks app, and a background poller confirms the order within ~20s. For " +
@@ -370,9 +375,21 @@ public class PaymentController {
                     log.info("POST /payments card instant-check EXPIRED orderType={} orderRef={} — starting fresh",
                             key.type(), key.ref());
                 } else {
-                    log.info("POST /payments card replay after instant check orderType={} orderRef={} paymentReference={}",
-                            key.type(), key.ref(), p.getPaymentReference());
-                    return toReplayResponse(p, key);
+                    // RE-READ, do not reuse `p`. A PENDING verdict does NOT
+                    // mean the row is unchanged: an echo mismatch on a PAID
+                    // read parks the row IN_DOUBT and still reports PENDING
+                    // (the money outcome is unknown, so it is not a PAID
+                    // result). markInDoubt runs REQUIRES_NEW on its own loaded
+                    // instance, so this `p` still says TOKEN_ISSUED — replaying
+                    // it would answer stage=AWAITING_PAYMENT + fundsCaptured=
+                    // false and re-render the card widget for a payment that
+                    // may already have taken the customer's money. Both harms
+                    // point the wrong way: a false "you were not charged", and
+                    // an invitation to pay a second time.
+                    Payment afterCheck = paymentRepository.findById(p.getId()).orElse(p);
+                    log.info("POST /payments card replay after instant check orderType={} orderRef={} paymentReference={} status={}",
+                            key.type(), key.ref(), p.getPaymentReference(), afterCheck.getStatus());
+                    return toReplayResponse(afterCheck, key);
                 }
             } else if (p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED
                     && p.getInnbucksCode() != null) {
@@ -392,9 +409,20 @@ public class PaymentController {
                     log.info("POST /payments instant-check EXPIRED orderType={} orderRef={} — minting a fresh code",
                             key.type(), key.ref());
                 } else {
-                    log.info("POST /payments replay after instant check (still pending upstream) orderType={} orderRef={} paymentReference={}",
-                            key.type(), key.ref(), p.getPaymentReference());
-                    return toReplayResponse(p, key);
+                    // Re-read for the same reason as the card branch above.
+                    // DEFENSIVE here rather than a live bug: today
+                    // tryResolveOpenCode only mutates on PAID/EXPIRED and
+                    // leaves the row untouched when it reports PENDING. But
+                    // that was equally true of the card rail until a
+                    // mutating-and-still-PENDING path (echo mismatch → park
+                    // IN_DOUBT) was added, and the failure it produces is a
+                    // false "you were not charged" on a paid row. One query
+                    // on a path that just made a network call is a cheap way
+                    // to make the branch correct by construction.
+                    Payment afterCheck = paymentRepository.findById(p.getId()).orElse(p);
+                    log.info("POST /payments replay after instant check (still pending upstream) orderType={} orderRef={} paymentReference={} status={}",
+                            key.type(), key.ref(), p.getPaymentReference(), afterCheck.getStatus());
+                    return toReplayResponse(afterCheck, key);
                 }
             } else {
                 log.info("POST /payments replay orderType={} orderRef={} existing paymentReference={} status={}",
