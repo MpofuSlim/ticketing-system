@@ -22,6 +22,88 @@ public class PaymentResponse {
      */
     public enum Status { SUCCESS, PROCESSING, FAILED }
 
+    /**
+     * Additive, machine-readable refinement of {@link Status}. {@code status}
+     * is the historical coarse contract and stays exactly as it was —
+     * {@code PROCESSING} covers six distinct ledger states, and until this
+     * field existed the ONLY way to tell them apart was reading the
+     * human-facing {@code message} prose. Prose is not a contract: it is
+     * localisable, reworded freely, and must never be branched on.
+     *
+     * <p>Clients should switch on {@code stage} and treat an unrecognised
+     * value as {@link #IN_PROGRESS} (new values may be added; none will be
+     * removed).
+     */
+    public enum Stage {
+        /**
+         * A payment instrument is live and renderable — the customer must act
+         * (enter card details, or approve the InnBucks code). NOTHING has been
+         * charged. Render the payment UI.
+         */
+        AWAITING_PAYMENT,
+        /**
+         * The request is in flight server-side; no instrument exists yet.
+         * Nothing charged. Show a spinner and retry shortly.
+         */
+        IN_PROGRESS,
+        /**
+         * The instrument lapsed unpaid. Nothing charged, and the order's
+         * payment slot is free — offer "Pay again", which mints a fresh one.
+         */
+        INSTRUMENT_EXPIRED,
+        /**
+         * We cannot present a payment instrument right now (deployment
+         * misconfiguration or gateway outage). Nothing charged. Retrying
+         * returns this same state until an operator fixes it, so show the
+         * message rather than an automatic retry loop.
+         */
+        PAYMENT_UNAVAILABLE,
+        /**
+         * <b>Money HAS been captured</b> and the order is being confirmed.
+         * This is the state that deserves a confident "payment received,
+         * confirming your booking…" screen. Confirmation normally lands
+         * within seconds; keep polling the order.
+         */
+        PAYMENT_RECEIVED,
+        /** Money captured AND the order confirmed. Terminal; pairs with {@link Status#SUCCESS}. */
+        COMPLETED,
+        /**
+         * The outcome is genuinely UNKNOWN to us — the upstream answer was
+         * unreadable or contradicted our ledger, and the row is parked for an
+         * operator. Money may or may not have moved, so
+         * {@code fundsCaptured} is {@code null}. Do NOT claim either outcome
+         * to the customer; direct them to support.
+         */
+        VERIFYING;
+
+        /**
+         * The money question, answered from the stage alone — the ONE place
+         * the mapping lives, so {@code stage} and {@code fundsCaptured} can
+         * never disagree.
+         *
+         * <p>The default is deliberately {@code null} (unknown) rather than
+         * {@code false}: a stage added later without updating this switch
+         * should fail SAFE by admitting ignorance, not by asserting that no
+         * money moved.
+         */
+        public Boolean fundsCaptured() {
+            return switch (this) {
+                case PAYMENT_RECEIVED, COMPLETED -> Boolean.TRUE;
+                case AWAITING_PAYMENT, IN_PROGRESS, INSTRUMENT_EXPIRED, PAYMENT_UNAVAILABLE -> Boolean.FALSE;
+                case VERIFYING -> null;
+            };
+        }
+    }
+
+    /** Set {@link #stage} and derive {@link #fundsCaptured} together. */
+    public static class PaymentResponseBuilder {
+        public PaymentResponseBuilder stage(Stage stage) {
+            this.stage = stage;
+            this.fundsCaptured = stage == null ? null : stage.fundsCaptured();
+            return this;
+        }
+    }
+
     private UUID transactionId;
 
     /**
@@ -38,6 +120,43 @@ public class PaymentResponse {
     private String orderRef;
 
     private Status status;
+
+    /**
+     * Additive discriminator — see {@link Stage}. Always populated.
+     */
+    private Stage stage;
+
+    /**
+     * <b>Has money actually left the customer?</b> Deliberately a nullable
+     * {@code Boolean}, not a primitive, because there are THREE honest
+     * answers and only two of them are booleans:
+     *
+     * <ul>
+     *   <li>{@code true}  — captured ({@link Stage#PAYMENT_RECEIVED},
+     *       {@link Stage#COMPLETED}).</li>
+     *   <li>{@code false} — definitively not captured (awaiting payment,
+     *       in progress, expired, unavailable).</li>
+     *   <li>{@code null}  — <b>UNKNOWN</b> ({@link Stage#VERIFYING}). The
+     *       row is parked for an operator. Returning {@code false} here would
+     *       tell a customer who may have paid that nothing was charged;
+     *       returning {@code true} would promise a ticket we cannot yet back.
+     *       Treat null as "don't claim either way".</li>
+     * </ul>
+     *
+     * Derived from {@link #stage} in one place so the two cannot drift.
+     *
+     * <p><b>{@code ALWAYS} is load-bearing, not decoration.</b> Several sibling
+     * DTOs in this package carry {@code @JsonInclude(NON_NULL)} at class level,
+     * so adding it here later would be the natural-looking change — and it
+     * would silently delete the key for exactly the VERIFYING case, leaving a
+     * client unable to distinguish "we don't know" from "old server that
+     * doesn't send this field". Field-level inclusion beats class-level, so
+     * this survives that edit. {@code PaymentResponseSerializationTest} fails
+     * if the key ever goes missing.
+     */
+    @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)
+    private Boolean fundsCaptured;
+
     private BigDecimal amountPaid;
     private String currency;
     private String confirmationNumber;

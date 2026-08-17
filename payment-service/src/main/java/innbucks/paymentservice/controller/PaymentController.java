@@ -115,6 +115,23 @@ public class PaymentController {
                     "`paymentCode`, `paymentCodeExpiresAt` and `paymentQrCode` — the FE renders both the " +
                     "typed code and the InnBucks-rendered QR (base64) on the checkout screen. No out-of-band " +
                     "delivery: the response IS the delivery.\n\n" +
+                    "**Branch on `stage`, never on `message`.** `status` is the coarse historical " +
+                    "contract and its `PROCESSING` value covers six different situations; `message` is " +
+                    "human prose that gets reworded and localised. The additive `stage` field is the " +
+                    "machine-readable discriminator, and `fundsCaptured` answers the money question " +
+                    "directly:\n\n" +
+                    "| `stage` | `fundsCaptured` | meaning |\n" +
+                    "|---|---|---|\n" +
+                    "| `AWAITING_PAYMENT` | `false` | instrument live — render the code/QR or the card widget |\n" +
+                    "| `IN_PROGRESS` | `false` | request in flight, no instrument yet — retry shortly |\n" +
+                    "| `INSTRUMENT_EXPIRED` | `false` | lapsed unpaid — offer Pay again (mints a fresh one) |\n" +
+                    "| `PAYMENT_UNAVAILABLE` | `false` | cannot present an instrument (config/outage) — do NOT auto-retry |\n" +
+                    "| `PAYMENT_RECEIVED` | `true` | **money captured**, order confirming — the confident receipt screen |\n" +
+                    "| `COMPLETED` | `true` | captured AND confirmed (pairs with `status=SUCCESS`) |\n" +
+                    "| `VERIFYING` | `null` | **UNKNOWN** — money may or may not have moved; direct to support |\n\n" +
+                    "`fundsCaptured` is deliberately nullable: `null` means we genuinely do not know, and " +
+                    "reporting `false` there would tell a customer who may have paid that nothing was " +
+                    "charged. Treat unrecognised `stage` values as `IN_PROGRESS`.\n\n" +
                     "**How the FE knows it's done (status lifecycle):** this endpoint returns `PROCESSING` " +
                     "immediately; it does NOT block until payment. The customer then approves the code in " +
                     "their InnBucks app, and a background poller confirms the order within ~20s. For " +
@@ -148,6 +165,8 @@ public class PaymentController {
                                                 "orderType": "BOOKING",
                                                 "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
                                                 "status": "PROCESSING",
+                                                "stage": "AWAITING_PAYMENT",
+                                                "fundsCaptured": false,
                                                 "amountPaid": 100.00,
                                                 "currency": "USD",
                                                 "confirmationNumber": null,
@@ -168,6 +187,8 @@ public class PaymentController {
                                                 "orderType": "BOOKING",
                                                 "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
                                                 "status": "SUCCESS",
+                                                "stage": "COMPLETED",
+                                                "fundsCaptured": true,
                                                 "amountPaid": 100.00,
                                                 "currency": "USD",
                                                 "confirmationNumber": "INN-20260611-AB12CD",
@@ -188,6 +209,8 @@ public class PaymentController {
                                                 "orderType": "BOOKING",
                                                 "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
                                                 "status": "PROCESSING",
+                                                "stage": "AWAITING_PAYMENT",
+                                                "fundsCaptured": false,
                                                 "amountPaid": 100.00,
                                                 "currency": "USD",
                                                 "confirmationNumber": null,
@@ -212,6 +235,8 @@ public class PaymentController {
                                                 "orderType": "MARKETPLACE",
                                                 "orderRef": "MKT-4F9A1C22B7D3",
                                                 "status": "PROCESSING",
+                                                "stage": "AWAITING_PAYMENT",
+                                                "fundsCaptured": false,
                                                 "amountPaid": 35.50,
                                                 "currency": "USD",
                                                 "confirmationNumber": null,
@@ -450,6 +475,12 @@ public class PaymentController {
                 // DEFAULT payment path as the only response carrying no rail
                 // — an FE with explicit per-rail arms renders nothing.
                 .paymentRail(innbucks.paymentservice.entity.PaymentRail.INNBUCKS_CODE)
+                // Fresh outcome: SUCCESS means captured + confirmed; the only
+                // other value reaching here is PROCESSING with a live code
+                // (FAILED returns via error() above), i.e. nothing charged yet.
+                .stage(status == PaymentResponse.Status.SUCCESS
+                        ? PaymentResponse.Stage.COMPLETED
+                        : PaymentResponse.Stage.AWAITING_PAYMENT)
                 .paymentCode(outcome.getPaymentCode())
                 .paymentCodeExpiresAt(outcome.getPaymentCodeExpiresAt())
                 .paymentQrCode(outcome.getPaymentQrCode())
@@ -487,6 +518,9 @@ public class PaymentController {
                 .currency(p.getCurrency() != null ? p.getCurrency() : cellCurrency)
                 .processedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .paymentRail(innbucks.paymentservice.entity.PaymentRail.ZIMSWITCH_CARD)
+                // A freshly prepared checkout is always awaiting card entry —
+                // preparing one moves no money.
+                .stage(PaymentResponse.Stage.AWAITING_PAYMENT)
                 .checkoutId(outcome.checkoutId())
                 .checkoutScriptUrl(outcome.widgetScriptUrl())
                 .checkoutIntegrity(outcome.checkoutIntegrity())
@@ -528,7 +562,37 @@ public class PaymentController {
         var cardArtifacts = cardRow && hasOpenInstrument
                 ? zimswitchCardPaymentService.replayOpenCheckout(p) : null;
         boolean awaitingApproval = hasOpenInstrument && (!cardRow || cardArtifacts != null);
+        // ONE derivation of the machine-readable state, reused for the prose
+        // below so the two can never disagree. Ordered most-specific first;
+        // the fallthrough is deliberately VERIFYING (unknown), never a
+        // confident "nothing was charged" — see PaymentResponse.Stage.
+        PaymentResponse.Stage stage;
+        if (p.getStatus() == Payment.PaymentStatus.SUCCEEDED) {
+            stage = PaymentResponse.Stage.COMPLETED;
+        } else if (awaitingApproval) {
+            stage = PaymentResponse.Stage.AWAITING_PAYMENT;
+        } else if (cardRow && hasOpenInstrument) {
+            // Live checkout we cannot render on this cell.
+            stage = PaymentResponse.Stage.PAYMENT_UNAVAILABLE;
+        } else if (p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED) {
+            stage = PaymentResponse.Stage.INSTRUMENT_EXPIRED;
+        } else if (p.getStatus() == Payment.PaymentStatus.COMPLETED_UNCONFIRMED) {
+            // The money HAS moved — the one PROCESSING state that earns a
+            // confident "payment received" screen.
+            stage = PaymentResponse.Stage.PAYMENT_RECEIVED;
+        } else if (p.getStatus() == Payment.PaymentStatus.PENDING) {
+            // Row opened before the upstream call. No money can move on
+            // either rail without customer action (code approval / card
+            // entry), so "not captured" is safe here.
+            stage = PaymentResponse.Stage.IN_PROGRESS;
+        } else {
+            // IN_DOUBT, plus the reserved states that have no writer. Money
+            // may or may not have moved; admitting that is the only honest
+            // answer and the only safe one.
+            stage = PaymentResponse.Stage.VERIFYING;
+        }
         PaymentResponse response = PaymentResponse.builder()
+                .stage(stage)
                 .transactionId(p.getId())
                 .bookingId(p.getBookingId())
                 .orderType(key.type())
@@ -551,33 +615,27 @@ public class PaymentController {
                 .checkoutExpiresAt(cardArtifacts != null && p.getCodeExpiresAt() != null
                         ? LocalDateTime.ofInstant(p.getCodeExpiresAt(), ZoneOffset.UTC) : null)
                 .build();
-        String message;
-        if (status == PaymentResponse.Status.SUCCESS) {
-            message = "Payment processed successfully";
-        } else if (awaitingApproval) {
-            message = cardRow
+        // Prose for humans, derived FROM the stage above — never the other way
+        // round. Clients must branch on `stage`, never on this text: it is
+        // reworded freely and will be localised.
+        String message = switch (stage) {
+            case COMPLETED -> "Payment processed successfully";
+            case AWAITING_PAYMENT -> cardRow
                     ? "Enter your card details to complete your " + noun
                     : "Approve the payment in your InnBucks app to complete your " + noun;
-        } else if (cardRow && hasOpenInstrument) {
-            // Live checkout we cannot render on this cell (unusable
-            // shopperResultUrl). "Expired — tap Pay again" would be a lie AND
-            // a loop: the row still holds the order's slot, so a retry
-            // returns this same state. Say something true instead; the
-            // ERROR log + card_resolution{outcome=replay_unrenderable}
+            // "Expired — tap Pay again" would be a lie AND a loop here: the row
+            // still holds the order's slot, so a retry returns this same state.
+            // The ERROR log + card_resolution{outcome=replay_unrenderable}
             // counter are what actually get an operator to fix the config.
-            message = "Card payment is temporarily unavailable — please try again shortly "
+            case PAYMENT_UNAVAILABLE -> "Card payment is temporarily unavailable — please try again shortly "
                     + "or contact support if this persists";
-        } else if (p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED) {
-            message = cardRow
+            case INSTRUMENT_EXPIRED -> cardRow
                     ? "Your previous card checkout expired — tap Pay again to start a new one"
                     : "Your previous payment code expired — tap Pay again in a moment to get a fresh one";
-        } else if (p.getStatus() == Payment.PaymentStatus.COMPLETED_UNCONFIRMED) {
-            message = "Payment received; your " + noun + " is being confirmed";
-        } else if (p.getStatus() == Payment.PaymentStatus.PENDING) {
-            message = "Your payment is already being processed — please retry in a moment";
-        } else {
-            message = "Your payment is being verified — contact support if this persists";
-        }
+            case PAYMENT_RECEIVED -> "Payment received; your " + noun + " is being confirmed";
+            case IN_PROGRESS -> "Your payment is already being processed — please retry in a moment";
+            case VERIFYING -> "Your payment is being verified — contact support if this persists";
+        };
         return ResponseEntity.ok(ApiResult.ok(message, response));
     }
 
