@@ -443,6 +443,13 @@ public class PaymentController {
                 .currency(outcome.getCurrency() != null ? outcome.getCurrency() : cellCurrency)
                 .confirmationNumber(outcome.getConfirmationNumber())
                 .processedAt(LocalDateTime.now(ZoneOffset.UTC))
+                // This method serves the 2D-code rail exclusively (the card
+                // branch returns via toCardResponse), so the rail is known.
+                // It MUST be stated: clients branch on the rail they RECEIVE,
+                // not the one they asked for, and omitting it here left the
+                // DEFAULT payment path as the only response carrying no rail
+                // — an FE with explicit per-rail arms renders nothing.
+                .paymentRail(innbucks.paymentservice.entity.PaymentRail.INNBUCKS_CODE)
                 .paymentCode(outcome.getPaymentCode())
                 .paymentCodeExpiresAt(outcome.getPaymentCodeExpiresAt())
                 .paymentQrCode(outcome.getPaymentQrCode())
@@ -509,14 +516,18 @@ public class PaymentController {
         boolean cardRow = p.getPaymentRail() == innbucks.paymentservice.entity.PaymentRail.ZIMSWITCH_CARD;
         boolean codeStillLive = p.getCodeExpiresAt() == null
                 || p.getCodeExpiresAt().isAfter(java.time.Instant.now());
-        boolean awaitingApproval = p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED
+        boolean hasOpenInstrument = p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED
                 && codeStillLive
                 && (cardRow ? p.getCheckoutId() != null : p.getInnbucksCode() != null);
         // Card rows re-surface the SAME open checkout (the gateway's
         // documented reuse model — reload/back-button/declined-retry all
         // re-render one checkout); code rows re-surface the live code + QR.
-        var cardArtifacts = cardRow && awaitingApproval
+        // A null here means the artifacts exist but are not renderable on
+        // this cell (unusable shopperResultUrl) — treat the row as NOT
+        // awaiting approval so we never advertise a dead payment form.
+        var cardArtifacts = cardRow && hasOpenInstrument
                 ? zimswitchCardPaymentService.replayOpenCheckout(p) : null;
+        boolean awaitingApproval = hasOpenInstrument && (!cardRow || cardArtifacts != null);
         PaymentResponse response = PaymentResponse.builder()
                 .transactionId(p.getId())
                 .bookingId(p.getBookingId())
@@ -547,6 +558,15 @@ public class PaymentController {
             message = cardRow
                     ? "Enter your card details to complete your " + noun
                     : "Approve the payment in your InnBucks app to complete your " + noun;
+        } else if (cardRow && hasOpenInstrument) {
+            // Live checkout we cannot render on this cell (unusable
+            // shopperResultUrl). "Expired — tap Pay again" would be a lie AND
+            // a loop: the row still holds the order's slot, so a retry
+            // returns this same state. Say something true instead; the
+            // ERROR log + card_resolution{outcome=replay_unrenderable}
+            // counter are what actually get an operator to fix the config.
+            message = "Card payment is temporarily unavailable — please try again shortly "
+                    + "or contact support if this persists";
         } else if (p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED) {
             message = cardRow
                     ? "Your previous card checkout expired — tap Pay again to start a new one"

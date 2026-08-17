@@ -274,6 +274,38 @@ class ZimswitchCardPaymentServiceTest {
     }
 
     @Test
+    @DisplayName("REPLAY on a half-provisioned cell returns NO artifacts — never a widget with an empty form action")
+    void replayOpenCheckout_refusesWhenResultUrlUnusable() {
+        // The gap the start-gate alone left: a row minted before the cell was
+        // fully provisioned (or by an old pod mid-rolling-deploy) would replay
+        // a COMPLETE artifact set with a blank shopperResultUrl — exactly the
+        // unrenderable response the start gate exists to prevent.
+        when(client.canStartCheckout()).thenReturn(false);
+
+        assertThat(service.replayOpenCheckout(openCardRow())).isNull();
+    }
+
+    @Test
+    @DisplayName("REPLAY on a healthy cell re-surfaces the SAME checkout's artifacts")
+    void replayOpenCheckout_reSurfacesSameCheckout() {
+        Payment p = openCardRow();
+        when(client.canStartCheckout()).thenReturn(true);
+        when(client.widgetScriptUrl(p.getCheckoutId())).thenReturn("https://gw.example/widgets?checkoutId=x");
+        properties.setShopperResultUrl("https://tickets.example.co.zw/checkout/card-result");
+        properties.setBrands("VISA MASTER");
+
+        var out = service.replayOpenCheckout(p);
+
+        assertThat(out).isNotNull();
+        // Same checkout — the gateway's documented reuse model; a second
+        // checkout here would be a double-charge surface.
+        assertThat(out.checkoutId()).isEqualTo(p.getCheckoutId());
+        assertThat(out.shopperResultUrl()).isEqualTo("https://tickets.example.co.zw/checkout/card-result");
+        assertThat(out.brands()).isEqualTo("VISA MASTER");
+        verify(client, never()).prepareCheckout(anyString(), anyLong(), anyString());
+    }
+
+    @Test
     @DisplayName("half-provisioned rail stays POLLABLE: open checkouts must still resolve")
     void halfProvisionedRail_isStillPollable() {
         // isRailConfigured() gates the reconciler sweep and must track
