@@ -30,9 +30,13 @@ public class PaymentResponse {
      * human-facing {@code message} prose. Prose is not a contract: it is
      * localisable, reworded freely, and must never be branched on.
      *
-     * <p>Clients should switch on {@code stage} and treat an unrecognised
-     * value as {@link #IN_PROGRESS} (new values may be added; none will be
-     * removed).
+     * <p>Clients should switch on {@code stage}. New values may be added;
+     * none will be removed. For an unrecognised value, do <b>not</b> map it
+     * onto a known stage — every known stage carries a money claim, so
+     * guessing imports a claim you have no basis for. Read
+     * {@code fundsCaptured} instead and treat {@code null} as unknown; UI-wise
+     * an unrecognised stage is "we're still working on this", never "you were
+     * not charged".
      */
     public enum Stage {
         /**
@@ -148,6 +152,12 @@ public class PaymentResponse {
     /**
      * Additive discriminator — see {@link Stage}. Always populated.
      */
+    @io.swagger.v3.oas.annotations.media.Schema(
+            description = "Machine-readable refinement of `status`, which collapses six situations "
+                    + "into PROCESSING. Branch on THIS, never on `message` (prose, reworded and "
+                    + "localised). For an unrecognised value do NOT assume a money answer — read "
+                    + "`fundsCaptured` and treat null as unknown.",
+            example = "AWAITING_PAYMENT")
     private Stage stage;
 
     /**
@@ -184,6 +194,14 @@ public class PaymentResponse {
      * if the key ever goes missing.
      */
     @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)
+    @io.swagger.v3.oas.annotations.media.Schema(
+            nullable = true,
+            description = "Has money actually left the customer? THREE-STATE: true = captured, "
+                    + "false = provably not captured, null = UNKNOWN (stage VERIFYING or "
+                    + "INSTRUMENT_EXPIRED). null is a real answer, not a missing value — never "
+                    + "coerce it to false, which would tell a customer who may have paid that "
+                    + "nothing was charged.",
+            example = "false")
     public Boolean getFundsCaptured() {
         return stage == null ? null : stage.fundsCaptured();
     }
