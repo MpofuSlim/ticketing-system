@@ -67,6 +67,17 @@
              netty-* artifact to ${netty.version}, so this single property bump
              cascades cleanly to every service. -->
         <netty.version>4.2.17.Final</netty.version>
+        <!-- httpcore5 5.4.2 arrives transitively through httpclient5 5.6.1 (the
+             Apache HttpClient backing Spring's RestClient/RestTemplate) and so
+             lands in EVERY service image — all seven failed the Release Trivy
+             gate on it (2026-08-17), before any push, so nothing shipped.
+             Two HIGH DoS CVEs, both fixed in 5.4.3:
+               CVE-2026-54399  httpcore5     excessive HTTP headers
+               CVE-2026-54428  httpcore5-h2  oversized HTTP/2 HPACK header
+             httpclient5 declares both artifacts explicitly rather than via a
+             BOM, so both are pinned below. Drop on the next Boot/httpclient5
+             upgrade once the transitive version reaches 5.4.3. -->
+        <httpcore5.version>5.4.3</httpcore5.version>
         <spring.cloud.version>2025.1.2</spring.cloud.version>
         <springdoc.version>3.1.0</springdoc.version>
         <testcontainers.version>1.21.3</testcontainers.version>
@@ -141,6 +152,20 @@
                 <groupId>org.postgresql</groupId>
                 <artifactId>postgresql</artifactId>
                 <version>${postgresql.version}</version>
+            </dependency>
+            <!-- See the httpcore5.version comment above: two HIGH DoS CVEs in
+                 5.4.2, which reaches every service image transitively via
+                 httpclient5. Both artifacts pinned — httpcore5-h2 is a
+                 separate GA that Trivy flags independently. -->
+            <dependency>
+                <groupId>org.apache.httpcomponents.core5</groupId>
+                <artifactId>httpcore5</artifactId>
+                <version>${httpcore5.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.httpcomponents.core5</groupId>
+                <artifactId>httpcore5-h2</artifactId>
+                <version>${httpcore5.version}</version>
             </dependency>
             <!-- Netty pulled in via Spring Cloud Gateway (api-gateway) and Spring
                  WebFlux DNS resolver in user-service. Pin the BOM rather than
