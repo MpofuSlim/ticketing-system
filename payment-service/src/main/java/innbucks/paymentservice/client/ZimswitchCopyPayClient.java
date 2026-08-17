@@ -105,12 +105,76 @@ public class ZimswitchCopyPayClient {
                 .build();
         this.retry = retryRegistry.retry(RESILIENCE_INSTANCE_NAME);
         this.circuitBreaker = circuitBreakerRegistry.circuitBreaker(RESILIENCE_INSTANCE_NAME);
+        warnOnHalfProvisionedRail();
     }
 
-    /** True when base-url + entity id + access token are present. */
+    /**
+     * Surface a half-provisioned rail at BOOT rather than at the first
+     * customer attempt. Credentials present + no usable result URL is the
+     * dangerous middle state: the rail looks live from the outside (health
+     * checks pass, config is "set") but no shopper can complete a payment.
+     * Deliberately a loud log, not a boot failure — the rail being off is a
+     * legitimate cell configuration, and refusing to boot payment-service
+     * would take the InnBucks code rail down with it.
+     */
+    private void warnOnHalfProvisionedRail() {
+        if (isConfigured() && !isUsableResultUrl(properties.getShopperResultUrl())) {
+            log.error("ZimSwitch card rail is HALF-PROVISIONED: credentials are set but "
+                    + "ZIMSWITCH_SHOPPER_RESULT_URL is blank or not an absolute http(s) URL. "
+                    + "Card checkouts will be REFUSED (503) until it is set to the FE's card-result "
+                    + "page — see docs/api/zimswitch-copyandpay.md.");
+        } else if (isConfigured()) {
+            log.info("ZimSwitch card rail configured; shopper result URL host={}",
+                    java.net.URI.create(properties.getShopperResultUrl().trim()).getHost());
+        }
+    }
+
+    /**
+     * True when we can TALK to the gateway (base-url + entity id + access
+     * token). This is the predicate the reconciler polls on: an already-open
+     * checkout must stay resolvable even if the cell's FE-facing config is
+     * incomplete, otherwise a config slip would strand paid rows.
+     *
+     * <p>Deliberately NOT sufficient to START a checkout — see
+     * {@link #canStartCheckout()}.
+     */
     public boolean isConfigured() {
         return notBlank(properties.getBaseUrl()) && notBlank(properties.getEntityId())
                 && notBlank(properties.getAccessToken());
+    }
+
+    /**
+     * True when we can start a checkout the shopper can actually COMPLETE:
+     * gateway reachable AND a usable {@code shopperResultUrl}.
+     *
+     * <p>Why this is separate from {@link #isConfigured()}: without a result
+     * URL the widget has no form action, so the FE cannot render a payment
+     * form — but the checkout we minted upstream is real and the ledger row
+     * we opened occupies the order's single payment slot (across BOTH rails)
+     * until it lapses ~28 minutes later. The customer can then neither pay by
+     * card NOR fall back to the InnBucks code. Refusing at the gate, before
+     * any ledger write, turns that into a clean 503.
+     */
+    public boolean canStartCheckout() {
+        return isConfigured() && isUsableResultUrl(properties.getShopperResultUrl());
+    }
+
+    /**
+     * The result URL must be an ABSOLUTE http(s) URL: it becomes the widget
+     * form's action and (for async brands) the gateway's redirect target, so a
+     * relative or malformed value fails in the shopper's browser mid-payment
+     * rather than here.
+     */
+    static boolean isUsableResultUrl(String url) {
+        if (!notBlank(url)) return false;
+        try {
+            java.net.URI uri = java.net.URI.create(url.trim());
+            return uri.isAbsolute()
+                    && ("http".equalsIgnoreCase(uri.getScheme()) || "https".equalsIgnoreCase(uri.getScheme()))
+                    && uri.getHost() != null;
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
     }
 
     /** Absolute widget script URL for a checkout — the FE loads this with the SRI digest. */
@@ -153,6 +217,17 @@ public class ZimswitchCopyPayClient {
         form.add("merchantTransactionId", merchantTransactionId);
         if (properties.isRequestIntegrity()) {
             form.add("integrity", "true");
+        }
+        // Sent for ASYNC brands (3-D Secure, wallets): those bounce the
+        // browser off-site, so the gateway needs its own copy of the return
+        // target — the widget's <form action> only covers the sync path. For
+        // sync brands this is redundant and ignored, which is the safe side of
+        // the asymmetry: an ignored parameter costs nothing, while a missing
+        // one strands a shopper who has just authenticated with their bank.
+        // UNVERIFIED against ZimSwitch's API Reference (page not reachable) —
+        // confirm during UAT with a 3DS test card.
+        if (notBlank(properties.getShopperResultUrl())) {
+            form.add("shopperResultUrl", properties.getShopperResultUrl().trim());
         }
         if (notBlank(properties.getTestMode())) {
             form.add("testMode", properties.getTestMode());
