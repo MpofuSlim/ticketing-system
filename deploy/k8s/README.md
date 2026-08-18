@@ -44,6 +44,37 @@ kubectl -n ticketing create configmap pg-init \
   --from-file=init-databases.sql=../../docker/postgres/init-databases.sql
 ```
 
+### Changing a value later
+
+Every service reads its whole environment through
+`envFrom: [configMapRef: cell-zw, secretRef: cell-zw-secrets]`, which has two
+consequences worth knowing before you chase a "config didn't take" ghost:
+
+- **A key absent from BOTH sources never reaches the pod.** There is no
+  per-service default to fall back on, so a variable that only exists in
+  `docker-compose.yml` or `.env.example` is simply missing on k3s. Add it to
+  `deploy/cells/cell.<iso>.env` (non-secret) or `cell.<iso>.local.env` (secret).
+- **`envFrom` is not live-reloaded.** Re-creating the ConfigMap does nothing to
+  a running pod until it restarts.
+
+So the round trip for a non-secret change is: edit `cell.zw.env`, then
+
+```sh
+kubectl -n ticketing create configmap cell-zw --from-env-file=../cells/cell.zw.env \
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n ticketing rollout restart deployment/<service>
+kubectl -n ticketing rollout status  deployment/<service>
+```
+
+> [!WARNING]
+> If a value was ever set with `kubectl set env deployment/<service> KEY=…`, that
+> writes an explicit `env:` entry which **wins over `envFrom`** — and a later
+> `kubectl apply -f 04-services.yaml` silently deletes it, because the manifest
+> has no such entry. Prefer the ConfigMap/Secret round trip above; if you must
+> use `set env` for a hotfix, fold the value back into the cell env file before
+> the next apply. `kubectl -n ticketing set env deployment/<service> --list` shows
+> what has drifted.
+
 ## 2. Apply the workloads (bottom-up)
 
 ```sh
