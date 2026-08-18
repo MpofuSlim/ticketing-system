@@ -510,6 +510,19 @@ it pins the four wire facts that are easy to get wrong. Non-negotiables:
   env-only secrets; blank = rail disabled (503 on card attempts). The
   Bearer token can create checkouts against the merchant — same custody
   rules as every other credential (A02).
+- **Config must land in `deploy/cells/cell.<iso>.env`, not just
+  `docker-compose.yml` / `.env.example`.** k3s services read their whole
+  environment via `envFrom: [configMapRef: cell-zw, secretRef: cell-zw-secrets]`,
+  so a key in neither source never reaches the pod — there is no per-service
+  default to fall back on. Shipping only the credentials (which arrive via the
+  gitignored `.local.env` → Secret) leaves the rail **half-provisioned**: it
+  looks live but `ZIMSWITCH_SHOPPER_RESULT_URL` has no source and every card
+  checkout is refused 503. That is exactly how the ZW cell shipped; the
+  distinguishing signal is the boot-time `ZimSwitch card rail is
+  HALF-PROVISIONED` ERROR and the `no_shopper_result_url` (vs `unconfigured`)
+  metric tag. Blank credentials in the committed file are deliberate — blank
+  fails SAFE (clean 503), whereas a `REPLACE_ME` placeholder is non-blank and
+  would make the rail believe itself configured and fail at the gateway.
 - Card-not-present refunds ARE supported by the platform
   (`paymentType=RF`) but are NOT modelled yet — refunds remain an operator
   procedure; see the spec doc's "Not yet modelled" list (also: webhooks,
