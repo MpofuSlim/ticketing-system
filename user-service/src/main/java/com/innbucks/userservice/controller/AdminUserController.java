@@ -358,11 +358,13 @@ public class AdminUserController {
                     every role the user should keep. Re-submitting the roles the user already has is
                     an idempotent no-op (no audit row, no session change).
 
-                    ### The seven platform roles
+                    ### The nine platform roles
 
                     | Role | What it is | How it is normally assigned |
                     |---|---|---|
                     | `SUPER_ADMIN` | Platform owner. Full access to every admin endpoint. | Seeded once from `BOOTSTRAP_ADMIN_PASSWORD`. **Never grantable or revocable here.** |
+                    | `PRODUCT_OFFICER` | Internal platform staff. Not scoped to a tenant, merchant, shop or organizer, and grants no service bundle. Treated as a system user for MFA and admin listing. | This endpoint — no prerequisites. |
+                    | `PRODUCT_MANAGER` | Internal platform staff, same shape as `PRODUCT_OFFICER`. | This endpoint — no prerequisites. |
                     | `EVENT_ORGANIZER` | Runs ticketed events — owns events, invoices, settlements and team members. | Self-registration as a business account, then `PUT /admin/users/{id}/active` to approve. |
                     | `TEAM_MEMBER` | Gate staff / scanner operator working for one EVENT_ORGANIZER. Their JWT carries the parent organizer's uuid so booking-service can authorize ticket scans. | `POST /event-organizer/team-members` |
                     | `MERCHANT_ADMIN` | Runs a loyalty merchant — manages that merchant's shops, staff and rules. | `POST /loyalty/merchants` plus the merchant-admin account. |

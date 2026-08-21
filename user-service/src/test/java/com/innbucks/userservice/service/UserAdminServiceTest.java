@@ -624,6 +624,26 @@ class UserAdminServiceTest {
     }
 
     @Test
+    void setRoles_grantsProductRoles_withNoScopingPrerequisites() {
+        Fixture f = new Fixture();
+        User user = userWithRoles(60L, User.Role.CUSTOMER);
+        when(f.userRepo.findById(60L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        // Unlike SHOP_* and TEAM_MEMBER, the product roles are platform-side and
+        // carry no merchant/shop/organizer scope, so they must be grantable to a
+        // plain account without any prior stamping.
+        User result = f.service.setRoles(60L,
+                Set.of(User.Role.PRODUCT_OFFICER, User.Role.PRODUCT_MANAGER),
+                "admin@innbucks.co.zw", AuditContext.none());
+
+        assertThat(result.getRoles())
+                .containsExactlyInAnyOrder(User.Role.PRODUCT_OFFICER, User.Role.PRODUCT_MANAGER);
+        // Still a privilege change, so the session must be invalidated like any other.
+        assertEquals(1, result.getTokenVersion());
+    }
+
+    @Test
     void setRoles_throwsNotFound_whenUserMissing() {
         Fixture f = new Fixture();
         when(f.userRepo.findById(999L)).thenReturn(Optional.empty());

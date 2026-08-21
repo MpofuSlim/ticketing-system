@@ -26,10 +26,13 @@ public class UpdateRolesDTO {
             arraySchema = @Schema(
                     description = """
                             Complete role set for the account. Every value must be one of the platform's \
-                            seven roles:
+                            nine roles:
 
                             * `SUPER_ADMIN` — platform owner. Seeded once from `BOOTSTRAP_ADMIN_PASSWORD` \
                             and **never grantable or revocable through this endpoint** (403 either way).
+                            * `PRODUCT_OFFICER` — internal platform staff. Not scoped to a tenant, merchant \
+                            or shop, and grants no service bundle. Assignable here with no prerequisites.
+                            * `PRODUCT_MANAGER` — internal platform staff, same shape as `PRODUCT_OFFICER`.
                             * `EVENT_ORGANIZER` — runs ticketed events; owns events, invoices and team members.
                             * `TEAM_MEMBER` — gate staff / scanner operator working for one EVENT_ORGANIZER. \
                             Requires the account to already be stamped with its parent organizer, which only \
