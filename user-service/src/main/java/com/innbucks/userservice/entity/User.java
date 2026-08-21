@@ -256,6 +256,24 @@ public class User {
 
     public enum Role {
         SUPER_ADMIN,
+        // Internal platform staff. Unlike the roles below, these are NOT scoped
+        // to a tenant, merchant, shop or organizer — they are platform-side
+        // people, so they carry no scoping claim and nothing derives a service
+        // bundle from them (see Services.BUNDLE_ROLES).
+        //
+        // Both are treated as system users everywhere that distinction is drawn
+        // from "not CUSTOMER" — most importantly MfaPolicy, so a holder is
+        // subject to the same MFA enrolment/challenge rules as any other staff
+        // account, and UserRepository's system-user projection, so they show up
+        // in the SUPER_ADMIN user list rather than the customer list.
+        //
+        // They are assigned via PUT /admin/users/{id}/roles. Neither grants
+        // access to any endpoint on its own yet: no @PreAuthorize names them, so
+        // a holder authenticates and is authorized for exactly what a
+        // role-less account is. Add them to the specific @PreAuthorize lists
+        // when their remit is decided, rather than pre-emptively here.
+        PRODUCT_OFFICER,
+        PRODUCT_MANAGER,
         EVENT_ORGANIZER,
         // Event-organizer team member (gate-staff, scanner operator). Created
         // by an EVENT_ORGANIZER via POST /event-organizer/team-members and

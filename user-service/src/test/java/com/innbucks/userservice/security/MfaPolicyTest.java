@@ -38,9 +38,13 @@ class MfaPolicyTest {
 
     @Test
     void required_trueForEverySystemRoleOnWebAndMobile() {
-        for (User.Role role : new User.Role[]{
-                User.Role.SUPER_ADMIN, User.Role.EVENT_ORGANIZER, User.Role.TEAM_MEMBER,
-                User.Role.MERCHANT_ADMIN, User.Role.SHOP_ADMIN, User.Role.SHOP_USER}) {
+        // Derived from the enum rather than a hand-listed set: MfaPolicy defines
+        // a system user as "holds any role that isn't CUSTOMER", so every role
+        // added later — PRODUCT_OFFICER and PRODUCT_MANAGER included — must be
+        // covered here automatically. A hardcoded list silently stops testing
+        // new roles the day they're added.
+        for (User.Role role : java.util.Arrays.stream(User.Role.values())
+                .filter(r -> r != User.Role.CUSTOMER).toList()) {
             User u = user(false, role);
             assertThat(policy.required(u, AuthChannel.WEB)).as("WEB required for %s", role).isTrue();
             assertThat(policy.required(u, AuthChannel.MOBILE)).as("MOBILE required for %s", role).isTrue();
