@@ -2,7 +2,7 @@
 # Build from repo root:
 #     docker build -f event-service/Dockerfile -t ticketing-event-service .
 
-FROM eclipse-temurin:21-jdk-alpine AS builder
+FROM eclipse-temurin:24-jdk-alpine AS builder
 WORKDIR /workspace
 
 COPY .mvn .mvn
@@ -25,7 +25,7 @@ COPY event-service/src event-service/src
 RUN ./mvnw -B -pl event-service -am -DskipTests package spring-boot:repackage \
     && cp event-service/target/event-service-*.jar /workspace/app.jar
 
-FROM eclipse-temurin:21-jre-alpine AS runtime
+FROM eclipse-temurin:24-jre-alpine AS runtime
 # Refresh the apk index + force-upgrade OpenSSL by name. Without naming the
 # packages, Docker reuses a stale layer hash and the cached upgrade doesn't
 # re-run when a new Alpine point release ships the fix.
