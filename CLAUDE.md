@@ -173,6 +173,37 @@ The remaining long-term step (LocalDateTime → Instant + `timestamptz`
 columns) is now invisible on the wire — the `Z` already ships — so it can
 be done per-service without FE coordination whenever convenient.
 
+## Event times are MARKET-LOCAL on the wire in, UTC out
+
+`POST/PUT /events` interpret `startDateTime` / `endDateTime` as **the local
+wall-clock of the market the cell serves**, not UTC. `EventService` converts to
+UTC via `MarketTimeZone` before anything reads them; responses stay UTC with the
+`Z` suffix per the rule above.
+
+- **Why.** An organizer types the time on the poster — "07:00" for a 7am Harare
+  fun run. Storing that verbatim in a zone-less column that is then serialized as
+  `07:00Z` asserts 07:00 UTC, i.e. 09:00 in Harare: the event was a genuinely
+  wrong instant, two hours late in the detail page, reminders and scan windows.
+  The conversion is deliberately server-side — clients send what the organizer
+  typed and do no timezone arithmetic.
+- **Clients must NOT pre-convert** or send an offset. A client that sends
+  `+02:00` would be double-converted. The FE keeps rendering the `Z` response in
+  the viewer's locale, which is display, not conversion.
+- **`MarketTimeZone` must stay in lock-step with `CountryMdcConfig.KNOWN_COUNTRIES`.**
+  An unmapped country throws at construction (taking the cell down) rather than
+  defaulting to UTC — a UTC fallback would store every event at the wrong instant
+  for that market while looking perfectly healthy. Not all markets share an
+  offset: KE is UTC+3 and NG UTC+1, so never hardcode +2.
+- **No supported market observes DST**, which is why `toUtc` needs no gap/overlap
+  policy; `MarketTimeZoneTest` fails if a DST market is ever added.
+- **Convert BEFORE the duplicate probe and the merged start/end order check** —
+  both compare against stored UTC values, so an unconverted probe compares two
+  different clocks and is wrong by the market offset.
+- **Pre-fix rows are stored `+offset` wrong** (a 07:00 Harare event sits at
+  07:00Z instead of 05:00Z). Fixing the write path does not correct them; they
+  need a one-off shift per cell, which is a deliberate data decision — see the
+  PR for the query.
+
 ## Branching
 
 > [!IMPORTANT]

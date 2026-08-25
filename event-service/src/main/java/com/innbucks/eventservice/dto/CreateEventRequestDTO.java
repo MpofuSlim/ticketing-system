@@ -61,6 +61,13 @@ public class CreateEventRequestDTO {
                     Event start timestamp (`yyyy-MM-ddTHH:mm:ss`). Must be strictly **in the future**.
                     Send the full ISO-8601 datetime including the time portion (e.g. `"2026-06-15T19:00:00"`);
                     a date-only value is rejected.
+
+                    **Send the local time of the market the event runs in** — the wall-clock an
+                    attendee would read on a poster. The server converts it to UTC for storage
+                    using the cell's market timezone (ZW = Africa/Harare, UTC+2), so `07:00` here
+                    means a 7am start in Harare. Do NOT pre-convert to UTC and do not append an
+                    offset; the client sends what the organizer typed and nothing more.
+                    Responses come back as UTC with a `Z` suffix.
                     """
     )
     @NotNull(message = "Start date and time is required")
@@ -73,6 +80,13 @@ public class CreateEventRequestDTO {
             description = """
                     Event end timestamp (`yyyy-MM-ddTHH:mm:ss`). Must be strictly **after** `startDateTime`.
                     Send the full ISO-8601 datetime including the time portion.
+
+                    **Send the local time of the market the event runs in** — the wall-clock an
+                    attendee would read on a poster. The server converts it to UTC for storage
+                    using the cell's market timezone (ZW = Africa/Harare, UTC+2), so `07:00` here
+                    means a 7am start in Harare. Do NOT pre-convert to UTC and do not append an
+                    offset; the client sends what the organizer typed and nothing more.
+                    Responses come back as UTC with a `Z` suffix.
                     """
     )
     @NotNull(message = "End date and time is required")

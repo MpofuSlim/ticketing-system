@@ -315,17 +315,23 @@ class EventControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.title", is("Updated Title")))
                 .andExpect(jsonPath("$.data.venue", is("New Venue")))
-                // UtcJsonTimeConfig: wire timestamps carry the explicit UTC designator.
-                .andExpect(jsonPath("$.data.startDateTime", is("2031-06-15T19:00:00Z")))
-                .andExpect(jsonPath("$.data.endDateTime", is("2031-06-15T22:00:00Z")));
+                // Submitted times are the MARKET-LOCAL wall-clock (see
+                // MarketTimeZone): 19:00 means 7pm in Harare, so it lands as
+                // 17:00 UTC and comes back as 17:00Z. The request body's "Z"
+                // suffix is not honoured as an instant — the contract is
+                // "send what the organizer typed", and this cell is UTC+2.
+                .andExpect(jsonPath("$.data.startDateTime", is("2031-06-15T17:00:00Z")))
+                .andExpect(jsonPath("$.data.endDateTime", is("2031-06-15T20:00:00Z")));
 
         Event reloaded = eventRepository.findById(saved.getEventId()).orElseThrow();
         org.junit.jupiter.api.Assertions.assertEquals("Updated Title", reloaded.getTitle());
         org.junit.jupiter.api.Assertions.assertEquals("New Venue", reloaded.getVenue());
         org.junit.jupiter.api.Assertions.assertEquals(
-                LocalDateTime.of(2031, 6, 15, 19, 0), reloaded.getStartDateTime());
+                LocalDateTime.of(2031, 6, 15, 17, 0), reloaded.getStartDateTime(),
+                "7pm Harare persists as 17:00 UTC");
         org.junit.jupiter.api.Assertions.assertEquals(
-                LocalDateTime.of(2031, 6, 15, 22, 0), reloaded.getEndDateTime());
+                LocalDateTime.of(2031, 6, 15, 20, 0), reloaded.getEndDateTime(),
+                "10pm Harare persists as 20:00 UTC");
     }
 
     private static CreateEventRequestDTO sampleRequest(String title, EventCategory category) {

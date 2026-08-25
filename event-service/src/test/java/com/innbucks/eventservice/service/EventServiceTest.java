@@ -45,7 +45,7 @@ class EventServiceTest {
         EventRepository repo = mock(EventRepository.class);
         EventMapper mapper = mock(EventMapper.class);
         SeatCategoryGateway gateway = mock(SeatCategoryGateway.class);
-        EventService service = new EventService(repo, mapper, gateway, mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mapper, gateway, mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder()
@@ -76,7 +76,7 @@ class EventServiceTest {
         EventRepository repo = mock(EventRepository.class);
         EventMapper mapper = mock(EventMapper.class);
         SeatCategoryGateway gateway = mock(SeatCategoryGateway.class);
-        EventService service = new EventService(repo, mapper, gateway, mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mapper, gateway, mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder()
@@ -114,7 +114,7 @@ class EventServiceTest {
     void createEvent_initializesAvailableTicketsToTotalCapacity() {
         EventRepository repo = mock(EventRepository.class);
         EventMapper mapper = mock(EventMapper.class);
-        EventService service = new EventService(repo, mapper, mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mapper, mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
         CreateEventRequestDTO req = new CreateEventRequestDTO();
         req.setTitle("Concert"); req.setDescription("desc"); req.setVenue("Venue");
@@ -141,7 +141,7 @@ class EventServiceTest {
     @Test
     void createEvent_rejectsWhenCountryMissingFromToken() {
         EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
         CreateEventRequestDTO req = new CreateEventRequestDTO();
         req.setTitle("Concert"); req.setVenue("Venue");
@@ -159,7 +159,7 @@ class EventServiceTest {
     @Test
     void createEvent_rejectsDuplicateForSameTenantTitleVenueDate() {
         EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
         LocalDateTime when = LocalDateTime.now().plusDays(10);
         CreateEventRequestDTO req = new CreateEventRequestDTO();
@@ -167,8 +167,13 @@ class EventServiceTest {
         req.setCategory(EventCategory.CONCERT);
         req.setStartDateTime(when); req.setEndDateTime(when.plusHours(2)); req.setTotalCapacity(100);
 
+        // The probe must use the CONVERTED (UTC) start, because that's what the
+        // column holds. Stubbing the raw market-local value here would make the
+        // duplicate check silently miss every existing event — so this stub
+        // doubles as the assertion that the service converts before probing.
+        LocalDateTime whenUtc = new com.innbucks.eventservice.config.MarketTimeZone("ZW").toUtc(when);
         when(repo.existsByTenantUserUuidAndTitleAndVenueAndStartDateTimeAndDeletedFalse(
-                TENANT_1, "Concert", "Harare Gardens", when)).thenReturn(true);
+                TENANT_1, "Concert", "Harare Gardens", whenUtc)).thenReturn(true);
 
         RuntimeException ex = assertThrows(RuntimeException.class,
                 () -> service.createEvent(TENANT_1, "Zimbabwe", req));
@@ -180,7 +185,7 @@ class EventServiceTest {
     void updateEvent_asAdmin_canEditEventOwnedByAnotherTenant() {
         EventRepository repo = mock(EventRepository.class);
         EventMapper mapper = mock(EventMapper.class);
-        EventService service = new EventService(repo, mapper, mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mapper, mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder()
@@ -203,7 +208,7 @@ class EventServiceTest {
     @Test
     void deleteEvent_rejectsNonOwnerTenant() {
         EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder().eventId(eventId).tenantUserUuid(OWNER_TENANT)
@@ -222,7 +227,7 @@ class EventServiceTest {
     @Test
     void deleteEvent_asAdmin_softDeletesEventOwnedByAnotherTenant() {
         EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder().eventId(eventId).tenantUserUuid(OWNER_TENANT)
@@ -240,7 +245,7 @@ class EventServiceTest {
     @Test
     void getEventById_throwsWhenMissing() {
         EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
         when(repo.findByEventIdAndDeletedFalse(any())).thenReturn(Optional.empty());
 
         RuntimeException ex = assertThrows(RuntimeException.class,
@@ -254,7 +259,7 @@ class EventServiceTest {
         EventMapper mapper = new EventMapper();
         SeatCategoryGateway seats = mock(SeatCategoryGateway.class);
         BookingGateway bookings = mock(BookingGateway.class);
-        EventService service = new EventService(repo, mapper, seats, bookings, mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mapper, seats, bookings, mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder().eventId(eventId).tenantUserUuid(ORGANIZER_A).title("T")
@@ -282,7 +287,7 @@ class EventServiceTest {
         SeatCategoryGateway seats = mock(SeatCategoryGateway.class);
         BookingGateway bookings = mock(BookingGateway.class);
         OrganizerGateway organizers = mock(OrganizerGateway.class);
-        EventService service = new EventService(repo, mapper, seats, bookings, organizers, mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mapper, seats, bookings, organizers, mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder().eventId(eventId).tenantUserUuid(ORGANIZER_RUMBI).title("T")
@@ -316,7 +321,7 @@ class EventServiceTest {
         SeatCategoryGateway seats = mock(SeatCategoryGateway.class);
         BookingGateway bookings = mock(BookingGateway.class);
         OrganizerGateway organizers = mock(OrganizerGateway.class);
-        EventService service = new EventService(repo, mapper, seats, bookings, organizers, mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mapper, seats, bookings, organizers, mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder().eventId(eventId).tenantUserUuid(ORGANIZER_AB).title("T")
@@ -341,9 +346,40 @@ class EventServiceTest {
     }
 
     @Test
+    void createEvent_storesTheOrganizersLocalTimeAsUtc() {
+        // The reported bug, end to end: an organizer schedules a 07:00 Harare
+        // fun run, and before this conversion the 07:00 was stored verbatim and
+        // served as "07:00Z" — which is 09:00 in Harare, so the event read two
+        // hours late everywhere.
+        EventRepository repo = mock(EventRepository.class);
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"),
+                new EventMapper(), mock(SeatCategoryGateway.class), mock(BookingGateway.class),
+                mock(OrganizerGateway.class), mock(BookingNotificationGateway.class),
+                mock(OrganizerNotificationGateway.class));
+        when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        CreateEventRequestDTO req = new CreateEventRequestDTO();
+        req.setTitle("Pink Fun Run");
+        req.setVenue("Chisipite Senior School");
+        req.setCategory(EventCategory.CONCERT);
+        req.setStartDateTime(LocalDateTime.of(2026, 9, 13, 7, 0));
+        req.setEndDateTime(LocalDateTime.of(2026, 9, 13, 11, 0));
+        req.setTotalCapacity(500);
+
+        service.createEvent(TENANT_1, "Zimbabwe", req);
+
+        ArgumentCaptor<Event> saved = ArgumentCaptor.forClass(Event.class);
+        verify(repo).save(saved.capture());
+        assertEquals(LocalDateTime.of(2026, 9, 13, 5, 0), saved.getValue().getStartDateTime(),
+                "07:00 Harare must persist as 05:00 UTC");
+        assertEquals(LocalDateTime.of(2026, 9, 13, 9, 0), saved.getValue().getEndDateTime(),
+                "11:00 Harare must persist as 09:00 UTC");
+    }
+
+    @Test
     void getEventById_draftOrRejected_isNotFound() {
         EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, new EventMapper(),
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), new EventMapper(),
                 mock(SeatCategoryGateway.class), mock(BookingGateway.class),
                 mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
@@ -375,7 +411,7 @@ class EventServiceTest {
         EventRepository repo = mock(EventRepository.class);
         EventMapper mapper = mock(EventMapper.class);
         SeatCategoryGateway gateway = mock(SeatCategoryGateway.class);
-        EventService service = new EventService(repo, mapper, gateway, mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mapper, gateway, mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder().eventId(eventId).tenantUserUuid(ORGANIZER_A).title("T")
@@ -409,7 +445,7 @@ class EventServiceTest {
     @Test
     void deactivateEvent_rejectsNonOwnerTenant() {
         EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(baseEvent(eventId, OWNER_TENANT)));
@@ -423,7 +459,7 @@ class EventServiceTest {
     @Test
     void deactivateEvent_ownerFlipsActiveFalse() {
         EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
         Event existing = baseEvent(eventId, TENANT_1); // active=true via @Builder.Default
@@ -438,7 +474,7 @@ class EventServiceTest {
     @Test
     void deactivateEvent_asAdmin_deactivatesEventOwnedByAnotherTenant() {
         EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(baseEvent(eventId, OWNER_TENANT)));
@@ -452,7 +488,7 @@ class EventServiceTest {
     @Test
     void activateEvent_refusesAdminRejectedEvent() {
         EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
         Event existing = baseEvent(eventId, TENANT_1);
@@ -469,7 +505,7 @@ class EventServiceTest {
     @Test
     void rejectEvent_setsRejectedTrueAndForcesActiveFalse() {
         EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
         Event existing = baseEvent(eventId, TENANT_7); // active=true, rejected=false
@@ -485,7 +521,7 @@ class EventServiceTest {
     @Test
     void approveEvent_clearsRejectedFlagAndLeavesInactive() {
         EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
         Event existing = baseEvent(eventId, TENANT_7);
@@ -503,7 +539,7 @@ class EventServiceTest {
     @Test
     void rejectEvent_throwsWhenEventMissing() {
         EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
         when(repo.findByEventIdAndDeletedFalse(any())).thenReturn(Optional.empty());
 
         RuntimeException ex = assertThrows(RuntimeException.class,
@@ -517,7 +553,7 @@ class EventServiceTest {
     // changes — never on an idempotent re-click, never on a refused action.
 
     private static EventService serviceWithNotify(EventRepository repo, OrganizerNotificationGateway orgNotify) {
-        return new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class),
+        return new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mock(EventMapper.class), mock(SeatCategoryGateway.class),
                 mock(BookingGateway.class), mock(OrganizerGateway.class),
                 mock(BookingNotificationGateway.class), orgNotify);
     }
@@ -687,7 +723,7 @@ class EventServiceTest {
         EventRepository repo = mock(EventRepository.class);
         EventMapper mapper = mock(EventMapper.class);
         BookingNotificationGateway notify = mock(BookingNotificationGateway.class);
-        EventService service = new EventService(repo, mapper, mock(SeatCategoryGateway.class),
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mapper, mock(SeatCategoryGateway.class),
                 mock(BookingGateway.class), mock(OrganizerGateway.class), notify, mock(OrganizerNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
@@ -709,7 +745,7 @@ class EventServiceTest {
         EventRepository repo = mock(EventRepository.class);
         EventMapper mapper = mock(EventMapper.class);
         BookingNotificationGateway notify = mock(BookingNotificationGateway.class);
-        EventService service = new EventService(repo, mapper, mock(SeatCategoryGateway.class),
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mapper, mock(SeatCategoryGateway.class),
                 mock(BookingGateway.class), mock(OrganizerGateway.class), notify, mock(OrganizerNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
@@ -730,7 +766,7 @@ class EventServiceTest {
         EventRepository repo = mock(EventRepository.class);
         EventMapper mapper = mock(EventMapper.class);
         BookingNotificationGateway notify = mock(BookingNotificationGateway.class);
-        EventService service = new EventService(repo, mapper, mock(SeatCategoryGateway.class),
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mapper, mock(SeatCategoryGateway.class),
                 mock(BookingGateway.class), mock(OrganizerGateway.class), notify, mock(OrganizerNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
@@ -750,7 +786,7 @@ class EventServiceTest {
     void deleteEvent_notifiesCancellation() {
         EventRepository repo = mock(EventRepository.class);
         BookingNotificationGateway notify = mock(BookingNotificationGateway.class);
-        EventService service = new EventService(repo, mock(EventMapper.class), mock(SeatCategoryGateway.class),
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mock(EventMapper.class), mock(SeatCategoryGateway.class),
                 mock(BookingGateway.class), mock(OrganizerGateway.class), notify, mock(OrganizerNotificationGateway.class));
 
         UUID eventId = UUID.randomUUID();
@@ -784,7 +820,7 @@ class EventServiceTest {
     @Test
     void getMyAssignedActiveEvents_emptyAssignments_returnsEmptyPage_withoutHittingDb() {
         EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, new EventMapper(), mock(SeatCategoryGateway.class),
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), new EventMapper(), mock(SeatCategoryGateway.class),
                 mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
         // Deny-by-default: no assignments → empty page, and NO repository call
@@ -802,7 +838,7 @@ class EventServiceTest {
     @Test
     void getMyAssignedActiveEvents_nullAssignments_returnsEmptyPage() {
         EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, new EventMapper(), mock(SeatCategoryGateway.class),
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), new EventMapper(), mock(SeatCategoryGateway.class),
                 mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
         Page<EventResponseDTO> result = service.getMyAssignedActiveEvents(
@@ -817,7 +853,7 @@ class EventServiceTest {
         EventRepository repo = mock(EventRepository.class);
         BookingGateway bookings = mock(BookingGateway.class);
         OrganizerGateway organizers = mock(OrganizerGateway.class);
-        EventService service = new EventService(repo, new EventMapper(), mock(SeatCategoryGateway.class),
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), new EventMapper(), mock(SeatCategoryGateway.class),
                 bookings, organizers, mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
         UUID assignedId = UUID.randomUUID();
@@ -846,7 +882,7 @@ class EventServiceTest {
         EventRepository repo = mock(EventRepository.class);
         BookingGateway bookings = mock(BookingGateway.class);
         OrganizerGateway organizers = mock(OrganizerGateway.class);
-        EventService service = new EventService(repo, new EventMapper(), mock(SeatCategoryGateway.class),
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), new EventMapper(), mock(SeatCategoryGateway.class),
                 bookings, organizers, mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
         UUID assignedId = UUID.randomUUID();
@@ -871,7 +907,7 @@ class EventServiceTest {
     @Test
     void getMyAssignedInactiveEvents_emptyAssignments_returnsEmptyPage_withoutHittingDb() {
         EventRepository repo = mock(EventRepository.class);
-        EventService service = new EventService(repo, new EventMapper(), mock(SeatCategoryGateway.class),
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), new EventMapper(), mock(SeatCategoryGateway.class),
                 mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
         Page<EventResponseDTO> result = service.getMyAssignedInactiveEvents(
@@ -889,7 +925,7 @@ class EventServiceTest {
         EventRepository repo = mock(EventRepository.class);
         BookingGateway bookings = mock(BookingGateway.class);
         OrganizerGateway organizers = mock(OrganizerGateway.class);
-        EventService service = new EventService(repo, new EventMapper(), mock(SeatCategoryGateway.class),
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), new EventMapper(), mock(SeatCategoryGateway.class),
                 bookings, organizers, mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
         UUID assignedId = UUID.randomUUID();
