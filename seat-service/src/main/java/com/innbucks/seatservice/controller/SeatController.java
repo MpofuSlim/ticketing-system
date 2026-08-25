@@ -4,7 +4,6 @@ import com.innbucks.seatservice.dto.ApiResult;
 import com.innbucks.seatservice.dto.SeatLockResponseDTO;
 import com.innbucks.seatservice.dto.SeatLookupResponseDTO;
 import com.innbucks.seatservice.dto.SeatResponseDTO;
-import com.innbucks.seatservice.security.MinTier;
 import com.innbucks.seatservice.service.SeatService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -176,8 +175,7 @@ public class SeatController {
     }
 
     @PostMapping("/{id}/lock")
-    @MinTier(2)
-    @Operation(summary = "Lock seat", description = "Locks an available seat for the authenticated user for a short TTL window. Requires tier 2.")
+    @Operation(summary = "Lock seat", description = "Locks an available seat for the authenticated user for a short TTL window.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -216,8 +214,7 @@ public class SeatController {
     }
 
     @PostMapping("/{id}/confirm")
-    @MinTier(2)
-    @Operation(summary = "Confirm seat", description = "Confirms a locked seat after successful payment. Requires tier 2.")
+    @Operation(summary = "Confirm seat", description = "Confirms a locked seat after successful payment.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -255,8 +252,7 @@ public class SeatController {
     }
 
     @PostMapping("/{id}/release")
-    @MinTier(2)
-    @Operation(summary = "Release seat lock", description = "Releases a seat lock owned by the authenticated user. Requires tier 2.")
+    @Operation(summary = "Release seat lock", description = "Releases a seat lock owned by the authenticated user.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",

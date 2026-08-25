@@ -53,11 +53,6 @@ booking-service:
   connect-timeout-ms: ${BOOKING_SERVICE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${BOOKING_SERVICE_READ_TIMEOUT_MS:5000}
 
-user-service:
-  base-url: http://user-service
-  connect-timeout-ms: ${USER_SERVICE_CONNECT_TIMEOUT_MS:2000}
-  read-timeout-ms: ${USER_SERVICE_READ_TIMEOUT_MS:5000}
-
 jwt:
   secret: ${JWT_SECRET:change-me-change-me-change-me-change-me}
   # OWASP A02 stage-1 RS256/JWKS dual-verify. When JWT_PUBLIC_KEY is set this

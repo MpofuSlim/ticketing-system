@@ -1,7 +1,6 @@
 package com.innbucks.bookingservice.exception;
 
 import com.innbucks.bookingservice.dto.ApiResult;
-import com.innbucks.bookingservice.dto.TierViolationData;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -56,21 +55,6 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                 .body(ApiResult.error(HttpStatus.SERVICE_UNAVAILABLE,
                         "We're having trouble checking seat availability right now. Please try again in a moment."));
-    }
-
-    @ExceptionHandler(TierRequirementException.class)
-    public ResponseEntity<ApiResult<TierViolationData>> handleTierRequirement(TierRequirementException ex) {
-        log.warn("Tier requirement not met requiredTier={} currentTier={} reason={}",
-                ex.getRequiredTier(), ex.getCurrentTier(), ex.getMessage());
-        ApiResult<TierViolationData> body = ApiResult.<TierViolationData>builder()
-                .code(String.valueOf(HttpStatus.UNPROCESSABLE_ENTITY.value()))
-                .message(ex.getMessage())
-                .data(TierViolationData.builder()
-                        .requiredTier(ex.getRequiredTier())
-                        .currentTier(ex.getCurrentTier())
-                        .build())
-                .build();
-        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(body);
     }
 
     @ExceptionHandler(NotFoundException.class)
