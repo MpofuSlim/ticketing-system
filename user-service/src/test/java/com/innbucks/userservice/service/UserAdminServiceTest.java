@@ -200,25 +200,46 @@ class UserAdminServiceTest {
     // -- markCredentialDelivered (callback for the listener) ------------------
 
     @Test
-    void markCredentialDelivered_setsTimestamp_onSave() {
+    void markCredentialDelivered_stampsTimestamp_viaTargetedUpdate() {
         Fixture f = new Fixture();
-        User user = User.builder().id(99L).active(true).approved(true).build();
-        when(f.userRepo.findById(99L)).thenReturn(Optional.of(user));
-        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(f.userRepo.markCredentialDelivered(eq(99L), any(LocalDateTime.class))).thenReturn(1);
 
         f.service.markCredentialDelivered(99L);
 
-        ArgumentCaptor<User> cap = ArgumentCaptor.forClass(User.class);
-        verify(f.userRepo).save(cap.capture());
-        assertNotNull(cap.getValue().getCredentialDeliveredAt());
+        ArgumentCaptor<LocalDateTime> at = ArgumentCaptor.forClass(LocalDateTime.class);
+        verify(f.userRepo).markCredentialDelivered(eq(99L), at.capture());
+        assertNotNull(at.getValue());
+    }
+
+    @Test
+    void markCredentialDelivered_neverLoadsAndResavesTheEntity() {
+        // Regression guard for the lost update this replaced. The old body was
+        // findById -> setter -> save, which ran on the @Async listener thread an
+        // unbounded time after the activation committed. User carries no
+        // @DynamicUpdate, so that save rewrote EVERY column from a stale
+        // snapshot — silently reverting any password change or admin edit made
+        // in the window. It surfaced as a flaky AuthControllerIT login 400.
+        //
+        // Asserting "no read, no entity save" is the point: a future refactor
+        // back to a load-mutate-save would reintroduce the race, and only this
+        // shape assertion catches that deterministically. Racing threads in a
+        // unit test would just be flaky in the other direction.
+        Fixture f = new Fixture();
+        when(f.userRepo.markCredentialDelivered(eq(7L), any(LocalDateTime.class))).thenReturn(1);
+
+        f.service.markCredentialDelivered(7L);
+
+        verify(f.userRepo, never()).findById(any());
+        verify(f.userRepo, never()).save(any());
     }
 
     @Test
     void markCredentialDelivered_noOp_whenUserGone() {
         // User deleted between event publish and listener callback — log and
-        // move on, don't throw and crash the listener thread.
+        // move on, don't throw and crash the listener thread. The targeted
+        // UPDATE reports this as 0 rows affected rather than an empty Optional.
         Fixture f = new Fixture();
-        when(f.userRepo.findById(404L)).thenReturn(Optional.empty());
+        when(f.userRepo.markCredentialDelivered(eq(404L), any(LocalDateTime.class))).thenReturn(0);
 
         assertDoesNotThrow(() -> f.service.markCredentialDelivered(404L));
         verify(f.userRepo, never()).save(any());

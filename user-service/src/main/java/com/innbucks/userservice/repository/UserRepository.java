@@ -2,9 +2,11 @@ package com.innbucks.userservice.repository;
 
 import com.innbucks.userservice.entity.User;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -104,4 +106,25 @@ public interface UserRepository extends JpaRepository<User, Long> {
      */
     @Query("SELECT u.tokenVersion FROM User u WHERE u.email = :subject OR u.phoneNumber = :subject")
     Optional<Long> findTokenVersionBySubject(@Param("subject") String subject);
+
+    /**
+     * Stamp {@code credential_delivered_at} and nothing else.
+     *
+     * <p>Deliberately a targeted UPDATE rather than a
+     * {@code findById} → setter → {@code save} round-trip. That round-trip is a
+     * read-modify-write, and {@link User} carries no {@code @DynamicUpdate}, so
+     * the {@code save} emits a full-column UPDATE built from whatever the entity
+     * was loaded with — {@code password}, {@code roles}, {@code active} and all.
+     * Its only caller is {@code CredentialDeliveryListener}, which is
+     * {@code @Async} + {@code AFTER_COMMIT}: it reads on a background thread
+     * some time after the activation transaction committed, so any write to
+     * that user in between (a password change, an admin edit) is silently
+     * reverted when the stale snapshot lands. One column in, one column out,
+     * and there is nothing to lose.
+     *
+     * @return rows updated — 0 means the user vanished between publish and callback
+     */
+    @Modifying
+    @Query("UPDATE User u SET u.credentialDeliveredAt = :at WHERE u.id = :id")
+    int markCredentialDelivered(@Param("id") Long id, @Param("at") LocalDateTime at);
 }

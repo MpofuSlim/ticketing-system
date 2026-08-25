@@ -159,14 +159,25 @@ public class UserAdminService {
      * committed (and on a different thread, thanks to @Async). Failure to mark
      * is non-fatal (the timestamp is a UX hint, not an invariant) so a transient
      * DB hiccup here doesn't blow up the listener thread; logged at WARN.
+     *
+     * <p>The write is a targeted single-column UPDATE, NOT a load-mutate-save.
+     * Because this runs on a background thread an unbounded time after the
+     * activation committed, a read-modify-write here races every other writer
+     * of the row: {@link User} has no {@code @DynamicUpdate}, so {@code save}
+     * would rewrite every column from a snapshot that may already be stale, and
+     * a password change or admin edit made in that window would be silently
+     * reverted. This surfaced as a flaky {@code AuthControllerIT} failure — the
+     * test set a known password right after approval and the listener put the
+     * random temp password back underneath it, so login 400'd on credentials
+     * that had just been written — but the same lost update is reachable in
+     * production by any user who changes their password shortly after approval.
      */
     @Transactional
     public void markCredentialDelivered(Long userId) {
-        userRepository.findById(userId).ifPresentOrElse(u -> {
-            u.setCredentialDeliveredAt(LocalDateTime.now(ZoneOffset.UTC));
-            userRepository.save(u);
-        }, () -> log.warn("markCredentialDelivered: user vanished between event publish "
-                + "and listener callback userId={}", userId));
+        if (userRepository.markCredentialDelivered(userId, LocalDateTime.now(ZoneOffset.UTC)) == 0) {
+            log.warn("markCredentialDelivered: user vanished between event publish "
+                    + "and listener callback userId={}", userId);
+        }
     }
 
     /**
