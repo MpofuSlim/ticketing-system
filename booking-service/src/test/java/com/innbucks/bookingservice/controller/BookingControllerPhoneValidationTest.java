@@ -5,7 +5,6 @@ import com.innbucks.bookingservice.dto.BookingResponseDTO;
 import com.innbucks.bookingservice.dto.CreateBookingRequestDTO;
 import com.innbucks.bookingservice.exception.BadRequestException;
 import com.innbucks.bookingservice.service.BookingService;
-import jakarta.servlet.http.HttpServletRequest;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -15,7 +14,6 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -57,27 +55,27 @@ class BookingControllerPhoneValidationTest {
 
         // The production bug: 11-digit ZW number (a digit short of +263782606983).
         assertThatThrownBy(() -> controller.createBooking(
-                bookingWithPhone("+26378260983"), null, mock(HttpServletRequest.class)))
+                bookingWithPhone("+26378260983"), null))
                 .isInstanceOf(BadRequestException.class)
                 .hasMessageContaining("valid");
 
         // Nothing was booked — validation blocks before the service call.
-        verify(bookingService, never()).createBooking(any(), anyInt(), any(), any());
+        verify(bookingService, never()).createBooking(any(), any(), any());
     }
 
     @Test
     void validPhone_isCanonicalisedToE164_beforeReachingTheService() {
         BookingService bookingService = mock(BookingService.class);
-        when(bookingService.createBooking(any(), anyInt(), any(), any()))
+        when(bookingService.createBooking(any(), any(), any()))
                 .thenReturn(BookingResponseDTO.builder().id(UUID.randomUUID()).build());
         BookingController controller = controller(bookingService);
 
         // Local form, no '+': must be normalised to +263782606983 using the
         // ZW cell region before it's stored / sent to WhatsApp.
-        controller.createBooking(bookingWithPhone("0782606983"), null, mock(HttpServletRequest.class));
+        controller.createBooking(bookingWithPhone("0782606983"), null);
 
         org.mockito.ArgumentCaptor<String> phone = org.mockito.ArgumentCaptor.forClass(String.class);
-        verify(bookingService).createBooking(any(), anyInt(), phone.capture(), any());
+        verify(bookingService).createBooking(any(), phone.capture(), any());
         assertThat(phone.getValue()).isEqualTo("+263782606983");
     }
 }

@@ -12,9 +12,6 @@ import com.innbucks.bookingservice.dto.PublicBookingResponseDTO;
 import com.innbucks.bookingservice.dto.EventActiveCountDTO;
 import com.innbucks.bookingservice.dto.CategoryActiveCountDTO;
 import com.innbucks.bookingservice.security.JwtAuthDetails;
-import com.innbucks.bookingservice.security.MinTier;
-import com.innbucks.bookingservice.security.TierAccessInterceptor;
-import jakarta.servlet.http.HttpServletRequest;
 import com.innbucks.bookingservice.service.BookingService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -59,16 +56,6 @@ public class BookingController {
     private final com.innbucks.bookingservice.service.EventChangeNotificationService eventChangeNotificationService;
 
     /**
-     * Default tier applied to a booking when the caller's phone isn't
-     * registered with user-service, or user-service is unreachable. Matches
-     * the existing minimum bookable rung (2 = max 10 seats per booking), so
-     * a guest can book up to ten seats without registering first. A
-     * registered customer with a higher real tier (3 or 4) gets their actual
-     * tier whenever user-service answers, unlocking the larger caps.
-     */
-    private static final int GUEST_TIER = 2;
-
-    /**
      * Shared secret payment-service must present on PATCH
      * /bookings/{id}/confirm. Booking confirm is service-to-service only —
      * it's called from payment-service after a successful payment to flip
@@ -88,8 +75,8 @@ public class BookingController {
     private String deploymentCountry;
 
     @PostMapping
-    @Operation(summary = "Create booking", description = "Creates a new pending booking. The customer's tier is resolved from user-service via the phone number — JWT phone wins when present, otherwise the request body's `phoneNumber`. " +
-            "Returns 404 if the phone number is not registered in user-service. Per-tier seat-count limits in BookingService still apply.")
+    @Operation(summary = "Create booking", description = "Creates a new pending booking. The phone number is taken from the JWT when present, otherwise from the request body's `phoneNumber`. " +
+            "Open to every customer — registration tier does not gate booking. A flat per-booking seat ceiling (`app.booking.max-seats-per-booking`, default 20) applies equally to everyone.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -129,13 +116,11 @@ public class BookingController {
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "Customer tier below minimum. Envelope: { code: '422', message: <reason>, data: { requiredTier, currentTier } }"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Validation or domain error")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Validation or domain error (includes exceeding the per-booking seat ceiling)")
     })
     public ResponseEntity<ApiResult<BookingResponseDTO>> createBooking(
             @Valid @RequestBody CreateBookingRequestDTO request,
-            Authentication authentication,
-            HttpServletRequest httpRequest
+            Authentication authentication
     ) {
         boolean authenticated = authentication != null
                 && authentication.isAuthenticated()
@@ -161,57 +146,45 @@ public class BookingController {
                                 + "international format, e.g. +263772000000."));
         phoneNumber = normalizedPhone;
 
-        // Look up the customer's current tier in user-service — but ONLY for
-        // AUTHENTICATED callers. An anonymous (phone-only) booking is a guest
-        // by definition: the phone is client-supplied and, for a true guest,
-        // will not resolve to a registered customer, so the lookup is a doomed
-        // round trip we already know the answer to (GUEST_TIER). Worse, on the
-        // booking hot path it's one user-service call PER guest booking —
-        // enough, under load, to saturate user-service and trip this client's
-        // circuit breaker. Skipping it keeps user-service off the guest path
-        // entirely (mirrors the event-service tenant-lookup skip in #168).
+        // Resolve the registered customer's email from user-service — but ONLY
+        // for AUTHENTICATED callers, and only as a FALLBACK when neither the JWT
+        // nor the request body carried one. An anonymous (phone-only) booking is
+        // a guest by definition: the phone is client-supplied and, for a true
+        // guest, will not resolve to a registered customer, so the lookup is a
+        // doomed round trip. Worse, on the booking hot path it's one user-service
+        // call PER guest booking — enough, under load, to saturate user-service
+        // and trip this client's circuit breaker. Skipping it keeps user-service
+        // off the guest path entirely (mirrors the event-service tenant-lookup
+        // skip in #168).
         //
-        // For an authenticated caller we still look up the LIVE tier: the JWT's
-        // tier claim goes stale after an upgrade, and a tier 3/4 customer needs
-        // their real tier to unlock the larger per-booking seat caps. A null
-        // result there still falls back to GUEST_TIER and covers both the
-        // "phone not registered" and "user-service unreachable / circuit open"
-        // cases. Guests are never blocked either way — the registered-only
-        // requirement is on RETRIEVAL (the GET endpoints), not creation.
-        com.innbucks.bookingservice.dto.CustomerTierResponseDTO tierData = null;
-        if (authenticated) {
+        // This lookup used to ALSO carry the customer's registration tier, which
+        // fed a per-tier seat-count ladder. Tier no longer gates anything — every
+        // customer books on the same terms — so only the email is read now. A
+        // failed/absent lookup is not an error: the booking simply has no email,
+        // exactly as a guest booking does. Guests were never blocked here either
+        // way; the registered-only requirement is on RETRIEVAL (the GET
+        // endpoints), not creation.
+        String userEmail = authenticated ? authentication.getName() : request.getUserEmail();
+        if ((userEmail == null || userEmail.isBlank()) && authenticated) {
             try {
                 com.innbucks.bookingservice.dto.ApiResult<com.innbucks.bookingservice.dto.CustomerTierResponseDTO> result =
                         userServiceClient.getCustomerTier(phoneNumber);
-                tierData = result == null ? null : result.getData();
+                com.innbucks.bookingservice.dto.CustomerTierResponseDTO data =
+                        result == null ? null : result.getData();
+                userEmail = data == null ? null : data.getEmail();
             } catch (Exception ex) {
-                log.warn("user-service tier lookup failed phoneNumber={} cause={}", MsisdnMasking.mask(phoneNumber), ex.toString());
-                // tierData stays null (its initial value) -> GUEST_TIER fallback below.
+                log.warn("user-service customer lookup failed phoneNumber={} cause={}",
+                        MsisdnMasking.mask(phoneNumber), ex.toString());
+                // userEmail stays null — the booking is recorded phone-only.
             }
-        }
-        int tier;
-        String tierEmail;
-        if (tierData == null) {
-            tier = GUEST_TIER;
-            tierEmail = null;
-            log.info("Guest booking path phoneNumber={} defaultTier={}",
-                    MsisdnMasking.mask(phoneNumber), tier);
-        } else {
-            tier = tierData.getCurrentTier();
-            tierEmail = tierData.getEmail();
-        }
-
-        String userEmail = authenticated ? authentication.getName() : request.getUserEmail();
-        if (userEmail == null || userEmail.isBlank()) {
-            userEmail = tierEmail;
         }
         if (userEmail != null && userEmail.isBlank()) {
             userEmail = null;
         }
-        log.info("POST /bookings userEmailDomain={} tier={} phoneNumber={} eventId={} seats={}",
+        log.info("POST /bookings userEmailDomain={} phoneNumber={} eventId={} seats={}",
                 userEmail == null ? "" : userEmail.replaceAll("(?s)^.*@", ""),
-                tier, MsisdnMasking.mask(phoneNumber), request.getEventId(), request.getSeats().size());
-        BookingResponseDTO created = bookingService.createBooking(userEmail, tier, phoneNumber, request);
+                MsisdnMasking.mask(phoneNumber), request.getEventId(), request.getSeats().size());
+        BookingResponseDTO created = bookingService.createBooking(userEmail, phoneNumber, request);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Booking created successfully", created));
     }
@@ -219,14 +192,6 @@ public class BookingController {
     private String extractPhoneNumber(Authentication authentication) {
         Object details = authentication.getDetails();
         return details instanceof JwtAuthDetails d ? d.phoneNumber() : null;
-    }
-
-    // Tier is stamped on the request by TierAccessInterceptor after a live
-    // user-service lookup, so the JWT's (potentially stale) tier claim never
-    // feeds the per-tier seat-count check.
-    private int currentTier(HttpServletRequest request) {
-        Object value = request.getAttribute(TierAccessInterceptor.CURRENT_TIER_ATTRIBUTE);
-        return value instanceof Integer i ? i : 0;
     }
 
     @GetMapping("/my")
@@ -974,8 +939,7 @@ public class BookingController {
     }
 
     @PatchMapping("/{id}/cancel")
-    @MinTier(2)
-    @Operation(summary = "Cancel booking", description = "Cancels a booking before payment confirmation. Requires tier 2.")
+    @Operation(summary = "Cancel booking", description = "Cancels a booking before payment confirmation.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",

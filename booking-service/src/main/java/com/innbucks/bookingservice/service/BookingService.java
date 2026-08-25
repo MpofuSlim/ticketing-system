@@ -11,7 +11,6 @@ import com.innbucks.bookingservice.exception.BookingConflictException;
 import com.innbucks.bookingservice.exception.DependencyUnavailableException;
 import com.innbucks.bookingservice.exception.LoyaltyServiceUnavailableException;
 import com.innbucks.bookingservice.exception.NotFoundException;
-import com.innbucks.bookingservice.exception.TierRequirementException;
 import com.innbucks.bookingservice.util.MsisdnMasking;
 import com.innbucks.bookingservice.loyalty.LoyaltyEarnRetryService;
 import com.innbucks.bookingservice.repository.*;
@@ -62,9 +61,15 @@ public class BookingService {
     // cashAmount must equal totalAmount within $0.01.
     private static final BigDecimal SPLIT_TOLERANCE = new BigDecimal("0.01");
 
-    private static final int TIER_2_MAX_SEATS = 10;
-    private static final int TIER_3_MAX_SEATS = 15;
-    private static final int TIER_4_MAX_SEATS = 20;
+    // Flat per-booking seat ceiling, applied identically to every customer.
+    // This replaced a per-tier ladder (tier 2 -> 10, 3 -> 15, 4 -> 20, anything
+    // else -> 0, i.e. a hard block); the tier ladder is gone, so everyone now
+    // gets what the top rung used to get. The cap itself is NOT a tier check —
+    // it's the inventory-abuse guard that stops one request reserving a whole
+    // venue, and CreateBookingRequestDTO.seats carries no @Size, so deleting it
+    // outright would leave booking unbounded.
+    @org.springframework.beans.factory.annotation.Value("${app.booking.max-seats-per-booking:20}")
+    private int maxSeatsPerBooking = 20;
 
     // How long a PENDING booking holds its seats before the expiration
     // scheduler auto-cancels it. Java-side default of 5 means unit tests that
@@ -111,21 +116,17 @@ public class BookingService {
 
     public BookingResponseDTO createBooking(
             String userEmail,
-            int tier,
             String phoneNumber,
             CreateBookingRequestDTO request
     ) {
-        log.info("Creating booking userEmail={} tier={} eventId={} seats={}",
-                userEmail, tier, request.getEventId(), request.getSeats().size());
+        log.info("Creating booking userEmail={} eventId={} seats={}",
+                userEmail, request.getEventId(), request.getSeats().size());
 
-        int maxSeats = maxSeatsForTier(tier);
-        if (request.getSeats().size() > maxSeats) {
-            log.warn("Booking rejected, exceeds tier seat limit userEmail={} tier={} requested={} max={}",
-                    userEmail, tier, request.getSeats().size(), maxSeats);
-            throw new TierRequirementException(
-                    minTierForSeatCount(request.getSeats().size()),
-                    tier,
-                    "Tier " + tier + " customers may book at most " + maxSeats + " seats per booking");
+        if (request.getSeats().size() > maxSeatsPerBooking) {
+            log.warn("Booking rejected, exceeds per-booking seat limit userEmail={} requested={} max={}",
+                    userEmail, request.getSeats().size(), maxSeatsPerBooking);
+            throw new BadRequestException(
+                    "You may book at most " + maxSeatsPerBooking + " seats per booking.");
         }
 
         // === Resolution phase — NO transaction, NO DB connection held. ===
@@ -969,22 +970,6 @@ public class BookingService {
             log.warn("Failed to fetch event lookup eventId={} reason={}", eventId, ex.getMessage());
             return null;
         }
-    }
-
-    private int maxSeatsForTier(int tier) {
-        return switch (tier) {
-            case 2 -> TIER_2_MAX_SEATS;
-            case 3 -> TIER_3_MAX_SEATS;
-            case 4 -> TIER_4_MAX_SEATS;
-            default -> 0;
-        };
-    }
-
-    // Smallest tier whose per-booking cap can accommodate the requested seat count.
-    private int minTierForSeatCount(int seatCount) {
-        if (seatCount <= TIER_2_MAX_SEATS) return 2;
-        if (seatCount <= TIER_3_MAX_SEATS) return 3;
-        return 4;
     }
 
     private String generateConfirmationNumber() {
