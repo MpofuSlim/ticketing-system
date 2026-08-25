@@ -63,12 +63,6 @@ marketplace-service:
   connect-timeout-ms: ${MARKETPLACE_SERVICE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${MARKETPLACE_SERVICE_READ_TIMEOUT_MS:5000}
 
-oradian-middleware:
-  base-url: ${ORADIAN_MIDDLEWARE_URL:http://localhost:8090}
-  internal-token: ${ORADIAN_INTERNAL_TOKEN:change-me-internal-token-change-me-internal-token}
-  connect-timeout-ms: ${ORADIAN_MIDDLEWARE_CONNECT_TIMEOUT_MS:2000}
-  read-timeout-ms: ${ORADIAN_MIDDLEWARE_READ_TIMEOUT_MS:10000}
-
 # InnBucks public notification API (email) — same platform + BANK_API_* creds
 # as the payment rail; mirrors booking-service's innbucks-notify block. Used by
 # UnconfirmedPaymentAlerter's one-time operator email for stuck payments.
@@ -142,13 +136,6 @@ jwt:
 resilience4j:
   retry:
     instances:
-      oradian-middleware:
-        max-attempts: 3
-        wait-duration: 500ms
-        enable-exponential-backoff: true
-        exponential-backoff-multiplier: 2
-        retry-exceptions:
-          - innbucks.paymentservice.client.OradianMiddlewareTransientException
       innbucks-api:
         max-attempts: 3
         wait-duration: 500ms
@@ -167,17 +154,6 @@ resilience4j:
           - innbucks.paymentservice.client.ZimswitchApiTransientException
   circuitbreaker:
     instances:
-      oradian-middleware:
-        register-health-indicator: true
-        sliding-window-type: COUNT_BASED
-        sliding-window-size: 20
-        minimum-number-of-calls: 5
-        failure-rate-threshold: 50
-        wait-duration-in-open-state: 30s
-        permitted-number-of-calls-in-half-open-state: 3
-        automatic-transition-from-open-to-half-open-enabled: true
-        record-exceptions:
-          - innbucks.paymentservice.client.OradianMiddlewareTransientException
       innbucks-api:
         register-health-indicator: true
         sliding-window-type: COUNT_BASED

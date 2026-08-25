@@ -64,7 +64,7 @@ class PaymentSecurityIT extends PostgresIntegrationTestBase {
     void actuatorHealth_isAnonymouslyReachable() throws Exception {
         // The endpoint must accept the call without auth — status 200 (all
         // downstreams healthy) or 503 (Spring health aggregator reports DOWN
-        // because the IT config points loyalty/oradian/booking at
+        // because the IT config points loyalty/booking at
         // *.invalid hostnames) are both valid here. The contract under
         // test is "the security filter let this through", and that's
         // proven by anything NOT 401.
@@ -102,26 +102,6 @@ class PaymentSecurityIT extends PostgresIntegrationTestBase {
                                 "Expected POST /payments to be open for guests, got 401");
                     }
                 });
-    }
-
-    @Test
-    void transfer_withoutJwt_stillRequiresAuth() throws Exception {
-        // The exact-path /payments permit must NOT leak to the money-moving
-        // siblings. /payments/transfer derives the customer from the JWT and
-        // moves real money via Oradian — it must still 401 for a guest.
-        mockMvc.perform(post("/payments/transfer")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"sourceAccountId\":\"A1\",\"destinationAccountId\":\"A2\",\"amount\":10.00}"))
-                .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.code").value("401 UNAUTHORIZED"));
-    }
-
-    @Test
-    void withdraw_withoutJwt_stillRequiresAuth() throws Exception {
-        mockMvc.perform(post("/payments/withdraw")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"accountId\":\"A1\",\"amount\":10.00}"))
-                .andExpect(status().isUnauthorized());
     }
 
     @Test

@@ -1,8 +1,6 @@
 package com.innbucks.userservice.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.innbucks.userservice.client.OradianClient;
-import com.innbucks.userservice.client.OradianCustomerResponse;
 import com.innbucks.userservice.client.WhatsAppNotificationClient;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.repository.OtpRepository;
@@ -42,28 +40,17 @@ class AuthControllerIT {
     @Autowired OtpRepository otpRepository;
     @Autowired PasswordEncoder passwordEncoder;
 
-    // Tier-2 registration mirrors the customer into Oradian via this client;
-    // hitting a real Oradian instance from a test is neither possible nor
-    // desirable, so the test stubs it to return a synthetic success.
-    // Without this stub the @Transactional save rolls back and the endpoint
-    // 502s — which is what was masking this test as "passing" until Failsafe
-    // started actually running it.
-    @MockitoBean OradianClient oradianClient;
+    // Tier-2 registration used to mirror the customer into Oradian, and this
+    // test had to stub that client or the @Transactional save rolled back and
+    // the endpoint 502'd. Oradian is gone and registration is now purely local,
+    // so there is nothing left to stub — which is itself the assertion: the
+    // tier-2 test below passes with no external collaborator at all.
 
     // OTP delivery now goes through the external WhatsApp gateway; stub it so
     // the customer-register flow makes no real network call. The OTP is still
     // generated + persisted, so the tier-2 test reads the real code back from
     // OtpRepository to verify.
     @MockitoBean WhatsAppNotificationClient whatsAppNotificationClient;
-
-    @BeforeEach
-    void stubOradianSuccess() {
-        OradianCustomerResponse fake = new OradianCustomerResponse();
-        fake.setCustomerId(java.util.UUID.randomUUID().toString());
-        fake.setOradianClientId(1001L);
-        fake.setOradianExternalId("stub-oradian-external");
-        when(oradianClient.createCustomer(any(), any())).thenReturn(fake);
-    }
 
     // Approval == first activation: assigns a RANDOM one-time temp password and
     // flags must-change, exactly as PUT /admin/users/{id}/active does. A

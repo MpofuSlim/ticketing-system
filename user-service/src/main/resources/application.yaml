@@ -100,12 +100,6 @@ loyalty-service:
   connect-timeout-ms: ${LOYALTY_SERVICE_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${LOYALTY_SERVICE_READ_TIMEOUT_MS:3000}
 
-oradian:
-  base-url: ${ORADIAN_BASE_URL:http://localhost:8090}
-  internal-token: ${ORADIAN_INTERNAL_TOKEN:change-me-internal-token-change-me-internal-token}
-  connect-timeout-ms: ${ORADIAN_CONNECT_TIMEOUT_MS:2000}
-  read-timeout-ms: ${ORADIAN_READ_TIMEOUT_MS:10000}
-
 # InnBucks public notification API (system-user emails). Same API Gateway +
 # BANK_API_* credentials as the payment rail (POST /auth/third-party for the
 # bearer, X-Api-Key header). Email body is plain text {subject,message,
@@ -144,8 +138,6 @@ innbucks:
   internal-api-token: ${INTERNAL_API_TOKEN:change-me-internal-token-change-me-internal-token}
   cells:
     registry: ${INNBUCKS_CELLS_REGISTRY:{}}
-  core-banking:
-    provider: ${INNBUCKS_CORE_BANKING:oradian}
   auth-rate-limit:
     login:
       per-identifier-max: ${AUTH_LOGIN_PER_IDENTIFIER_MAX:5}

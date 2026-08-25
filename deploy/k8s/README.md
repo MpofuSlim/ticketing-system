@@ -158,14 +158,11 @@ auto-applied change.
 - **Service discovery**: each JVM service sets `EUREKA_INSTANCE_HOSTNAME=<svc>`
   + `EUREKA_PREFER_IP_ADDRESS=false` and has a matching `Service`, so the gateway
   resolves `lb://<svc>` → `<svc>:<port>` → pod.
-- **Core banking / Oradian**: ZW is intended to run on the **Veengu** provider,
-  but that adapter isn't built yet (`CoreBankingProviderConfig` only allows
-  `oradian` today), so `user-service` runs `INNBUCKS_CORE_BANKING=oradian` — the
-  only value that boots. `oradian-middleware` is **not** in this cluster, so the
-  two Oradian-backed *runtime* paths (user-service tier-2 `createCustomer`,
-  payment-service `ORADIAN_MIDDLEWARE_URL`) are inert until either the Veengu
-  adapter lands or an `ExternalName`/Service for `oradian-middleware` is added.
-  Login, MFA, browse, seat-hold and the InnBucks 2D-code payment all work.
+- **Core banking**: there is no server-side core-banking provider. The Oradian
+  integration was removed — the frontend talks to Veengu directly — so tier-2
+  registration is a purely local state change and payment-service no longer
+  carries wallet transfer/withdrawal endpoints. Login, MFA, browse, seat-hold,
+  the InnBucks 2D-code payment and the ZimSwitch card rail all work.
 - **`INNBUCKS_GATEWAY_URL`** (in `cell.zw.env`) is an inert placeholder — the
   `innbucks-core-gateway` spike it pointed at was retired (A06) and the SMS path
   moved to the authenticated notify API. Leave the default; nothing serves

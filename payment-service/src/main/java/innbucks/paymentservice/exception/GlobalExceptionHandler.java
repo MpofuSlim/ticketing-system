@@ -2,7 +2,6 @@ package innbucks.paymentservice.exception;
 
 import innbucks.paymentservice.client.BookingServiceClient;
 import innbucks.paymentservice.client.LoyaltyServiceClient;
-import innbucks.paymentservice.client.OradianMiddlewareException;
 import innbucks.paymentservice.dto.ApiResult;
 import innbucks.paymentservice.service.InnbucksPaymentService.InvalidPaymentRequestException;
 import lombok.extern.slf4j.Slf4j;
@@ -80,28 +79,8 @@ public class GlobalExceptionHandler {
     // loyalty-service's GlobalExceptionHandler.
 
     /**
-     * Outbound failures from {@link innbucks.paymentservice.client.OradianMiddlewareClient}.
-     * Preserves the upstream HTTP status when we recognise it (so a 400 from
-     * Oradian validation stays a 400, a 401 stays a 401, etc.); falls back to
-     * 502 Bad Gateway for connectivity errors / empty bodies / unknown
-     * statuses, which is the canonical "upstream is having a moment" code.
-     */
-    @ExceptionHandler(OradianMiddlewareException.class)
-    public ResponseEntity<ApiResult<Void>> handle(OradianMiddlewareException ex) {
-        HttpStatus status = HttpStatus.resolve(ex.getStatusCode());
-        if (status == null) status = HttpStatus.BAD_GATEWAY;
-        log.warn("Oradian middleware call failed status={} message={}",
-                status.value(), ex.getMessage());
-        return ResponseEntity.status(status).body(ApiResult.<Void>builder()
-                .code(status.value() + " " + status.name())
-                .message(ex.getMessage() == null ? "oradian middleware error" : ex.getMessage())
-                .data(null)
-                .build());
-    }
-
-    /**
      * Outbound failures from {@link LoyaltyServiceClient} (shop-checkout flow).
-     * Same shape as the Oradian handler — preserve loyalty-service's upstream
+     * Preserve loyalty-service's upstream
      * status (a 4xx insufficient-points stays a 4xx; a 503-on-unreachable stays
      * 503), fall back to 502 for unknown / synthetic codes. Without this the
      * exception would fall through to the catch-all and surface as a generic

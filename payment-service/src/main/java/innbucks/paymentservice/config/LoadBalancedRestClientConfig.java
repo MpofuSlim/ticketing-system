@@ -13,9 +13,9 @@ import org.springframework.web.client.RestClient;
  * inter-service clients (booking-, loyalty-service) clone this builder so their
  * calls are discovery-routed.
  *
- * <p>The external Oradian middleware client deliberately does NOT use this
+ * <p>External (non-fleet) clients deliberately do NOT use this
  * builder — it keeps a plain {@code RestClient.builder()} with an explicit URL,
- * because Oradian is not registered in our Eureka.
+ * because those hosts are not registered in our Eureka.
  */
 @Configuration
 public class LoadBalancedRestClientConfig {

@@ -74,14 +74,15 @@ Eureka **client** and resolves siblings **by name**, not by hardcoded URL:
 
 So **do not** reintroduce explicit `http://host:port` inter-service URLs or
 `*_SERVICE_URL` / `*_SERVICE_URI` env vars. The only deliberately non-discovery
-client is the external **Oradian middleware** (not in our registry) — it keeps
-a plain `RestClient` + explicit URL. Tests disable discovery via
+clients are the external payment/notification providers (InnBucks, ZimSwitch,
+the WhatsApp gateway), which are not in our registry — they keep a plain
+`RestClient` + explicit URL. Tests disable discovery via
 `spring.cloud.discovery.enabled: false` in the `test` / `it` profiles; keep
 that when adding a new service so `@SpringBootTest` doesn't try to register.
 
 ## External-service contract tests (WireMock)
 
-**Every client that calls an external HTTP service (Oradian middleware, the
+**Every client that calls an external HTTP service (the
 WhatsApp gateway, the InnBucks core adapter, etc.) MUST have a WireMock-driven
 contract test that pins one assertion per response shape we've observed in
 production.** This is the test that fails the build when an upstream service
@@ -399,6 +400,49 @@ staged rollout, NOT a code-only PR**):
   the edge. `06-networkpolicy.yaml` is segmentation, not encryption. Needs a
   mesh or per-hop TLS + cert management.
 
+## Core banking — none (Oradian removed)
+
+**There is no server-side core-banking integration.** The Oradian middleware
+client is gone from both services that used it; the frontend calls **Veengu
+directly** for wallet operations. Do not reintroduce a server-side wallet rail
+without a deliberate decision — the FE owning it is the current architecture,
+not an accident.
+
+What went with it:
+
+- **user-service** — the whole `corebanking` package (`CoreBankingPort` and its
+  only adapter), `OradianClient` + config/properties, and the two endpoints that
+  existed solely to read Oradian deposit accounts: `GET /auth/customer/deposits`
+  and `GET /auth/customer/send-money/details/{phone}`. **Tier-2 registration is
+  now purely local** — it used to mirror the customer into Oradian and roll the
+  whole transaction back if that call failed (surfacing as a 502), so the failure
+  mode where a customer could not reach tier 2 because an upstream was down is
+  gone with it. `INNBUCKS_CORE_BANKING` / `ORADIAN_*` env vars are removed.
+- **payment-service** — the entire wallet-transfer subsystem:
+  `POST /payments/transfer`, `POST /payments/withdraw`,
+  `GET /payments/transactions[/{id}]`, `OradianMiddlewareClient`,
+  `TransactionService`/`Repository`/entity, `TransferLimitService` (velocity
+  caps), `ReconciliationJob`, and the `TransactionCompletedEvent` →
+  `PaymentNotificationListener` WhatsApp side-effect. The **ticket/order payment
+  rails are untouched** — `POST /payments` (InnBucks 2D code + ZimSwitch card),
+  `POST /payments/shop-checkout`, `Payment`/`PaymentEvent`, the settlement
+  reconciler and the audit chain all stay.
+
+**Two tables are left dormant rather than dropped**, same call as `event_outbox`
+after Kafka: payment-service's `transactions` (V1/V2) and user-service's
+core-banking linkage columns on `customer_profiles` (`oradian_external_id`,
+`oradian_client_id` from V10; `core_banking_provider`, `core_banking_profile_id`
+from V19). Applied migrations are never edited, unmapped columns and tables are
+harmless under `ddl-auto: validate`, and the existing rows are real history —
+they name the Oradian record each pre-cutover tier-2 customer was mirrored into,
+which is exactly what a support or reconciliation query would need. Drop them in
+a later migration once that history is genuinely worthless.
+
+Also note `Payments-Frontend-Integration.md` now documents only auth, device
+binding, idempotency and gateway rate limits — its transfer/withdraw/history/
+deposits sections described the removed API and were cut rather than left
+lying about what the backend serves.
+
 ## Messaging — no broker (Kafka removed)
 
 **There is no message broker.** Kafka was removed once the review found it was a
@@ -602,7 +646,7 @@ convention above) is anchored to a versioned source.
    custody only, never committed, per the A02 rules above.
 
 Each spec is ~1 MB — too large to inline anywhere or grep usefully. Use
-the snippets below (same shape as `OradianMiddleware/docs/oradian-swagger.json`)
+the snippets below
 to inspect either file (swap the filename):
 
 ```bash
@@ -638,7 +682,7 @@ for t, n in c.most_common(): print(f'{n:4d}  {t}')
 "
 ```
 
-As with Oradian, do NOT try to model every field of every veengu DTO —
+Do NOT try to model every field of every veengu DTO —
 trim aggressively to only what we actually consume on the wire, and let
 the unknown fields fall through as ignored JSON. The pinned spec exists
 so anyone can re-derive the shape they need without rediscovering it

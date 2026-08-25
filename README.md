@@ -14,7 +14,7 @@ other through a Eureka registry and communicate over REST.
 | `event-service`    | 8082 | Event catalogue and tenant-scoped event admin.                              |
 | `seat-service`     | 8083 | Seat inventory, categories, optimistic-locked holds.                        |
 | `booking-service`  | 8084 | Booking creation, idempotency, payment hand-off. |
-| `payment-service`  | 8085 | Booking payments + wallet transfers/withdrawals via the Oradian middleware. Opt-in (`payments` profile). |
+| `payment-service`  | 8085 | Booking/order payments — InnBucks 2D code + ZimSwitch card rails. Opt-in (`payments` profile). |
 | `loyalty-service`  | 8086 | Loyalty & merchant platform: merchants, shops, vouchers, invoices, QR, points. |
 
 Shared infrastructure: PostgreSQL 16 (one database per service, schema owned by
@@ -31,7 +31,7 @@ cp .env.example .env
 # Generate a JWT secret and paste it into .env
 openssl rand -base64 48
 # Then fill in the other required secrets (see Configuration / .env.example):
-# POSTGRES_PASSWORD, INTERNAL_API_TOKEN, ORADIAN_INTERNAL_TOKEN, WHATSAPP_API_KEY
+# POSTGRES_PASSWORD, INTERNAL_API_TOKEN, WHATSAPP_API_KEY
 
 docker compose up --build
 ```
@@ -61,7 +61,6 @@ fill in real values. Required:
 | `JWT_SECRET`            | HS256 signing key. Must be ≥32 chars; shared across services.           |
 | `POSTGRES_PASSWORD`     | Password for the Postgres container. Required by docker-compose.        |
 | `INTERNAL_API_TOKEN`    | Shared secret for service-to-service calls (loyalty webhooks, event/booking internal endpoints). |
-| `ORADIAN_INTERNAL_TOKEN`| `X-Internal-Token` sent to the Oradian middleware; must match its `INTERNAL_API_TOKEN`. |
 | `WHATSAPP_API_KEY`      | API key for the WhatsApp notification gateway (OTP + payment confirmations). |
 | `POSTGRES_USER`         | Postgres user. Defaults to `postgres`.                                  |
 | `CORS_ALLOWED_ORIGINS`  | Origins allowed by the gateway and services. **Set this to your exact frontend origins in staging/prod** — the default is a dev-oriented Vercel/localhost pattern. |
@@ -167,9 +166,10 @@ on boot and resolves its siblings **by name**, never by a hardcoded host:port:
 - `payment`/`seat`/`loyalty`/`user`/`event` call `http://<service-name>` through
   a `@LoadBalanced` `RestClient`/`RestTemplate`.
 
-The only deliberately non-discovery client is the external **Oradian
-middleware** (not in our registry) — a plain `RestClient` with an explicit
-URL. Tests disable discovery via `spring.cloud.discovery.enabled: false` in the
+The deliberately non-discovery clients are the external payment/notification
+providers (InnBucks, ZimSwitch, the WhatsApp gateway) — plain `RestClient`s
+with explicit URLs, since they are not in our registry. Tests disable
+discovery via `spring.cloud.discovery.enabled: false` in the
 `test`/`it` profiles.
 
 ## CI/CD
@@ -200,7 +200,7 @@ GitHub Actions workflows in `.github/workflows/`:
 ├── event-service/         Event catalogue
 ├── seat-service/          Seat inventory + holds
 ├── booking-service/       Booking + idempotency
-├── payment-service/       Booking payments + Oradian wallet transfers (opt-in)
+├── payment-service/       Booking/order payments — InnBucks code + card (opt-in)
 ├── loyalty-service/       Loyalty + merchant platform
 ├── prometheus/            Scrape config, alert rules, SLO doc
 ├── scripts/               dev-env / deploy / backup helpers

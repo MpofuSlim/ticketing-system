@@ -1,8 +1,5 @@
 package com.innbucks.userservice.service;
 
-import com.innbucks.userservice.corebanking.CoreBankingCreateCustomerCommand;
-import com.innbucks.userservice.corebanking.CoreBankingCustomerResult;
-import com.innbucks.userservice.corebanking.CoreBankingPort;
 import com.innbucks.userservice.dto.CustomerRegistrationResponseDTO;
 import com.innbucks.userservice.dto.CustomerTier2RegisterDTO;
 import com.innbucks.userservice.dto.CustomerTier4RegisterDTO;
@@ -36,12 +33,6 @@ class CustomerServiceTest {
 
     private CustomerService newService(UserRepository userRepo,
                                        CustomerProfileRepository profileRepo) {
-        return newService(userRepo, profileRepo, mock(CoreBankingPort.class));
-    }
-
-    private CustomerService newService(UserRepository userRepo,
-                                       CustomerProfileRepository profileRepo,
-                                       CoreBankingPort coreBanking) {
         return new CustomerService(
                 userRepo,
                 profileRepo,
@@ -49,7 +40,6 @@ class CustomerServiceTest {
                 mock(PendingRegistrationRepository.class),
                 mock(PasswordEncoder.class),
                 mock(OtpService.class),
-                coreBanking,
                 new com.innbucks.userservice.security.NationalIdHasher("test-secret")
         );
     }
@@ -72,16 +62,6 @@ class CustomerServiceTest {
         dto.setAddress(addr);
         dto.setClientCustomFields(new LinkedHashMap<>());
         return dto;
-    }
-
-    private CoreBankingCustomerResult fakeCoreBankingResult() {
-        return CoreBankingCustomerResult.builder()
-                .profileRef("oradian-ext-1")
-                .oradianExternalId("oradian-ext-1")
-                .oradianClientId(1001L)
-                .status("PENDING_APPROVAL")
-                .country("KE")
-                .build();
     }
 
     private User customerUser(long id, String phone) {
@@ -159,65 +139,15 @@ class CustomerServiceTest {
     }
 
     @Test
-    void registerTier2_usesStableIdempotencyKeyDerivedFromUserId() {
-        // Pins the contract that makes Oradian-vs-local atomicity recoverable:
-        // the idempotency key MUST be derived from User.id, never randomised
-        // per call. If anything between the Oradian response and the local
-        // transaction commit fails, the @Transactional rolls back and the
-        // FE retries — and the retry must replay Oradian's cached response
-        // (same key, same body), not double-create a fresh client. Previous
-        // implementation called UUID.randomUUID() inside OradianClient,
-        // which defeated the whole mechanism: every retry looked brand new
-        // to the middleware so the orphan in Oradian could never be paired
-        // back with the local profile.
-        UserRepository userRepo = mock(UserRepository.class);
-        CustomerProfileRepository profileRepo = mock(CustomerProfileRepository.class);
-        CoreBankingPort coreBanking = mock(CoreBankingPort.class);
-        when(coreBanking.provider()).thenReturn("ORADIAN");
-        when(coreBanking.createCustomer(any(CoreBankingCreateCustomerCommand.class), anyString()))
-                .thenReturn(fakeCoreBankingResult());
-        CustomerService service = newService(userRepo, profileRepo, coreBanking);
-
-        User user = customerUser(42L, "+263770000001");
-        CustomerProfile profile = CustomerProfile.builder()
-                .user(user)
-                .registrationTier(1)
-                // A01/A04: recent OTP verification — the tier2/3/4 gate requires it.
-                .phoneVerifiedAt(LocalDateTime.now(ZoneOffset.UTC))
-                .build();
-        when(userRepo.findByPhoneNumber("+263770000001")).thenReturn(Optional.of(user));
-        when(profileRepo.findByUserId(42L)).thenReturn(Optional.of(profile));
-
-        service.registerTier2(tier2Request("+263770000001"));
-
-        ArgumentCaptor<String> keyCaptor = ArgumentCaptor.forClass(String.class);
-        verify(coreBanking).createCustomer(any(CoreBankingCreateCustomerCommand.class), keyCaptor.capture());
-        String key = keyCaptor.getValue();
-
-        assertEquals("customer-tier-2:42", key,
-                "idempotency key must be derived from User.id so retries replay the provider's cached response");
-
-        // The provider-agnostic linkage AND the legacy oradian columns must
-        // both land on the profile (dual-write during the provider split).
-        assertEquals("ORADIAN", profile.getCoreBankingProvider());
-        assertEquals("oradian-ext-1", profile.getCoreBankingProfileId());
-        assertEquals("oradian-ext-1", profile.getOradianExternalId());
-        assertEquals(1001L, profile.getOradianClientId());
-    }
-
-    @Test
-    void registerTier2_storesHashedNationalId_butSendsRawToCoreBanking() {
+    void registerTier2_storesHashedNationalId_neverTheRawValue() {
         // PII at rest: the stored national_id must be HMAC'd, never the raw
-        // "12345678". But core-banking (Oradian) needs the REAL id for KYC, and
-        // it gets it straight off the request — proving the hash is storage-only
-        // and doesn't corrupt the provider linkage.
+        // "12345678". This used to also assert that core-banking received the
+        // RAW id for KYC — that half went away with the Oradian mirror, but the
+        // storage guarantee is the part that protects the database and it still
+        // holds.
         UserRepository userRepo = mock(UserRepository.class);
         CustomerProfileRepository profileRepo = mock(CustomerProfileRepository.class);
-        CoreBankingPort coreBanking = mock(CoreBankingPort.class);
-        when(coreBanking.provider()).thenReturn("ORADIAN");
-        when(coreBanking.createCustomer(any(CoreBankingCreateCustomerCommand.class), anyString()))
-                .thenReturn(fakeCoreBankingResult());
-        CustomerService service = newService(userRepo, profileRepo, coreBanking);
+        CustomerService service = newService(userRepo, profileRepo);
 
         User user = customerUser(42L, "+263770000001");
         CustomerProfile profile = CustomerProfile.builder()
@@ -235,58 +165,6 @@ class CustomerServiceTest {
         assertTrue(profile.getNationalId().startsWith("hmac:"),
                 "national_id must be HMAC'd at rest, was: " + profile.getNationalId());
         assertNotEquals("12345678", profile.getNationalId());
-
-        // Core-banking still receives the raw value.
-        ArgumentCaptor<CoreBankingCreateCustomerCommand> cmd =
-                ArgumentCaptor.forClass(CoreBankingCreateCustomerCommand.class);
-        verify(coreBanking).createCustomer(cmd.capture(), anyString());
-        assertEquals("12345678", cmd.getValue().nationalId(),
-                "core-banking must get the real national ID, not the hash");
-    }
-
-    @Test
-    void registerTier2_passesSameKeyOnRetryForSameCustomer() {
-        // Simulates the bug scenario: the first attempt's @Transactional rolls
-        // back AFTER Oradian successfully committed, so the profile stays at
-        // tier 1 locally. The user retries. The second call MUST send the
-        // same idempotency key (same user.id => same key) so Oradian replies
-        // from cache with the existing externalID / clientID — pairing the
-        // orphaned Oradian record back with the local profile instead of
-        // making a second one.
-        UserRepository userRepo = mock(UserRepository.class);
-        CustomerProfileRepository profileRepo = mock(CustomerProfileRepository.class);
-        CoreBankingPort coreBanking = mock(CoreBankingPort.class);
-        when(coreBanking.provider()).thenReturn("ORADIAN");
-        when(coreBanking.createCustomer(any(CoreBankingCreateCustomerCommand.class), anyString()))
-                .thenReturn(fakeCoreBankingResult());
-        CustomerService service = newService(userRepo, profileRepo, coreBanking);
-
-        User user = customerUser(99L, "+263770000099");
-        CustomerProfile profile = CustomerProfile.builder()
-                .user(user)
-                .registrationTier(1)
-                // A01/A04: recent OTP verification — the tier2/3/4 gate requires it.
-                .phoneVerifiedAt(LocalDateTime.now(ZoneOffset.UTC))
-                .build();
-        when(userRepo.findByPhoneNumber("+263770000099")).thenReturn(Optional.of(user));
-        when(profileRepo.findByUserId(99L)).thenReturn(Optional.of(profile));
-
-        // First attempt — the provider commits, then imagine local rollback.
-        // After rollback the in-memory profile keeps its mutations, so reset
-        // its tier back to 1 to model the on-disk state the retry would observe.
-        service.registerTier2(tier2Request("+263770000099"));
-        profile.setRegistrationTier(1);
-
-        // Retry.
-        service.registerTier2(tier2Request("+263770000099"));
-
-        ArgumentCaptor<String> keyCaptor = ArgumentCaptor.forClass(String.class);
-        verify(coreBanking, times(2))
-                .createCustomer(any(CoreBankingCreateCustomerCommand.class), keyCaptor.capture());
-        assertEquals(2, keyCaptor.getAllValues().size());
-        assertEquals(keyCaptor.getAllValues().get(0), keyCaptor.getAllValues().get(1),
-                "two attempts for the same user must use the same idempotency key");
-        assertEquals("customer-tier-2:99", keyCaptor.getAllValues().get(0));
     }
 
     @Test
@@ -295,11 +173,10 @@ class CustomerServiceTest {
         // phone was never OTP-verified (phoneVerifiedAt == null) MUST be refused
         // with 403 — otherwise an unauthenticated attacker could overwrite a
         // victim's email/KYC just by naming their phone in the request body. The
-        // gate fires before any core-banking mutation or local profile write.
+        // gate fires before any local profile write.
         UserRepository userRepo = mock(UserRepository.class);
         CustomerProfileRepository profileRepo = mock(CustomerProfileRepository.class);
-        CoreBankingPort coreBanking = mock(CoreBankingPort.class);
-        CustomerService service = newService(userRepo, profileRepo, coreBanking);
+        CustomerService service = newService(userRepo, profileRepo);
 
         User user = customerUser(55L, "+263770000055");
         CustomerProfile profile = CustomerProfile.builder()
@@ -316,9 +193,8 @@ class CustomerServiceTest {
         assertTrue(ex.getReason() != null && ex.getReason().contains("Verify your phone"),
                 "expected the phone-verification-required reason, got: " + ex.getReason());
 
-        // Gate short-circuits before the provider create and before any save,
-        // so an attacker can't advance the tier or reach core-banking.
-        verify(coreBanking, never()).createCustomer(any(), anyString());
+        // Gate short-circuits before any save, so an attacker can't advance
+        // the tier or overwrite the victim's KYC fields.
         verify(profileRepo, never()).save(any());
         assertEquals(1, profile.getRegistrationTier(), "tier must not advance");
     }

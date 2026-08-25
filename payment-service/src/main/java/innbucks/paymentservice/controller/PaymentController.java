@@ -63,9 +63,7 @@ import java.util.UUID;
  *   <li>{@code POST /payments/shop-checkout} — pay at a shop with cash,
  *       loyalty points, or a mix. <b>Moves real loyalty points</b> via
  *       loyalty-service (earn on the cash leg, burn on the points leg —
- *       both committed atomically). Wallet operations from
- *       {@link TransfersController} are a separate surface and use real
- *       Oradian-backed money.</li>
+ *       both committed atomically).</li>
  * </ul>
  */
 @RestController

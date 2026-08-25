@@ -55,13 +55,6 @@ spec:
             - { name: REDIS_HOST, value: "redis" }
             - { name: REDIS_PORT, value: "6379" }
             - { name: JWT_EXPIRATION_MS, value: "900000" }
-            # ZW is intended for the Veengu provider, but that adapter is not built
-            # yet (CoreBankingProviderConfig only allows 'oradian' today), so this
-            # stays 'oradian' -- the only value that boots. oradian-middleware is
-            # NOT in this cluster, so tier-2 createCustomer is inert until either
-            # the Veengu adapter lands or oradian-middleware is made reachable.
-            - { name: INNBUCKS_CORE_BANKING, value: "oradian" }
-            - { name: ORADIAN_BASE_URL, value: "http://oradian-middleware:8090" }
             - { name: BANK_API_READ_TIMEOUT_MS, value: "30000" }
             - { name: MFA_ISSUER, value: "InnBucks" }
           resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }

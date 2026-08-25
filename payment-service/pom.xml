@@ -155,8 +155,8 @@
         <!-- Service discovery: registers with the Eureka registry
              (discovery-server) and resolves ticketing siblings (booking-,
              loyalty-service) by name via Spring Cloud LoadBalancer. The
-             external Oradian middleware is NOT in the registry and keeps its
-             explicit URL. -->
+             external payment/notification providers are NOT in the registry
+             and keep their explicit URLs. -->
         <dependency>
             <groupId>org.springframework.cloud</groupId>
             <artifactId>spring-cloud-starter-netflix-eureka-client</artifactId>
@@ -171,11 +171,11 @@
         </dependency>
 
         <!-- Resilience4j: retry-on-transient + circuit-breaker around the
-             Oradian middleware client. Without this, a single TCP blip
-             becomes a customer-facing 502 and a wasted FAILED ledger row;
-             a sustained Oradian outage threads every customer's request
-             through the read-timeout (~10s) before failing, exhausting
-             the pool. The same Spring Cloud starter booking-service uses
+             external payment-rail clients (InnBucks, ZimSwitch). Without
+             this, a single TCP blip becomes a customer-facing 502, and a
+             sustained upstream outage threads every customer's request
+             through the read-timeout before failing, exhausting the pool.
+             The same Spring Cloud starter booking-service uses
              so the registries (Retry + CircuitBreaker) auto-wire from
              the application.yaml block. -->
         <dependency>
@@ -200,8 +200,8 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- WireMock: real-HTTP contract tests for the Oradian middleware client
-             (sibling of user-service's SmsNotificationClient WireMock setup —
+        <!-- WireMock: real-HTTP contract tests for the external payment-rail
+             clients (sibling of user-service's SmsNotificationClient setup —
              see CLAUDE.md "External-service contract tests"). Standalone
              classifier so the shaded jar doesn't conflict with the project's
              Jetty/Jackson versions. -->

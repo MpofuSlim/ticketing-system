@@ -86,7 +86,6 @@ the flags.
    REDIS_PASSWORD=$(openssl rand -base64 32)
    EUREKA_PASSWORD=$(openssl rand -hex 24)
    JWT_SECRET=$(openssl rand -base64 48)
-   ORADIAN_INTERNAL_TOKEN=$(openssl rand -base64 32)
    INTERNAL_API_TOKEN=$(openssl rand -base64 32)
    LOYALTY_VOUCHER_SECRET=$(openssl rand -base64 32)
    LOYALTY_QR_SECRET=$(openssl rand -base64 32)

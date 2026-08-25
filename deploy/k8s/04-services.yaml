@@ -216,9 +216,6 @@ spec:
             - { name: REDIS_HOST, value: "redis" }
             - { name: REDIS_PORT, value: "6379" }
             - { name: IDEMPOTENCY_STORE, value: "redis" }
-            # Oradian is not in this cluster (ZW); this URL is inert until the
-            # Veengu adapter lands or oradian-middleware is made reachable.
-            - { name: ORADIAN_MIDDLEWARE_URL, value: "http://oradian-middleware:8090" }
             - { name: PAYMENTS_INNBUCKS_ENABLED, value: "true" }
           resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }
           readinessProbe: { httpGet: { path: /actuator/health, port: 8085 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }

@@ -2,7 +2,6 @@ package com.innbucks.userservice.exception;
 
 import com.innbucks.userservice.cells.WrongCellException;
 import com.innbucks.userservice.client.NotificationDeliveryException;
-import com.innbucks.userservice.client.OradianClientException;
 import com.innbucks.userservice.dto.ApiResult;
 import com.innbucks.userservice.service.AuthService;
 import com.innbucks.userservice.service.RefreshTokenService;
@@ -90,18 +89,6 @@ public class GlobalExceptionHandler {
                 .message("Validation failed")
                 .data(fields)
                 .build());
-    }
-
-    // Surface Oradian middleware failures as 502 Bad Gateway so the client knows
-    // the local state was rolled back — distinct from a 400 caused by user input.
-    // The raw upstream text often contains internal HTTP envelopes / Oradian
-    // operation names; it goes to logs, the user sees a friendly retry hint.
-    @ExceptionHandler(OradianClientException.class)
-    public ResponseEntity<ApiResult<Void>> handleOradian(OradianClientException ex) {
-        log.warn("Oradian middleware call failed: {}", ex.getMessage());
-        return ResponseEntity.status(HttpStatus.BAD_GATEWAY)
-                .body(ApiResult.error(HttpStatus.BAD_GATEWAY,
-                        "We're having trouble reaching the bank right now. Please try again in a moment."));
     }
 
     // WhatsApp / SMS notification gateway failures (OTP / approval delivery).

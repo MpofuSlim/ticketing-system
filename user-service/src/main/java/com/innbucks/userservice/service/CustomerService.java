@@ -1,9 +1,5 @@
 package com.innbucks.userservice.service;
 
-import com.innbucks.userservice.client.DepositAccount;
-import com.innbucks.userservice.corebanking.CoreBankingCreateCustomerCommand;
-import com.innbucks.userservice.corebanking.CoreBankingCustomerResult;
-import com.innbucks.userservice.corebanking.CoreBankingPort;
 import com.innbucks.userservice.util.MsisdnMasking;
 import com.innbucks.userservice.dto.*;
 import com.innbucks.userservice.entity.CustomerProfile;
@@ -45,13 +41,7 @@ public class CustomerService {
     private final PendingRegistrationRepository pendingRegistrationRepository;
     private final PasswordEncoder passwordEncoder;
     private final OtpService otpService;
-    // Per-cell core-banking provider (Oradian for the Kenya cell, Veengu for
-    // Zimbabwe once its adapter lands). Selected at deploy time via
-    // innbucks.core-banking.provider — see CoreBankingPort.
-    private final CoreBankingPort coreBanking;
-    // Hashes the national ID before it lands in the DB (PII at rest). The raw
-    // value still goes to core-banking straight off the request — only the
-    // stored copy is HMAC'd.
+    // Hashes the national ID before it lands in the DB (PII at rest).
     private final com.innbucks.userservice.security.NationalIdHasher nationalIdHasher;
 
     /** Deployment country fallback for MSISDNs whose dialling prefix isn't an
@@ -164,47 +154,12 @@ public class CustomerService {
         user.setEmail(request.getEmail());
         userRepository.save(user);
 
-        // Mirror the registration into this cell's core-banking provider
-        // (Oradian today; Veengu for the ZW cell once its adapter lands).
-        // Failure throws the adapter's exception (e.g. OradianClientException),
-        // which rolls back the @Transactional saves above so local state can't
-        // advance to tier 2 without a core-banking record. GlobalExceptionHandler
-        // maps the exception to HTTP 502.
-        //
-        // Idempotency key MUST be stable per customer (User.id, set at tier-1
-        // and never re-issued). True atomicity between the provider and the
-        // local DB isn't possible — there's always a window where the provider
-        // commits but the local transaction rolls back (DB outage during
-        // commit, an exception between the response and the final save, etc.).
-        // A stable key lets a retry replay the create: within Oradian
-        // middleware's 24h idempotency window the same key returns the cached
-        // response, so we can stamp the existing externalID / clientID locally
-        // instead of orphaning the provider-side record. Previously this key
-        // was freshly randomised per call (UUID.randomUUID()) which defeated
-        // the entire mechanism — every retry looked like a brand-new request.
-        String idempotencyKey = "customer-tier-2:" + user.getId();
-        CoreBankingCustomerResult coreBankingCustomer = coreBanking.createCustomer(
-                toCreateCommand(request, user.getPhoneNumber()), idempotencyKey);
-
-        // Stamp the core-banking linkage on the local profile so subsequent
-        // reads (balance enquiries, account-status lookups, reconciliation
-        // jobs) can hit the provider by the stored reference instead of
-        // querying by msisdn each time. The provider-agnostic pair
-        // (core_banking_provider, core_banking_profile_id) is the durable
-        // linkage; the oradian_* columns are kept in lockstep for existing
-        // tooling and stay null on non-Oradian cells.
-        profile.setCoreBankingProvider(coreBanking.provider());
-        profile.setCoreBankingProfileId(coreBankingCustomer.profileRef());
-        profile.setOradianExternalId(coreBankingCustomer.oradianExternalId());
-        profile.setOradianClientId(coreBankingCustomer.oradianClientId());
-        customerProfileRepository.save(profile);
-
-        log.info("Tier-2 mirrored to {} phone={} userId={} profileRef={} oradianClientId={}",
-                coreBanking.provider(),
-                MsisdnMasking.mask(user.getPhoneNumber()),
-                user.getId(),
-                coreBankingCustomer.profileRef(),
-                coreBankingCustomer.oradianClientId());
+        // Registration completes locally. This used to also mirror the
+        // customer into a core-banking provider (Oradian) and roll the whole
+        // transaction back if that call failed. Oradian is gone and no
+        // server-side provider replaced it — the frontend talks to Veengu
+        // directly — so tier-2 is now a purely local state change and the
+        // customer_profiles core-banking linkage columns are left unwritten.
 
         return CustomerRegistrationResponseDTO.builder()
                 .userId(user.getId())
@@ -290,66 +245,6 @@ public class CustomerService {
                 .build();
     }
 
-    /**
-     * Customer-self deposits lookup. Verifies the JWT-derived phone resolves
-     * to a real CUSTOMER row, then delegates to this cell's core-banking
-     * provider (Oradian: middleware's S2S /internal/customers/{msisdn}/deposits,
-     * returning just the deposits array). Keeps a stale JWT issued for a
-     * de-registered customer from leaking core-banking data.
-     */
-    @Transactional(readOnly = true)
-    public List<DepositAccount> getDepositsForCustomer(String phoneNumber) {
-        String phone = normalizePhone(phoneNumber);
-        User user = userRepository.findByPhoneNumber(phone)
-                .orElseThrow(() -> new RuntimeException("Customer not found for phone " + phone));
-        if (!user.hasRole(User.Role.CUSTOMER)) {
-            throw new RuntimeException("User is not a customer");
-        }
-        return coreBanking.listDeposits(phone);
-    }
-
-    /**
-     * Send-money projection: same upstream Oradian call as the deposits
-     * lookup, but each row is reduced to identifying fields only — balance,
-     * subscribed, and lifecycle dates are dropped. Use case: a sender
-     * looking up a recipient by phone needs to pick the right account, not
-     * see the recipient's private balance or account history.
-     */
-    @Transactional(readOnly = true)
-    public List<CustomerSendMoneyDetail> getSendMoneyDetailsForCustomer(String phoneNumber) {
-        String phone = normalizePhone(phoneNumber);
-        User user = userRepository.findByPhoneNumber(phone)
-                .orElseThrow(() -> new RuntimeException("Customer not found for phone " + phone));
-        if (!user.hasRole(User.Role.CUSTOMER)) {
-            throw new RuntimeException("User is not a customer");
-        }
-        // Capture the recipient's structured name once and stamp it onto every
-        // returned account row so the sender's UI can show "Sending to: Jane M.
-        // Doe" without a second lookup.
-        return coreBanking.listDeposits(phone).stream()
-                .map(d -> toSendMoneyDetail(d, user))
-                .toList();
-    }
-
-    private static CustomerSendMoneyDetail toSendMoneyDetail(DepositAccount d, User recipient) {
-        return CustomerSendMoneyDetail.builder()
-                .firstName(recipient.getFirstName())
-                .middleName(recipient.getMiddleName())
-                .lastName(recipient.getLastName())
-                .internalID(d.getInternalID())
-                .ID(d.getID())
-                .externalAccountNumber(d.getExternalAccountNumber())
-                .clientInternalID(d.getClientInternalID())
-                .productID(d.getProductID())
-                .productName(d.getProductName())
-                .currencyCode(d.getCurrencyCode())
-                .status(d.getStatus())
-                .isMainAccount(d.getIsMainAccount())
-                .isMessagingFeeAccount(d.getIsMessagingFeeAccount())
-                .isJointAccount(d.getIsJointAccount())
-                .build();
-    }
-
     /** Joins first / middle / last into a single string, skipping any blanks. */
     private static String composeFullName(String first, String middle, String last) {
         StringBuilder sb = new StringBuilder();
@@ -363,33 +258,6 @@ public class CustomerService {
             sb.append(last.trim());
         }
         return sb.toString();
-    }
-
-    /**
-     * Provider-neutral create command. Provider-specific constraints (e.g.
-     * Oradian's MALE/FEMALE-only gender enum) are enforced inside the
-     * adapters, where the provider knowledge lives.
-     */
-    private static CoreBankingCreateCustomerCommand toCreateCommand(CustomerTier2RegisterDTO request,
-                                                                    String normalizedMsisdn) {
-        CustomerTier2RegisterDTO.Address addr = request.getAddress();
-        return CoreBankingCreateCustomerCommand.builder()
-                .firstName(request.getFirstName())
-                .middleName(request.getMiddleName())
-                .lastName(request.getLastName())
-                .dateOfBirth(request.getDateOfBirth())
-                .gender(request.getGender().name())
-                .msisdn(normalizedMsisdn)
-                .nationalId(request.getNationalId())
-                .email(request.getEmail())
-                .address(CoreBankingCreateCustomerCommand.Address.builder()
-                        .street1(addr.getStreet1())
-                        .city(addr.getCity())
-                        .postCode(addr.getPostCode())
-                        .country(addr.getCountry())
-                        .build())
-                .clientCustomFields(request.getClientCustomFields())
-                .build();
     }
 
     /**

@@ -31,16 +31,14 @@ import java.util.Set;
 @Slf4j
 public class ProductionSecretsGuard {
 
-    // payment-service holds three distinct shared secrets:
+    // payment-service holds two distinct shared secrets:
     //   - innbucks.internal-api-token   (env INTERNAL_API_TOKEN)     -> talks to loyalty-service
-    //   - oradian-middleware.internal-token (env ORADIAN_INTERNAL_TOKEN) -> talks to Oradian middleware
     //   - jwt.secret                    (env JWT_SECRET)             -> verifies bearer JWTs minted by user-service
-    // All three must be set in prod. As more secrets land (Stripe API key
+    // Both must be set in prod. As more secrets land (Stripe API key
     // when real payments wire in, etc.) add them here and the deployment-boot
     // gate widens automatically.
     private static final List<String> SECRETS_TO_CHECK = List.of(
             "innbucks.internal-api-token",
-            "oradian-middleware.internal-token",
             "jwt.secret",
             "whatsapp.api-key",
             "audit.hmac-secret"
@@ -102,8 +100,8 @@ public class ProductionSecretsGuard {
             throw new IllegalStateException(
                     "Refusing to start under deployment profile " + Arrays.toString(active) +
                     ": these secrets still hold placeholder/weak values: " + offenders +
-                    ". Override them via env vars (INTERNAL_API_TOKEN, ORADIAN_INTERNAL_TOKEN, " +
-                    "JWT_SECRET, WHATSAPP_API_KEY) before deploying."
+                    ". Override them via env vars (INTERNAL_API_TOKEN, JWT_SECRET, " +
+                    "WHATSAPP_API_KEY) before deploying."
             );
         }
         log.info("Secrets guard passed for profile {} ({} keys verified)",
