@@ -323,10 +323,24 @@ public class CustomerService {
         CustomerProfile profile = customerProfileRepository.findByUserId(user.getId())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "We couldn't find your customer profile. Please contact support."));
-        if (profile.getRegistrationTier() < requiredCurrentTier) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Please complete tier " + requiredCurrentTier + " registration first.");
-        }
+        // The registration ladder is no longer ORDERED. This used to refuse a
+        // tier-N registration unless the profile had already reached tier N-1
+        // ("Please complete tier N registration first."), which was the last
+        // tier check a customer could hit anywhere in the fleet — the per-service
+        // ACCESS gates were removed separately, so this rejection was the one
+        // still surfacing in the mobile app.
+        //
+        // Consequence, deliberately accepted: a customer can now submit tier 3
+        // or tier 4 without having completed tier 2, producing a profile whose
+        // registrationTier is high while the identity fields tier 2 collects
+        // (full name, date of birth, national ID) are still empty. Nothing
+        // downstream gates on tier any more, so that is a data-completeness
+        // question rather than an access one — but a KYC report that assumes
+        // "tier 4 implies tier 2 was filled in" is no longer safe to write.
+        //
+        // The per-step guards that remain are unchanged and unrelated to tier:
+        // the account must exist, be a CUSTOMER, have a profile, and have a
+        // recent OTP verification.
         return profile;
     }
 
