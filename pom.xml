@@ -29,6 +29,12 @@
 
     <properties>
         <java.version>21</java.version>
+        <!-- Pinned so the compile-time dependency and the annotation-processor
+             path below resolve to the SAME Lombok. Matches what the Spring Boot
+             BOM resolves today; check with
+               ./mvnw dependency:list -Dincludes=org.projectlombok:lombok
+             before changing it. -->
+        <lombok.version>1.18.46</lombok.version>
         <!-- 4.0.6 patches two Spring Boot CVEs (CVE-2026-40976 CRITICAL: default-
              web-security bypass; CVE-2026-40973 HIGH: ACE + session hijacking via
              predictable session IDs), and its BOM brings spring-security to 7.0.5
@@ -258,6 +264,7 @@
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
+            <version>${lombok.version}</version>
             <optional>true</optional>
         </dependency>
         <!-- spring-cloud-netflix-eureka-client 5.0.2 (brought in by PR #224's
@@ -333,6 +340,50 @@
     <build>
         <pluginManagement>
             <plugins>
+                <!-- Lombok MUST be named here as an explicit annotation-processor
+                     path, not merely left on the compile classpath.
+
+                     Recent JDKs (23+) stopped running annotation processors that
+                     javac discovers on the classpath — you now have to opt in.
+                     With Lombok only on the classpath, a JDK-24 builder image
+                     compiled every module with Lombok silently doing NOTHING, so
+                     every generated member vanished and the build died with
+                     hundreds of "cannot find symbol: variable log / getX()".
+                     That is exactly how the eclipse-temurin 21->24 Dependabot
+                     bumps broke every Release build while ci.yml (pinned to Java
+                     21) stayed green.
+
+                     Declaring the path makes the processor explicit, so Lombok
+                     runs on any JDK and the next base-image bump is a non-event.
+
+                     annotationProcessorPaths deliberately does NOT consult
+                     dependencyManagement, so it needs a literal version — hence
+                     the lombok.version property, which also pins the dependency
+                     above so the compile-time and processor versions cannot
+                     drift apart. -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-compiler-plugin</artifactId>
+                    <configuration>
+                        <!-- `release` rather than source+target: it also pins the
+                             system-module location, which is what javac was
+                             warning about ("not setting the location of system
+                             modules may lead to class files that cannot run on
+                             JDK 21"). It makes compiling on a newer JDK produce
+                             genuinely 21-compatible bytecode. -->
+                        <release>${java.version}</release>
+                        <annotationProcessorPaths>
+                            <path>
+                                <groupId>org.projectlombok</groupId>
+                                <artifactId>lombok</artifactId>
+                                <version>${lombok.version}</version>
+                            </path>
+                        </annotationProcessorPaths>
+                        <compilerArgs>
+                            <arg>-parameters</arg>
+                        </compilerArgs>
+                    </configuration>
+                </plugin>
                 <plugin>
                     <groupId>org.springframework.boot</groupId>
                     <artifactId>spring-boot-maven-plugin</artifactId>

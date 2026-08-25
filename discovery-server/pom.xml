@@ -54,10 +54,9 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
-                <configuration>
-                    <source>${java.version}</source>
-                    <target>${java.version}</target>
-                </configuration>
+                <!-- source/target come from the root pluginManagement, along
+                     with the Lombok annotationProcessorPaths. -->
+
             </plugin>
         </plugins>
     </build>
