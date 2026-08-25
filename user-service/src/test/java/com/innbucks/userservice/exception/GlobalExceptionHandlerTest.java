@@ -64,7 +64,7 @@ class GlobalExceptionHandlerTest {
         // CustomerService.loadProfile used to throw bare RuntimeException,
         // and the registering user saw "We couldn't process your request"
         // instead of the actual reason (email/phone already registered,
-        // service bundle missing, tier prerequisite, etc.). Each typed
+        // service bundle missing, profile missing, etc.). Each typed
         // ResponseStatusException must reach the wire with its descriptive
         // reason intact so the FE can render something the user can act on.
         for (String reason : new String[]{
@@ -73,7 +73,7 @@ class GlobalExceptionHandlerTest {
                 "Please select at least one service to register for.",
                 "We don't recognise the service 'pop-rock'. Available services: [LOYALTY, TICKETING].",
                 "This account isn't a customer account.",
-                "Please complete tier 1 registration first."
+                "We couldn't find your customer profile. Please contact support."
         }) {
             ResponseEntity<ApiResult<Void>> resp = handler.handleResponseStatus(
                     new ResponseStatusException(HttpStatus.BAD_REQUEST, reason));

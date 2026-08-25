@@ -118,7 +118,17 @@ class CustomerServiceTest {
     }
 
     @Test
-    void registerTier4_rejectsWhenCustomerIsNotYetAtTier3() {
+    void registerTier4_isAcceptedEvenWhenEarlierTiersWereSkipped() {
+        // The registration ladder is no longer ordered. This test previously
+        // asserted the opposite — that a profile still at tier 2 was refused
+        // with "Please complete tier 3 registration first." That rejection was
+        // the last tier check a customer could hit anywhere in the fleet, and
+        // it is deliberately gone.
+        //
+        // What this pins now is the consequence, so it is visible rather than
+        // discovered: the profile advances to tier 4 with the tier-3 step never
+        // taken. A KYC report that assumes "tier 4 implies every earlier tier
+        // was completed" is no longer safe to write.
         UserRepository userRepo = mock(UserRepository.class);
         CustomerProfileRepository profileRepo = mock(CustomerProfileRepository.class);
         CustomerService service = newService(userRepo, profileRepo);
@@ -126,16 +136,18 @@ class CustomerServiceTest {
         User user = customerUser(42L, "+263770000001");
         CustomerProfile profile = CustomerProfile.builder()
                 .user(user)
-                .registrationTier(2) // skipped tier 3 — must be rejected
+                .registrationTier(2) // tier 3 skipped — no longer refused
+                // The OTP-recency guard is unrelated to tier and still applies.
+                .phoneVerifiedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .build();
         when(userRepo.findByPhoneNumber("+263770000001")).thenReturn(Optional.of(user));
         when(profileRepo.findByUserId(42L)).thenReturn(Optional.of(profile));
 
-        RuntimeException ex = assertThrows(RuntimeException.class,
-                () -> service.registerTier4("+263770000001", tier4Request()));
-        assertTrue(ex.getMessage().contains("tier 3"),
-                "expected tier-3 prerequisite message, got: " + ex.getMessage());
-        verify(profileRepo, never()).save(any());
+        service.registerTier4("+263770000001", tier4Request());
+
+        assertEquals(4, profile.getRegistrationTier(),
+                "tier 4 must be reachable directly from tier 2");
+        verify(profileRepo, atLeastOnce()).save(any());
     }
 
     @Test
