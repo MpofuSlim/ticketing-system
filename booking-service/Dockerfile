@@ -2,7 +2,7 @@
 # Build from repo root:
 #     docker build -f booking-service/Dockerfile -t ticketing-booking-service .
 
-FROM eclipse-temurin:24-jdk-alpine AS builder
+FROM eclipse-temurin:21-jdk-alpine AS builder
 WORKDIR /workspace
 
 COPY .mvn .mvn
@@ -26,7 +26,7 @@ COPY booking-service/src booking-service/src
 RUN ./mvnw -B -pl booking-service -am -DskipTests package spring-boot:repackage \
     && cp booking-service/target/booking-service-*.jar /workspace/app.jar
 
-FROM eclipse-temurin:24-jre-alpine AS runtime
+FROM eclipse-temurin:21-jre-alpine AS runtime
 # Refresh the apk index + force-upgrade OpenSSL by name. Without naming the
 # packages, Docker reuses a stale layer hash and the cached upgrade doesn't
 # re-run when a new Alpine point release ships the fix.

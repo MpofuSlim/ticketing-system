@@ -264,6 +264,19 @@ called-out reason, not a silent revert.**
   org-owned. **Watch for this failure mode:** a red Release run no longer implies
   the image is missing — check whether the push step itself succeeded before
   concluding a deploy is blocked.
+- **Lombok is declared as an explicit `annotationProcessorPaths` entry** in the
+  root pom's `pluginManagement`, and the base images build on the SAME JDK the
+  tests run on. Both halves matter. Recent JDKs (23+) no longer run annotation
+  processors that javac merely discovers on the classpath, so when Dependabot
+  bumped six `eclipse-temurin` builders from 21 to 24, Lombok silently stopped
+  running and every Release build died with hundreds of `cannot find symbol:
+  variable log / getEventId()`. **`ci.yml` stayed green throughout** — it pins
+  `java-version: 21`, so only the Docker builds saw JDK 24. Watch for that
+  asymmetry: a green CI does not mean the images build. The processor path makes
+  Lombok work on any JDK; `<release>` (not `-source`/`-target`) makes bytecode
+  genuinely target-compatible. If you DO want to adopt a newer JDK, move
+  `ci.yml`'s `java-version` and `<java.version>` in the same PR as the base
+  images, so tests run on what production runs.
 - **`.trivyignore` is a governed waiver list** — every entry needs an owner +
   reason + review-date comment (rules are in the file). Prefer fixing/upgrading
   over waiving; the root `pom.xml` carries the CVE version-overrides.
