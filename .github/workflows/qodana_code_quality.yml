@@ -28,9 +28,31 @@ jobs:
         env:
           QODANA_TOKEN: ${{ secrets.QODANA_TOKEN }}
         with:
-          pr-mode: false
+          # Scan the DIFF on a pull request, the WHOLE project on master.
+          #
+          # With pr-mode false everywhere, every PR got a full-project scan and
+          # so inherited every pre-existing finding as a "new problem" — this
+          # repo has one (`Unnecessary 'null' check before method call`) and it
+          # was reported on PRs that changed no Java at all: #516 (a Lombok/JDK
+          # build fix) and #519 (two .env files, zero code). A signal that fires
+          # identically on every PR regardless of content carries no
+          # information, and people learn to ignore the check entirely — which
+          # is worse than not running it.
+          #
+          # Splitting by event keeps both halves honest: a PR is asked "did YOU
+          # introduce a problem?", while the push-to-master run above still does
+          # the full-project scan, so nothing stops being looked at. That is why
+          # this is a scope fix rather than a baseline — a baseline would bury
+          # the existing finding instead of leaving master to report it.
+          pr-mode: ${{ github.event_name == 'pull_request' }}
           use-caches: true
           post-pr-comment: true
           use-annotations: true
-          upload-result: false
+          # Publish qodana.sarif.json + logs as a job artifact. Without this the
+          # PR comment states a problem COUNT with no way to reach the detail —
+          # you cannot see which file, which line, or whether the finding is
+          # even real. That opacity is why the phantom above went unexamined for
+          # so long. The artifact costs nothing and makes the next finding
+          # diagnosable in one click.
+          upload-result: true
           push-fixes: 'none'
