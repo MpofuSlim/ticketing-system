@@ -66,6 +66,9 @@ public class EventService {
     private static final String DEFAULT_SORT_FIELD = "startDateTime";
 
     private final EventRepository eventRepository;
+    /** Turns the market-local wall-clock an organizer types into the UTC value
+     *  the zone-less start/end columns are contracted to hold. */
+    private final com.innbucks.eventservice.config.MarketTimeZone marketTimeZone;
     private final EventMapper eventMapper;
     private final SeatCategoryGateway seatCategoryGateway;
     private final BookingGateway bookingGateway;
@@ -539,10 +542,18 @@ public class EventService {
             throw new BadRequestException("Your session is missing country information. Please sign in again.");
         }
 
+        // Market-local -> UTC, once, before anything reads these. The organizer
+        // types the time the event starts where it happens ("07:00" for a 7am
+        // Harare fun run); the columns store UTC. Converting here means the
+        // duplicate probe below compares like with like — probing with the raw
+        // local value would miss an existing event stored in UTC.
+        LocalDateTime startUtc = marketTimeZone.toUtc(request.getStartDateTime());
+        LocalDateTime endUtc = marketTimeZone.toUtc(request.getEndDateTime());
+
         if (eventRepository.existsByTenantUserUuidAndTitleAndVenueAndStartDateTimeAndDeletedFalse(
-                tenantUserUuid, request.getTitle(), request.getVenue(), request.getStartDateTime())) {
-            log.warn("Event create rejected, duplicate tenantUserUuid={} title={} venue={} startDateTime={}",
-                    tenantUserUuid, request.getTitle(), request.getVenue(), request.getStartDateTime());
+                tenantUserUuid, request.getTitle(), request.getVenue(), startUtc)) {
+            log.warn("Event create rejected, duplicate tenantUserUuid={} title={} venue={} startUtc={}",
+                    tenantUserUuid, request.getTitle(), request.getVenue(), startUtc);
             throw new ConflictException("An event with the same title, venue and date already exists");
         }
 
@@ -558,8 +569,8 @@ public class EventService {
                 .country(country)
                 .category(request.getCategory())
                 .location(toLocation(request.getLocation()))
-                .startDateTime(request.getStartDateTime())
-                .endDateTime(request.getEndDateTime())
+                .startDateTime(startUtc)
+                .endDateTime(endUtc)
                 .totalCapacity(request.getTotalCapacity())
                 .availableTickets(request.getTotalCapacity())
                 .deleted(false)
@@ -718,8 +729,15 @@ public class EventService {
         if (request.getVenue() != null)        event.setVenue(HtmlSanitizer.stripAll(request.getVenue()));
         if (request.getCategory() != null)     event.setCategory(request.getCategory());
         if (request.getLocation() != null)     event.setLocation(toLocation(request.getLocation()));
-        if (request.getStartDateTime() != null) event.setStartDateTime(request.getStartDateTime());
-        if (request.getEndDateTime() != null)   event.setEndDateTime(request.getEndDateTime());
+        // Same market-local -> UTC conversion as create. Converting BEFORE the
+        // merged-order guard below matters on a single-sided update: comparing
+        // an unconverted incoming value against the stored UTC one would be
+        // comparing two different clocks, and would reject (or wave through)
+        // the wrong edits by exactly the market's offset.
+        if (request.getStartDateTime() != null)
+            event.setStartDateTime(marketTimeZone.toUtc(request.getStartDateTime()));
+        if (request.getEndDateTime() != null)
+            event.setEndDateTime(marketTimeZone.toUtc(request.getEndDateTime()));
         // Guard the merged result: a single-sided update (only start or only
         // end) could still invert the order against the stored value, which
         // the request-level @AssertTrue can't catch.

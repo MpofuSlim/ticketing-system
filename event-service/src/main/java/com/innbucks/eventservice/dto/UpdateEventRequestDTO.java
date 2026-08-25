@@ -63,6 +63,12 @@ public class UpdateEventRequestDTO {
             description = """
                     Event start timestamp (`yyyy-MM-ddTHH:mm:ss`). If provided, must be strictly **in the future**.
                     Send the full ISO-8601 datetime; a date-only value (e.g. `"2026-06-15"`) is rejected.
+
+                    **Send the local time of the market the event runs in** — the wall-clock an
+                    attendee would read on a poster. The server converts it to UTC for storage
+                    using the cell's market timezone (ZW = Africa/Harare, UTC+2), so `07:00` here
+                    means a 7am start in Harare. Do NOT pre-convert to UTC and do not append an
+                    offset. Responses come back as UTC with a `Z` suffix.
                     """
     )
     @Future(message = "Event start must be in the future")
@@ -73,6 +79,12 @@ public class UpdateEventRequestDTO {
             example = "2026-06-15T22:00:00",
             description = """
                     Event end timestamp (`yyyy-MM-ddTHH:mm:ss`). If provided, must be strictly **after** the start.
+
+                    **Send the local time of the market the event runs in** — the wall-clock an
+                    attendee would read on a poster. The server converts it to UTC for storage
+                    using the cell's market timezone (ZW = Africa/Harare, UTC+2), so `07:00` here
+                    means a 7am start in Harare. Do NOT pre-convert to UTC and do not append an
+                    offset. Responses come back as UTC with a `Z` suffix.
                     """
     )
     @Future(message = "Event end must be in the future")
