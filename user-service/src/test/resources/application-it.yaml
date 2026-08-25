@@ -29,11 +29,6 @@ mfa:
   encryption-key: bWZhLXRlc3Qta2V5LTAwMDAwMDAwMDAwMDAwMDAtMzI=
   issuer: InnBucks-IT
 
-oradian:
-  base-url: http://oradian.invalid
-  internal-token: it-oradian-token
-  connect-timeout-ms: 100
-  read-timeout-ms: 100
 
 logging:
   level:

@@ -23,12 +23,6 @@ jwt:
 innbucks:
   internal-api-token: it-internal-token-it-internal-token
 
-oradian-middleware:
-  base-url: http://oradian-middleware.invalid
-  internal-token: it-oradian-token
-  connect-timeout-ms: 100
-  read-timeout-ms: 100
-
 booking-service:
   base-url: http://booking-service.invalid
   connect-timeout-ms: 100

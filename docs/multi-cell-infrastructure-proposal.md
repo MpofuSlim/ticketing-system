@@ -317,8 +317,7 @@ deploy ergonomics.
 
 ### Phase 2 — first non-Zimbabwe cell (4–8 weeks)
 
-- Business + Legal: pick country #2 (Kenya recommended — large market,
-  OradianMiddleware roadmap targets KE first per their docs)
+- Business + Legal: pick country #2 (Kenya recommended — large market)
 - Stand up KE infrastructure (EC2, DNS, certs, monitoring, secrets)
 - Coordinate with InnBucks platform team for KE veengu participant and
   messenger-interface configuration
@@ -387,8 +386,8 @@ cluster (the 5-node HA cluster, IPs in our compose config). For multi-cell:
 | **A: One shared Eureka** | All cells' gateways connect to it. veengu / messenger-interface multi-tenant by `X-Source-Component`. Simpler. |
 | **B: Per-country Eureka cluster** | Each cell connects only to its country's cluster. Stricter isolation; better fault containment. |
 
-The OradianMiddleware sibling repo's docs suggest InnBucks is moving toward
-per-country deployment (which implies per-country Eureka — option B).
+InnBucks appears to be moving toward per-country deployment (which implies
+per-country Eureka — option B).
 
 **Decision needed from InnBucks Platform Lead.**
 

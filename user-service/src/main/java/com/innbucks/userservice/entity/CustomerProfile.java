@@ -55,30 +55,19 @@ public class CustomerProfile {
     private String proofOfResidencePath;
     private String passportDocumentPath;
 
-    // Oradian linkage stamped at tier-2 by CustomerService.registerTier2 after
-    // POST /internal/customers on the Oradian middleware succeeds. Lets us
-    // reconcile the local customer with Oradian's Person+Client without
-    // re-querying Oradian on every read. Both nullable: tier-1 customers and
-    // legacy rows have no Oradian record yet. Uniqueness is enforced by
-    // partial unique indexes (V10 migration) rather than @Column(unique=true)
-    // so multiple NULLs are allowed for tier-1 customers.
-    @Column(name = "oradian_external_id", length = 64)
-    private String oradianExternalId;
-
-    @Column(name = "oradian_client_id")
-    private Long oradianClientId;
-
-    // Provider-agnostic core-banking linkage (V19). The provider tag is the
-    // CoreBankingPort.provider() of the cell that created the record
-    // ("ORADIAN" / "VEENGU"); profileId is that provider's stable customer
-    // reference (Oradian externalID / Veengu individual id). Written
-    // alongside the oradian_* columns above — those stay in lockstep on
-    // Oradian cells for existing tooling, and stay null on Veengu cells.
-    @Column(name = "core_banking_provider", length = 16)
-    private String coreBankingProvider;
-
-    @Column(name = "core_banking_profile_id", length = 64)
-    private String coreBankingProfileId;
+    // The core-banking linkage columns (oradian_external_id, oradian_client_id
+    // from V10; core_banking_provider, core_banking_profile_id from V19) are no
+    // longer mapped. Tier-2 registration used to mirror the customer into
+    // Oradian and stamp its references here; Oradian is gone and nothing
+    // server-side replaced it, so the columns have no writer.
+    //
+    // They are left in place rather than dropped — same call as the dormant
+    // event_outbox table after Kafka was removed. Applied migrations are never
+    // edited, unmapped columns are harmless under ddl-auto: validate, and the
+    // existing rows are real history: they still name the Oradian record each
+    // pre-cutover tier-2 customer was mirrored into, which is exactly what a
+    // reconciliation or support query would need. Drop them in a later
+    // migration once that history is genuinely worthless.
 
     @Column(nullable = false)
     @Builder.Default

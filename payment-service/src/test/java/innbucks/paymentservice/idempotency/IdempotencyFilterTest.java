@@ -64,7 +64,7 @@ class IdempotencyFilterTest {
         // replay the cached response — that would let a careless client
         // reuse one key for "$1 transfer" and "$1000 transfer" and silently
         // get the $1 response back. 422 with errorCode=idempotency_conflict
-        // matches the OradianMiddleware/IdempotencyService contract.
+        // matches the IdempotencyService contract.
         IdempotencyStore store = mock(IdempotencyStore.class);
         IdempotencyFilter filter = new IdempotencyFilter(store);
         StoredResponse cached = new StoredResponse(

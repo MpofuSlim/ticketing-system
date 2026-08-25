@@ -80,16 +80,14 @@ public class SecurityConfig {
                         // open — the payer identity is the BOOKING's phoneNumber,
                         // read from the booking record, NOT the JWT principal, so
                         // this endpoint never used the token anyway. EXACT path
-                        // only ("/payments"): the money-moving siblings
-                        // (/payments/transfer, /payments/withdraw,
-                        // /payments/shop-checkout) derive the customer FROM the
-                        // JWT and MUST stay authenticated — they fall through to
+                        // only ("/payments"): the money-moving sibling
+                        // /payments/shop-checkout derives the customer FROM the
+                        // JWT and MUST stay authenticated — it falls through to
                         // anyRequest() below.
                         .requestMatchers(HttpMethod.POST, "/payments").permitAll()
-                        // Everything else — /payments/transfer, /payments/withdraw,
-                        // /payments/shop-checkout, /actuator/prometheus, any future
-                        // endpoint — requires a valid customer JWT populated by
-                        // JwtFilter.
+                        // Everything else — /payments/shop-checkout,
+                        // /actuator/prometheus, any future endpoint — requires a
+                        // valid customer JWT populated by JwtFilter.
                         .anyRequest().authenticated()
                 )
                 .exceptionHandling(ex -> ex

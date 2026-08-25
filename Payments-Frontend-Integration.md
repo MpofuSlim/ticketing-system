@@ -1,10 +1,19 @@
 # Payments — Frontend Integration Guide
 
-Practical reference for integrating the customer money paths (transfer,
-withdraw, history) and the auth flow that underpins them. Pairs with the
-Swagger UI (each backend service exposes `/swagger-ui/index.html`); this
-doc covers the cross-cutting rules that don't live on any single endpoint
-— auth tokens, idempotency keys, session-supersession, error codes.
+Practical reference for the auth flow and the cross-cutting request rules
+that apply to every customer-facing call. Pairs with the Swagger UI (each
+backend service exposes `/swagger-ui/index.html`); this doc covers the
+rules that don't live on any single endpoint — auth tokens, device
+binding, idempotency keys, session-supersession, gateway rate limits.
+
+> **The wallet money paths documented here previously — transfer, withdraw,
+> withdrawal/transfer history, deposit-account lookup and send-money
+> recipient lookup — no longer exist.** They were backed by the Oradian
+> middleware, which has been removed; the frontend now calls Veengu
+> directly for those operations. What remains in this backend on
+> `/payments` is the **ticket/order payment** rail (`POST /payments`,
+> InnBucks 2D code and ZimSwitch card) plus `POST /payments/shop-checkout`
+> — see the payment-service Swagger for those.
 
 Base URL: the API gateway (`http://localhost:8080` in dev). All endpoints
 below assume that prefix unless noted.
@@ -204,14 +213,15 @@ this on user-initiated logout — `SESSION_SUPERSEDED` doesn't need it
 
 ### 2.1 When it's required
 
-`Idempotency-Key` is **required** on:
+The two endpoints that used to *require* `Idempotency-Key`
+(`POST /payments/transfer`, `POST /payments/withdraw`) are gone. No
+endpoint requires it today: `/payments`, `/payments/shop-checkout` and the
+other mutating paths accept the header and honour it, but don't reject a
+request that omits it.
 
-- `POST /payments/transfer`
-- `POST /payments/withdraw`
-
-Missing key → `400 BAD_REQUEST` with `errorCode: "idempotency_key_required"`.
-Other mutating endpoints (`/payments/shop-checkout`, `/payments`) accept
-the header but don't require it.
+Send it anyway on anything that moves money or creates an order — the
+replay semantics below are what stop a retried request from charging
+twice.
 
 ### 2.2 How to mint it
 
@@ -229,9 +239,9 @@ A buggy one:
 
 ```javascript
 // Wrong — regenerated on every retry
-async function sendMoney() {
+async function pay() {
   const idempotencyKey = crypto.randomUUID();  // NO!
-  await fetch('/payments/transfer', {...});
+  await fetch('/payments', {...});
 }
 ```
 
@@ -263,189 +273,13 @@ Same key + same body within 24h → the cached 200 response is replayed
 byte-for-byte. The FE sees the original confirmation. The money moved
 exactly once.
 
-After 24h the cache entry evicts and the request re-runs. Velocity caps
-+ Oradian's own duplicate-check protect against double-sends if the FE
-somehow retries the same logical attempt across a 24h boundary.
+After 24h the cache entry evicts and the request re-runs. Don't rely on
+the cache as the only guard across a 24h boundary — a logical attempt that
+old should be re-confirmed with the user rather than silently retried.
 
 ---
 
-## 3. Transfer — move money between two Oradian accounts
-
-```http
-POST /payments/transfer
-Authorization: Bearer <access token>
-Content-Type: application/json
-Idempotency-Key: <fresh UUID per user-tap>
-
-{
-  "fromAccountId": "A000001",     // source — MUST be one of the caller's accounts
-  "toAccountId":   "A000002",     // destination
-  "amount":        "123.00",      // string; max 4 decimal places; > 0
-  "notes":         "Lunch"        // optional
-}
-```
-
-> **Don't send `transactionDate`** — it's server-stamped to today. Any
-> value the FE sends is ignored.
-
-Success (200):
-
-```json
-{
-  "code": "200 OK",
-  "message": "Deposit transfer submitted",
-  "data": {
-    "fromAccountId": "A000001",
-    "toAccountId":   "A000002",
-    "amount":        "123.00",
-    "notes":         "Lunch",
-    "transactionDate":  "2026-05-19",
-    "transactionID":    "1155",            // Oradian's ID — show on the receipt
-    "referenceNumber":  "1234567980123"    // also useful on the receipt
-  }
-}
-```
-
-### 3.1 Failure shapes
-
-See §5 below for the unified error catalog. Key ones specific to transfer:
-
-- `400` — missing fields, missing Idempotency-Key, amount fails parse / sign / scale
-- `401` — token issues (see auth section)
-- `403` — three sub-reasons distinguished by message text:
-  - `"fromAccountId does not belong to the authenticated customer"`
-  - `"Customer must be at KYC tier 2 or higher to use this endpoint"`
-  - `"Source account is not Active (status: Frozen)"` (or Closed / Dormant)
-- `422` — `idempotency_conflict`
-- `502` — Oradian rejected (validation, insufficient funds) — `message` carries the upstream reason
-
----
-
-## 4. Withdraw — money out of a deposit account
-
-```http
-POST /payments/withdraw
-Authorization: Bearer <access token>
-Content-Type: application/json
-Idempotency-Key: <fresh UUID per user-tap>
-
-{
-  "accountID":         "A000015",
-  "paymentMethodName": "Cash",            // value from Oradian's config (e.g. Cash, MobileMoney)
-  "amount":            "10.00",
-  "notes":             "Cash out"         // optional
-}
-```
-
-> Three fields are **server-stamped** and any value the FE sends is
-> ignored: `transactionDate` (today), `transactionBranchID` (always
-> `MobileBanking`), `overrideLimitCheck` (always `false`).
-
-Success / failure shapes mirror Transfer. Same 403 reasons (substitute
-`accountID` for `fromAccountId` in the message).
-
----
-
-## 5. Error code catalog
-
-Bookmark this when wiring error UX. Codes come either in the `code`
-field (HTTP status name) or as `errorCode` (specific to the failure).
-
-| code / errorCode                       | HTTP | What to do                                                       |
-|----------------------------------------|------|------------------------------------------------------------------|
-| `INVALID_TOKEN`                        | 401  | Try refresh once; if that fails, log out                         |
-| `TOKEN_REVOKED`                        | 401  | Log out                                                          |
-| `SESSION_SUPERSEDED`                   | 401  | Log out with a "signed in elsewhere" toast                       |
-| `idempotency_key_required` (400)       | 400  | Bug. The FE must always send the header. Don't show to the user. |
-| `idempotency_conflict` (422)           | 422  | Bug. The FE reused a key with a different body. Don't show to the user. |
-| `"Customer must be at KYC tier 2 ..."` | 403  | Route to KYC upgrade flow                                         |
-| `"Source account is not Active ..."`   | 403  | Show "your account is {Frozen/Closed/Dormant}, contact support"   |
-| `"fromAccountId/accountID does not ..."`| 403 | Stale account picker — refresh `/auth/customer/deposits`         |
-| `"Daily limit exceeded (...)"`         | 400  | Show "you've hit your daily limit"                               |
-| `"Per-transaction limit exceeded (...)"`| 400 | Show "amount too large; max is {N}"                              |
-| `"amount must be greater than zero"`   | 400  | Form validation bug — block on the FE before send                |
-| `"amount must be a valid decimal ..."` | 400  | Form validation bug — same                                       |
-| `"amount must have at most 4 decimal places"` | 400 | Form validation bug — same                                  |
-| `"Oradian middleware rejected ..."`    | 502  | Show the message verbatim — Oradian's reason is customer-facing (insufficient funds, etc.) |
-| `"Oradian middleware is temporarily unavailable (circuit open)"` | 503 | Show "service temporarily unavailable, try again in a few minutes" |
-| HTTP 429                               | 429  | Rate limit hit — back off (see §8)                                |
-
-For the 502s where the message carries Oradian's actual reason, show
-the message text. Common ones:
-- `"... Insufficient funds"`
-- `"... The maximum transfer amount for outgoing account (A000009) is KSh0.00"`
-- `"... Account is suspended"`
-
----
-
-## 6. Transaction history
-
-### 6.1 List
-
-```http
-GET /payments/transactions?fromDate=2026-04-19&toDate=2026-05-19&page=0&size=20
-Authorization: Bearer <access token>
-```
-
-All params optional. Defaults:
-- `fromDate`: 30 days before `toDate`
-- `toDate`: today
-- `page`: 0
-- `size`: 20 (max 100; values larger are silently clamped)
-
-Returns paginated `TransactionView` rows, newest-first. Includes
-`PENDING` rows so the FE can show in-flight transfers, plus
-`FAILED` rows so the user can see why something didn't go through.
-
-Fields stripped before serialisation (you'll never see them): the
-internal idempotency key, the correlation id, and Oradian's command id.
-
-### 6.2 Detail (single transaction)
-
-```http
-GET /payments/transactions/{id}
-Authorization: Bearer <access token>
-```
-
-Returns the same `TransactionView` shape as a single element of the
-list. Use this for receipt screens / share-receipt flows.
-
-**404 semantics**: a 404 means either "no such transaction" OR "exists
-but belongs to another customer". The two are merged so a caller can't
-probe UUIDs to discover other people's transactions.
-
----
-
-## 7. Other endpoints you'll need
-
-### 7.1 List the caller's Oradian deposit accounts (with balances)
-
-```http
-GET /auth/customer/deposits
-Authorization: Bearer <access token>
-```
-
-Returns the customer's owned accounts. Use this to populate the
-"from account" picker on transfer / withdraw, and to render balances
-on the home screen. Each row includes `ID`, `productName`, `balance`,
-`status` (Active / Frozen / etc.), `currencyCode`.
-
-### 7.2 Look up a recipient's accounts by phone (for send-money)
-
-```http
-GET /auth/customer/send-money/details/{recipientPhoneNumber}
-Authorization: Bearer <access token>
-```
-
-Returns the recipient's deposit-account identifiers. The balance,
-subscribed amount, and lifecycle dates are stripped — the sender
-shouldn't see the recipient's full account state.
-
----
-
-## 8. Rate limits + retries
-
-### 8.1 Gateway-side per-token rate limit
+## 3. Rate limits
 
 `/payments/**` is split by HTTP method at the gateway:
 
@@ -454,107 +288,9 @@ shouldn't see the recipient's full account state.
 | Read  | `GET`                    | 50 rps    | 100   |
 | Write | `POST`, `PUT`, `PATCH`, `DELETE` | 1 rps | 5  |
 
-Same limits per bearer token. Reads use the generous default that
-matches `/events/**`, `/bookings/**`, etc. — so history pagination,
-detail-screen fetches, and pull-to-refresh won't hit the bucket under
-normal use. Writes use the tight limit because real customers
-transfer / withdraw a handful of times per day; anything north of
-1 rps on the money path is anomalous.
+Same limits per bearer token. Reads use the generous default that matches
+`/events/**`, `/bookings/**`, etc. Writes use the tight limit because the
+money path is low-frequency by nature; anything north of 1 rps on it is
+anomalous.
 
 If you hit it, you get `HTTP 429` from the gateway. Back off and retry.
-
-### 8.2 Retries on transient failures
-
-The backend has its own retry-on-transient against Oradian (3 attempts
-with exponential backoff, ~3.5s ceiling). So:
-
-- A 502 with `"Oradian middleware is temporarily unavailable"` means
-  even our internal retries gave up. **The FE should NOT silently
-  retry** — surface the error and let the user decide.
-- A 503 with `"circuit open"` means Oradian is having a sustained
-  outage and we've stopped trying. Same advice: surface, don't retry.
-
-If you DO retry from the FE (e.g. on user tap-to-retry), **reuse the
-same Idempotency-Key**. Generating a fresh key on a manual retry is
-the same bug as generating it inside the fetch function.
-
----
-
-## 9. Velocity caps
-
-`POST /payments/transfer` and `POST /payments/withdraw` enforce two
-caps server-side:
-
-- **Per-transaction**: configurable, default `100,000` (currency unit).
-  A typo turning `"100"` into `"100000"` lands here.
-- **Per-day per source account**: configurable, default `500,000`.
-  Sum of today's `PENDING + SUCCEEDED` rows on that account.
-
-Override per deployment via `PER_TX_LIMIT` / `PER_DAY_LIMIT` env vars.
-For Kenya, ask backend before shipping FE — placeholders won't match
-the real banking limits.
-
----
-
-## 10. Status lifecycle (for the receipt UX)
-
-`TransactionView.status` transitions:
-
-```
-        ┌─────────┐
-   ─────▶ PENDING │
-        └────┬────┘
-             │
-       ┌─────┴──────┐
-       ▼            ▼
- ┌──────────┐  ┌────────┐
- │ SUCCEEDED│  │ FAILED │
- └──────────┘  └────────┘
-```
-
-- `PENDING`: payment-service has called Oradian and is awaiting the
-  response (or the response came back but the local "mark succeeded"
-  write hasn't committed yet). Briefly visible in normal operation;
-  long-lived `PENDING` rows are a reconciliation concern.
-- `SUCCEEDED`: Oradian confirmed the money moved. Receipt is final.
-- `FAILED`: Oradian or the gate rejected the call. `failureCode` +
-  `failureMessage` carry the why.
-
-There's no `CANCELLED` / `REVERSED` today. Reversals go through
-support tooling, not the customer app.
-
----
-
-## 11. Sample end-to-end flow
-
-1. **App start** → `POST /auth/login` → store both tokens.
-2. **Home screen** → `GET /auth/customer/deposits` → render account
-   tiles with balances.
-3. **User taps "Send money"** → opens recipient picker.
-4. **User picks recipient by phone** → `GET /auth/customer/send-money/details/{phone}`
-   → render their accounts (no balances visible to the sender).
-5. **User confirms transfer screen mount** →
-   `const [idempotencyKey] = useState(() => crypto.randomUUID());`
-6. **User taps Send** → `POST /payments/transfer` with the key.
-   - On `200`: render receipt with `transactionID` + `referenceNumber`.
-   - On `403 Frozen`: route to "contact support" flow.
-   - On `403 tier 2`: route to KYC upgrade.
-   - On `502`: show Oradian's reason text.
-   - On `401 SESSION_SUPERSEDED`: clear tokens, route to login.
-7. **User views history** → `GET /payments/transactions`.
-8. **User taps a row** → `GET /payments/transactions/{id}` → receipt.
-
----
-
-## 12. Quick gotchas checklist
-
-- [ ] `Idempotency-Key` minted on the confirm-screen mount, not inside the fetch
-- [ ] Same key reused on retry; new key on a user-edit + re-submit
-- [ ] Refresh interceptor wired up (15-min access TTL)
-- [ ] `SESSION_SUPERSEDED` routes to login, not just a generic 401 toast
-- [ ] `transactionDate` / `transactionBranchID` / `overrideLimitCheck` NOT sent on the request
-- [ ] 502 message text shown verbatim — it's the customer-facing Oradian reason
-- [ ] 429 handled with backoff, not a tight retry loop
-- [ ] FE doesn't generate amounts with > 4 decimal places (server rejects)
-- [ ] Tier-1 customer attempts to transfer routed to KYC upgrade UX
-- [ ] History view shows PENDING + SUCCEEDED + FAILED (don't hide PENDING — user wants to know it's in flight)

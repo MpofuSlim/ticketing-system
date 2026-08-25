@@ -94,7 +94,6 @@ BANK_API_URL=https://staging.innbucks.co.zw
 BANK_API_KEY=<real InnBucks Notify API key>
 BANK_API_USERNAME=<real>
 BANK_API_PASSWORD=<real>
-ORADIAN_INTERNAL_TOKEN=<MUST equal the Oradian middleware's INTERNAL_API_TOKEN>
 EOF
 chmod 600 deploy/cells/cell.zw.local.env
 ```
@@ -107,9 +106,8 @@ chmod 600 deploy/cells/cell.zw.local.env
   live data, these become *stable forever* — rotating them orphans every TOTP
   secret / national-ID hash respectively.)
 - **Copy real values** — `BANK_API_*` and `WHATSAPP_API_KEY` are external
-  provider credentials; `ORADIAN_INTERNAL_TOKEN` must match the Oradian
-  middleware. Pull these from your secrets store (or the previous host's
-  `cell.<iso>.local.env`).
+  provider credentials. Pull these from your secrets store (or the previous
+  host's `cell.<iso>.local.env`).
 
 ## 7. Bring the cell up
 
@@ -188,7 +186,7 @@ missing. All live in `cell.<iso>.local.env` except `INNBUCKS_COUNTRY`, which is
 in the committed `cell.<iso>.env`:
 
 `POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `EUREKA_PASSWORD`, `JWT_SECRET`,
-`INTERNAL_API_TOKEN`, `ORADIAN_INTERNAL_TOKEN`, `LOYALTY_VOUCHER_SECRET`,
+`INTERNAL_API_TOKEN`, `LOYALTY_VOUCHER_SECRET`,
 `LOYALTY_QR_SECRET`, `NATIONAL_ID_HMAC_SECRET`, `MFA_ENCRYPTION_KEY`,
 `WHATSAPP_API_KEY`, `BANK_API_KEY`, `BANK_API_USERNAME`, `BANK_API_PASSWORD`
 — plus `INNBUCKS_COUNTRY` (committed).

@@ -10,7 +10,7 @@ package com.innbucks.bookingservice.exception;
  * nothing wrong, the server is temporarily unable to honour the request.
  * It also lets infrastructure (load balancers, monitoring) treat these
  * differently from genuine 4xx client errors — important when veengu /
- * loyalty / Oradian have a blip.
+ * loyalty / seat have a blip.
  *
  * <p>Siblings: {@link SeatServiceUnavailableException} (also 503) and
  * {@link LoyaltyServiceUnavailableException} (also 503) — kept separate
