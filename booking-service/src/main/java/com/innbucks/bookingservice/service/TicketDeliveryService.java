@@ -8,7 +8,6 @@ import com.innbucks.bookingservice.dto.EventLookupDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -55,28 +54,6 @@ public class TicketDeliveryService {
     private final WhatsAppNotificationClient whatsApp;
     private final EmailNotificationClient email;
     private final EventServiceClient eventServiceClient;
-
-    /**
-     * The path prefix the public edge mounts this system under (e.g.
-     * {@code /foundry} — dtx.innbucks.co.zw hosts several systems). nginx
-     * STRIPS it before proxying, so nothing inside the fleet ever sees it.
-     *
-     * <p>The QR path below MUST carry it anyway, for the same reason
-     * {@code SwaggerConfig}'s server URL does: the consumer resolves the URL
-     * against the PUBLIC origin, not from inside the cluster. We hand the
-     * WhatsApp gateway a domain-relative path, it prepends its own base URL,
-     * and Twilio then fetches that URL to attach the media. Without the
-     * prefix that fetch lands on the domain root, where nginx answers with a
-     * 301 to HTML instead of the PNG — Twilio drops the media and the customer
-     * receives nothing, while our logs record a successful send, because the
-     * gateway accepted the request and the fetch fails afterwards out of our
-     * sight.
-     *
-     * <p>Blank (the default) reproduces today's behaviour exactly — correct for
-     * local dev and direct NodePort access, where we ARE the domain root.
-     */
-    @Value("${PUBLIC_API_PREFIX:}")
-    private String publicApiPrefix;
 
     public TicketDeliveryService(WhatsAppNotificationClient whatsApp,
                                  EmailNotificationClient email,
@@ -177,11 +154,13 @@ public class TicketDeliveryService {
             // serves the identical PNG at both /qr and /qr.png (TicketController),
             // so this only changes the URL string, not the bytes or Content-Type.
             //
-            // Prefixed for the public edge — see publicApiPrefix. This URL is
-            // fetched from OUTSIDE the cluster, so it is one of the few places
-            // that must NOT be cluster-relative.
-            String qrCodePath = publicPath(
-                    "/bookings/" + booking.getId() + "/tickets/" + tn + "/qr.png");
+            // NOT edge-prefixed, deliberately. The WhatsApp gateway's configured
+            // BASE_URL already ends in `/foundry/brand`, so it builds
+            // BASE_URL + this path = /foundry/brand/bookings/... — which
+            // TicketController serves as an explicit alias for exactly this
+            // reason. Adding the prefix here produces /foundry/brand/foundry/...
+            // and Twilio fails the media fetch with 63019.
+            String qrCodePath = "/bookings/" + booking.getId() + "/tickets/" + tn + "/qr.png";
             try {
                 whatsApp.sendEventQrCode(phone, eventName, qrCodePath);
                 sent++;
@@ -198,32 +177,6 @@ public class TicketDeliveryService {
         return sent;
     }
 
-    /**
-     * Prepend the public edge prefix to a domain-relative path.
-     *
-     * <p>Normalises rather than concatenating blindly: a prefix configured as
-     * {@code foundry} or {@code /foundry/} must produce the same result as
-     * {@code /foundry}. A doubled or missing slash here is not a cosmetic
-     * problem — it is a 301 to HTML at the edge, which Twilio reports as no
-     * media at all rather than as an error we would see.
-     *
-     * <p>Blank prefix returns the path untouched (local dev / direct access).
-     * The result is always domain-relative, which
-     * {@code WhatsAppNotificationClient} enforces anyway.
-     */
-    private String publicPath(String path) {
-        if (publicApiPrefix == null || publicApiPrefix.isBlank()) {
-            return path;
-        }
-        String prefix = publicApiPrefix.trim();
-        if (!prefix.startsWith("/")) {
-            prefix = "/" + prefix;
-        }
-        while (prefix.endsWith("/")) {
-            prefix = prefix.substring(0, prefix.length() - 1);
-        }
-        return prefix + path;
-    }
 
     /**
      * Build the value injected into the Twilio template's single

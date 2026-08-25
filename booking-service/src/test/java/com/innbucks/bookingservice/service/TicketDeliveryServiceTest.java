@@ -8,7 +8,6 @@ import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.List;
 import java.util.UUID;
@@ -19,20 +18,26 @@ import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.Mockito.*;
 
 /**
- * The QR e-ticket URL is fetched from OUTSIDE the cluster, which makes its
- * exact shape a wire contract rather than an implementation detail.
+ * The QR e-ticket path is a wire contract with the WhatsApp gateway, not an
+ * implementation detail — it is the one string that decides whether a paying
+ * customer receives their ticket.
  *
- * <p>We hand the WhatsApp gateway a domain-relative path; it prepends its own
- * base URL and Twilio then fetches that URL to attach the media. The public
- * edge mounts this system under a prefix ({@code /foundry}) and nginx strips it
- * before proxying, so a path built cluster-relative resolves, at the public
- * origin, to a 301 to HTML instead of a PNG. Twilio drops media it cannot
- * fetch, and the customer receives nothing — while our logs record a
- * successful send, because the gateway accepted the request and the fetch
- * fails afterwards, out of our sight.
+ * <p>We send a path ONLY; the gateway rejects anything containing a domain. It
+ * prepends its own configured BASE_URL, which ends in {@code /foundry/brand}
+ * (it was provisioned for brand assets), and hands the result to Twilio as a
+ * MediaUrl. So the path we send must be exactly
+ * {@code /bookings/{id}/tickets/{tn}/qr.png} — no edge prefix — because the
+ * gateway's base already carries one. {@code TicketController} serves the
+ * {@code /brand/bookings/...} alias precisely so this resolves without any
+ * change to the gateway's config.
  *
- * <p>That silence is why this is pinned by a test: the failure mode produces no
- * error anywhere in our system.
+ * <p><b>Why this is pinned:</b> getting it wrong is invisible from here. The
+ * gateway ACCEPTS our request and returns success, so we log a successful send;
+ * Twilio then fails the media download with {@code 63019} minutes later, out of
+ * our sight. Nothing in our logs or metrics moves, and a booking with no email
+ * address has WhatsApp as its only channel, so the customer simply receives
+ * nothing. Adding the {@code /foundry} prefix here once produced
+ * {@code /foundry/brand/foundry/bookings/...} and did exactly that.
  */
 class TicketDeliveryServiceTest {
 
@@ -43,13 +48,12 @@ class TicketDeliveryServiceTest {
                            WhatsAppNotificationClient whatsApp,
                            EmailNotificationClient email) {}
 
-    private static Fixture fixture(String publicApiPrefix) {
+    private static Fixture fixture() {
         WhatsAppNotificationClient whatsApp = mock(WhatsAppNotificationClient.class);
         EmailNotificationClient email = mock(EmailNotificationClient.class);
-        TicketDeliveryService service = new TicketDeliveryService(
-                whatsApp, email, mock(EventServiceClient.class));
-        ReflectionTestUtils.setField(service, "publicApiPrefix", publicApiPrefix);
-        return new Fixture(service, whatsApp, email);
+        return new Fixture(
+                new TicketDeliveryService(whatsApp, email, mock(EventServiceClient.class)),
+                whatsApp, email);
     }
 
     private static Booking bookingWithOneTicket() {
@@ -74,64 +78,49 @@ class TicketDeliveryServiceTest {
     }
 
     @Test
-    void qrPath_carriesThePublicEdgePrefix() {
-        Fixture f = fixture("/foundry");
-
-        f.service().deliver(bookingWithOneTicket());
-
-        assertEquals("/foundry/bookings/" + BOOKING_ID + "/tickets/" + TICKET + "/qr.png",
-                capturedQrPath(f),
-                "The QR URL is resolved against the PUBLIC origin — without the edge "
-                        + "prefix nginx answers the media fetch with a 301 to HTML and "
-                        + "Twilio silently drops the ticket");
-    }
-
-    @Test
-    void qrPath_isUnchanged_whenNoPrefixIsConfigured() {
-        // Local dev / direct NodePort: we ARE the domain root, so today's
-        // behaviour must be preserved exactly.
-        Fixture f = fixture("");
+    void qrPath_isBareAndUnprefixed_becauseTheGatewaysBaseUrlCarriesThePrefix() {
+        Fixture f = fixture();
 
         f.service().deliver(bookingWithOneTicket());
 
         assertEquals("/bookings/" + BOOKING_ID + "/tickets/" + TICKET + "/qr.png",
-                capturedQrPath(f));
+                capturedQrPath(f),
+                "The gateway prepends its own BASE_URL, which ends in /foundry/brand. "
+                        + "Any prefix added here doubles it and Twilio fails the media "
+                        + "download with 63019 — silently, since the gateway still returns "
+                        + "success to us");
     }
 
     @Test
-    void qrPath_normalisesAwkwardPrefixes() {
-        // A prefix set as "foundry/" or "/foundry/" must land identically to
-        // "/foundry". A doubled or missing slash is not cosmetic here — it is
-        // another 301 at the edge, i.e. another silently undelivered ticket.
-        for (String awkward : List.of("foundry", "/foundry/", "  /foundry  ", "/foundry//")) {
-            Fixture f = fixture(awkward);
-
-            f.service().deliver(bookingWithOneTicket());
-
-            assertEquals("/foundry/bookings/" + BOOKING_ID + "/tickets/" + TICKET + "/qr.png",
-                    capturedQrPath(f),
-                    "prefix '" + awkward + "' should normalise to /foundry");
-        }
-    }
-
-    @Test
-    void qrPath_staysDomainRelative_whichTheClientRequires() {
-        // WhatsAppNotificationClient rejects anything not starting with '/'
-        // (the gateway prepends its own base URL). Prefixing must not turn the
-        // path into an absolute URL.
-        Fixture f = fixture("/foundry");
+    void qrPath_carriesNoEdgePrefix_andNoDomain() {
+        // Two separate failure modes, both fatal and both silent:
+        //   - a /foundry prefix doubles the gateway's own base
+        //   - an absolute URL is rejected outright by the gateway
+        //     ("qrCodePath must be a path only — do not include the domain")
+        Fixture f = fixture();
 
         f.service().deliver(bookingWithOneTicket());
 
         String path = capturedQrPath(f);
-        assertTrue(path.startsWith("/"), "must stay domain-relative, was: " + path);
+        assertTrue(path.startsWith("/bookings/"), "must start at /bookings/, was: " + path);
+        assertFalse(path.startsWith("http"), "must not be absolute, was: " + path);
+        assertFalse(path.contains("/foundry"), "must not carry the edge prefix, was: " + path);
+        assertFalse(path.contains("/brand"), "the gateway's base supplies /brand, was: " + path);
         assertFalse(path.contains("//"), "no doubled slash, was: " + path);
-        assertFalse(path.startsWith("http"), "must not become absolute, was: " + path);
     }
 
     @Test
-    void oneSendPerTicket_andPrefixAppliedToEach() {
-        Fixture f = fixture("/foundry");
+    void qrPath_endsInPng_soTwilioSeesAnImageExtension() {
+        Fixture f = fixture();
+
+        f.service().deliver(bookingWithOneTicket());
+
+        assertTrue(capturedQrPath(f).endsWith("/qr.png"));
+    }
+
+    @Test
+    void oneSendPerTicket_eachWithItsOwnPath() {
+        Fixture f = fixture();
         Booking booking = bookingWithOneTicket();
         booking.setItems(List.of(
                 BookingItem.builder().id(UUID.randomUUID()).ticketNumber("TN-1").build(),
@@ -142,15 +131,15 @@ class TicketDeliveryServiceTest {
         ArgumentCaptor<String> paths = ArgumentCaptor.forClass(String.class);
         verify(f.whatsApp(), times(2)).sendEventQrCode(anyString(), anyString(), paths.capture());
         assertEquals(List.of(
-                        "/foundry/bookings/" + BOOKING_ID + "/tickets/TN-1/qr.png",
-                        "/foundry/bookings/" + BOOKING_ID + "/tickets/TN-2/qr.png"),
+                        "/bookings/" + BOOKING_ID + "/tickets/TN-1/qr.png",
+                        "/bookings/" + BOOKING_ID + "/tickets/TN-2/qr.png"),
                 paths.getAllValues());
         assertEquals(2, outcome.qrTicketsSent());
     }
 
     @Test
     void noPhone_meansNoQrSend_atAll() {
-        Fixture f = fixture("/foundry");
+        Fixture f = fixture();
         Booking booking = bookingWithOneTicket();
         booking.setPhoneNumber(null);
 
@@ -162,7 +151,7 @@ class TicketDeliveryServiceTest {
 
     @Test
     void oneTicketsFailure_doesNotStopTheOthers() {
-        Fixture f = fixture("/foundry");
+        Fixture f = fixture();
         Booking booking = bookingWithOneTicket();
         booking.setItems(List.of(
                 BookingItem.builder().id(UUID.randomUUID()).ticketNumber("TN-BAD").build(),
@@ -181,7 +170,7 @@ class TicketDeliveryServiceTest {
     void deliveryNeverThrows_soAConfirmedBookingIsNeverRolledBack() {
         // The booking is already CONFIRMED and the money has moved by the time
         // this runs; a notification failure must never propagate.
-        Fixture f = fixture("/foundry");
+        Fixture f = fixture();
         doThrow(new RuntimeException("gateway down"))
                 .when(f.whatsApp()).sendEventQrCode(anyString(), anyString(), anyString());
         doThrow(new RuntimeException("smtp down"))
@@ -191,6 +180,4 @@ class TicketDeliveryServiceTest {
 
         assertDoesNotThrow(() -> f.service().deliver(booking));
     }
-
-
 }
