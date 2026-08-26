@@ -54,6 +54,7 @@ class PaymentResolutionJobTest {
                 records, mock(InnbucksApiClient.class), metrics,
                 new CodePaymentResolutionService(records, registryOver(bookings), metrics),
                 mock(ZimswitchCardPaymentService.class),
+                mock(innbucks.paymentservice.service.EcocashPaymentService.class),
                 mock(UnconfirmedPaymentAlerter.class),
                 new ZimswitchProperties(),
                 FIVE_MINUTES, 100);
@@ -70,6 +71,7 @@ class PaymentResolutionJobTest {
                 records, innbucksApi, metrics,
                 new CodePaymentResolutionService(records, registryOver(bookings), metrics),
                 mock(ZimswitchCardPaymentService.class),
+                mock(innbucks.paymentservice.service.EcocashPaymentService.class),
                 mock(UnconfirmedPaymentAlerter.class),
                 new ZimswitchProperties(),
                 FIVE_MINUTES, 100);
@@ -121,7 +123,7 @@ class PaymentResolutionJobTest {
                 "PaymentResolutionJob must stay a @Component or Spring never schedules it — "
                         + "payments would stop resolving silently");
 
-        for (String sweep : List.of("pollCodePayments", "pollCardPayments", "scanPayments")) {
+        for (String sweep : List.of("pollCodePayments", "pollCardPayments", "pollEcocashPayments", "scanPayments")) {
             Scheduled scheduled = PaymentResolutionJob.class
                     .getMethod(sweep).getAnnotation(Scheduled.class);
             assertNotNull(scheduled, sweep + "() must stay @Scheduled — without it, "

@@ -53,7 +53,8 @@ class GatewayRouteTableTest {
             "booking-tickets-route",
             "scans-route", "brand-assets-route",
             "payment-internal-deny", "payment-service-read-route",
-            "payments-innbucks-write-route", "payment-service-write-route",
+            "payments-innbucks-write-route", "ecocash-notify-write-route",
+            "payment-service-write-route",
             "loyalty-internal-deny", "loyalty-service-route",
             "marketplace-internal-deny", "marketplace-service-route",
             "user-service-proxy-route", "event-service-proxy-route",
@@ -88,7 +89,8 @@ class GatewayRouteTableTest {
             "seat-service-seat-route", "seat-service-category-route",
             "booking-service-route", "booking-invoices-route", "booking-tickets-route",
             "scans-route", "brand-assets-route",
-            "payment-service-read-route", "payments-innbucks-write-route", "payment-service-write-route",
+            "payment-service-read-route", "payments-innbucks-write-route",
+            "ecocash-notify-write-route", "payment-service-write-route",
             "loyalty-service-route", "marketplace-service-route");
 
     private static final List<String> API_DOCS_PROXY_ROUTES = List.of(
@@ -103,7 +105,7 @@ class GatewayRouteTableTest {
     private static final List<String> RESILIENT_LIMITED_ROUTES = List.of(
             "auth-register-route", "auth-otp-route", "auth-password-reset-route",
             "payment-service-read-route", "payments-innbucks-write-route",
-            "payment-service-write-route");
+            "ecocash-notify-write-route", "payment-service-write-route");
 
     @Autowired
     RouteDefinitionLocator locator;
@@ -187,6 +189,13 @@ class GatewayRouteTableTest {
         // and reopens the harvest/abuse window we just closed.
         assertThat(order.indexOf("payments-innbucks-write-route"))
                 .as("payments-innbucks-write-route must match before the /payments/** write catch-all")
+                .isBetween(0, order.indexOf("payment-service-write-route") - 1);
+        // Same rule for the EcoCash notify webhook: matched after the write
+        // catch-all it would fall into the bearer-keyed bucket, where the
+        // gateway's unauthenticated POSTs (no bearer) each mint a per-forged-
+        // header bucket — exactly the bypass the IP-keyed resolver closes.
+        assertThat(order.indexOf("ecocash-notify-write-route"))
+                .as("ecocash-notify-write-route must match before the /payments/** write catch-all")
                 .isBetween(0, order.indexOf("payment-service-write-route") - 1);
     }
 

@@ -336,6 +336,30 @@ spring:
                     # Fail-SAFE: public payment-initiation rail — keep throttling if Redis is down.
                     rate-limiter: "#{@resilientRedisRateLimiter}"
 
+            # EcoCash EIP notifyUrl callback: a MACHINE endpoint the EcoCash
+            # gateway POSTs charge outcomes to from the public internet, so it
+            # must be reachable without a bearer (the default gatewayKeyResolver
+            # would mint a bucket per forged Authorization header — IP-keyed
+            # like the other public payment route). The payment-service handler
+            # treats the body as an untrusted trigger only (it re-queries
+            # EcoCash for the truth), so rate limiting is about noise, not
+            # money. BEFORE the catch-all payment write route so the IP keying
+            # actually applies.
+            - id: ecocash-notify-write-route
+              uri: lb://payment-service
+              predicates:
+                - Path=/payments/ecocash/notify
+                - Method=POST
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${PAYMENTS_ECOCASH_NOTIFY_RATE_LIMIT_REPLENISH_PER_SECOND:5}
+                    redis-rate-limiter.burstCapacity: ${PAYMENTS_ECOCASH_NOTIFY_RATE_LIMIT_BURST_CAPACITY:20}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@paymentsInnbucksIpKeyResolver}"
+                    # Fail-SAFE: public machine endpoint — keep throttling if Redis is down.
+                    rate-limiter: "#{@resilientRedisRateLimiter}"
+
             - id: payment-service-write-route
               uri: lb://payment-service
               predicates:

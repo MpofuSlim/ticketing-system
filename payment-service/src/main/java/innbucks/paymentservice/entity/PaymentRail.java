@@ -13,9 +13,14 @@ package innbucks.paymentservice.entity;
  *       checkout: the FE renders the gateway's PCI-scoped widget against a
  *       server-prepared {@code checkoutId}
  *       ({@code docs/api/zimswitch-copyandpay.md}).</li>
+ *   <li>{@link #ECOCASH} — EcoCash Instant Payment (EIP): a wallet-debit
+ *       charge that pushes a PIN prompt to the customer's phone; resolved by
+ *       polling the Query endpoint keyed on our {@code clientCorrelator}
+ *       ({@code docs/api/ecocash-eip.md}). Extended in V14.</li>
  * </ul>
  */
 public enum PaymentRail {
     INNBUCKS_CODE,
-    ZIMSWITCH_CARD
+    ZIMSWITCH_CARD,
+    ECOCASH
 }

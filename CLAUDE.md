@@ -531,11 +531,12 @@ kubectl -n ticketing rollout restart deployment/<service>
 
 ## InnBucks Merchant API — the primary ticket-payment rail (2D code)
 
-**Ticket payments (`POST /payments` in payment-service) run on TWO rails
-since the ZimSwitch integration: the InnBucks 2D-code rail (the default —
-`paymentRail` omitted) and the ZimSwitch COPYandPAY card rail (additive,
-`paymentRail=ZIMSWITCH_CARD`; see the next section).** The earlier
-"exclusively InnBucks" wording predates the card rail; what remains
+**Ticket payments (`POST /payments` in payment-service) run on THREE rails:
+the InnBucks 2D-code rail (the default — `paymentRail` omitted), the
+ZimSwitch COPYandPAY card rail (additive, `paymentRail=ZIMSWITCH_CARD`) and
+the EcoCash EIP wallet rail (additive, `paymentRail=ECOCASH`; see the
+sections below).** The earlier "exclusively InnBucks" wording predates the
+other rails; what remains
 non-negotiable is that the earlier server-side wallet debit
 (`/bank/api/payment`) was removed at the InnBucks team's direction — do not
 reintroduce it. The InnBucks canonical spec is
@@ -615,6 +616,47 @@ it pins the four wire facts that are easy to get wrong. Non-negotiables:
   (`paymentType=RF`) but are NOT modelled yet — refunds remain an operator
   procedure; see the spec doc's "Not yet modelled" list (also: webhooks,
   Transaction Reports, settlement recon for card rows).
+
+## EcoCash Instant Payment (EIP) — the wallet rail
+
+**The third collection rail on `POST /payments`** (`paymentRail=ECOCASH`,
+additive). Spec distilled at `docs/api/ecocash-eip.md` — read it before
+touching the integration; the PDF's own samples are unreliable in documented
+ways (identity fields swapped, country code dropped, the merchant PIN echoed
+back). Non-negotiables:
+
+- **Amounts are decimal JSON NUMBERS in MAJOR units** (`3.00`) — a third
+  convention (InnBucks: integer cents; ZimSwitch: major-unit strings).
+  `EcocashEipClient` owns the one cents→major rendering; the echo guard on a
+  COMPLETED read (`totalAmountCharged`/amount/currency vs ledger) parks
+  mismatches IN_DOUBT for an operator.
+- **The charge is NEVER retried** — `clientCorrelator` is the upstream
+  idempotency key, and a fresh correlator on a blind retry could debit the
+  customer twice. The Query (`GET .../{endUserId}/transactions/amount/
+  {clientCorrelator}`) is the only retried call and the only truth source.
+- **Ledger ordering is INVERTED vs the other rails**: PENDING →
+  TOKEN_ISSUED (correlator persisted) happens BEFORE the upstream call,
+  because the EIP "instrument" is a PIN prompt EcoCash delivers to the
+  customer's phone — a crash mid-call can leave a payable prompt live. An
+  AMBIGUOUS charge outcome therefore stays TOKEN_ISSUED for the poller,
+  never markFailed.
+- **`transactionOperationStatus` is the ONLY outcome field** (COMPLETED /
+  FAILED / everything-else-is-open). Never gate on HTTP status or
+  `responseCode`.
+- **The notify webhook (`POST /payments/ecocash/notify`) is a TRIGGER, not
+  a truth source** — unauthenticated body, so it only re-runs the Query
+  resolver; constant 200; the poller stays authoritative. Public via the
+  gateway's IP-keyed `ecocash-notify-write-route` (BEFORE the write
+  catch-all, pinned by `GatewayRouteTableTest`).
+- **`ECOCASH_NOTIFY_URL` must be the ABSOLUTE public edge URL WITH the
+  `/foundry` prefix** (the QR-media lesson: EcoCash fetches from the public
+  internet, where nginx strips the prefix). The shared `cell.zw.env`
+  carries production's value; the staging box overrides it in
+  `cell.zw.local.env`. Blank credentials fail SAFE (clean 503); credentials
+  present but no notify URL = the half-provisioned boot ERROR.
+- Refunds ARE supported upstream (`/transactions/refund` keyed by
+  `originalEcocashReference` — persisted as `payment.ecocash_reference`)
+  but are NOT modelled yet; operator procedure, same as the card rail.
 
 ## Veengu API reference — source of truth for payment integrations
 

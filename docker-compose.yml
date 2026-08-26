@@ -410,6 +410,13 @@ services:
       # = the rail refuses to START a checkout (503) rather than minting one
       # the FE cannot render — see ZimswitchCopyPayClient.canStartCheckout().
       ZIMSWITCH_SHOPPER_RESULT_URL: ${ZIMSWITCH_SHOPPER_RESULT_URL:-}
+      ECOCASH_BASE_URL: ${ECOCASH_BASE_URL:-https://payonline.ecocash.co.zw/ecocashGateway-preprod}
+      ECOCASH_API_USERNAME: ${ECOCASH_API_USERNAME:-}
+      ECOCASH_API_PASSWORD: ${ECOCASH_API_PASSWORD:-}
+      ECOCASH_MERCHANT_CODE: ${ECOCASH_MERCHANT_CODE:-}
+      ECOCASH_MERCHANT_NUMBER: ${ECOCASH_MERCHANT_NUMBER:-}
+      ECOCASH_MERCHANT_PIN: ${ECOCASH_MERCHANT_PIN:-}
+      ECOCASH_NOTIFY_URL: ${ECOCASH_NOTIFY_URL:-}
     ports:
       - "127.0.0.1:8085:8085"
     healthcheck:

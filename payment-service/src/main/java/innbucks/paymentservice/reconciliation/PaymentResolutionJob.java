@@ -56,6 +56,11 @@ import java.util.List;
  *       an operator; auto-expiring it would invite a second charge.</li>
  *   <li><b>Card-status poll (~30s):</b> the same job for open ZimSwitch
  *       COPYandPAY checkouts.</li>
+ *   <li><b>EcoCash Query poll (~20s):</b> the same job for open EcoCash EIP
+ *       charges — the customer approves a PIN prompt on their phone and this
+ *       poll (plus the notify-webhook trigger, which runs the SAME resolver)
+ *       turns that into a confirmed order. The notify webhook is a fast-path
+ *       trigger only; this sweep is the authority.</li>
  *   <li><b>Stale PENDING / IN_DOUBT (every minute):</b> PENDING rows past the
  *       threshold mean the service died between opening the row and recording the
  *       generate outcome — no code was ever DELIVERED (the send happens after
@@ -92,6 +97,7 @@ public class PaymentResolutionJob {
     private final PaymentMetrics metrics;
     private final CodePaymentResolutionService resolutionService;
     private final ZimswitchCardPaymentService zimswitchCardPaymentService;
+    private final innbucks.paymentservice.service.EcocashPaymentService ecocashPaymentService;
     private final UnconfirmedPaymentAlerter unconfirmedAlerter;
     private final Duration stalePendingThreshold;
     private final Duration cardPollMinInterval;
@@ -104,6 +110,7 @@ public class PaymentResolutionJob {
             PaymentMetrics metrics,
             CodePaymentResolutionService resolutionService,
             ZimswitchCardPaymentService zimswitchCardPaymentService,
+            innbucks.paymentservice.service.EcocashPaymentService ecocashPaymentService,
             UnconfirmedPaymentAlerter unconfirmedAlerter,
             ZimswitchProperties zimswitchProperties,
             @Value("${payment-service.reconciliation.stale-pending-threshold:PT5M}") Duration stalePendingThreshold,
@@ -114,6 +121,7 @@ public class PaymentResolutionJob {
         this.metrics = metrics;
         this.resolutionService = resolutionService;
         this.zimswitchCardPaymentService = zimswitchCardPaymentService;
+        this.ecocashPaymentService = ecocashPaymentService;
         this.unconfirmedAlerter = unconfirmedAlerter;
         // The poller's share of the two-reads-per-checkout-per-minute budget
         // — one value with the client config so they can't drift apart.
@@ -238,6 +246,42 @@ public class PaymentResolutionJob {
         }
     }
 
+    /**
+     * The EcoCash EIP resolver: polls open wallet charges via the Query
+     * endpoint. Same cadence class as the code poll — this IS the rail's
+     * confirmation path (the notify webhook is only a fast-path trigger into
+     * the same resolver). All money rules live in
+     * {@link innbucks.paymentservice.service.EcocashPaymentService#resolveOpenCharge}:
+     * COMPLETED → echo-check → confirm → SUCCEEDED (confirm failure leaves
+     * COMPLETED_UNCONFIRMED for the shared retry sweep); FAILED = subscriber
+     * rejected = terminal FAILED, slot freed; still-pending or NOT_FOUND past
+     * the prompt deadline + grace expires locally; UNKNOWN never closes a
+     * row.
+     */
+    @Scheduled(fixedDelayString = "${payment-service.ecocash-poll.interval:PT20S}")
+    public void pollEcocashPayments() {
+        List<Payment> open = paymentRepository.findByStatusAndPaymentRail(
+                PaymentStatus.TOKEN_ISSUED, PaymentRail.ECOCASH, PageRequest.of(0, batchSize));
+        if (open.isEmpty()) {
+            return;
+        }
+        if (!ecocashPaymentService.isRailConfigured()) {
+            log.warn("EcoCash poll: {} TOKEN_ISSUED rows but the EcoCash API is not configured — cannot resolve",
+                    open.size());
+            return;
+        }
+        for (Payment p : open) {
+            // Per-row isolation: one charge's query failure must not stall the rest.
+            try {
+                ecocashPaymentService.resolveOpenCharge(p);
+            } catch (RuntimeException e) {
+                metrics.incEcocashResolution("error");
+                log.warn("EcoCash poll failed for paymentReference={} — leaving row for next pass: {}",
+                        p.getPaymentReference(), e.getMessage());
+            }
+        }
+    }
+
     /** Code-payment ledger sweeps (stale watch + unconfirmed self-heal). */
     @Scheduled(fixedDelayString = "${payment-service.reconciliation.scan-interval:PT1M}")
     public void scanPayments() {
@@ -262,6 +306,11 @@ public class PaymentResolutionJob {
                 // was minted upstream, it was never DELIVERED (delivery happens
                 // after TOKEN_ISSUED) so nobody can pay it — closing FAILED is
                 // safe and frees the order's payment slot for a clean retry.
+                // ECOCASH rows keep this guarantee by ordering, not delivery:
+                // that rail transitions to TOKEN_ISSUED BEFORE its upstream
+                // call (a crashed charge can leave a LIVE prompt on the
+                // customer's phone), so an ECOCASH row still PENDING provably
+                // never called upstream — closing it is equally safe.
                 paymentRecordService.markFailed(p.getId(), "stale_pending",
                         "No code was recorded before the staleness threshold — closing; slot freed for retry");
             }

@@ -179,6 +179,40 @@ public class PaymentRecordService {
     }
 
     /**
+     * EcoCash EIP flow: the row is armed for the charge call. Runs BEFORE the
+     * upstream request — the inverse of the other two rails' order, and
+     * deliberate: the EIP "instrument" is a PIN prompt EcoCash pushes to the
+     * customer's phone, so a crash mid-call can leave a payable prompt live.
+     * Transitioning first (correlator already on the row from openPending)
+     * keeps every state truthful: PENDING provably means "no upstream call
+     * attempted" (safe for the stale sweep to close), TOKEN_ISSUED means "a
+     * charge may exist, keyed by this correlator" (the poller Query resolves
+     * it either way). See docs/api/ecocash-eip.md.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void markEcocashChargeIssued(UUID id, String clientCorrelator, Instant expiresAt) {
+        transition(id, PaymentStatus.TOKEN_ISSUED,
+                "EcoCash charge armed; sending the wallet PIN prompt", clientCorrelator,
+                payment -> payment.setCodeExpiresAt(expiresAt));
+    }
+
+    /**
+     * EcoCash EIP: a charge/Query response revealed EcoCash's own transaction
+     * reference — the handle a future refund keys on. Same no-journal
+     * rationale as {@link #recordCardBrand}: informational, no status change.
+     */
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void recordEcocashReference(UUID id, String ecocashReference) {
+        if (ecocashReference == null || ecocashReference.isBlank()) return;
+        repository.findById(id).ifPresent(payment -> {
+            if (payment.getEcocashReference() == null) {
+                payment.setEcocashReference(truncate(ecocashReference, 64));
+                repository.save(payment);
+            }
+        });
+    }
+
+    /**
      * Stamp when the COPYandPAY status endpoint was queried for this row —
      * the persisted gate that keeps the poller + instant check inside the
      * gateway's two-reads-per-checkout-per-minute throttle. Deliberately NOT
