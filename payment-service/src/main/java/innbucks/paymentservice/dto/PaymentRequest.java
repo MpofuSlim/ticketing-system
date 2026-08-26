@@ -34,8 +34,10 @@ public class PaymentRequest {
             description = "Additive: which rail to collect on. Omitted/null = INNBUCKS_CODE (the "
                     + "historical contract — an InnBucks code/QR the customer approves in their app). "
                     + "ZIMSWITCH_CARD returns COPYandPAY widget artifacts (checkoutId + script URL + "
-                    + "integrity) for card entry instead. One active payment per order across BOTH "
-                    + "rails: while an attempt is open on one rail, POSTing with the other returns "
+                    + "integrity) for card entry instead. ECOCASH pushes a wallet PIN prompt to the "
+                    + "order's phone number — nothing to render; show 'approve on your phone' and poll "
+                    + "(promptExpiresAt drives the countdown). One active payment per order across ALL "
+                    + "rails: while an attempt is open on one rail, POSTing with another returns "
                     + "the open attempt's receipt unchanged (switch rails after it lapses).")
     private innbucks.paymentservice.entity.PaymentRail paymentRail;
 }

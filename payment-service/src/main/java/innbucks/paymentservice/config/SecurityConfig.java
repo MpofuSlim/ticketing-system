@@ -85,6 +85,17 @@ public class SecurityConfig {
                         // JWT and MUST stay authenticated — it falls through to
                         // anyRequest() below.
                         .requestMatchers(HttpMethod.POST, "/payments").permitAll()
+                        // EcoCash EIP notifyUrl callback: the gateway POSTs the
+                        // final charge status here from the public internet and
+                        // cannot carry our JWTs. Safe to open — the handler
+                        // treats the body as an untrusted TRIGGER only (it
+                        // re-queries EcoCash for the truth; see
+                        // EcocashNotifyController), answers a constant 200, and
+                        // the reconciler poll remains the authority, so a forged
+                        // POST can at most make us ask EcoCash a question we
+                        // would ask within 20s anyway. Rate-limited per-IP at
+                        // the gateway (ecocash-notify-write-route).
+                        .requestMatchers(HttpMethod.POST, "/payments/ecocash/notify").permitAll()
                         // Everything else — /payments/shop-checkout,
                         // /actuator/prometheus, any future endpoint — requires a
                         // valid customer JWT populated by JwtFilter.

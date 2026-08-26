@@ -109,6 +109,10 @@ payment-service:
   # sets how often the sweep offers each open row a chance.
   card-poll:
     interval: ${CARD_POLL_INTERVAL:PT30S}
+  # EcoCash Query sweep cadence — this rail's confirmation path (the notify
+  # webhook only fast-paths into the same resolver).
+  ecocash-poll:
+    interval: ${ECOCASH_POLL_INTERVAL:PT20S}
   recon:
     cron: ${RECON_CRON:0 30 2 * * *}
 
@@ -152,6 +156,15 @@ resilience4j:
         exponential-backoff-multiplier: 2
         retry-exceptions:
           - innbucks.paymentservice.client.ZimswitchApiTransientException
+      # Retries apply to the read-only Query GET only — the charge is invoked
+      # outside the retry decorator (never retried; see EcocashEipClient).
+      ecocash:
+        max-attempts: 3
+        wait-duration: 500ms
+        enable-exponential-backoff: true
+        exponential-backoff-multiplier: 2
+        retry-exceptions:
+          - innbucks.paymentservice.client.EcocashApiTransientException
   circuitbreaker:
     instances:
       innbucks-api:
@@ -176,6 +189,17 @@ resilience4j:
         automatic-transition-from-open-to-half-open-enabled: true
         record-exceptions:
           - innbucks.paymentservice.client.ZimswitchApiTransientException
+      ecocash:
+        register-health-indicator: true
+        sliding-window-type: COUNT_BASED
+        sliding-window-size: 20
+        minimum-number-of-calls: 5
+        failure-rate-threshold: 50
+        wait-duration-in-open-state: 30s
+        permitted-number-of-calls-in-half-open-state: 3
+        automatic-transition-from-open-to-half-open-enabled: true
+        record-exceptions:
+          - innbucks.paymentservice.client.EcocashApiTransientException
 
 innbucks-api:
   base-url: ${BANK_API_URL:https://staging.innbucks.co.zw}
@@ -207,6 +231,26 @@ zimswitch:
   checkout-ttl: ${ZIMSWITCH_CHECKOUT_TTL:PT28M}
   status-poll-min-interval: ${ZIMSWITCH_STATUS_POLL_MIN_INTERVAL:PT30S}
   instant-check-min-gap: ${ZIMSWITCH_INSTANT_CHECK_MIN_GAP:PT15S}
+
+# EcoCash Instant Payment (EIP) — the wallet rail (docs/api/ecocash-eip.md).
+# Blank credentials fail SAFE: the rail refuses charges with a clean 503 and
+# the other rails are unaffected. notify-url must be the ABSOLUTE public edge
+# URL (prefix included) — EcoCash resolves it from the public internet.
+ecocash:
+  base-url: ${ECOCASH_BASE_URL:https://payonline.ecocash.co.zw/ecocashGateway-preprod}
+  api-username: ${ECOCASH_API_USERNAME:}
+  api-password: ${ECOCASH_API_PASSWORD:}
+  merchant-code: ${ECOCASH_MERCHANT_CODE:}
+  merchant-number: ${ECOCASH_MERCHANT_NUMBER:}
+  merchant-pin: ${ECOCASH_MERCHANT_PIN:}
+  notify-url: ${ECOCASH_NOTIFY_URL:}
+  merchant-name: ${ECOCASH_MERCHANT_NAME:TICKETIZE}
+  super-merchant-name: ${ECOCASH_SUPER_MERCHANT_NAME:INNBUCKS}
+  terminal-id: ${ECOCASH_TERMINAL_ID:TICKETIZE-WEB}
+  location: ${ECOCASH_LOCATION:ONLINE}
+  connect-timeout-ms: ${ECOCASH_CONNECT_TIMEOUT_MS:3000}
+  read-timeout-ms: ${ECOCASH_READ_TIMEOUT_MS:15000}
+  charge-ttl: ${ECOCASH_CHARGE_TTL:PT5M}
 
 payments:
   innbucks:

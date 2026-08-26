@@ -158,6 +158,41 @@ public class PaymentMetrics {
     }
 
     /**
+     * EcoCash EIP charge outcomes (the wallet rail's entry point).
+     * outcome={charged, refused, ambiguous, unconfigured, no_notify_url}.
+     * `charged` is the top of the funnel; `ambiguous` means the charge call
+     * did not answer cleanly and the row is waiting on the Query poller — a
+     * spike there means the gateway is degraded; `unconfigured`/
+     * `no_notify_url` in prod means the FE offers a rail the cell hasn't
+     * (fully) provisioned.
+     */
+    public void incEcocashCharge(String outcome) {
+        Counter.builder("payment.payments.ecocash_charge")
+                .description("EcoCash EIP charge attempts, by outcome")
+                .tag("outcome", outcome)
+                .register(registry)
+                .increment();
+    }
+
+    /**
+     * Outcome of each Query resolution pass over a TOKEN_ISSUED EcoCash row
+     * (poller, customer-triggered instant check, or webhook trigger).
+     * outcome={paid, paid_unconfirmed, failed, expired, still_pending,
+     * not_found_pending, echo_mismatch, unknown, error}. `paid` is the
+     * conversion signal; `failed` the rejection rate; `echo_mismatch` is
+     * page-NOW territory (parked IN_DOUBT); a sustained `unknown`/`error`
+     * drip means the status contract broke WHILE customer money may be
+     * waiting. Rows behind `unknown` are deliberately never auto-expired.
+     */
+    public void incEcocashResolution(String outcome) {
+        Counter.builder("payment.payments.ecocash_resolution")
+                .description("Query resolutions of TOKEN_ISSUED EcoCash payments, by outcome")
+                .tag("outcome", outcome)
+                .register(registry)
+                .increment();
+    }
+
+    /**
      * Settlement-reconciliation run outcomes. status={clean, discrepant,
      * failed, skipped}. Anything other than a daily `clean` is actionable:
      * `discrepant` → read the recon_run row; `failed` → the statement fetch

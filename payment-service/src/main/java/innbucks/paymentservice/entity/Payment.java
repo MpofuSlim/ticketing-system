@@ -212,6 +212,26 @@ public class Payment {
     private String cardBrand;
 
     /**
+     * EcoCash EIP: OUR idempotency key for the charge request and the handle
+     * every Query keys on — the EIP twin of {@link #codeAuthNumber} /
+     * {@link #checkoutId}. Persisted BEFORE the upstream call (see
+     * docs/api/ecocash-eip.md — a crash mid-call can leave a live PIN prompt
+     * on the customer's phone, so the row must stay resolvable). Unique where
+     * present (V14); the notify webhook looks rows up by this value.
+     */
+    @Column(name = "ecocash_client_correlator", length = 64)
+    private String ecocashClientCorrelator;
+
+    /**
+     * EcoCash's own transaction reference (serverReferenceCode /
+     * ecocashReference, e.g. {@code MP251117.0952.T0527795}) once a Query or
+     * charge response reveals it — the handle a future refund keys on
+     * ({@code originalEcocashReference}) and the support/dispute lookup value.
+     */
+    @Column(name = "ecocash_reference", length = 64)
+    private String ecocashReference;
+
+    /**
      * When the COPYandPAY status endpoint was last queried for this row.
      * The gateway allows TWO status reads per checkout per minute; the
      * reconciler poll and the customer-triggered instant check both gate on

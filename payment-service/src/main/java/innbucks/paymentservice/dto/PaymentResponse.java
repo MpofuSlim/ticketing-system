@@ -225,10 +225,21 @@ public class PaymentResponse {
 
     /**
      * Additive: which rail this payment runs on ({@code INNBUCKS_CODE} —
-     * render the code/QR fields above — or {@code ZIMSWITCH_CARD} — render
-     * the COPYandPAY widget from the checkout fields below).
+     * render the code/QR fields above; {@code ZIMSWITCH_CARD} — render the
+     * COPYandPAY widget from the checkout fields below; {@code ECOCASH} —
+     * nothing to render: tell the customer to approve the PIN prompt on
+     * their phone and poll, with {@code promptExpiresAt} driving the
+     * countdown).
      */
     private innbucks.paymentservice.entity.PaymentRail paymentRail;
+
+    /**
+     * ECOCASH only: when the customer's wallet PIN prompt lapses locally.
+     * Present while {@code stage=AWAITING_PAYMENT}; after it passes, a fresh
+     * Pay tap starts a new charge. UTC with the {@code Z} designator like
+     * every other timestamp.
+     */
+    private LocalDateTime promptExpiresAt;
 
     /**
      * ZimSwitch COPYandPAY widget artifacts, present while a card checkout

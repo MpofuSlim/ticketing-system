@@ -27,6 +27,14 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
     Optional<Payment> findByIdempotencyKey(String idempotencyKey);
 
     /**
+     * EcoCash notify-webhook lookup: "which row is this notification about?"
+     * The correlator is unique where present (uq_payment_ecocash_correlator),
+     * and it is OUR value — an attacker guessing one gains nothing, since the
+     * webhook only triggers a fresh upstream Query, never trusts the body.
+     */
+    Optional<Payment> findByEcocashClientCorrelator(String ecocashClientCorrelator);
+
+    /**
      * Pre-check companion to the {@code uq_payment_active_order} partial
      * unique index: lets the service refuse a second payment for an order
      * with a clean 409 instead of a constraint violation. The INDEX remains

@@ -87,17 +87,23 @@ public class PaymentController {
     private final InnbucksPaymentService innbucksPaymentService;
     private final innbucks.paymentservice.service.ZimswitchCardPaymentService zimswitchCardPaymentService;
     private final innbucks.paymentservice.client.ZimswitchProperties zimswitchProperties;
+    private final innbucks.paymentservice.service.EcocashPaymentService ecocashPaymentService;
     private final PaymentRecordService paymentRecordService;
     private final PaymentRepository paymentRepository;
 
     @PostMapping
     @Operation(
-            summary = "Pay for an order — InnBucks 2D-code (default) or ZimSwitch card",
+            summary = "Pay for an order — InnBucks 2D-code (default), ZimSwitch card, or EcoCash",
             description = "Public endpoint (no login required — guest checkout). Identify the order EXACTLY " +
                     "one way: `bookingId` (ticket bookings — the historical contract, unchanged) OR " +
                     "`orderType` + `orderRef` (additive; e.g. `MARKETPLACE` + the `MKT-...` order reference). " +
                     "\n\n**Rail selection (additive):** omit `paymentRail` (or send `INNBUCKS_CODE`) for the " +
-                    "historical InnBucks code/QR flow described below. Send `paymentRail=ZIMSWITCH_CARD` to " +
+                    "historical InnBucks code/QR flow described below. Send `paymentRail=ECOCASH` to charge " +
+                    "the order's phone number via EcoCash: a wallet PIN prompt is pushed to the customer's " +
+                    "phone, the response is `status=PROCESSING` with `promptExpiresAt`, and there is NOTHING " +
+                    "to render — show \"approve the prompt on your phone\" and poll by re-POSTing this " +
+                    "endpoint (each re-POST also triggers an instant upstream check). " +
+                    "Send `paymentRail=ZIMSWITCH_CARD` to " +
                     "pay by card: the response carries COPYandPAY widget artifacts (`checkoutId`, " +
                     "`checkoutScriptUrl`, `checkoutIntegrity`, `checkoutBrands`, `shopperResultUrl`) — render " +
                     "the script + `<form class=\"paymentWidgets\" data-brands=\"{checkoutBrands}\" " +
@@ -266,6 +272,27 @@ public class PaymentController {
                                               }
                                             }
                                             """),
+                                    @ExampleObject(name = "Booking — EcoCash prompt pushed (request: {\"bookingId\":\"a3b9c1d2-...\",\"paymentRail\":\"ECOCASH\"})", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Approve the payment prompt on your phone to complete your booking",
+                                              "data": {
+                                                "transactionId": "c4d5e6f7-8901-2345-6789-abcdef012345",
+                                                "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "orderType": "BOOKING",
+                                                "orderRef": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                                "status": "PROCESSING",
+                                                "stage": "AWAITING_PAYMENT",
+                                                "fundsCaptured": false,
+                                                "amountPaid": 100.00,
+                                                "currency": "USD",
+                                                "confirmationNumber": null,
+                                                "processedAt": "2026-06-11T15:48:00Z",
+                                                "paymentRail": "ECOCASH",
+                                                "promptExpiresAt": "2026-06-11T15:53:00Z"
+                                              }
+                                            }
+                                            """),
                                     @ExampleObject(name = "Marketplace order — code issued (request: {\"orderType\":\"MARKETPLACE\",\"orderRef\":\"MKT-4F9A1C22B7D3\"})", value = """
                                             {
                                               "code": "200 OK",
@@ -428,6 +455,35 @@ public class PaymentController {
                     return toReplayResponse(afterCheck, key);
                 }
             } else if (p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED
+                    && p.getPaymentRail() == innbucks.paymentservice.entity.PaymentRail.ECOCASH
+                    && p.getEcocashClientCorrelator() != null) {
+                // EcoCash twin of the instant checks above/below: the customer
+                // just approved the prompt (or refreshed) — Query EcoCash NOW
+                // instead of waiting a poll cycle. Same resolver as the poller
+                // and the notify webhook, so the money rules cannot drift.
+                var ecoCheck = ecocashPaymentService.resolveOpenCharge(p);
+                if (ecoCheck == innbucks.paymentservice.service.EcocashPaymentService.EcocashCheckOutcome.PAID) {
+                    Payment resolved = paymentRepository.findById(p.getId()).orElse(p);
+                    log.info("POST /payments ecocash instant-check PAID orderType={} orderRef={} paymentReference={}",
+                            key.type(), key.ref(), p.getPaymentReference());
+                    return toReplayResponse(resolved, key);
+                }
+                if (ecoCheck == innbucks.paymentservice.service.EcocashPaymentService.EcocashCheckOutcome.EXPIRED) {
+                    // Row just went terminal (FAILED/EXPIRED, slot freed) —
+                    // fall through and start a FRESH charge in this request.
+                    log.info("POST /payments ecocash instant-check EXPIRED orderType={} orderRef={} — starting fresh",
+                            key.type(), key.ref());
+                } else {
+                    // Re-read, never reuse `p`: an echo mismatch on a
+                    // COMPLETED read parks the row IN_DOUBT and still reports
+                    // PENDING — the same mutating-and-still-PENDING hazard the
+                    // card branch documents.
+                    Payment afterCheck = paymentRepository.findById(p.getId()).orElse(p);
+                    log.info("POST /payments ecocash replay after instant check orderType={} orderRef={} paymentReference={} status={}",
+                            key.type(), key.ref(), p.getPaymentReference(), afterCheck.getStatus());
+                    return toReplayResponse(afterCheck, key);
+                }
+            } else if (p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED
                     && p.getInnbucksCode() != null) {
                 // Customer-triggered instant check ("I've paid" / page refresh):
                 // ask InnBucks NOW instead of replaying blindly — confirmation
@@ -481,6 +537,10 @@ public class PaymentController {
             if (rail == innbucks.paymentservice.entity.PaymentRail.ZIMSWITCH_CARD) {
                 return toCardResponse(
                         zimswitchCardPaymentService.startCheckout(key.type(), key.ref()), key);
+            }
+            if (rail == innbucks.paymentservice.entity.PaymentRail.ECOCASH) {
+                return toEcocashResponse(
+                        ecocashPaymentService.startCharge(key.type(), key.ref()), key);
             }
             outcome = innbucksPaymentService.processPayment(key.type(), key.ref(), null, null);
         } catch (BookingConfirmationException e) {
@@ -599,6 +659,39 @@ public class PaymentController {
                 "Enter your card details to complete your " + noun, response));
     }
 
+    /** Map a fresh EcoCash charge outcome onto the stub's response contract. */
+    private ResponseEntity<ApiResult<PaymentResponse>> toEcocashResponse(
+            innbucks.paymentservice.service.EcocashPaymentService.EcocashChargeOutcome outcome,
+            OrderKey key) {
+        if (outcome.failed()) {
+            String message = outcome.upstreamMessage() != null
+                    ? outcome.upstreamMessage() : "Payment was rejected";
+            return error(HttpStatus.BAD_REQUEST, message);
+        }
+        Payment p = outcome.payment();
+        String noun = key.type() == OrderType.BOOKING ? "booking" : "order";
+        PaymentResponse response = PaymentResponse.builder()
+                .transactionId(p.getId())
+                .bookingId(p.getBookingId())
+                .orderType(key.type())
+                .orderRef(key.ref())
+                .status(PaymentResponse.Status.PROCESSING)
+                .amountPaid(p.getAmount())
+                .currency(p.getCurrency() != null ? p.getCurrency() : cellCurrency)
+                .processedAt(LocalDateTime.now(ZoneOffset.UTC))
+                .paymentRail(innbucks.paymentservice.entity.PaymentRail.ECOCASH)
+                // The prompt is on the customer's phone — no artifact to
+                // render; the deadline drives the FE's countdown.
+                .stage(PaymentResponse.Stage.AWAITING_PAYMENT)
+                .promptExpiresAt(outcome.promptExpiresAt() == null ? null
+                        : LocalDateTime.ofInstant(outcome.promptExpiresAt(), ZoneOffset.UTC))
+                .build();
+        log.info("EcoCash charge issued transactionId={} orderType={} orderRef={}",
+                response.getTransactionId(), key.type(), key.ref());
+        return ResponseEntity.ok(ApiResult.ok(
+                "Approve the payment prompt on your phone to complete your " + noun, response));
+    }
+
     private ResponseEntity<ApiResult<PaymentResponse>> toReplayResponse(Payment p, OrderKey key) {
         PaymentResponse.Status status = switch (p.getStatus()) {
             case SUCCEEDED -> PaymentResponse.Status.SUCCESS;
@@ -612,11 +705,14 @@ public class PaymentController {
         // interval) and the next Pay tap mints a fresh one. Paid-but-
         // unconfirmed rows keep their code hidden too: that code is spent.
         boolean cardRow = p.getPaymentRail() == innbucks.paymentservice.entity.PaymentRail.ZIMSWITCH_CARD;
+        boolean ecocashRow = p.getPaymentRail() == innbucks.paymentservice.entity.PaymentRail.ECOCASH;
         boolean codeStillLive = p.getCodeExpiresAt() == null
                 || p.getCodeExpiresAt().isAfter(java.time.Instant.now());
         boolean hasOpenInstrument = p.getStatus() == Payment.PaymentStatus.TOKEN_ISSUED
                 && codeStillLive
-                && (cardRow ? p.getCheckoutId() != null : p.getInnbucksCode() != null);
+                && (cardRow ? p.getCheckoutId() != null
+                        : ecocashRow ? p.getEcocashClientCorrelator() != null
+                        : p.getInnbucksCode() != null);
         // Card rows re-surface the SAME open checkout (the gateway's
         // documented reuse model — reload/back-button/declined-retry all
         // re-render one checkout); code rows re-surface the live code + QR.
@@ -667,10 +763,12 @@ public class PaymentController {
                 .confirmationNumber(p.getConfirmationNumber())
                 .processedAt(LocalDateTime.now(ZoneOffset.UTC))
                 .paymentRail(p.getPaymentRail())
-                .paymentCode(!cardRow && awaitingApproval ? p.getInnbucksCode() : null)
-                .paymentCodeExpiresAt(!cardRow && awaitingApproval && p.getCodeExpiresAt() != null
+                .paymentCode(!cardRow && !ecocashRow && awaitingApproval ? p.getInnbucksCode() : null)
+                .paymentCodeExpiresAt(!cardRow && !ecocashRow && awaitingApproval && p.getCodeExpiresAt() != null
                         ? LocalDateTime.ofInstant(p.getCodeExpiresAt(), ZoneOffset.UTC) : null)
-                .paymentQrCode(!cardRow && awaitingApproval ? p.getCodeQrBase64() : null)
+                .paymentQrCode(!cardRow && !ecocashRow && awaitingApproval ? p.getCodeQrBase64() : null)
+                .promptExpiresAt(ecocashRow && awaitingApproval && p.getCodeExpiresAt() != null
+                        ? LocalDateTime.ofInstant(p.getCodeExpiresAt(), ZoneOffset.UTC) : null)
                 .checkoutId(cardArtifacts != null ? cardArtifacts.checkoutId() : null)
                 .checkoutScriptUrl(cardArtifacts != null ? cardArtifacts.widgetScriptUrl() : null)
                 .checkoutIntegrity(cardArtifacts != null ? cardArtifacts.checkoutIntegrity() : null)
@@ -686,6 +784,8 @@ public class PaymentController {
             case COMPLETED -> "Payment processed successfully";
             case AWAITING_PAYMENT -> cardRow
                     ? "Enter your card details to complete your " + noun
+                    : ecocashRow
+                    ? "Approve the payment prompt on your phone to complete your " + noun
                     : "Approve the payment in your InnBucks app to complete your " + noun;
             // "Expired — tap Pay again" would be a lie AND a loop here: the row
             // still holds the order's slot, so a retry returns this same state.
@@ -695,6 +795,8 @@ public class PaymentController {
                     + "or contact support if this persists";
             case INSTRUMENT_EXPIRED -> cardRow
                     ? "Your previous card checkout expired — tap Pay again to start a new one"
+                    : ecocashRow
+                    ? "Your previous payment prompt expired — tap Pay again to get a fresh one"
                     : "Your previous payment code expired — tap Pay again in a moment to get a fresh one";
             case PAYMENT_RECEIVED -> "Payment received; your " + noun + " is being confirmed";
             case IN_PROGRESS -> "Your payment is already being processed — please retry in a moment";
