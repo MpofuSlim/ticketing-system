@@ -27,18 +27,27 @@ RUN ./mvnw -B -pl booking-service -am -DskipTests package spring-boot:repackage 
     && cp booking-service/target/booking-service-*.jar /workspace/app.jar
 
 FROM eclipse-temurin:21-jre-alpine AS runtime
-# Refresh the apk index + force-upgrade OpenSSL by name. Without naming the
-# packages, Docker reuses a stale layer hash and the cached upgrade doesn't
-# re-run when a new Alpine point release ships the fix.
-# CVE-2026-45447 (HIGH) — libssl3 / libcrypto3 / openssl PKCS#7 / S/MIME
-# signed-message handling. Fixed in alpine 3.5.7-r0.
-# CVE-2026-2100 (HIGH) — p11-kit / p11-kit-trust NULL-deref via C_DeriveKey with
-# specific NULL params. Fixed in alpine p11-kit 0.26.2-r0.
-# CVE-2026-56131 / CVE-2026-56407 / CVE-2026-56408 (HIGH) — libexpat < 2.8.2
-# (missing call-depth tracking + integer overflows in doProlog / copyString).
-# Fixed in alpine libexpat 2.8.2-r0.
+# Refresh the apk index, then force each security-relevant package to a PINNED
+# MINIMUM version. The floor is what makes this work: a bare `apk upgrade <pkg>`
+# is a constant RUN string, so buildx replays the CACHED layer and the upgrade
+# never re-runs when a new Alpine point release ships a fix — which is how
+# CVE-2026-14456 shipped in every image despite openssl already being listed
+# here. Bumping a floor changes the instruction (busting the cache) AND makes
+# apk fail loudly if the fixed version is not reachable, instead of silently
+# keeping the vulnerable one. Raise the floor when Trivy reports a new CVE.
+# libssl3 / libcrypto3 / openssl >= 3.5.8-r0
+#   CVE-2026-14456 (HIGH) — unbounded memory growth in QUIC server handling.
+#   CVE-2026-45447 (HIGH) — PKCS#7 / S/MIME signed-message handling.
+# p11-kit / p11-kit-trust >= 0.26.2-r0
+#   CVE-2026-2100 (HIGH) — NULL-deref via C_DeriveKey with NULL params.
+# libexpat >= 2.8.2-r0
+#   CVE-2026-56131 / CVE-2026-56407 / CVE-2026-56408 (HIGH) — missing call-depth
+#   tracking + integer overflows in doProlog / copyString.
 RUN apk update \
- && apk --no-cache upgrade libssl3 libcrypto3 openssl p11-kit p11-kit-trust libexpat \
+ && apk add --no-cache --upgrade \
+      'libssl3>=3.5.8-r0' 'libcrypto3>=3.5.8-r0' 'openssl>=3.5.8-r0' \
+      'p11-kit>=0.26.2-r0' 'p11-kit-trust>=0.26.2-r0' \
+      'libexpat>=2.8.2-r0' \
  && addgroup -S app && adduser -S -G app app
 WORKDIR /app
 USER app
