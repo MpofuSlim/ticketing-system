@@ -643,6 +643,23 @@ back). Non-negotiables:
 - **`transactionOperationStatus` is the ONLY outcome field** (COMPLETED /
   FAILED / everything-else-is-open). Never gate on HTTP status or
   `responseCode`.
+- **A 2xx whose body is not a JSON object is INFRASTRUCTURE, not a status** —
+  raise it as transient, never classify it. EcoCash sits behind Cloudflare and
+  an F5 BIG-IP ASM, and the ASM serves its "Request Rejected / support ID"
+  page with **HTTP 200** and `text/html`. Classifying that as `UNKNOWN` looks
+  harmless but is not: `UNKNOWN` never closes a row, so a sustained block pins
+  every charge in `TOKEN_ISSUED` holding the order's ONLY payment slot across
+  all three rails — the customer can then never pay for that order by any
+  method. Same trap by a second route: an unknown correlator answers **200
+  with an all-null envelope** (NOT a 404), which is why "no status AND no
+  echo" maps to `NOT_FOUND` while "no status WITH an echo" stays `UNKNOWN`.
+  Both shapes are pinned verbatim in `EcocashEipClientContractTest`.
+- **The client sends an honest `User-Agent`** (`EcocashEipClient.USER_AGENT`),
+  because EcoCash's edge runs a UA **allow-list**: `curl/8.x` passes,
+  `Java-http-client/21` (the JDK default) and even `Ticketize-Payments/1.0`
+  are refused with a bodyless 403. It is therefore NOT a self-service fix —
+  it is the stable identity EcoCash allow-lists. Never spoof a browser or
+  another tool's UA to get through a payment partner's edge.
 - **The notify webhook (`POST /payments/ecocash/notify`) is a TRIGGER, not
   a truth source** — unauthenticated body, so it only re-runs the Query
   resolver; constant 200; the poller stays authoritative. Public via the
