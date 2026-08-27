@@ -126,11 +126,41 @@ holding the order's only payment slot.
 - Settlement reconciliation for ECOCASH rows (the nightly recon covers the
   InnBucks statement only).
 
+## Verified wire facts (preprod, 2026-08-27, from the ZW cell)
+
+Observed directly against `payonline.ecocash.co.zw/ecocashGateway-preprod`;
+each is pinned by a case in `EcocashEipClientContractTest`.
+
+- **An unknown correlator answers HTTP 200 with an ALL-NULL envelope**, NOT
+  the 404 this doc previously assumed. Every field — `id`,
+  `clientCorrelator`, `transactionOperationStatus`, `paymentAmount` — is
+  `null`. `classify()` reads "no status AND no echo" as the positive
+  no-such-transaction answer (`NOT_FOUND`); a null status *with* an echoed
+  correlator stays `UNKNOWN`, because EcoCash knowing the transaction while
+  we cannot read its state is exactly when guessing would free a slot the
+  customer may have paid for. The 404 branch is kept — it costs nothing and
+  may still be what production returns.
+- **The edge can answer 200 with an HTML body.** EcoCash sits behind
+  Cloudflare and then an F5 BIG-IP ASM, and the ASM serves its "Request
+  Rejected / Your support ID is: …" page with **HTTP 200** and `text/html`.
+  Any non-JSON 2xx is therefore infrastructure answering for EIP, and
+  `classify()` raises it as transient rather than classifying it — see the
+  non-negotiable below.
+- **The edge runs a User-Agent allow-list.** Same URL, same credentials,
+  varying only the UA: `curl/8.x` → 200, `Java-http-client/21` → 403,
+  `Ticketize-Payments/1.0` → 403. So no UA we can choose fixes it on our
+  own; the client sends a stable honest identity (`EcocashEipClient.USER_AGENT`)
+  for EcoCash to allow-list. Basic auth itself works (wrong credentials give
+  a clean 401), and the source IP is not blocked.
+
 ## Open questions for the EcoCash POC
 
 - How long does the subscriber PIN prompt live upstream, and does an
   unanswered prompt eventually flip the transaction to `FAILED` on Query?
   (Local TTL default PT5M is a guess; tighten once answered.)
-- The exact Query response for an unknown correlator (assumed: HTTP 404 or
-  an error envelope with no `transactionOperationStatus`).
 - The exact ServiceError envelope for a duplicate `clientCorrelator`.
+- Whether the F5 rejects the charge POST on content grounds independently of
+  the UA allow-list — an empty `{}` body from an allowed UA was also blocked
+  (support ID `11686949056897540070`), so **no** POST has yet reached EIP.
+  Until one does, nothing about our charge body, merchant provisioning or
+  msisdn handling has been validated upstream.

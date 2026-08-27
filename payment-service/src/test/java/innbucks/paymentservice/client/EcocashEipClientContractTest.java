@@ -260,14 +260,119 @@ class EcocashEipClientContractTest {
                 .isEqualTo(EcocashChargeStatus.Outcome.NOT_FOUND);
     }
 
-    @Test
-    @DisplayName("query: an unreadable 200 maps to UNKNOWN — which never expires a row")
-    void query_unparseable() {
-        wireMock.stubFor(get(urlEqualTo(QUERY_PATH))
-                .willReturn(aResponse().withStatus(200).withBody("<html>gateway error page</html>")));
+    /**
+     * The REAL body captured from the preprod gateway on 2026-08-27 when the
+     * F5 BIG-IP ASM in front of EIP rejected the request — served, as F5 does
+     * by default, with HTTP <b>200</b> and {@code text/html}. Trimmed to the
+     * meaningful part; the support ID is what an operator quotes to EcoCash.
+     */
+    private static final String F5_BLOCK_PAGE =
+            "<html><head><title>Request Rejected</title></head><body>The requested URL was rejected. "
+                    + "Please consult with your administrator.<br><br>Your support ID is: "
+                    + "11686949056897540070<br><br><a href='javascript:history.back();'>[Go Back]</a>"
+                    + "</body></html>";
 
+    /**
+     * The REAL body captured from the preprod gateway on 2026-08-27 for a
+     * correlator EcoCash had never seen: HTTP 200, a FULL envelope, every
+     * field null. The spec doc had assumed a 404 — it is not.
+     */
+    private static final String ALL_NULL_ENVELOPE = """
+            {"id":null,"version":0,"clientCorrelator":null,"endTime":null,"startTime":null,
+             "notifyUrl":null,"referenceCode":null,"endUserId":null,"serverReferenceCode":null,
+             "transactionOperationStatus":null,"paymentAmount":null,"ecocashReference":null,
+             "merchantCode":null,"merchantPin":null,"merchantNumber":null,"notificationFormat":null,
+             "serviceId":null,"originalServerReferenceCode":null,"originalEcocashReference":null,
+             "transactionDate":null,"remarks":null,"ecocashResponseCode":null,"responseMessage":null,
+             "orginalMerchantReference":null,"type":null,"source":null}""";
+
+    @Test
+    @DisplayName("query: an HTML 200 (F5 block page) is INFRASTRUCTURE, not a status — transient, never a silent 'still pending'")
+    void query_htmlBodyIsInfrastructureNotStatus() {
+        wireMock.stubFor(get(urlEqualTo(QUERY_PATH))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "text/html; charset=utf-8")
+                        .withBody(F5_BLOCK_PAGE)));
+
+        // Must THROW, not return UNKNOWN. UNKNOWN never closes a row, so
+        // classifying an edge block as a status would pin the payment in
+        // TOKEN_ISSUED forever, holding the order's only payment slot.
+        assertThatThrownBy(() -> newClient(wireMock.baseUrl()).query(MSISDN, CORRELATOR))
+                .isInstanceOf(EcocashApiTransientException.class)
+                .hasMessageContaining("non-JSON");
+    }
+
+    @Test
+    @DisplayName("query: an empty 200 body is infrastructure too — transient, not a status")
+    void query_emptyBodyIsTransient() {
+        wireMock.stubFor(get(urlEqualTo(QUERY_PATH))
+                .willReturn(aResponse().withStatus(200).withBody("")));
+
+        assertThatThrownBy(() -> newClient(wireMock.baseUrl()).query(MSISDN, CORRELATOR))
+                .isInstanceOf(EcocashApiTransientException.class);
+    }
+
+    @Test
+    @DisplayName("query: the REAL all-null 200 envelope for an unknown correlator is NOT_FOUND, not UNKNOWN")
+    void query_allNullEnvelopeIsNotFound() {
+        wireMock.stubFor(get(urlEqualTo(QUERY_PATH))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json;charset=UTF-8")
+                        .withBody(ALL_NULL_ENVELOPE)));
+
+        // NOT_FOUND lets the resolver close the row once the prompt deadline
+        // has passed; UNKNOWN would leave it open forever.
+        assertThat(newClient(wireMock.baseUrl()).query(MSISDN, CORRELATOR).outcome())
+                .isEqualTo(EcocashChargeStatus.Outcome.NOT_FOUND);
+    }
+
+    @Test
+    @DisplayName("query: a null status WITH an echoed correlator stays UNKNOWN — EcoCash knows the txn, we just can't read it")
+    void query_nullStatusButEchoedCorrelatorStaysUnknown() {
+        wireMock.stubFor(get(urlEqualTo(QUERY_PATH))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "application/json")
+                        .withBody("{\"clientCorrelator\":\"" + CORRELATOR
+                                + "\",\"transactionOperationStatus\":null}")));
+
+        // The safety half of the NOT_FOUND rule: an echo proves the
+        // transaction exists upstream, so we must NOT free the slot.
         assertThat(newClient(wireMock.baseUrl()).query(MSISDN, CORRELATOR).outcome())
                 .isEqualTo(EcocashChargeStatus.Outcome.UNKNOWN);
+    }
+
+    @Test
+    @DisplayName("charge: an HTML 200 (F5 block) is never reported as an issued charge")
+    void charge_htmlBodyIsNotAnIssuedCharge() {
+        wireMock.stubFor(post(urlEqualTo(CHARGE_PATH))
+                .willReturn(aResponse().withStatus(200)
+                        .withHeader("Content-Type", "text/html; charset=utf-8")
+                        .withBody(F5_BLOCK_PAGE)));
+
+        // Before this guard the block page classified as UNKNOWN and the
+        // caller logged "charge issued", telling the customer to approve a
+        // prompt that was never pushed.
+        assertThatThrownBy(() -> newClient(wireMock.baseUrl())
+                .charge(CORRELATOR, MSISDN, 300L, "USD", "TKZ-TEST-0001"))
+                .isInstanceOf(EcocashApiTransientException.class);
+
+        // Still exactly one attempt — the charge is NEVER retried.
+        wireMock.verify(1, postRequestedFor(urlEqualTo(CHARGE_PATH)));
+    }
+
+    @Test
+    @DisplayName("every call identifies us honestly — User-Agent is set, never the JDK default")
+    void sendsIdentifyingUserAgent() {
+        wireMock.stubFor(get(urlEqualTo(QUERY_PATH))
+                .willReturn(aResponse().withStatus(404)));
+
+        newClient(wireMock.baseUrl()).query(MSISDN, CORRELATOR);
+
+        // EcoCash's edge runs a User-Agent allow-list; this is the stable
+        // identity we ask them to allow, and it must not regress to
+        // Java-http-client/<ver>.
+        wireMock.verify(getRequestedFor(urlEqualTo(QUERY_PATH))
+                .withHeader("User-Agent", equalTo(EcocashEipClient.USER_AGENT)));
     }
 
     @Test

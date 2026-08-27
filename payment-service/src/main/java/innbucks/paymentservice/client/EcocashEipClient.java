@@ -11,6 +11,7 @@ import io.github.resilience4j.retry.RetryRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
@@ -70,6 +71,22 @@ public class EcocashEipClient {
     private static final String CHARGE_PATH = "/payment/v1/transactions/amount";
 
     /**
+     * Identify ourselves honestly on every EIP call. The JDK HttpClient's
+     * default is {@code Java-http-client/<ver>}, which EcoCash's Cloudflare
+     * layer refuses with a bodyless 403 — their edge runs a User-Agent
+     * ALLOW-list (verified 2026-08-27 from the ZW cell: {@code curl/8.x} → 200,
+     * {@code Java-http-client/21} → 403, and this string → 403 as well, so it
+     * only starts working once EcoCash allow-lists it).
+     *
+     * <p>It is therefore <b>not</b> a fix on its own — it is the stable
+     * identity we ask them to allow, and it stops us being an anonymous
+     * generic-runtime caller against a payment gateway. Never spoof a browser
+     * or another tool's UA here: the whole point is that EcoCash can tell who
+     * is calling.
+     */
+    static final String USER_AGENT = "Ticketize-Payments/1.0";
+
+    /**
      * Legal shapes of the two values we splice into the Query URL. Both are
      * OUR values (we mint the correlator; the msisdn comes from the order
      * snapshot) — this is defence in depth against ever building a request
@@ -99,6 +116,7 @@ public class EcocashEipClient {
         this.restClient = RestClient.builder()
                 .baseUrl(properties.getBaseUrl() == null ? "http://localhost" : trimTrailingSlash(properties.getBaseUrl()))
                 .requestFactory(rf)
+                .defaultHeader(HttpHeaders.USER_AGENT, USER_AGENT)
                 .requestInterceptor(new CorrelationIdPropagatingInterceptor())
                 .build();
         this.retry = retryRegistry.retry(RESILIENCE_INSTANCE_NAME);
@@ -335,12 +353,40 @@ public class EcocashEipClient {
      * the doc); an unreadable body is UNKNOWN, which never expires a row.
      */
     private EcocashChargeStatus classify(String raw) {
+        // A 2xx whose body is not an EIP envelope did not come FROM EIP: it is
+        // infrastructure answering on its behalf (EcoCash sits behind
+        // Cloudflare and an F5 BIG-IP ASM, and the ASM serves its "Request
+        // Rejected / support ID" page with HTTP **200** and text/html). Such a
+        // body must never be classified as a status — mapping it to UNKNOWN
+        // read as "the customer has not decided yet", and UNKNOWN never closes
+        // a row, so a sustained block would pin every charge in TOKEN_ISSUED
+        // forever holding the order's only payment slot across all rails.
+        // Treating it as transient routes it through the same path as a
+        // timeout: retried on the Query, counted as an error, alertable.
         if (raw == null || raw.isBlank()) {
-            return new EcocashChargeStatus(EcocashChargeStatus.Outcome.UNKNOWN, "empty body",
-                    null, null, null, null);
+            throw new EcocashApiTransientException(
+                    "EcoCash returned an empty body where a JSON envelope was expected", 502);
+        }
+        JsonNode parsed;
+        try {
+            parsed = objectMapper.readTree(raw);
+        } catch (Exception e) {
+            // Safe to log a prefix: a non-JSON body is by definition not our
+            // envelope, so it cannot carry the merchant PIN — and an F5 block
+            // page contains the support ID an operator needs to give EcoCash.
+            log.error("[ecocash] NON-JSON body on a 2xx — infrastructure answered, not EIP. "
+                    + "Body starts: {}", truncate(raw.strip(), 200));
+            throw new EcocashApiTransientException(
+                    "EcoCash returned a non-JSON body on a 2xx (blocked at the edge?)", 502, e);
+        }
+        if (!parsed.isObject()) {
+            log.error("[ecocash] 2xx body is JSON but not an object — not an EIP envelope: {}",
+                    truncate(raw.strip(), 200));
+            throw new EcocashApiTransientException(
+                    "EcoCash returned a JSON non-object where an envelope was expected", 502);
         }
         try {
-            JsonNode root = objectMapper.readTree(raw);
+            JsonNode root = parsed;
             String rawStatus = text(root, "transactionOperationStatus");
             String reference = text(root, "ecocashReference");
             if (reference == null) reference = text(root, "serverReferenceCode");
@@ -353,7 +399,22 @@ public class EcocashEipClient {
 
             EcocashChargeStatus.Outcome outcome;
             if (rawStatus == null || rawStatus.isBlank()) {
-                outcome = EcocashChargeStatus.Outcome.UNKNOWN;
+                // VERIFIED 2026-08-27 against the preprod gateway: a Query for
+                // a correlator EcoCash has never seen answers HTTP 200 with a
+                // full envelope whose every field is null — NOT the 404 the
+                // spec doc assumed. The discriminator is that the envelope
+                // echoes NOTHING back: a transaction EcoCash knows returns our
+                // clientCorrelator (and usually a reference) even when the
+                // status is unreadable. So "no status AND no echo" is the
+                // positive no-such-transaction answer -> NOT_FOUND, which the
+                // resolver still only acts on AFTER the prompt deadline +
+                // grace. A null status WITH an echo stays UNKNOWN: EcoCash
+                // knows the transaction, we just cannot read its state, and
+                // guessing there could free a slot the customer has paid for.
+                boolean echoesNothing = text(root, "clientCorrelator") == null && reference == null;
+                outcome = echoesNothing
+                        ? EcocashChargeStatus.Outcome.NOT_FOUND
+                        : EcocashChargeStatus.Outcome.UNKNOWN;
             } else {
                 String s = rawStatus.trim().toUpperCase(Locale.ROOT);
                 outcome = switch (s) {
