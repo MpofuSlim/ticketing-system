@@ -164,6 +164,7 @@ services:
       INNBUCKS_GATEWAY_URL: ${INNBUCKS_GATEWAY_URL:-http://10.0.155.69:8088}
       WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-http://localhost:8089}
       WHATSAPP_API_KEY: ${WHATSAPP_API_KEY:?set WHATSAPP_API_KEY in .env}
+      WHATSAPP_EVENT_QR_CODE_PATH: ${WHATSAPP_EVENT_QR_CODE_PATH:-/api/messages/event-qr-code}
       NATIONAL_ID_HMAC_SECRET: ${NATIONAL_ID_HMAC_SECRET:?set NATIONAL_ID_HMAC_SECRET in .env (see .env.example) — keep it stable; rotating it orphans existing hashes}
       # InnBucks notification API (system-user emails). Same creds as payment-service.
       # Optional: blank → email no-ops and falls back to SMS/WhatsApp.
@@ -320,6 +321,7 @@ services:
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
       WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-http://localhost:8089}
       WHATSAPP_API_KEY: ${WHATSAPP_API_KEY:?set WHATSAPP_API_KEY in .env}
+      WHATSAPP_EVENT_QR_CODE_PATH: ${WHATSAPP_EVENT_QR_CODE_PATH:-/api/messages/event-qr-code}
       INNBUCKS_GATEWAY_URL: ${INNBUCKS_GATEWAY_URL:-http://10.0.155.69:8088}
       TICKETS_PUBLIC_BASE_URL: ${TICKETS_PUBLIC_BASE_URL:-http://localhost:8080}
       # Platform->organizer commission invoicing (all optional; safe defaults in
@@ -387,6 +389,7 @@ services:
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
       WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-http://localhost:8089}
       WHATSAPP_API_KEY: ${WHATSAPP_API_KEY:?set WHATSAPP_API_KEY in .env}
+      WHATSAPP_EVENT_QR_CODE_PATH: ${WHATSAPP_EVENT_QR_CODE_PATH:-/api/messages/event-qr-code}
       BANK_API_URL: ${BANK_API_URL:-https://staging.innbucks.co.zw}
       BANK_API_KEY: ${BANK_API_KEY:?set BANK_API_KEY in .env}
       BANK_API_USERNAME: ${BANK_API_USERNAME:?set BANK_API_USERNAME in .env}

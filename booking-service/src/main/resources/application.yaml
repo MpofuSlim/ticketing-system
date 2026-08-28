@@ -130,6 +130,10 @@ whatsapp:
   api-key: ${WHATSAPP_API_KEY:change-me-whatsapp-api-key}
   connect-timeout-ms: ${WHATSAPP_CONNECT_TIMEOUT_MS:2000}
   read-timeout-ms: ${WHATSAPP_READ_TIMEOUT_MS:10000}
+  # Defaults to the PRODUCTION endpoint, so an unset cell behaves exactly as
+  # before. Staging overrides it because the gateway resolves qrCodePath
+  # against a BASE_URL pinned to the production origin — see WhatsAppProperties.
+  event-qr-code-path: ${WHATSAPP_EVENT_QR_CODE_PATH:/api/messages/event-qr-code}
 
 # InnBucks public notification API (email). Same API Gateway + BANK_API_*
 # credentials as the payment rail (POST /auth/third-party for the bearer,

@@ -27,7 +27,6 @@ import java.util.Map;
 public class WhatsAppNotificationClient {
 
     private static final String CUSTOM_NOTIFICATION_PATH = "/api/messages/custom-notification";
-    private static final String EVENT_QR_CODE_PATH = "/api/messages/event-qr-code";
     private static final String API_KEY_HEADER = "x-api-key";
     static final int MAX_MESSAGE_LENGTH = 1600;
 
@@ -104,7 +103,7 @@ public class WhatsAppNotificationClient {
         }
         try {
             restClient.post()
-                    .uri(EVENT_QR_CODE_PATH)
+                    .uri(properties.getEventQrCodePath())
                     .header(API_KEY_HEADER, properties.getApiKey())
                     .contentType(MediaType.APPLICATION_JSON)
                     .body(Map.of("to", to, "eventName", eventName, "qrCodePath", qrCodePath))
