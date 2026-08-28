@@ -126,10 +126,45 @@ holding the order's only payment slot.
 - Settlement reconciliation for ECOCASH rows (the nightly recon covers the
   InnBucks statement only).
 
+## THE HOST TRAP — the PDF names the wrong one for preprod
+
+> [!IMPORTANT]
+> **Preprod is `payonline.econet.co.zw`, NOT the `payonline.ecocash.co.zw`
+> this PDF documents.** The documented host sits behind a Cloudflare **bot
+> challenge**, which a server-to-server client cannot pass by design — it has
+> no browser to run the JavaScript. Every charge from our backend was refused
+> `403` there while the credentials, merchant config, request body and
+> registered msisdns were all correct the whole time.
+
+Confirmed 2026-08-28 from the ZW cell by varying **only** the `User-Agent` on
+an otherwise identical request (same URL path, credentials, source IP):
+
+| Host | `curl/8.x` | `Java-http-client/21` | `Ticketize-Payments/1.0` |
+|---|---|---|---|
+| `payonline.ecocash.co.zw` (PDF) | 200 | **403** | **403** |
+| `payonline.econet.co.zw` | 200 | **200** | **200** |
+
+The `403` carried Cloudflare's own `cf-mitigated: challenge` header — proof
+it is Cloudflare mitigating, not the EIP application refusing. The `POST`
+path additionally returned an F5 BIG-IP ASM block page ("Request Rejected /
+Your support ID is: …") served with **HTTP 200** and `text/html`, even for an
+empty `{}` body — which is what proved the request *content* was never the
+problem.
+
+- **Which host serves PRODUCTION is NOT yet confirmed.** EcoCash said
+  `.ecocash` first, then `.econet`. Before go-live, get the production base
+  URL in writing and run one non-mutating GET against it with our real
+  `User-Agent`; if production is on `payonline.ecocash.co.zw`, the same
+  challenge will refuse every charge on launch day unless they whitelist us
+  first.
+- Do NOT "fix" this by spoofing a browser or `curl` User-Agent. The rail
+  sends an honest identity (`EcocashEipClient.USER_AGENT`); a payment partner
+  is entitled to know what is calling it.
+
 ## Verified wire facts (preprod, 2026-08-27, from the ZW cell)
 
-Observed directly against `payonline.ecocash.co.zw/ecocashGateway-preprod`;
-each is pinned by a case in `EcocashEipClientContractTest`.
+Observed directly against the preprod gateway; each is pinned by a case in
+`EcocashEipClientContractTest`.
 
 - **An unknown correlator answers HTTP 200 with an ALL-NULL envelope**, NOT
   the 404 this doc previously assumed. Every field — `id`,

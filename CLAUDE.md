@@ -654,6 +654,19 @@ back). Non-negotiables:
   with an all-null envelope** (NOT a 404), which is why "no status AND no
   echo" maps to `NOT_FOUND` while "no status WITH an echo" stays `UNKNOWN`.
   Both shapes are pinned verbatim in `EcocashEipClientContractTest`.
+- **PREPROD IS `payonline.econet.co.zw` — the PDF's `payonline.ecocash.co.zw`
+  is a trap.** The documented host sits behind a Cloudflare **bot challenge**,
+  which a server-to-server client cannot pass by design (no browser to run the
+  JS), so every charge is refused `403` there — with the `cf-mitigated:
+  challenge` header proving it is Cloudflare mitigating, not EIP refusing.
+  Confirmed by varying ONLY the User-Agent on an otherwise identical request:
+  `ecocash.co.zw` answers `curl` 200 but our client 403; `econet.co.zw`
+  answers **both** 200. This cost a full day of debugging while the
+  credentials, merchant config, body and registered msisdns were all correct
+  — so check the HOST first if EcoCash starts refusing. **The PRODUCTION host
+  is NOT confirmed** (EcoCash said `.ecocash`, then `.econet`): get it in
+  writing and probe it with our real User-Agent before go-live, or launch day
+  reproduces this with real customers.
 - **The client sends an honest `User-Agent`** (`EcocashEipClient.USER_AGENT`),
   because EcoCash's edge runs a UA **allow-list**: `curl/8.x` passes,
   `Java-http-client/21` (the JDK default) and even `Ticketize-Payments/1.0`
