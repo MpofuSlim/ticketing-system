@@ -14,6 +14,7 @@ import java.time.Duration;
 
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -233,6 +234,42 @@ class WhatsAppNotificationClientContractTest {
         assertThatThrownBy(() -> client.sendEventQrCode(" ", "Gala", "/qrcodes/t.png"))
                 .isInstanceOf(NotificationDeliveryException.class)
                 .hasMessageContaining("Recipient");
+        wireMock.verify(0, postRequestedFor(urlEqualTo("/api/messages/event-qr-code")));
+    }
+
+    @Test
+    @DisplayName("the e-ticket QR endpoint is per-cell configurable, and defaults to the PRODUCTION path")
+    void eventQrCodePath_isPerCellConfigurable() {
+        // An unset cell must behave exactly as before this became configurable.
+        assertThat(new WhatsAppProperties().getEventQrCodePath())
+                .isEqualTo("/api/messages/event-qr-code");
+
+        // Staging points at the gateway's staging-specific endpoint, which
+        // resolves qrCodePath against the STAGING origin instead of the
+        // production one (the Twilio 63019 media-fetch failure).
+        String stagingPath = "/api/messages/staging-event-qr-code";
+        WhatsAppProperties stagingProps = new WhatsAppProperties();
+        stagingProps.setBaseUrl("http://localhost:" + wireMock.port());
+        stagingProps.setApiKey("test-api-key");
+        stagingProps.setEventQrCodePath(stagingPath);
+        WhatsAppNotificationClient stagingClient = new WhatsAppNotificationClient(
+                RestClient.builder().baseUrl(stagingProps.getBaseUrl()).build(), stagingProps);
+
+        wireMock.stubFor(post(urlEqualTo(stagingPath)).willReturn(aResponse().withStatus(200)));
+
+        stagingClient.sendEventQrCode("+263771234567", "Pink Run 2026",
+                "/bookings/f46b4278-0000-0000-0000-000000000000/tickets/TKT-1/qr.png");
+
+        // Same headers and same body as the production endpoint — only the
+        // path differs, which is the whole point of the gateway's twin.
+        wireMock.verify(postRequestedFor(urlEqualTo(stagingPath))
+                .withHeader("x-api-key", equalTo("test-api-key"))
+                .withRequestBody(matchingJsonPath("$.to", equalTo("+263771234567")))
+                .withRequestBody(matchingJsonPath("$.eventName", equalTo("Pink Run 2026")))
+                .withRequestBody(matchingJsonPath("$.qrCodePath",
+                        equalTo("/bookings/f46b4278-0000-0000-0000-000000000000/tickets/TKT-1/qr.png"))));
+
+        // and the production endpoint was never touched.
         wireMock.verify(0, postRequestedFor(urlEqualTo("/api/messages/event-qr-code")));
     }
 }

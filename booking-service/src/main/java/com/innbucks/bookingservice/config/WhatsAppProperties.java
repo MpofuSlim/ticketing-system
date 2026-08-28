@@ -17,4 +17,19 @@ public class WhatsAppProperties {
     private String apiKey;
     private int connectTimeoutMs = 2000;
     private int readTimeoutMs = 10000;
+
+    /**
+     * The gateway path that sends the scannable e-ticket QR. Configurable
+     * ONLY because the gateway resolves {@code qrCodePath} against a BASE_URL
+     * it holds internally, and that base is pinned to PRODUCTION — so a
+     * staging booking id 404s when Twilio fetches the media, and the e-ticket
+     * silently fails with Twilio error 63019.
+     *
+     * <p>The gateway team's answer is a second endpoint that resolves media
+     * against the staging origin, identical in headers and body. Which one we
+     * call is therefore a per-cell deployment fact, not a code fact — hence a
+     * property, defaulted to the PRODUCTION path so an unset environment keeps
+     * today's behaviour exactly.
+     */
+    private String eventQrCodePath = "/api/messages/event-qr-code";
 }
