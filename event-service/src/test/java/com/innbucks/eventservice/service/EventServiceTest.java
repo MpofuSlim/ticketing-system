@@ -947,4 +947,72 @@ class EventServiceTest {
                 eq(ORGANIZER_A), eq(assigned), any(), any(), any(), any(), any());
         verify(repo, never()).findByTenantUserUuidInactiveOnly(any(), any(), any(), any(), any(), any());
     }
+
+    @org.junit.jupiter.api.AfterEach
+    void clearSecurityContext() {
+        org.springframework.security.core.context.SecurityContextHolder.clearContext();
+    }
+
+    private static void authenticateAs(String... roles) {
+        var auth = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                "staff@example.com", null,
+                java.util.Arrays.stream(roles)
+                        .map(r -> new org.springframework.security.core.authority.SimpleGrantedAuthority(r))
+                        .toList());
+        org.springframework.security.core.context.SecurityContextHolder.getContext().setAuthentication(auth);
+    }
+
+    @Test
+    void activateEvent_asProductManager_publishesEventOwnedByAnotherTenant() {
+        EventRepository repo = mock(EventRepository.class);
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+
+        UUID eventId = UUID.randomUUID();
+        Event existing = baseEvent(eventId, OWNER_TENANT);
+        existing.setActive(false);
+        when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
+        when(repo.save(org.mockito.ArgumentMatchers.any(Event.class)))
+                .thenAnswer(inv -> inv.getArgument(0));
+
+        // A PRODUCT_MANAGER owns nothing, so the ownership check must let them
+        // through — otherwise they pass @PreAuthorize and are refused inside,
+        // which is the exact half-wired failure this guards.
+        authenticateAs("ROLE_PRODUCT_MANAGER");
+        service.activateEvent(null, "ROLE_PRODUCT_MANAGER", eventId);
+
+        assertTrue(existing.isActive());
+    }
+
+    @Test
+    void activateEvent_asProductOfficer_isStillRefused() {
+        EventRepository repo = mock(EventRepository.class);
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+
+        UUID eventId = UUID.randomUUID();
+        when(repo.findByEventIdAndDeletedFalse(eventId))
+                .thenReturn(Optional.of(baseEvent(eventId, OWNER_TENANT)));
+
+        // Read-only. @PreAuthorize refuses them at the door; this pins that the
+        // service does not quietly allow it either.
+        authenticateAs("ROLE_PRODUCT_OFFICER");
+        assertThrows(com.innbucks.eventservice.exception.ForbiddenException.class,
+                () -> service.activateEvent(OTHER_TENANT, "ROLE_PRODUCT_OFFICER", eventId));
+    }
+
+    @Test
+    void activateEvent_asProductManager_stillRefusesAnAdminRejectedEvent() {
+        EventRepository repo = mock(EventRepository.class);
+        EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
+
+        UUID eventId = UUID.randomUUID();
+        Event rejected = baseEvent(eventId, OWNER_TENANT);
+        rejected.setRejected(true);
+        when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(rejected));
+
+        // The active=true => rejected=false invariant holds for everyone: the
+        // manager must /approve first, then /activate.
+        authenticateAs("ROLE_PRODUCT_MANAGER");
+        assertThrows(com.innbucks.eventservice.exception.ConflictException.class,
+                () -> service.activateEvent(null, "ROLE_PRODUCT_MANAGER", eventId));
+    }
 }

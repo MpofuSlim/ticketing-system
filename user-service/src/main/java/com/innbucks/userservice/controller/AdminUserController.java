@@ -180,7 +180,10 @@ public class AdminUserController {
     }
 
     @GetMapping("/merchants")
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    // Product staff need this to filter the platform-wide event list by
+    // organizer — we gave them every organizer's events and no way to narrow
+    // them. Read-only list of staff account names; no write path is widened.
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','PRODUCT_OFFICER','PRODUCT_MANAGER')")
     @Operation(
             summary = "List merchant admins and event organizers",
             description = "Returns user accounts carrying the **MERCHANT_ADMIN** role (people who " +
