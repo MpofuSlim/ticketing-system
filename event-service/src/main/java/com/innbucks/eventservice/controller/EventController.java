@@ -1285,7 +1285,7 @@ public class EventController {
     }
 
     @PutMapping("/{id}/reject")
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','PRODUCT_MANAGER')")
     @Operation(
             summary = "Reject event (admin moderation)",
             description = """
@@ -1349,7 +1349,7 @@ public class EventController {
     }
 
     @PutMapping("/{id}/approve")
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','PRODUCT_MANAGER')")
     @Operation(
             summary = "Approve (un-reject) event (admin moderation)",
             description = """

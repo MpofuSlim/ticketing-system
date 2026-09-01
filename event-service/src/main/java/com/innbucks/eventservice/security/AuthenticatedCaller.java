@@ -12,6 +12,27 @@ import java.util.UUID;
  * the filter's internal map shape.
  */
 public final class AuthenticatedCaller {
+
+    /**
+     * Roles whose holders read the platform WIDE — not scoped to one
+     * organizer's events. Mirrors booking-service's definition; the two must
+     * stay in step or a role sees reports in one service and not the other.
+     *
+     * <p><b>Read scope only.</b> Never gates a WRITE: updateEvent,
+     * activateEvent, deactivateEvent and deleteEvent keep their explicit
+     * ROLE_SUPER_ADMIN comparison, so widening this set cannot silently let a
+     * reporting role edit or destroy an event. PRODUCT_MANAGER's one write —
+     * approve/reject — is granted explicitly by {@code @PreAuthorize}.
+     */
+    private static final java.util.Set<String> PLATFORM_STAFF_ROLES = java.util.Set.of(
+            "ROLE_SUPER_ADMIN", "ROLE_PRODUCT_OFFICER", "ROLE_PRODUCT_MANAGER");
+
+    /** True when the caller sees every organizer's events, not just their own. */
+    public static boolean isPlatformStaff(org.springframework.security.core.Authentication auth) {
+        if (auth == null || !auth.isAuthenticated()) return false;
+        return auth.getAuthorities().stream()
+                .anyMatch(a -> PLATFORM_STAFF_ROLES.contains(a.getAuthority()));
+    }
     private AuthenticatedCaller() {}
 
     public static UUID userUuid(Authentication auth) {
