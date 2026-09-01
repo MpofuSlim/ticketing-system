@@ -1149,7 +1149,7 @@ public class EventController {
     }
 
     @PutMapping("/{id}/activate")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN','PRODUCT_MANAGER')")
     @Operation(
             summary = "Activate event",
             description = """

@@ -102,9 +102,24 @@ class PlatformStaffRoleMatrixTest {
     }
 
     @Test
-    @DisplayName("DENIED: neither role may edit, activate, deactivate or delete an event")
+    @DisplayName("GRANTED: the MANAGER may PUBLISH an event — approving means making it live")
+    void managerMayPublish() {
+        // "Approve an event" operationally means publish it. /approve only
+        // clears the rejected flag; /activate is what puts an event live, and
+        // is what the dashboard's approve action has always called. Granting
+        // /approve alone left the manager able to un-reject but not publish.
+        assertThat(preAuthorizeFor("/{id}/activate"))
+                .as("publish")
+                .contains(MANAGER)
+                .doesNotContain(OFFICER);
+    }
+
+    @Test
+    @DisplayName("DENIED: neither role may edit, deactivate or delete an event")
     void neitherRoleMayMutateEvents() {
-        for (String path : List.of("/{id}", "/{id}/activate", "/{id}/deactivate")) {
+        // Deactivate stays out: pulling a live event down is not part of the
+        // approve remit, and /reject already covers the "block this" case.
+        for (String path : List.of("/{id}", "/{id}/deactivate")) {
             assertThat(preAuthorizeFor(path))
                     .as("event write %s — approving is not editing", path)
                     .doesNotContain(OFFICER)

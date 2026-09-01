@@ -395,6 +395,23 @@ public class EventService {
      * {@code tenantUserUuid}) or a SUPER_ADMIN. Anonymous callers and other
      * organizers may not — the public by-id / banner endpoints 404 for them.
      */
+    /**
+     * True when the caller may publish an event they do not own — SUPER_ADMIN,
+     * or a PRODUCT_MANAGER acting on their approve/publish remit. Deliberately
+     * NOT the whole platform-staff set: PRODUCT_OFFICER is read-only.
+     */
+    private boolean callerMayPublishAnyEvent() {
+        org.springframework.security.core.Authentication auth =
+                org.springframework.security.core.context.SecurityContextHolder
+                        .getContext().getAuthentication();
+        if (auth == null || !auth.isAuthenticated()) {
+            return false;
+        }
+        return auth.getAuthorities().stream().anyMatch(a ->
+                "ROLE_SUPER_ADMIN".equals(a.getAuthority())
+                        || "ROLE_PRODUCT_MANAGER".equals(a.getAuthority()));
+    }
+
     private boolean callerMayViewUnpublished(Event event) {
         org.springframework.security.core.Authentication auth =
                 org.springframework.security.core.context.SecurityContextHolder
@@ -841,7 +858,14 @@ public class EventService {
                     return new NotFoundException("Event not found");
                 });
 
-        boolean isAdmin = "ROLE_SUPER_ADMIN".equals(role);
+        // Publishing someone else's event is the PRODUCT_MANAGER's actual
+        // remit: "approve an event" means make it live, and a manager owns
+        // nothing, so the ownership check must let them through. Read from the
+        // security context rather than the `role` string — getCurrentRole()
+        // is findFirst() over the authorities, so for a caller holding several
+        // roles it returns an arbitrary one. NOT PRODUCT_OFFICER: read-only,
+        // and already refused at the door by @PreAuthorize.
+        boolean isAdmin = "ROLE_SUPER_ADMIN".equals(role) || callerMayPublishAnyEvent();
         if (!isAdmin && !java.util.Objects.equals(event.getTenantUserUuid(), tenantUserUuid)) {
             log.warn("Unauthorized activate attempt eventId={} tenantUserUuid={} ownerTenantUserUuid={}",
                     eventId, tenantUserUuid, event.getTenantUserUuid());
