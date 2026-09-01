@@ -49,7 +49,7 @@ public class TicketResendController {
     private final TicketDeliveryService ticketDeliveryService;
 
     @PostMapping("/{id}/resend-ticket")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN','PRODUCT_MANAGER')")
     @Operation(summary = "Resend a confirmed booking's e-tickets",
             description = """
                     Re-delivers the booking's tickets over every channel the booking has an
@@ -133,8 +133,7 @@ public class TicketResendController {
      * for organizers — same posture as the analytics ownership checks.
      */
     private static void requireOwnershipUnlessAdmin(Authentication authentication, Booking booking) {
-        boolean admin = authentication.getAuthorities().stream()
-                .anyMatch(a -> "ROLE_SUPER_ADMIN".equals(a.getAuthority()));
+        boolean admin = AuthenticatedCaller.isPlatformStaff(authentication);
         if (admin) {
             return;
         }

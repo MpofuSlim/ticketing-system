@@ -11,6 +11,7 @@ import com.innbucks.bookingservice.dto.CreateBookingRequestDTO;
 import com.innbucks.bookingservice.dto.PublicBookingResponseDTO;
 import com.innbucks.bookingservice.dto.EventActiveCountDTO;
 import com.innbucks.bookingservice.dto.CategoryActiveCountDTO;
+import com.innbucks.bookingservice.security.AuthenticatedCaller;
 import com.innbucks.bookingservice.security.JwtAuthDetails;
 import com.innbucks.bookingservice.service.BookingService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -302,7 +303,7 @@ public class BookingController {
             Authentication authentication
     ) {
         String userEmail = authentication.getName();
-        boolean isAdmin = hasRole(authentication, "ROLE_SUPER_ADMIN");
+        boolean isAdmin = AuthenticatedCaller.isPlatformStaff(authentication);
         log.debug("GET /bookings/{} userEmail={} isAdmin={}", id, userEmail, isAdmin);
         return ResponseEntity.ok(ApiResult.ok("Booking retrieved successfully",
                 bookingService.getBookingById(id, userEmail, isAdmin)));
@@ -513,7 +514,7 @@ public class BookingController {
     }
 
     @GetMapping("/by-category/{categoryId}")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN','PRODUCT_OFFICER','PRODUCT_MANAGER')")
     @Operation(
             summary = "List bookings by seat category",
             description = "Analytics endpoint. Returns one row per booked seat in the given category, " +
@@ -579,7 +580,7 @@ public class BookingController {
             Authentication authentication) {
         UUID requesterOrganizerUuid = com.innbucks.bookingservice.security.AuthenticatedCaller
                 .organizerUuid(authentication);
-        boolean isAdmin = hasRole(authentication, "ROLE_SUPER_ADMIN");
+        boolean isAdmin = AuthenticatedCaller.isPlatformStaff(authentication);
         log.debug("GET /bookings/by-category/{} requesterOrganizerUuid={} isAdmin={}",
                 categoryId, requesterOrganizerUuid, isAdmin);
         return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully",
@@ -587,7 +588,7 @@ public class BookingController {
     }
 
     @GetMapping("/by-event/{eventId}")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN','PRODUCT_OFFICER','PRODUCT_MANAGER')")
     @Operation(
             summary = "List bookings by event",
             description = "Analytics endpoint. Returns one row per booked seat across every category " +
@@ -654,7 +655,7 @@ public class BookingController {
             Authentication authentication) {
         UUID requesterOrganizerUuid = com.innbucks.bookingservice.security.AuthenticatedCaller
                 .organizerUuid(authentication);
-        boolean isAdmin = hasRole(authentication, "ROLE_SUPER_ADMIN");
+        boolean isAdmin = AuthenticatedCaller.isPlatformStaff(authentication);
         log.debug("GET /bookings/by-event/{} requesterOrganizerUuid={} isAdmin={}",
                 eventId, requesterOrganizerUuid, isAdmin);
         return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully",
@@ -835,7 +836,8 @@ public class BookingController {
             Authentication authentication) {
         String callerEmail = authentication.getName();
         String callerPhone = normalizePhone(extractPhoneNumber(authentication));
-        boolean isAdmin = hasAnyRole(authentication, "ROLE_EVENT_ORGANIZER", "ROLE_SUPER_ADMIN");
+        boolean isAdmin = hasRole(authentication, "ROLE_EVENT_ORGANIZER")
+                || AuthenticatedCaller.isPlatformStaff(authentication);
         log.debug("GET /bookings/confirmation/{} isAdmin={}", number, isAdmin);
         return ResponseEntity.ok(ApiResult.ok("Booking retrieved successfully",
                 bookingService.getByConfirmationNumber(number, callerEmail, callerPhone, isAdmin)));
@@ -910,7 +912,8 @@ public class BookingController {
     public ResponseEntity<ApiResult<List<BookingResponseDTO>>> getBookingsByPhoneNumber(
             @PathVariable String phoneNumber,
             Authentication authentication) {
-        boolean isAdmin = hasAnyRole(authentication, "ROLE_EVENT_ORGANIZER", "ROLE_SUPER_ADMIN");
+        boolean isAdmin = hasRole(authentication, "ROLE_EVENT_ORGANIZER")
+                || AuthenticatedCaller.isPlatformStaff(authentication);
         // Canonicalise the requested number to E.164 the same way createBooking
         // stores it, so the ownership compare and the lookup both use the stored
         // form (a customer may enter their number in local 07... form).

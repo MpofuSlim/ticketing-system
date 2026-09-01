@@ -220,7 +220,7 @@ public class ScanReportController {
     }
 
     @GetMapping("/events/{eventId}")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN','PRODUCT_OFFICER','PRODUCT_MANAGER')")
     @Operation(summary = "List scan attempts for an event",
             description = "Returns every scan attempt for the named event in the [from, to] window, " +
                           "newest first. The caller must OWN the event (organizerUuid match).")
@@ -282,7 +282,7 @@ public class ScanReportController {
             @RequestParam(defaultValue = "20") int size) {
         // SUPER_ADMIN sees every event's scans (no organizer claim on an
         // admin token, so the ownership check is bypassed, not just passed).
-        boolean admin = isSuperAdmin(authentication);
+        boolean admin = isPlatformStaff(authentication);
         UUID organizerUuid = admin ? null : requireOrganizer(authentication);
         validateRange(from, to);
         validatePage(page, size);
@@ -296,7 +296,7 @@ public class ScanReportController {
     }
 
     @GetMapping("/events/{eventId}/stats")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN','PRODUCT_OFFICER','PRODUCT_MANAGER')")
     @Operation(summary = "Outcome stats for an event",
             description = "Outcome breakdown for the named event over the [from, to] window. " +
                           "Every Outcome enum value is present in the response (zero-filled).")
@@ -348,7 +348,7 @@ public class ScanReportController {
             @PathVariable UUID eventId,
             @RequestParam Instant from,
             @RequestParam Instant to) {
-        boolean admin = isSuperAdmin(authentication);
+        boolean admin = isPlatformStaff(authentication);
         UUID organizerUuid = admin ? null : requireOrganizer(authentication);
         validateRange(from, to);
         if (!admin) {
@@ -361,7 +361,7 @@ public class ScanReportController {
     }
 
     @GetMapping("/team-stats")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN','PRODUCT_OFFICER','PRODUCT_MANAGER')")
     @Operation(summary = "Team scan-outcome leaderboard",
             description = "Per-team-member outcome breakdown for the calling organizer's gate staff " +
                           "over the [from, to] window. Members are ordered by total scans DESC.")
@@ -427,7 +427,7 @@ public class ScanReportController {
             @RequestParam Instant from,
             @RequestParam Instant to) {
         // SUPER_ADMIN: null scope = every organizer's gate staff fleet-wide.
-        UUID organizerUuid = isSuperAdmin(authentication) ? null : requireOrganizer(authentication);
+        UUID organizerUuid = isPlatformStaff(authentication) ? null : requireOrganizer(authentication);
         validateRange(from, to);
         log.debug("GET /scans/team-stats organizer={} from={} to={}", organizerUuid, from, to);
         return ResponseEntity.ok(ApiResult.ok("Team scan stats retrieved",
@@ -471,9 +471,12 @@ public class ScanReportController {
     /** Mirror of {@link OrganizerReportController#requireOrganizer}. A legacy
      *  EVENT_ORGANIZER token without the organizerUuid claim must NOT silently
      *  scope to null and return another organizer's (or empty) data. */
-    private static boolean isSuperAdmin(Authentication authentication) {
-        return authentication != null && authentication.getAuthorities().stream()
-                .anyMatch(a -> "ROLE_SUPER_ADMIN".equals(a.getAuthority()));
+    /** Platform-wide READ scope: SUPER_ADMIN, PRODUCT_OFFICER, PRODUCT_MANAGER.
+     *  Renamed from isSuperAdmin when the reporting roles were added — the old
+     *  name would now be a lie, and a lying predicate is how a reporting role
+     *  ends up gating something it must not. */
+    private static boolean isPlatformStaff(Authentication authentication) {
+        return AuthenticatedCaller.isPlatformStaff(authentication);
     }
 
     private static UUID requireOrganizer(Authentication authentication) {

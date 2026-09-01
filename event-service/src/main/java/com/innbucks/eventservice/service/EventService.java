@@ -402,9 +402,10 @@ public class EventService {
         if (auth == null) {
             return false;
         }
-        boolean superAdmin = auth.getAuthorities().stream()
-                .anyMatch(a -> "ROLE_SUPER_ADMIN".equals(a.getAuthority()));
-        if (superAdmin) {
+        // Platform staff, not just SUPER_ADMIN: a PRODUCT_MANAGER who can
+        // approve an event must be able to OPEN it while it is still
+        // unpublished, and a PRODUCT_OFFICER's remit is reviewing events.
+        if (com.innbucks.eventservice.security.AuthenticatedCaller.isPlatformStaff(auth)) {
             return true;
         }
         UUID caller = com.innbucks.eventservice.security.AuthenticatedCaller.organizerUuid(auth);

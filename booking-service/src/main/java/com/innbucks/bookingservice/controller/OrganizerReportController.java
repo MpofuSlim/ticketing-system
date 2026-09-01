@@ -55,7 +55,7 @@ import java.util.UUID;
                    "SUPER_ADMIN (fleet-wide). Revenue is recognised from CONFIRMED bookings (paid); " +
                    "admin reversals show as refunds.")
 @SecurityRequirement(name = "bearerAuth")
-@PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+@PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN','PRODUCT_OFFICER','PRODUCT_MANAGER')")
 public class OrganizerReportController {
 
     private final OrganizerReportService reportService;
@@ -281,8 +281,7 @@ public class OrganizerReportController {
      */
     @org.springframework.lang.Nullable
     private UUID resolveScope(Authentication authentication) {
-        if (authentication != null && authentication.getAuthorities().stream()
-                .anyMatch(a -> "ROLE_SUPER_ADMIN".equals(a.getAuthority()))) {
+        if (AuthenticatedCaller.isPlatformStaff(authentication)) {
             return null;
         }
         UUID organizerUuid = AuthenticatedCaller.organizerUuid(authentication);

@@ -64,7 +64,7 @@ public class InvoiceController {
     private final InvoiceService invoiceService;
 
     @GetMapping
-    @PreAuthorize("hasAnyRole('SUPER_ADMIN','EVENT_ORGANIZER')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','EVENT_ORGANIZER','PRODUCT_OFFICER','PRODUCT_MANAGER')")
     @Operation(summary = "List invoices",
             description = "SUPER_ADMIN lists all organizers' invoices (optionally narrowed by `organizerUuid`); "
                     + "an EVENT_ORGANIZER lists only their own. Filter by `status`; newest issued first. "
@@ -119,7 +119,7 @@ public class InvoiceController {
             @RequestParam(required = false) InvoiceStatus status,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
-        UUID organizerScope = isSuperAdmin(authentication) ? null : requireOrganizer(authentication);
+        UUID organizerScope = isPlatformStaff(authentication) ? null : requireOrganizer(authentication);
         Pageable pageable = PageRequest.of(Math.max(page, 0), clampSize(size),
                 Sort.by(Sort.Direction.DESC, "issuedAt"));
         PageResponse<InvoiceResponse> data =
@@ -154,7 +154,7 @@ public class InvoiceController {
     }
 
     @GetMapping("/{id}")
-    @PreAuthorize("hasAnyRole('SUPER_ADMIN','EVENT_ORGANIZER')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','EVENT_ORGANIZER','PRODUCT_OFFICER','PRODUCT_MANAGER')")
     @Operation(summary = "Get one invoice",
             description = "Full invoice with its per-event line items. An EVENT_ORGANIZER may only fetch their "
                     + "own — another organizer's invoice id returns 404 (existence is not leaked).")
@@ -197,7 +197,7 @@ public class InvoiceController {
                                     """)))
     })
     public ResponseEntity<ApiResult<InvoiceResponse>> getOne(Authentication authentication, @PathVariable UUID id) {
-        UUID organizerScope = isSuperAdmin(authentication) ? null : requireOrganizer(authentication);
+        UUID organizerScope = isPlatformStaff(authentication) ? null : requireOrganizer(authentication);
         return ResponseEntity.ok(ApiResult.ok("Invoice retrieved", invoiceService.getById(id, organizerScope)));
     }
 
@@ -288,9 +288,12 @@ public class InvoiceController {
         return ResponseEntity.ok(ApiResult.ok("Invoice cancelled", invoiceService.cancel(id)));
     }
 
-    private static boolean isSuperAdmin(Authentication authentication) {
-        return authentication != null && authentication.getAuthorities().stream()
-                .anyMatch(a -> "ROLE_SUPER_ADMIN".equals(a.getAuthority()));
+    /** Platform-wide READ scope: SUPER_ADMIN, PRODUCT_OFFICER, PRODUCT_MANAGER.
+     *  Renamed from isSuperAdmin when the reporting roles were added — the old
+     *  name would now be a lie, and a lying predicate is how a reporting role
+     *  ends up gating something it must not. */
+    private static boolean isPlatformStaff(Authentication authentication) {
+        return AuthenticatedCaller.isPlatformStaff(authentication);
     }
 
     /**
