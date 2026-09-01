@@ -1015,6 +1015,35 @@ class BookingServiceTest {
     }
 
     @Test
+    void getBookingsByCategory_surfacesPurchaserPhoneNumber() {
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        BookingService service = newService(mock(BookingRepository.class), itemRepo, mock(SeatServiceClient.class));
+        UUID categoryId = UUID.randomUUID();
+
+        // A guest checkout: no email captured, which is exactly why the report
+        // needs the phone number to identify the buyer at all.
+        Booking guest = Booking.builder()
+                .id(UUID.randomUUID()).eventId(UUID.randomUUID())
+                .userEmail(null).phoneNumber("263771234567")
+                .confirmationNumber("INN-20260901-3C8849")
+                .status(Booking.BookingStatus.CONFIRMED)
+                .totalAmount(new BigDecimal("0.50")).build();
+        BookingItem item = BookingItem.builder()
+                .booking(guest).seatId(UUID.randomUUID()).categoryId(categoryId)
+                .categoryName("Standard").rowLabel("GA").seatNumber(1)
+                .ticketNumber("20260901-69065M")
+                .priceAtBooking(new BigDecimal("0.50")).build();
+        when(itemRepo.findByCategoryIdWithBooking(categoryId)).thenReturn(List.of(item));
+
+        List<CategoryBookingDTO> result = service.getBookingsByCategory(categoryId, UUID.randomUUID(), true);
+
+        assertEquals(1, result.size());
+        assertEquals("263771234567", result.get(0).getPhoneNumber());
+        // Still null-safe: an email-only booking must not break the mapping.
+        assertNull(result.get(0).getUserEmail());
+    }
+
+    @Test
     void getBookingsByCategory_returnsEmptyListWhenNoneFound() {
         BookingItemRepository itemRepo = mock(BookingItemRepository.class);
         BookingService service = newService(mock(BookingRepository.class), itemRepo, mock(SeatServiceClient.class));

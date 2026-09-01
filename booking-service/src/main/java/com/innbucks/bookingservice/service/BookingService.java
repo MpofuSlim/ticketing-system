@@ -455,6 +455,7 @@ public class BookingService {
         return CategoryBookingDTO.builder()
                 .bookingId(b.getId())
                 .userEmail(b.getUserEmail())
+                .phoneNumber(b.getPhoneNumber())
                 .eventId(b.getEventId())
                 .status(b.getStatus())
                 .confirmationNumber(b.getConfirmationNumber())
