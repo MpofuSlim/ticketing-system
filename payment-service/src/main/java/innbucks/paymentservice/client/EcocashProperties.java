@@ -22,8 +22,18 @@ import java.time.Duration;
 @ConfigurationProperties(prefix = "ecocash")
 public class EcocashProperties {
 
-    /** Environment host + gateway root, e.g.
-     *  {@code https://payonline.ecocash.co.zw/ecocashGateway-preprod}. */
+    /**
+     * Environment host + gateway root. Preprod is
+     * {@code https://payonline.econet.co.zw/ecocashGateway-preprod}.
+     *
+     * <p><b>NOT</b> the {@code payonline.ecocash.co.zw} the EIP PDF documents:
+     * that host is behind a Cloudflare <b>bot challenge</b>, which a
+     * server-to-server client cannot pass by design (no browser to run the JS),
+     * so every charge is refused 403 there — with Cloudflare's own
+     * {@code cf-mitigated: challenge} header proving it is the edge, not EIP.
+     * If EcoCash starts refusing, check the HOST before anything else.
+     * See {@code docs/api/ecocash-eip.md}, "THE HOST TRAP".
+     */
     private String baseUrl;
 
     /** HTTP Basic username issued by EcoCash. */

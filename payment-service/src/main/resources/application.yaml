@@ -237,7 +237,10 @@ zimswitch:
 # the other rails are unaffected. notify-url must be the ABSOLUTE public edge
 # URL (prefix included) — EcoCash resolves it from the public internet.
 ecocash:
-  base-url: ${ECOCASH_BASE_URL:https://payonline.ecocash.co.zw/ecocashGateway-preprod}
+  # Preprod is payonline.ECONET.co.zw; the PDF's payonline.ECOCASH.co.zw is
+  # behind a Cloudflare bot challenge our backend cannot pass. Every cell
+  # overrides this; see docs/api/ecocash-eip.md "THE HOST TRAP".
+  base-url: ${ECOCASH_BASE_URL:https://payonline.econet.co.zw/ecocashGateway-preprod}
   api-username: ${ECOCASH_API_USERNAME:}
   api-password: ${ECOCASH_API_PASSWORD:}
   merchant-code: ${ECOCASH_MERCHANT_CODE:}
