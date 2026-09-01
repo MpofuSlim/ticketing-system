@@ -40,14 +40,19 @@ FROM eclipse-temurin:21-jre-alpine AS runtime
 #   CVE-2026-45447 (HIGH) — PKCS#7 / S/MIME signed-message handling.
 # p11-kit / p11-kit-trust >= 0.26.2-r0
 #   CVE-2026-2100 (HIGH) — NULL-deref via C_DeriveKey with NULL params.
-# libexpat >= 2.8.2-r0
+# libexpat >= 2.8.4-r0
 #   CVE-2026-56131 / CVE-2026-56407 / CVE-2026-56408 (HIGH) — missing call-depth
-#   tracking + integer overflows in doProlog / copyString.
+#   tracking + integer overflows in doProlog / copyString. Fixed in 2.8.2-r0.
+#   CVE-2026-66046 (HIGH) — denial of service in Expat through 2.8.3.
+#   CVE-2026-76641 (HIGH) — affects expat < 2.8.3-2. Both fixed in 2.8.4-r0.
+#   NOTE: the previous floor of 2.8.2-r0 was SATISFIED by the vulnerable
+#   2.8.3-r0, so apk had no reason to upgrade and both CVEs shipped. That is
+#   precisely why the floor exists and must be raised per CVE, not left behind.
 RUN apk update \
  && apk add --no-cache --upgrade \
       'libssl3>=3.5.8-r0' 'libcrypto3>=3.5.8-r0' 'openssl>=3.5.8-r0' \
       'p11-kit>=0.26.2-r0' 'p11-kit-trust>=0.26.2-r0' \
-      'libexpat>=2.8.2-r0' \
+      'libexpat>=2.8.4-r0' \
  && addgroup -S app && adduser -S -G app app
 WORKDIR /app
 USER app
