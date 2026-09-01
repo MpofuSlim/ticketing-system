@@ -47,6 +47,28 @@ public class SecurityConfig {
                         // the hosted ticket-QR endpoint (UUID is the access token) but a
                         // TRIMMED, PII-free DTO. Distinct path from the authenticated
                         // GET /bookings/{id} above so the access model is explicit at the URL.
+                        //
+                        // CAVEAT — this prefix now also covers GET
+                        // /bookings/public/phone/{phoneNumber} (the mobile app's ticket
+                        // wallet), and that one does NOT fit the model described above.
+                        // Its key is a phone number, not an unguessable UUID: ~20 bits of
+                        // entropy vs 122, i.e. enumerable. So it is the one path under
+                        // this prefix where "the URL is the credential" is FALSE, and an
+                        // enumerating caller harvests the scannable QR — a bearer
+                        // instrument for entry. It ships this way deliberately for
+                        // staging, with the DTO kept PII-free and a gateway IP rate limit
+                        // as the only brake.
+                        //
+                        // A planned X-Api-Key does NOT resolve this: an app-shipped key is
+                        // extractable and, being identical across installs, cannot scope a
+                        // read to one customer. Closing it needs a credential bound to the
+                        // phone number itself — user-service's existing OTP pair issuing a
+                        // short-lived number-scoped token. When that lands, move the path
+                        // OFF this permitAll rather than widening the rule further.
+                        //
+                        // The note above still stands unchanged for /bookings/phone/** and
+                        // /bookings/confirmation/**: those return full PII and remain
+                        // authenticated + owner-scoped. Do NOT permitAll them.
                         .requestMatchers(HttpMethod.GET, "/bookings/public/**").permitAll()
                         // Public ticket artifacts (QR PNG + HTML view page) linked
                         // from the confirmation email/WhatsApp — opened with no app

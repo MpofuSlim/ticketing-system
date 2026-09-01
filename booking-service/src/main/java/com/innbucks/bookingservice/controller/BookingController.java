@@ -8,7 +8,9 @@ import com.innbucks.bookingservice.dto.ExtendHoldRequestDTO;
 import com.innbucks.bookingservice.dto.CategoryBookingDTO;
 import com.innbucks.bookingservice.dto.ConfirmBookingRequestDTO;
 import com.innbucks.bookingservice.dto.CreateBookingRequestDTO;
+import com.innbucks.bookingservice.dto.CustomerTicketDTO;
 import com.innbucks.bookingservice.dto.PublicBookingResponseDTO;
+import com.innbucks.bookingservice.dto.TicketWindow;
 import com.innbucks.bookingservice.dto.EventActiveCountDTO;
 import com.innbucks.bookingservice.dto.CategoryActiveCountDTO;
 import com.innbucks.bookingservice.security.AuthenticatedCaller;
@@ -385,6 +387,172 @@ public class BookingController {
                 .cacheControl(CacheControl.noStore())
                 .body(ApiResult.ok("Booking retrieved successfully",
                         bookingService.getBookingByIdPublic(id)));
+    }
+
+    /**
+     * The customer's ticket wallet — "my tickets", keyed by phone number, for
+     * the mobile app's UPCOMING / LIVE / PAST tabs.
+     *
+     * <p><b>UNAUTHENTICATED, and that is a deliberate, TEMPORARY decision made
+     * with the trade-off understood.</b> Read this before extending it:
+     *
+     * <p>Unlike every other public endpoint here, the access-control key is NOT
+     * an unguessable UUID — it is a phone number. A ZW msisdn has roughly 20
+     * bits of entropy against a 122-bit UUID, so this path IS enumerable: a
+     * caller can walk the numbering plan and harvest, for any number that has
+     * ever bought a ticket, what events that person is attending and the
+     * scannable QR that admits them. The QR is a bearer instrument — whoever
+     * shows it first gets in — so the exposure here is ticket theft, not just a
+     * privacy leak. {@link CustomerTicketDTO} is PII-free precisely to cap the
+     * blast radius; keep it that way.
+     *
+     * <p><b>The planned control (an `X-Api-Key` header) does NOT close this</b>,
+     * and should not be mistaken for having done so. A key shipped inside a
+     * mobile app is extractable from the package, and more fundamentally it
+     * authenticates the APP, not the PERSON: every install carries the same
+     * value, so it cannot distinguish customer A from customer B and the
+     * enumeration stays open to any caller holding a legitimate app build. What
+     * actually closes it is a credential bound to THIS phone number — the
+     * existing OTP pair ({@code POST /auth/otp/request} + {@code /otp/verify}
+     * in user-service, already public and rate-limited) issuing a short-lived
+     * number-scoped token that this endpoint requires.
+     *
+     * <p>Until then the only brake is the gateway's IP-keyed rate limiter on
+     * {@code booking-public-phone-route}, which slows a scrape without
+     * preventing one. Ship the number-scoped credential before real customers
+     * and real events are behind this.
+     */
+    @GetMapping("/public/phone/{phoneNumber}")
+    @SecurityRequirements({})
+    @Operation(summary = "My tickets by phone number (public)",
+            description = "Returns the CONFIRMED bookings for a phone number as a customer ticket "
+                    + "wallet — each entry carrying its event (title, venue, start/end in UTC), the "
+                    + "scannable per-seat QR codes, and a server-decided `window` of UPCOMING / LIVE "
+                    + "/ PAST. PENDING and CANCELLED bookings are excluded, so an entry appears only "
+                    + "once it is paid for.\n\n"
+                    + "**Filtering**: `?filter=UPCOMING|LIVE|PAST` (case-insensitive). `FUTURE` and "
+                    + "`PRESENT` are accepted as aliases for `UPCOMING` and `LIVE`. Omit the "
+                    + "parameter — or pass `ALL` — for everything.\n\n"
+                    + "**Do not recompute `window` on the device.** It is decided server-side in UTC; "
+                    + "a device with a wrong clock or timezone would file a live event under PAST and "
+                    + "hide the QR the customer is at the gate trying to show.\n\n"
+                    + "**Ordering**: live events first, then upcoming soonest-first, then past "
+                    + "most-recent-first.\n\n"
+                    + "**Unknown number returns an empty list, not a 404** — a 404/200 split would "
+                    + "itself confirm whether a given number has ever bought a ticket.\n\n"
+                    + "No authentication today; a phone-number-scoped credential is planned before "
+                    + "production. Rate-limited per IP at the gateway.")
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200",
+                    description = "Tickets returned (empty list if the number has no confirmed bookings)",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = CustomerTicketDTO.class),
+                            examples = @ExampleObject(name = "My tickets", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Tickets retrieved successfully",
+                                      "data": [
+                                        {
+                                          "id": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                          "confirmationNumber": "INN-20260502-AB12CD",
+                                          "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                          "eventTitle": "Harare Jazz Festival",
+                                          "venue": "Harare International Conference Centre",
+                                          "startDateTime": "2026-09-12T16:00:00Z",
+                                          "endDateTime": "2026-09-12T22:00:00Z",
+                                          "window": "UPCOMING",
+                                          "live": false,
+                                          "totalAmount": 100.00,
+                                          "items": [
+                                            {
+                                              "seatId": "11111111-2222-3333-4444-555555555555",
+                                              "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                              "categoryName": "VIP",
+                                              "rowLabel": "A",
+                                              "seatNumber": 12,
+                                              "priceAtBooking": 100.00,
+                                              "ticketNumber": "20260502-12345A",
+                                              "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)"
+                                            }
+                                          ],
+                                          "createdAt": "2026-05-02T15:45:00Z"
+                                        }
+                                      ]
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200 (empty)",
+                    description = "Number has no confirmed bookings — an empty list, never a 404",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Tickets retrieved successfully",
+                                      "data": []
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "Unrecognised filter value",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "Unknown filter 'SOON'. Use UPCOMING (or FUTURE), LIVE (or PRESENT), PAST, or ALL.",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "429",
+                    description = "Per-IP rate limit exceeded at the gateway",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "429 TOO_MANY_REQUESTS", "message": "Too many requests", "data": null }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<List<CustomerTicketDTO>>> getMyTicketsPublic(
+            @PathVariable String phoneNumber,
+            @RequestParam(value = "filter", required = false) String filter) {
+        TicketWindow window = parseTicketFilter(filter);
+        // Canonicalise the same way createBooking stores it, so a customer who
+        // types 07... matches rows stored as +2637...
+        String normalized = normalizePhone(phoneNumber);
+        String lookupPhone = normalized != null ? normalized : phoneNumber;
+        log.debug("GET /bookings/public/phone/{} filter={}", MsisdnMasking.mask(lookupPhone), window);
+        // no-store, for the same reason as the public lookup by id AND one more:
+        // an unauthenticated GET keyed only by URL is trivially cacheable, and a
+        // shared cache holding one customer's tickets — QR codes included —
+        // could serve them to the next caller of the same URL.
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.noStore())
+                .body(ApiResult.ok("Tickets retrieved successfully",
+                        bookingService.getPublicTicketsByPhoneNumber(lookupPhone, window)));
+    }
+
+    /**
+     * Resolve the {@code filter} query parameter to a {@link TicketWindow}, or
+     * null for "all buckets".
+     *
+     * <p>Parsed here rather than binding {@code TicketWindow} directly on the
+     * parameter for two reasons: Spring's enum conversion failure surfaces as an
+     * opaque {@code MethodArgumentTypeMismatchException} that names the Java
+     * type rather than the valid values, and the app was specified in
+     * PAST/PRESENT/FUTURE vocabulary — accepting both spellings costs a line and
+     * removes a whole class of "why is this 400" round-trip.
+     */
+    private TicketWindow parseTicketFilter(String filter) {
+        if (filter == null || filter.isBlank() || "ALL".equalsIgnoreCase(filter.trim())) {
+            return null;
+        }
+        String value = filter.trim().toUpperCase(java.util.Locale.ROOT);
+        return switch (value) {
+            case "UPCOMING", "FUTURE" -> TicketWindow.UPCOMING;
+            case "LIVE", "PRESENT" -> TicketWindow.LIVE;
+            case "PAST" -> TicketWindow.PAST;
+            default -> throw new BadRequestException("Unknown filter '" + filter.trim()
+                    + "'. Use UPCOMING (or FUTURE), LIVE (or PRESENT), PAST, or ALL.");
+        };
     }
 
     /**

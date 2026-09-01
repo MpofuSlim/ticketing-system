@@ -49,8 +49,8 @@ class GatewayRouteTableTest {
             "user-internal-deny", "user-self-route",
             "event-internal-deny", "event-availability-deny", "event-service-route",
             "seat-service-seat-route", "seat-service-category-route",
-            "booking-internal-deny", "booking-service-route", "booking-invoices-route",
-            "booking-tickets-route",
+            "booking-internal-deny", "booking-public-phone-route", "booking-service-route",
+            "booking-invoices-route", "booking-tickets-route",
             "scans-route", "brand-assets-route",
             "payment-internal-deny", "payment-service-read-route",
             "payments-innbucks-write-route", "ecocash-notify-write-route",
@@ -87,6 +87,7 @@ class GatewayRouteTableTest {
             "user-admin-route", "user-event-organizer-route", "booking-event-organizer-reports-route",
             "user-self-route", "event-service-route",
             "seat-service-seat-route", "seat-service-category-route",
+            "booking-public-phone-route",
             "booking-service-route", "booking-invoices-route", "booking-tickets-route",
             "scans-route", "brand-assets-route",
             "payment-service-read-route", "payments-innbucks-write-route",
@@ -105,7 +106,11 @@ class GatewayRouteTableTest {
     private static final List<String> RESILIENT_LIMITED_ROUTES = List.of(
             "auth-register-route", "auth-otp-route", "auth-password-reset-route",
             "payment-service-read-route", "payments-innbucks-write-route",
-            "ecocash-notify-write-route", "payment-service-write-route");
+            "ecocash-notify-write-route", "payment-service-write-route",
+            // Not SMS-cost or payment, but the same fail-open hazard: this route
+            // is unauthenticated and enumerable, so its limiter is the only
+            // access control it has.
+            "booking-public-phone-route");
 
     @Autowired
     RouteDefinitionLocator locator;
@@ -197,6 +202,41 @@ class GatewayRouteTableTest {
         assertThat(order.indexOf("ecocash-notify-write-route"))
                 .as("ecocash-notify-write-route must match before the /payments/** write catch-all")
                 .isBetween(0, order.indexOf("payment-service-write-route") - 1);
+        // The public ticket-wallet route is UNAUTHENTICATED and keyed on a
+        // low-entropy phone number, so its tight per-IP bucket is the only thing
+        // standing between a caller and a full scrape of confirmed tickets — QR
+        // codes included. Matched after booking-service-route it would instead
+        // land in the bearer-keyed catch-all, where a rotating garbage
+        // Authorization header mints a fresh bucket per request and the cap
+        // never engages.
+        assertThat(order.indexOf("booking-public-phone-route"))
+                .as("booking-public-phone-route must match before the /bookings/** catch-all")
+                .isBetween(0, order.indexOf("booking-service-route") - 1);
+    }
+
+    @Test
+    void publicTicketWalletRouteIsIpKeyedAndFailsSafe() {
+        // Both halves are load-bearing on an unauthenticated, enumerable path.
+        // IP-keying: the default gatewayKeyResolver keys on the RAW Authorization
+        // header, which the caller controls — attacker-supplied garbage would
+        // shard the bucket per request. Fail-safe limiter: the stock Redis
+        // limiter fails OPEN, so a Redis blip would drop throttling entirely and
+        // leave the scrape unthrottled at exactly the worst moment.
+        boolean ipKeyed = route("booking-public-phone-route").getFilters().stream()
+                .filter(f -> "RequestRateLimiter".equals(f.getName()))
+                .flatMap(f -> f.getArgs().values().stream())
+                .anyMatch(v -> v != null && v.contains("preAuthIpKeyResolver"));
+        assertThat(ipKeyed)
+                .as("must key on IP, never the attacker-controlled Authorization header")
+                .isTrue();
+        assertThat(usesResilientLimiter("booking-public-phone-route"))
+                .as("must fail SAFE — a Redis outage must not remove the only brake")
+                .isTrue();
+        // Scoped to GET: this path must never become a write surface by a
+        // predicate widening.
+        assertThat(predicateArgs("booking-public-phone-route", "Method")).containsExactly("GET");
+        assertThat(predicateArgs("booking-public-phone-route", "Path"))
+                .containsExactly("/bookings/public/phone/**");
     }
 
     @Test

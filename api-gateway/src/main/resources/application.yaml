@@ -241,6 +241,35 @@ spring:
               predicates:
                 - Path=/bookings/internal/**
 
+            # The mobile app's ticket wallet: GET /bookings/public/phone/{msisdn}.
+            # Unauthenticated and keyed on a LOW-ENTROPY identifier (a phone
+            # number, ~20 bits, vs the 122-bit UUID every other public booking
+            # path uses), so unlike them it IS enumerable — and what it returns
+            # includes the scannable entry QR. Until a phone-number-scoped
+            # credential lands (see BookingController#getMyTicketsPublic), this
+            # per-IP bucket is the ONLY brake on a scrape, so it must sit BEFORE
+            # booking-service-route: the catch-all keys on the raw Authorization
+            # header, which an attacker controls, and a rotating garbage Bearer
+            # would mint a fresh bucket per request and defeat the cap entirely
+            # (the same bypass preAuthIpKeyResolver was introduced to close).
+            # Tight by design — a human opening their tickets makes one call.
+            - id: booking-public-phone-route
+              uri: lb://booking-service
+              predicates:
+                - Path=/bookings/public/phone/**
+                - Method=GET
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${BOOKINGS_PUBLIC_PHONE_RATE_LIMIT_REPLENISH_PER_SECOND:2}
+                    redis-rate-limiter.burstCapacity: ${BOOKINGS_PUBLIC_PHONE_RATE_LIMIT_BURST_CAPACITY:10}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@preAuthIpKeyResolver}"
+                    # Fail-SAFE: keep throttling if Redis is down. The stock
+                    # limiter fails OPEN, which on this route would drop the only
+                    # control standing between an outage and a full ticket scrape.
+                    rate-limiter: "#{@resilientRedisRateLimiter}"
+
             - id: booking-service-route
               uri: lb://booking-service
               predicates:

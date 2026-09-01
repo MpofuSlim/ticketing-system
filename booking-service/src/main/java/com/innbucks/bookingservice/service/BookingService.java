@@ -501,6 +501,114 @@ public class BookingService {
                 .collect(Collectors.toList());
     }
 
+    /**
+     * The customer's own ticket wallet: CONFIRMED bookings for a phone number,
+     * each enriched with its event and classified UPCOMING / LIVE / PAST.
+     *
+     * <p>Serves the PUBLIC {@code GET /bookings/public/phone/{phoneNumber}}, so
+     * it maps to the PII-free {@link CustomerTicketDTO} rather than reusing
+     * {@link #toDTO} — see that DTO for what is deliberately withheld.
+     *
+     * <p><b>One event lookup per DISTINCT event, not per booking.</b> A
+     * customer with six tickets to the same festival costs one call, not six.
+     * Failures are memoized too (a {@code null} is cached), so an event-service
+     * outage costs at most one attempt per event rather than one per row —
+     * without that, this endpoint would amplify an outage into a per-booking
+     * retry storm against a service that is already struggling.
+     *
+     * @param filter the bucket to return, or {@code null} for all of them
+     */
+    public List<CustomerTicketDTO> getPublicTicketsByPhoneNumber(String phoneNumber, TicketWindow filter) {
+        List<Booking> confirmed = bookingRepository.findByPhoneNumberOrderByCreatedAtDesc(phoneNumber)
+                .stream()
+                .filter(b -> b.getStatus() == Booking.BookingStatus.CONFIRMED)
+                .toList();
+        log.debug("Public ticket lookup phoneNumber={} confirmed={} filter={}",
+                MsisdnMasking.mask(phoneNumber), confirmed.size(), filter);
+
+        // containsKey/put rather than computeIfAbsent: the latter does not cache
+        // a null mapping, so a failed lookup would be retried for every booking
+        // on that event.
+        Map<UUID, EventLookupDTO> eventCache = new HashMap<>();
+        LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
+
+        List<CustomerTicketDTO> tickets = new ArrayList<>();
+        for (Booking booking : confirmed) {
+            UUID eventId = booking.getEventId();
+            EventLookupDTO event = null;
+            if (eventId != null) {
+                if (!eventCache.containsKey(eventId)) {
+                    eventCache.put(eventId, lookupEvent(eventId));
+                }
+                event = eventCache.get(eventId);
+            }
+
+            LocalDateTime start = event == null ? null : event.getStartDateTime();
+            LocalDateTime end = event == null ? null : event.getEndDateTime();
+            TicketWindow window = TicketWindow.classify(start, end, now);
+            if (filter != null && window != filter) {
+                continue;
+            }
+
+            tickets.add(CustomerTicketDTO.builder()
+                    .id(booking.getId())
+                    .confirmationNumber(booking.getConfirmationNumber())
+                    .eventId(eventId)
+                    .eventTitle(event == null ? null : event.getTitle())
+                    .venue(event == null ? null : event.getVenue())
+                    .startDateTime(start)
+                    .endDateTime(end)
+                    .window(window)
+                    .live(window == TicketWindow.LIVE)
+                    .totalAmount(booking.getTotalAmount())
+                    .items(toItemDTOs(booking))
+                    .createdAt(booking.getCreatedAt())
+                    .build());
+        }
+
+        tickets.sort(TICKET_ORDER);
+        return tickets;
+    }
+
+    /**
+     * Reading order for the ticket wallet: what the customer needs RIGHT NOW
+     * first. Live events lead, then upcoming ones soonest-first (the next thing
+     * you must show at a gate), then past ones most-recent-first (history, read
+     * backwards). A ticket whose event could not be resolved has no start time
+     * and sorts to the end of its bucket rather than jumping the queue.
+     */
+    private static final Comparator<CustomerTicketDTO> TICKET_ORDER = (a, b) -> {
+        int byBucket = Integer.compare(a.getWindow().ordinal(), b.getWindow().ordinal());
+        if (byBucket != 0) {
+            // LIVE(1) must lead UPCOMING(0), so invert the declaration order.
+            return a.getWindow() == TicketWindow.LIVE ? -1
+                    : b.getWindow() == TicketWindow.LIVE ? 1 : byBucket;
+        }
+        LocalDateTime sa = a.getStartDateTime();
+        LocalDateTime sb = b.getStartDateTime();
+        if (sa == null || sb == null) {
+            return sa == sb ? 0 : (sa == null ? 1 : -1);
+        }
+        return a.getWindow() == TicketWindow.PAST ? sb.compareTo(sa) : sa.compareTo(sb);
+    };
+
+    private List<BookingItemDTO> toItemDTOs(Booking booking) {
+        return booking.getItems() == null
+                ? List.of()
+                : booking.getItems().stream()
+                        .map(i -> BookingItemDTO.builder()
+                                .seatId(i.getSeatId())
+                                .categoryId(i.getCategoryId())
+                                .categoryName(i.getCategoryName())
+                                .rowLabel(i.getRowLabel())
+                                .seatNumber(i.getSeatNumber())
+                                .priceAtBooking(i.getPriceAtBooking())
+                                .ticketNumber(i.getTicketNumber())
+                                .qrCode(qrCodeGenerator.toDataUri(i.getTicketNumber()))
+                                .build())
+                        .collect(Collectors.toList());
+    }
+
     public BookingResponseDTO getBookingById(UUID bookingId, String userEmail) {
         return getBookingById(bookingId, userEmail, false);
     }
@@ -1012,20 +1120,7 @@ public class BookingService {
     }
 
     private BookingResponseDTO toDTO(Booking booking) {
-        List<BookingItemDTO> itemDTOs = booking.getItems() == null
-                ? List.of()
-                : booking.getItems().stream()
-                  .map(i -> BookingItemDTO.builder()
-                            .seatId(i.getSeatId())
-                            .categoryId(i.getCategoryId())
-                            .categoryName(i.getCategoryName())
-                            .rowLabel(i.getRowLabel())
-                            .seatNumber(i.getSeatNumber())
-                            .priceAtBooking(i.getPriceAtBooking())
-                            .ticketNumber(i.getTicketNumber())
-                            .qrCode(qrCodeGenerator.toDataUri(i.getTicketNumber()))
-                            .build())
-                  .collect(Collectors.toList());
+        List<BookingItemDTO> itemDTOs = toItemDTOs(booking);
 
         return BookingResponseDTO.builder()
                 .id(booking.getId())
