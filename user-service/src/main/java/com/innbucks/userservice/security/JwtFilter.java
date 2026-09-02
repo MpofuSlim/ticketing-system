@@ -36,9 +36,45 @@ public class JwtFilter extends OncePerRequestFilter {
     public static final String HOME_COUNTRY_MDC_KEY = "homeCountry";
 
     private final JwtUtil jwtUtil;
+    /**
+     * Back-fills permissions for a token minted before the {@code perms} claim
+     * existed — the rolling-deploy bridge, see {@code permissionsFor}.
+     */
+    private final PermissionResolver permissionResolver;
     @Lazy
     private final TokenRevocationService tokenRevocationService;
     private final CellAffinityChecker cellAffinityChecker;
+
+    /**
+     * The permissions to authorize this request with.
+     *
+     * <p>Normally the token's own {@code perms} claim (V35). When that claim is
+     * ABSENT the permissions are re-derived from the token's roles instead.
+     *
+     * <p>That fallback is what makes migrating a check from {@code hasRole} to
+     * {@code hasAuthority} safe to deploy. A token minted before this release
+     * carries roles but no {@code perms}, so without it every already-logged-in
+     * admin would get a 403 from every migrated endpoint until their token
+     * expired or they logged in again — a self-inflicted outage on the admin
+     * surface, visible only during the rollout and therefore easy to ship
+     * unnoticed. (The CI run on this PR's first commit caught exactly this: eight
+     * AdminUserControllerTest cases 403'd because their caller held
+     * ROLE_SUPER_ADMIN and nothing else, which is precisely the shape of an
+     * in-flight token.)
+     *
+     * <p>It grants no more than the claim would: the same
+     * {@link PermissionResolver} against the same {@code roles} table, so it can
+     * only ever produce what a freshly minted token for that account would
+     * carry. The extra query costs one small indexed read, and only for tokens
+     * predating the claim — it stops happening on its own as sessions turn over.
+     */
+    private List<String> permissionsFor(String token, List<String> roles) {
+        List<String> claimed = jwtUtil.extractPermissions(token);
+        if (!claimed.isEmpty() || roles.isEmpty() || permissionResolver == null) {
+            return claimed;
+        }
+        return new ArrayList<>(permissionResolver.resolve(roles));
+    }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
@@ -98,7 +134,7 @@ public class JwtFilter extends OncePerRequestFilter {
                 return;
             }
             List<String> roles = jwtUtil.extractRoles(token);
-            List<String> permissions = jwtUtil.extractPermissions(token);
+            List<String> permissions = permissionsFor(token, roles);
             List<String> services = jwtUtil.extractServices(token);
             Integer tier = jwtUtil.extractTier(token);
             Boolean verified = jwtUtil.extractVerified(token);

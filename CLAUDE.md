@@ -204,6 +204,20 @@ Other load-bearing details:
   binding used to 400 an unknown name before the controller ran. Now nothing
   upstream does, so without it `EVENT_ORGANISER` would persist happily and
   present as a user who authenticates fine and is refused everywhere.
+- **Migrating a check from `hasRole` to `hasAuthority` is NOT behaviour-neutral
+  on its own** — this is the trap that red-lined the first CI run of #542.
+  Tokens already in users' browsers carry `roles` but no `perms` claim, so the
+  moment a migrated build rolls out, every logged-in admin 403s on every
+  migrated endpoint until their session turns over. `JwtFilter.permissionsFor`
+  is the bridge: when `perms` is absent it re-derives permissions from the roles
+  claim through the same `PermissionResolver`, so it grants no more than a fresh
+  token would and stops firing as sessions turn over. **Keep it until every
+  service is migrated and no pre-`perms` token can still be in flight.**
+  `JwtFilterPermissionBackfillTest` fails if it is removed.
+- **A test authenticating as `@WithMockUser(roles = "SUPER_ADMIN")` models a
+  caller that can no longer exist** — the role with no permissions is exactly
+  the in-flight-token shape above. Use `@WithSuperAdmin`, whose factory reads
+  `PermissionCatalog.concrete()` so it cannot drift when a permission is added.
 - **Roles and permissions become authorities in different namespaces** —
   `ROLE_<UPPER_SNAKE>` vs the bare, lowercase, colon-namespaced permission code.
   They cannot collide, and `PermissionResolverTest` pins that. Both are granted

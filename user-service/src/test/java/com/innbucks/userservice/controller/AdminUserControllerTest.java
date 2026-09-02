@@ -13,6 +13,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import com.innbucks.userservice.security.WithSuperAdmin;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
@@ -44,7 +45,7 @@ class AdminUserControllerTest {
     private PasswordEncoder passwordEncoder;
 
     @Test
-    @WithMockUser(roles = "SUPER_ADMIN")
+    @WithSuperAdmin
     void testListUsersReturnsDefaultServicesAsBundle() throws Exception {
         User testUser = User.builder()
                 .firstName("Test")
@@ -74,7 +75,7 @@ class AdminUserControllerTest {
     }
 
     @Test
-    @WithMockUser(roles = "SUPER_ADMIN")
+    @WithSuperAdmin
     void testListUsersWithActiveFilterReturnsCorrectBundles() throws Exception {
         User inactiveUser = User.builder()
                 .firstName("Inactive")
@@ -101,7 +102,7 @@ class AdminUserControllerTest {
     }
 
     @Test
-    @WithMockUser(roles = "SUPER_ADMIN")
+    @WithSuperAdmin
     void listUsersExcludesCustomersByDefault() throws Exception {
         // The SUPER_ADMIN portal lists system users (admins / staff); the
         // wallet-holding customer population belongs on the customer
@@ -139,7 +140,7 @@ class AdminUserControllerTest {
     }
 
     @Test
-    @WithMockUser(roles = "SUPER_ADMIN")
+    @WithSuperAdmin
     void listUsersIncludesCustomersWhenOptedIn() throws Exception {
         // ?includeCustomers=true is the escape hatch for support triage —
         // it brings the customer population back into the result set.
@@ -164,7 +165,7 @@ class AdminUserControllerTest {
     }
 
     @Test
-    @WithMockUser(roles = "SUPER_ADMIN")
+    @WithSuperAdmin
     void listUsers_surfacesBusinessDetailsForBusinessAccounts() throws Exception {
         // Regression: GET /admin/users used to map with the no-profile overload
         // (UserResponseDTO::from), so a business account's tenant profile never
@@ -235,7 +236,7 @@ class AdminUserControllerTest {
     }
 
     @Test
-    @WithMockUser(roles = "SUPER_ADMIN")
+    @WithSuperAdmin
     void testUpdateActiveStatusReturnsDefaultServicesAsBundle() throws Exception {
         User loyaltyUser = User.builder()
                 .firstName("Loyalty")
@@ -262,7 +263,7 @@ class AdminUserControllerTest {
     }
 
     @Test
-    @WithMockUser(roles = "SUPER_ADMIN")
+    @WithSuperAdmin
     void listMerchants_returnsMerchantAdminsAndEventOrganizers() throws Exception {
         User merchant = User.builder()
                 .firstName("Tendai").lastName("Ncube")
@@ -339,7 +340,7 @@ class AdminUserControllerTest {
     }
 
     @Test
-    @WithMockUser(roles = "SUPER_ADMIN")
+    @WithSuperAdmin
     void listMerchants_withActiveFalse_returnsOnlyInactiveAccounts() throws Exception {
         User activeMerchant = User.builder()
                 .firstName("Active").lastName("Merchant")
