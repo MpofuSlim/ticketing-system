@@ -37,7 +37,10 @@ class JwtFilterTest {
         // paths, not cell routing (CellAffinityCheckerTest does that). Default
         // doNothing() means every token looks like a local-cell token.
         CellAffinityChecker affinity = mock(CellAffinityChecker.class);
-        filter = new JwtFilter(jwtUtil, tokenRevocationService, affinity);
+        // Null PermissionResolver: these tests cover the auth / session paths,
+        // and a null resolver simply skips the pre-V35 permission back-fill —
+        // PermissionResolverTest covers the expansion itself.
+        filter = new JwtFilter(jwtUtil, null, tokenRevocationService, affinity);
         SecurityContextHolder.clearContext();
     }
 
@@ -185,7 +188,7 @@ class JwtFilterTest {
         var throwingAffinity = mock(com.innbucks.userservice.cells.CellAffinityChecker.class);
         doThrow(new com.innbucks.userservice.cells.WrongCellException("KE", "https://dtx.innbucks.co.ke"))
                 .when(throwingAffinity).requireDomesticCountry(any());
-        var spyFilter = new JwtFilter(jwtUtil, tokenRevocationService, throwingAffinity);
+        var spyFilter = new JwtFilter(jwtUtil, null, tokenRevocationService, throwingAffinity);
 
         String token = jwtUtil.generateToken("user@example.com", "CUSTOMER", 1, true);
         MockHttpServletRequest req = new MockHttpServletRequest("GET", "/customers/me");

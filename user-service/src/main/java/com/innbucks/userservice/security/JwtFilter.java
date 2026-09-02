@@ -36,9 +36,45 @@ public class JwtFilter extends OncePerRequestFilter {
     public static final String HOME_COUNTRY_MDC_KEY = "homeCountry";
 
     private final JwtUtil jwtUtil;
+    /**
+     * Back-fills permissions for a token minted before the {@code perms} claim
+     * existed — the rolling-deploy bridge, see {@code permissionsFor}.
+     */
+    private final PermissionResolver permissionResolver;
     @Lazy
     private final TokenRevocationService tokenRevocationService;
     private final CellAffinityChecker cellAffinityChecker;
+
+    /**
+     * The permissions to authorize this request with.
+     *
+     * <p>Normally the token's own {@code perms} claim (V35). When that claim is
+     * ABSENT the permissions are re-derived from the token's roles instead.
+     *
+     * <p>That fallback is what makes migrating a check from {@code hasRole} to
+     * {@code hasAuthority} safe to deploy. A token minted before this release
+     * carries roles but no {@code perms}, so without it every already-logged-in
+     * admin would get a 403 from every migrated endpoint until their token
+     * expired or they logged in again — a self-inflicted outage on the admin
+     * surface, visible only during the rollout and therefore easy to ship
+     * unnoticed. (The CI run on this PR's first commit caught exactly this: eight
+     * AdminUserControllerTest cases 403'd because their caller held
+     * ROLE_SUPER_ADMIN and nothing else, which is precisely the shape of an
+     * in-flight token.)
+     *
+     * <p>It grants no more than the claim would: the same
+     * {@link PermissionResolver} against the same {@code roles} table, so it can
+     * only ever produce what a freshly minted token for that account would
+     * carry. The extra query costs one small indexed read, and only for tokens
+     * predating the claim — it stops happening on its own as sessions turn over.
+     */
+    private List<String> permissionsFor(String token, List<String> roles) {
+        List<String> claimed = jwtUtil.extractPermissions(token);
+        if (!claimed.isEmpty() || roles.isEmpty() || permissionResolver == null) {
+            return claimed;
+        }
+        return new ArrayList<>(permissionResolver.resolve(roles));
+    }
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
@@ -98,6 +134,7 @@ public class JwtFilter extends OncePerRequestFilter {
                 return;
             }
             List<String> roles = jwtUtil.extractRoles(token);
+            List<String> permissions = permissionsFor(token, roles);
             List<String> services = jwtUtil.extractServices(token);
             Integer tier = jwtUtil.extractTier(token);
             Boolean verified = jwtUtil.extractVerified(token);
@@ -106,6 +143,21 @@ public class JwtFilter extends OncePerRequestFilter {
             for (String role : roles) {
                 if (role != null && !role.isBlank()) {
                     authorities.add(new SimpleGrantedAuthority("ROLE_" + role));
+                }
+            }
+            // Permissions (V35) are granted as BARE authorities — no prefix — so
+            // a check reads hasAuthority('users:read'). Roles keep their ROLE_
+            // prefix because hasRole() adds it implicitly.
+            //
+            // Both are granted, deliberately: the migration from hasRole to
+            // hasAuthority is running one service at a time, so a token has to
+            // satisfy whichever style each check still uses. The colon in a
+            // permission code also makes the two namespaces impossible to
+            // confuse — no role name can produce 'users:read', since role names
+            // are UPPER_SNAKE_CASE (RoleAdminService.VALID_NAME).
+            for (String permission : permissions) {
+                if (permission != null && !permission.isBlank()) {
+                    authorities.add(new SimpleGrantedAuthority(permission));
                 }
             }
             for (String service : services) {

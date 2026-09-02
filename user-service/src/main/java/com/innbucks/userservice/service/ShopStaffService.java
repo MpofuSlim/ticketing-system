@@ -77,6 +77,17 @@ public class ShopStaffService {
     @Transactional
     public UserResponseDTO createShopAdmin(CreateShopAdminDTO req) {
         User caller = requireCaller();
+        // NOTE (V35): this service-layer check still requires the BUILT-IN role,
+        // while the controller now gates on a permission. So a custom role
+        // granted that permission passes @PreAuthorize and is refused here.
+        //
+        // That is deliberate for now, not an oversight: these handlers derive
+        // the caller's merchant/shop scope from the role they hold, so granting
+        // the permission alone would produce a caller with no scope to act
+        // within. Making them role-agnostic means moving scope onto the account
+        // (or the permission), which is a design change of its own rather than a
+        // rename — tracked as follow-up work, and called out in the PR so nobody
+        // reads the permission as usable by a custom role yet.
         if (!caller.hasRole(User.Role.MERCHANT_ADMIN)) {
             throw forbidden("Only MERCHANT_ADMIN can create shop admins");
         }
@@ -455,7 +466,7 @@ public class ShopStaffService {
                 .phoneNumber(normalizedPhone)
                 .homeCountry(deploymentCountry)
                 .password(passwordEncoder.encode(tempPassword))
-                .roles(EnumSet.of(role))
+                .roles(User.roleNames(role))
                 // Grants the loyalty bundle's microservices (loyalty + payments) on the JWT.
                 .defaultServices(new LinkedHashSet<>(List.of(Services.LOYALTY)))
                 .active(true)

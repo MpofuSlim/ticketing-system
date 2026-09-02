@@ -213,7 +213,7 @@ class OtpServiceTest {
         verify(userRepo).save(userCaptor.capture());
         assertEquals("+263771234567", userCaptor.getValue().getPhoneNumber());
         assertEquals("hashed-pw", userCaptor.getValue().getPassword());
-        assertTrue(userCaptor.getValue().getRoles().contains(User.Role.CUSTOMER));
+        assertTrue(userCaptor.getValue().getRoles().contains(User.Role.CUSTOMER.name()));
 
         ArgumentCaptor<CustomerProfile> profileCaptor = ArgumentCaptor.forClass(CustomerProfile.class);
         verify(profileRepo).save(profileCaptor.capture());
@@ -234,7 +234,7 @@ class OtpServiceTest {
         when(otpRepo.consume(eq("+263771234567"), eq(HASHER.hash("000000")), any())).thenReturn(1);
         when(pendingRepo.findByPhoneNumber("+263771234567")).thenReturn(Optional.empty());
         User user = User.builder().id(7L).phoneNumber("+263771234567")
-                .roles(java.util.EnumSet.of(User.Role.CUSTOMER)).build();
+                .roles(User.roleNames(User.Role.CUSTOMER)).build();
         CustomerProfile profile = CustomerProfile.builder().user(user).registrationTier(1).phoneVerified(false).build();
         when(userRepo.findByPhoneNumber("+263771234567")).thenReturn(Optional.of(user));
         when(profileRepo.findByUserId(7L)).thenReturn(Optional.of(profile));

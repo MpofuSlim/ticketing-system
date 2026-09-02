@@ -13,6 +13,7 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import com.innbucks.userservice.security.WithSuperAdmin;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
@@ -44,7 +45,7 @@ class AdminUserControllerTest {
     private PasswordEncoder passwordEncoder;
 
     @Test
-    @WithMockUser(roles = "SUPER_ADMIN")
+    @WithSuperAdmin
     void testListUsersReturnsDefaultServicesAsBundle() throws Exception {
         User testUser = User.builder()
                 .firstName("Test")
@@ -52,7 +53,7 @@ class AdminUserControllerTest {
                 .email("test-bundles@example.com")
                 .phoneNumber("+1234567890")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.EVENT_ORGANIZER, User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.EVENT_ORGANIZER, User.Role.MERCHANT_ADMIN))
                 .defaultServices(new LinkedHashSet<>(List.of("ticketing", "loyalty")))
                 .active(true)
                 .build();
@@ -74,7 +75,7 @@ class AdminUserControllerTest {
     }
 
     @Test
-    @WithMockUser(roles = "SUPER_ADMIN")
+    @WithSuperAdmin
     void testListUsersWithActiveFilterReturnsCorrectBundles() throws Exception {
         User inactiveUser = User.builder()
                 .firstName("Inactive")
@@ -82,7 +83,7 @@ class AdminUserControllerTest {
                 .email("inactive-user@example.com")
                 .phoneNumber("+0987654321")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.EVENT_ORGANIZER))
+                .roles(User.roleNames(User.Role.EVENT_ORGANIZER))
                 .defaultServices(new LinkedHashSet<>(List.of("ticketing")))
                 .active(false)
                 .build();
@@ -101,7 +102,7 @@ class AdminUserControllerTest {
     }
 
     @Test
-    @WithMockUser(roles = "SUPER_ADMIN")
+    @WithSuperAdmin
     void listUsersExcludesCustomersByDefault() throws Exception {
         // The SUPER_ADMIN portal lists system users (admins / staff); the
         // wallet-holding customer population belongs on the customer
@@ -113,7 +114,7 @@ class AdminUserControllerTest {
                 .email("sysadmin-default@example.com")
                 .phoneNumber("+260000000001")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
                 .active(true)
                 .build();
         User customer = User.builder()
@@ -122,7 +123,7 @@ class AdminUserControllerTest {
                 .email("customer-default@example.com")
                 .phoneNumber("+260000000002")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.CUSTOMER))
+                .roles(User.roleNames(User.Role.CUSTOMER))
                 .active(true)
                 .build();
         userRepository.save(systemUser);
@@ -139,7 +140,7 @@ class AdminUserControllerTest {
     }
 
     @Test
-    @WithMockUser(roles = "SUPER_ADMIN")
+    @WithSuperAdmin
     void listUsersIncludesCustomersWhenOptedIn() throws Exception {
         // ?includeCustomers=true is the escape hatch for support triage —
         // it brings the customer population back into the result set.
@@ -149,7 +150,7 @@ class AdminUserControllerTest {
                 .email("customer-optin@example.com")
                 .phoneNumber("+260000000003")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.CUSTOMER))
+                .roles(User.roleNames(User.Role.CUSTOMER))
                 .active(true)
                 .build();
         userRepository.save(customer);
@@ -164,7 +165,7 @@ class AdminUserControllerTest {
     }
 
     @Test
-    @WithMockUser(roles = "SUPER_ADMIN")
+    @WithSuperAdmin
     void listUsers_surfacesBusinessDetailsForBusinessAccounts() throws Exception {
         // Regression: GET /admin/users used to map with the no-profile overload
         // (UserResponseDTO::from), so a business account's tenant profile never
@@ -175,7 +176,7 @@ class AdminUserControllerTest {
                 .firstName("Rumbi").lastName("Moyo")
                 .email("rumbi-listusers@showtime.co.zw").phoneNumber("+263772999000")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.EVENT_ORGANIZER))
+                .roles(User.roleNames(User.Role.EVENT_ORGANIZER))
                 .defaultServices(new LinkedHashSet<>(List.of("ticketing")))
                 .active(true)
                 .business(true)
@@ -198,7 +199,7 @@ class AdminUserControllerTest {
                 .firstName("Farai").lastName("Dube")
                 .email("farai-listusers@example.com").phoneNumber("+263773111222")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.SHOP_ADMIN))
+                .roles(User.roleNames(User.Role.SHOP_ADMIN))
                 .active(true)
                 .build();
         userRepository.save(shopAdmin);
@@ -235,7 +236,7 @@ class AdminUserControllerTest {
     }
 
     @Test
-    @WithMockUser(roles = "SUPER_ADMIN")
+    @WithSuperAdmin
     void testUpdateActiveStatusReturnsDefaultServicesAsBundle() throws Exception {
         User loyaltyUser = User.builder()
                 .firstName("Loyalty")
@@ -243,7 +244,7 @@ class AdminUserControllerTest {
                 .email("loyalty-org@example.com")
                 .phoneNumber("+1111111111")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
                 .defaultServices(new LinkedHashSet<>(List.of("loyalty")))
                 .active(false)
                 .build();
@@ -262,13 +263,13 @@ class AdminUserControllerTest {
     }
 
     @Test
-    @WithMockUser(roles = "SUPER_ADMIN")
+    @WithSuperAdmin
     void listMerchants_returnsMerchantAdminsAndEventOrganizers() throws Exception {
         User merchant = User.builder()
                 .firstName("Tendai").lastName("Ncube")
                 .email("tendai@acme-merch.co.zw").phoneNumber("+263772345678")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
                 .defaultServices(new LinkedHashSet<>(List.of("loyalty")))
                 .active(true)
                 .business(true)
@@ -291,7 +292,7 @@ class AdminUserControllerTest {
                 .firstName("Rumbi").lastName("Moyo")
                 .email("organizer@example.com").phoneNumber("+263770000001")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.EVENT_ORGANIZER))
+                .roles(User.roleNames(User.Role.EVENT_ORGANIZER))
                 .defaultServices(new LinkedHashSet<>(List.of("ticketing")))
                 .active(true)
                 .build();
@@ -302,7 +303,7 @@ class AdminUserControllerTest {
                 .firstName("Kuda").lastName("Dube")
                 .email("both@example.com").phoneNumber("+263770000009")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.EVENT_ORGANIZER, User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.EVENT_ORGANIZER, User.Role.MERCHANT_ADMIN))
                 .defaultServices(new LinkedHashSet<>(List.of("ticketing", "loyalty")))
                 .active(true)
                 .build();
@@ -313,7 +314,7 @@ class AdminUserControllerTest {
                 .firstName("Shop").lastName("Admin")
                 .email("shop-admin@example.com").phoneNumber("+263770000004")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.SHOP_ADMIN))
+                .roles(User.roleNames(User.Role.SHOP_ADMIN))
                 .active(true)
                 .build();
         userRepository.save(shopAdmin);
@@ -339,13 +340,13 @@ class AdminUserControllerTest {
     }
 
     @Test
-    @WithMockUser(roles = "SUPER_ADMIN")
+    @WithSuperAdmin
     void listMerchants_withActiveFalse_returnsOnlyInactiveAccounts() throws Exception {
         User activeMerchant = User.builder()
                 .firstName("Active").lastName("Merchant")
                 .email("active-merch@example.com").phoneNumber("+263770000002")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
                 .defaultServices(new LinkedHashSet<>(List.of("loyalty")))
                 .active(true)
                 .build();
@@ -355,7 +356,7 @@ class AdminUserControllerTest {
                 .firstName("Pending").lastName("Merchant")
                 .email("pending-merch@example.com").phoneNumber("+263770000003")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
                 .defaultServices(new LinkedHashSet<>(List.of("loyalty")))
                 .active(false)
                 .build();
@@ -366,7 +367,7 @@ class AdminUserControllerTest {
                 .firstName("Pending").lastName("Organizer")
                 .email("pending-organizer@example.com").phoneNumber("+263770000005")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.EVENT_ORGANIZER))
+                .roles(User.roleNames(User.Role.EVENT_ORGANIZER))
                 .defaultServices(new LinkedHashSet<>(List.of("ticketing")))
                 .active(false)
                 .build();

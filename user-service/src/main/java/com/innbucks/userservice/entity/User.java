@@ -9,8 +9,8 @@ import org.springframework.data.jpa.domain.support.AuditingEntityListener;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
-import java.util.EnumSet;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.UUID;
 
@@ -79,12 +79,31 @@ public class User {
     @Column(nullable = false)
     private String password;
 
-    @ElementCollection(targetClass = Role.class, fetch = FetchType.EAGER)
+    /**
+     * The account's role NAMES, referencing {@code roles.name} (V35).
+     *
+     * <p>Held as strings rather than the {@link Role} enum so an operator-created
+     * role is assignable without a redeploy — the point of making roles data.
+     * The column was already {@code VARCHAR(255)} with no CHECK constraint (V3,
+     * and V22 dropped a stray one that staging had grown), so this is a mapping
+     * change only: no migration, and existing rows are already valid.
+     *
+     * <p>There is no database foreign key to {@code roles} here. Adding one would
+     * mean a role deleted out from under a user takes the user row with it (or
+     * blocks the delete on a table Hibernate manages as a collection). Instead
+     * {@code RoleAdminService} refuses to delete a role anyone still holds, and
+     * {@code PermissionResolver} degrades an unresolvable name to "grants
+     * nothing" and logs it.
+     *
+     * <p>{@link Role} survives as a constants holder for the nine built-ins so
+     * code can keep saying {@code Role.SUPER_ADMIN} instead of a bare literal —
+     * see {@link #hasRole(Role)}.
+     */
+    @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(name = "user_roles", joinColumns = @JoinColumn(name = "user_id"))
     @Column(name = "role", nullable = false)
-    @Enumerated(EnumType.STRING)
     @Builder.Default
-    private Set<Role> roles = EnumSet.noneOf(Role.class);
+    private Set<String> roles = new LinkedHashSet<>();
 
     @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(name = "user_default_services", joinColumns = @JoinColumn(name = "user_id"))
@@ -229,8 +248,37 @@ public class User {
     @Column(name = "created_by_organizer_uuid")
     private UUID createdByOrganizerUuid;
 
+    /**
+     * Convenience overload for the nine built-in roles, so call sites keep
+     * reading {@code hasRole(Role.SUPER_ADMIN)} rather than a bare string
+     * literal — a typo in an enum constant fails to compile, a typo in a literal
+     * silently never matches.
+     */
     public boolean hasRole(Role role) {
-        return roles != null && roles.contains(role);
+        return role != null && hasRole(role.name());
+    }
+
+    /** Whether the account holds this role name — built-in or operator-created. */
+    public boolean hasRole(String roleName) {
+        return roles != null && roleName != null && roles.contains(roleName);
+    }
+
+    /**
+     * A MUTABLE role-name set from built-in constants, for the {@code .roles(…)}
+     * builder calls that seed an account with a known role.
+     *
+     * <p>Mutable on purpose: the result is handed to Hibernate as the entity's
+     * {@code @ElementCollection} instance, and later code (role grants in
+     * {@code ServiceRequestService}, {@code UserAdminService.setRoles}) mutates
+     * that collection in place rather than replacing the reference. An immutable
+     * {@code Set.of(…)} here would compile and then throw at the first grant.
+     */
+    public static Set<String> roleNames(Role... roles) {
+        Set<String> names = new LinkedHashSet<>();
+        for (Role role : roles) {
+            if (role != null) names.add(role.name());
+        }
+        return names;
     }
 
     /**
@@ -254,6 +302,23 @@ public class User {
         this.updatedAt = LocalDateTime.now(ZoneOffset.UTC);
     }
 
+    /**
+     * The nine BUILT-IN roles.
+     *
+     * <p>Since V35 this is no longer the closed set of roles the platform can
+     * have — roles live in the {@code roles} table and an operator creates more
+     * through {@code POST /admin/roles}. What this enum still is: the names that
+     * <em>code</em> references directly, so they can be written as constants
+     * instead of literals and a typo fails the build. Every constant here has a
+     * matching {@code builtin = true} row seeded by V35, and
+     * {@code RoleAdminService} refuses to delete or rename those rows precisely
+     * because this enum (and {@code Services.BUNDLE_ROLES}, and
+     * {@code DataInitializer}) still names them.
+     *
+     * <p>Do NOT add a constant here for a new operator-facing role — create it
+     * through the API. Add one only when this service's own code needs to name
+     * the role, which in practice means a {@code @PreAuthorize} or a seed does.
+     */
     public enum Role {
         SUPER_ADMIN,
         // Internal platform staff. Unlike the roles below, these are NOT scoped

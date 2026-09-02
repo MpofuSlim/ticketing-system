@@ -13,8 +13,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.EnumSet;
 import java.util.LinkedHashSet;
+import java.util.Set;
 
 @Slf4j
 @Component
@@ -73,7 +73,7 @@ public class DataInitializer implements CommandLineRunner {
                     // a placeholder, not an MSISDN, so we can't derive — use
                     // the cell pin instead.
                     .homeCountry(deploymentCountry)
-                    .roles(EnumSet.of(User.Role.SUPER_ADMIN))
+                    .roles(new LinkedHashSet<>(Set.of(User.Role.SUPER_ADMIN.name())))
                     .defaultServices(new LinkedHashSet<>(Services.ALL_BUNDLES))
                     .active(true)
                     .approved(true)
@@ -96,8 +96,9 @@ public class DataInitializer implements CommandLineRunner {
         // defaultServices were never populated (e.g. created before the
         // join tables existed). Does NOT touch the password.
         boolean changed = false;
-        if (existing.getRoles() == null || !existing.getRoles().contains(User.Role.SUPER_ADMIN)) {
-            EnumSet<User.Role> roles = EnumSet.of(User.Role.SUPER_ADMIN);
+        if (existing.getRoles() == null || !existing.getRoles().contains(User.Role.SUPER_ADMIN.name())) {
+            LinkedHashSet<String> roles = new LinkedHashSet<>();
+            roles.add(User.Role.SUPER_ADMIN.name());
             if (existing.getRoles() != null) roles.addAll(existing.getRoles());
             existing.setRoles(roles);
             changed = true;

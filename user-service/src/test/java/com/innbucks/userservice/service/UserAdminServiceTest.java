@@ -58,8 +58,23 @@ class UserAdminServiceTest {
         // can prove the publish happened without a Redis.
         final com.innbucks.userservice.security.TokenVersionPublisher tokenVersions =
                 mock(com.innbucks.userservice.security.TokenVersionPublisher.class);
+        // setRoles validates every requested name against the roles table
+        // (V35). Stubbed to resolve any built-in name, so these tests keep
+        // asserting the SUPER_ADMIN / scope guards rather than the new
+        // existence check — RoleAdminServiceTest covers that separately.
+        final com.innbucks.userservice.repository.RoleRepository roleRepo =
+                mock(com.innbucks.userservice.repository.RoleRepository.class);
+        {
+            when(roleRepo.findAllByNameIn(any())).thenAnswer(inv -> {
+                java.util.Collection<String> names = inv.getArgument(0);
+                return names.stream()
+                        .map(n -> com.innbucks.userservice.entity.Role.builder()
+                                .name(n).description(n).builtin(true).build())
+                        .toList();
+            });
+        }
         final UserAdminService service = new UserAdminService(
-                userRepo, encoder, audit, publisher, tenantProfiles, tokenVersions);
+                userRepo, encoder, audit, publisher, tenantProfiles, tokenVersions, roleRepo);
     }
 
     /** Capture the plaintext handed to encode() — it's the generated temp password. */
@@ -252,7 +267,7 @@ class UserAdminServiceTest {
         Fixture f = new Fixture();
         User user = User.builder().id(12L).email("staff@acme.co.zw").firstName("Tendai")
                 .phoneNumber("+263771234567")
-                .roles(java.util.EnumSet.of(User.Role.SHOP_ADMIN))
+                .roles(User.roleNames(User.Role.SHOP_ADMIN))
                 .active(true).approved(true).password("pw").build();
         when(f.userRepo.findById(12L)).thenReturn(Optional.of(user));
         when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -293,7 +308,7 @@ class UserAdminServiceTest {
         User user = User.builder().id(42L).email("alice@innbucks.co.zw").phoneNumber("+263771234567")
                 .password("old-hash").active(true).approved(true).mustChangePassword(false)
                 .credentialDeliveredAt(LocalDateTime.now().minusDays(1))
-                .roles(java.util.EnumSet.of(User.Role.EVENT_ORGANIZER)).build();
+                .roles(User.roleNames(User.Role.EVENT_ORGANIZER)).build();
         when(f.userRepo.findById(42L)).thenReturn(Optional.of(user));
         when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
         when(f.encoder.encode(anyString())).thenReturn("new-hash");
@@ -322,7 +337,7 @@ class UserAdminServiceTest {
         Fixture f = new Fixture();
         User superAdmin = User.builder().id(1L).email("admin@innbucks.co.zw")
                 .password("pw").active(true).approved(true)
-                .roles(java.util.EnumSet.of(User.Role.SUPER_ADMIN)).build();
+                .roles(User.roleNames(User.Role.SUPER_ADMIN)).build();
         when(f.userRepo.findById(1L)).thenReturn(Optional.of(superAdmin));
 
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
@@ -349,7 +364,7 @@ class UserAdminServiceTest {
         Fixture f = new Fixture();
         User superAdmin = User.builder().id(1L).email("admin@innbucks.co.zw")
                 .password("pw").active(true).approved(true)
-                .roles(java.util.EnumSet.of(User.Role.SUPER_ADMIN)).build();
+                .roles(User.roleNames(User.Role.SUPER_ADMIN)).build();
         when(f.userRepo.findById(1L)).thenReturn(Optional.of(superAdmin));
 
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
@@ -368,7 +383,7 @@ class UserAdminServiceTest {
         Fixture f = new Fixture();
         User superAdmin = User.builder().id(1L).email("admin@innbucks.co.zw")
                 .password("pw").active(false).approved(true)
-                .roles(java.util.EnumSet.of(User.Role.SUPER_ADMIN)).build();
+                .roles(User.roleNames(User.Role.SUPER_ADMIN)).build();
         when(f.userRepo.findById(1L)).thenReturn(Optional.of(superAdmin));
 
         assertThrows(ResponseStatusException.class,
@@ -481,7 +496,7 @@ class UserAdminServiceTest {
     private static User userWithRoles(long id, User.Role... roles) {
         return User.builder().id(id).userUuid(UUID.randomUUID())
                 .email("u" + id + "@innbucks.co.zw").password("pw").active(true).approved(true)
-                .roles(roles.length == 0 ? EnumSet.noneOf(User.Role.class) : EnumSet.copyOf(Set.of(roles)))
+                .roles(User.roleNames(roles))
                 .build();
     }
 
@@ -492,11 +507,11 @@ class UserAdminServiceTest {
         when(f.userRepo.findById(50L)).thenReturn(Optional.of(user));
         when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        User result = f.service.setRoles(50L, Set.of(User.Role.CUSTOMER),
+        User result = f.service.setRoles(50L, User.roleNames(User.Role.CUSTOMER),
                 "admin@innbucks.co.zw", AuditContext.none());
 
         // EVENT_ORGANIZER is gone — a merge would have kept it.
-        assertThat(result.getRoles()).containsExactly(User.Role.CUSTOMER);
+        assertThat(result.getRoles()).containsExactly(User.Role.CUSTOMER.name());
     }
 
     @Test
@@ -507,7 +522,7 @@ class UserAdminServiceTest {
         when(f.userRepo.findById(51L)).thenReturn(Optional.of(user));
         when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        User result = f.service.setRoles(51L, Set.of(User.Role.CUSTOMER),
+        User result = f.service.setRoles(51L, User.roleNames(User.Role.CUSTOMER),
                 "admin@innbucks.co.zw", AuditContext.none());
 
         // Without the bump the demoted user's existing JWT would keep asserting
@@ -524,7 +539,7 @@ class UserAdminServiceTest {
         when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
         AuditContext ctx = new AuditContext("10.0.0.9", "curl/8.4");
 
-        f.service.setRoles(52L, Set.of(User.Role.CUSTOMER), "admin@innbucks.co.zw", ctx);
+        f.service.setRoles(52L, User.roleNames(User.Role.CUSTOMER), "admin@innbucks.co.zw", ctx);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> meta = ArgumentCaptor.forClass(Map.class);
@@ -546,7 +561,7 @@ class UserAdminServiceTest {
         when(f.userRepo.findById(53L)).thenReturn(Optional.of(user));
 
         User result = f.service.setRoles(53L,
-                Set.of(User.Role.EVENT_ORGANIZER, User.Role.CUSTOMER),
+                User.roleNames(User.Role.EVENT_ORGANIZER, User.Role.CUSTOMER),
                 "admin@innbucks.co.zw", AuditContext.none());
 
         // No bump: a UI that PUTs on every save must not log the user out for a
@@ -564,11 +579,11 @@ class UserAdminServiceTest {
         when(f.userRepo.findById(1L)).thenReturn(Optional.of(owner));
 
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> f.service.setRoles(1L, Set.of(User.Role.CUSTOMER),
+                () -> f.service.setRoles(1L, User.roleNames(User.Role.CUSTOMER),
                         "admin@innbucks.co.zw", AuditContext.none()));
 
         assertEquals(403, ex.getStatusCode().value());
-        assertThat(owner.getRoles()).containsExactly(User.Role.SUPER_ADMIN);
+        assertThat(owner.getRoles()).containsExactly(User.Role.SUPER_ADMIN.name());
         verify(f.userRepo, never()).save(any(User.class));
     }
 
@@ -579,7 +594,7 @@ class UserAdminServiceTest {
         when(f.userRepo.findById(54L)).thenReturn(Optional.of(user));
 
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> f.service.setRoles(54L, Set.of(User.Role.SUPER_ADMIN),
+                () -> f.service.setRoles(54L, User.roleNames(User.Role.SUPER_ADMIN),
                         "admin@innbucks.co.zw", AuditContext.none()));
 
         assertEquals(403, ex.getStatusCode().value());
@@ -595,7 +610,7 @@ class UserAdminServiceTest {
         // This is the "caller's JWT has no shopId" account: it would log in fine
         // and then fail inside every shop-scoped handler.
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> f.service.setRoles(55L, Set.of(User.Role.SHOP_USER),
+                () -> f.service.setRoles(55L, User.roleNames(User.Role.SHOP_USER),
                         "admin@innbucks.co.zw", AuditContext.none()));
 
         assertEquals(400, ex.getStatusCode().value());
@@ -611,10 +626,10 @@ class UserAdminServiceTest {
         when(f.userRepo.findById(56L)).thenReturn(Optional.of(user));
         when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        User result = f.service.setRoles(56L, Set.of(User.Role.SHOP_ADMIN),
+        User result = f.service.setRoles(56L, User.roleNames(User.Role.SHOP_ADMIN),
                 "admin@innbucks.co.zw", AuditContext.none());
 
-        assertThat(result.getRoles()).containsExactly(User.Role.SHOP_ADMIN);
+        assertThat(result.getRoles()).containsExactly(User.Role.SHOP_ADMIN.name());
     }
 
     @Test
@@ -624,7 +639,7 @@ class UserAdminServiceTest {
         when(f.userRepo.findById(57L)).thenReturn(Optional.of(user));
 
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> f.service.setRoles(57L, Set.of(User.Role.TEAM_MEMBER),
+                () -> f.service.setRoles(57L, User.roleNames(User.Role.TEAM_MEMBER),
                         "admin@innbucks.co.zw", AuditContext.none()));
 
         assertEquals(400, ex.getStatusCode().value());
@@ -638,7 +653,7 @@ class UserAdminServiceTest {
         when(f.userRepo.findById(58L)).thenReturn(Optional.of(user));
 
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
-                () -> f.service.setRoles(58L, Set.of(), "admin@innbucks.co.zw", AuditContext.none()));
+                () -> f.service.setRoles(58L, User.roleNames(), "admin@innbucks.co.zw", AuditContext.none()));
 
         assertEquals(400, ex.getStatusCode().value());
         verify(f.userRepo, never()).save(any(User.class));
@@ -655,11 +670,11 @@ class UserAdminServiceTest {
         // carry no merchant/shop/organizer scope, so they must be grantable to a
         // plain account without any prior stamping.
         User result = f.service.setRoles(60L,
-                Set.of(User.Role.PRODUCT_OFFICER, User.Role.PRODUCT_MANAGER),
+                User.roleNames(User.Role.PRODUCT_OFFICER, User.Role.PRODUCT_MANAGER),
                 "admin@innbucks.co.zw", AuditContext.none());
 
         assertThat(result.getRoles())
-                .containsExactlyInAnyOrder(User.Role.PRODUCT_OFFICER, User.Role.PRODUCT_MANAGER);
+                .containsExactlyInAnyOrder(User.Role.PRODUCT_OFFICER.name(), User.Role.PRODUCT_MANAGER.name());
         // Still a privilege change, so the session must be invalidated like any other.
         assertEquals(1, result.getTokenVersion());
     }
@@ -670,7 +685,7 @@ class UserAdminServiceTest {
         when(f.userRepo.findById(999L)).thenReturn(Optional.empty());
 
         assertThrows(NotFoundException.class,
-                () -> f.service.setRoles(999L, Set.of(User.Role.CUSTOMER),
+                () -> f.service.setRoles(999L, User.roleNames(User.Role.CUSTOMER),
                         "admin@innbucks.co.zw", AuditContext.none()));
     }
 }

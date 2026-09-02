@@ -19,7 +19,7 @@ class MfaPolicyTest {
     private static User user(boolean mfaEnabled, User.Role... roles) {
         return User.builder()
                 .id(1L)
-                .roles(EnumSet.copyOf(java.util.Arrays.asList(roles)))
+                .roles(User.roleNames(roles))
                 .mfaEnabled(mfaEnabled)
                 .build();
     }

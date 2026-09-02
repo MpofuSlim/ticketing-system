@@ -129,8 +129,7 @@ public class UserResponseDTO {
                 .lastName(user.getLastName())
                 .email(user.getEmail())
                 .phoneNumber(user.getPhoneNumber())
-                .roles(user.getRoles() == null ? List.of()
-                        : user.getRoles().stream().map(Enum::name).collect(Collectors.toList()))
+                .roles(user.getRoles() == null ? List.of() : List.copyOf(user.getRoles()))
                 .defaultServices(user.getDefaultServices() == null ? null
                         : List.copyOf(user.getDefaultServices()))
                 .active(user.isActive())

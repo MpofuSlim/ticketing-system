@@ -224,14 +224,45 @@ public class JwtUtil {
                                 long tokenVersion, String country,
                                 UUID userUuid, UUID organizerUuid,
                                 boolean mustChangePassword) {
+        return generateToken(email, roles, List.of(), defaultServices, tier, verified, phoneNumber,
+                merchantId, shopId, firstName, middleName, lastName, tokenVersion, country,
+                userUuid, organizerUuid, mustChangePassword);
+    }
+
+    /**
+     * The canonical mint, carrying the {@code perms} claim added in V35.
+     *
+     * <p>Permissions are resolved from the holder's roles at mint time
+     * ({@code PermissionResolver}) rather than looked up per request, so every
+     * service can authorize from the token alone — the same trade-off the
+     * {@code roles} claim has always made. A permission change therefore reaches
+     * a live token only on re-mint (next login or {@code POST /auth/refresh}),
+     * and {@code tokenVersion} is the lever for forcing that immediately.
+     *
+     * <p>The overload without permissions delegates here with an empty set. It is
+     * kept for the test helpers and the shorter delegating overloads: a token
+     * with no {@code perms} claim authorizes exactly as it did before V35, via
+     * {@code hasRole}, so nothing that mints one breaks.
+     */
+    public String generateToken(String email, Collection<String> roles, Collection<String> permissions,
+                                Collection<String> defaultServices,
+                                int tier, boolean verified, String phoneNumber,
+                                UUID merchantId, UUID shopId,
+                                String firstName, String middleName, String lastName,
+                                long tokenVersion, String country,
+                                UUID userUuid, UUID organizerUuid,
+                                boolean mustChangePassword) {
         List<String> roleList = roles == null ? List.of()
                 : roles.stream().filter(r -> r != null && !r.isBlank()).collect(Collectors.toList());
         List<String> serviceList = defaultServices == null ? List.of()
                 : defaultServices.stream().filter(s -> s != null && !s.isBlank()).collect(Collectors.toList());
+        List<String> permissionList = permissions == null ? List.of()
+                : permissions.stream().filter(p -> p != null && !p.isBlank()).collect(Collectors.toList());
 
         JwtBuilder builder = Jwts.builder()
                 .subject(email)
                 .claim("roles", roleList)
+                .claim("perms", permissionList)
                 .claim("services", serviceList)
                 .claim("tier", tier)
                 .claim("verified", verified)
@@ -407,6 +438,27 @@ public class JwtUtil {
     @SuppressWarnings("unchecked")
     public List<String> extractRoles(String token) {
         Object raw = getClaims(token).get("roles");
+        if (raw instanceof Collection<?> c) {
+            List<String> out = new ArrayList<>();
+            for (Object o : c) {
+                if (o != null) out.add(o.toString());
+            }
+            return out;
+        }
+        return Collections.emptyList();
+    }
+
+    /**
+     * The {@code perms} claim (V35), or an empty list for a token minted before
+     * it existed.
+     *
+     * <p>Empty is the safe default: such a token authorizes through
+     * {@code hasRole} exactly as it did before, so tokens already in flight
+     * during a rolling deploy keep working and simply pick up permissions on
+     * their next refresh.
+     */
+    public List<String> extractPermissions(String token) {
+        Object raw = getClaims(token).get("perms");
         if (raw instanceof Collection<?> c) {
             List<String> out = new ArrayList<>();
             for (Object o : c) {

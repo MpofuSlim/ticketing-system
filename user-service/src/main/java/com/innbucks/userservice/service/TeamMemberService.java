@@ -98,7 +98,7 @@ public class TeamMemberService {
                 .phoneNumber(normalizedPhone)
                 .homeCountry(deploymentCountry)
                 .password(passwordEncoder.encode(tempPassword))
-                .roles(EnumSet.of(User.Role.TEAM_MEMBER))
+                .roles(User.roleNames(User.Role.TEAM_MEMBER))
                 // Team members operate the ticketing scanner; grant the
                 // ticketing bundle so their JWT carries the same services
                 // claim an organizer would.
@@ -130,7 +130,7 @@ public class TeamMemberService {
             // SUPER_ADMIN sees every TEAM_MEMBER across all organizers — they
             // run support / oversight, not a single tenant. Returns an empty
             // list (never 403) when no team members exist anywhere.
-            return userRepository.findByAnyRole(List.of(User.Role.TEAM_MEMBER)).stream()
+            return userRepository.findByAnyRole(User.roleNames(User.Role.TEAM_MEMBER)).stream()
                     .map(UserResponseDTO::from)
                     .toList();
         }
@@ -383,6 +383,17 @@ public class TeamMemberService {
         }
         User caller = userRepository.findByEmail(auth.getName())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Caller not found"));
+        // NOTE (V35): this service-layer check still requires the BUILT-IN role,
+        // while the controller now gates on a permission. So a custom role
+        // granted that permission passes @PreAuthorize and is refused here.
+        //
+        // That is deliberate for now, not an oversight: these handlers derive
+        // the caller's merchant/shop scope from the role they hold, so granting
+        // the permission alone would produce a caller with no scope to act
+        // within. Making them role-agnostic means moving scope onto the account
+        // (or the permission), which is a design change of its own rather than a
+        // rename — tracked as follow-up work, and called out in the PR so nobody
+        // reads the permission as usable by a custom role yet.
         if (!caller.hasRole(User.Role.EVENT_ORGANIZER)) {
             // Belt-and-braces — the controller's @PreAuthorize already
             // enforces this, but a service-level recheck keeps the

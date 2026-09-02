@@ -63,6 +63,12 @@ public class MfaPolicy {
             // A roleless account can't be a system user — treat as customer.
             return false;
         }
-        return user.getRoles().stream().anyMatch(r -> r != User.Role.CUSTOMER);
+        // "System user" = holds any role other than CUSTOMER. Since V35 that
+        // includes operator-created roles, which is the correct reading: a
+        // custom role exists to grant staff capability, so its holder must face
+        // the same MFA enrolment and challenge rules as any other staff account.
+        // Defaulting a custom role to the customer path would let someone opt
+        // out of MFA by creating a role.
+        return user.getRoles().stream().anyMatch(r -> !User.Role.CUSTOMER.name().equals(r));
     }
 }

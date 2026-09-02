@@ -1,5 +1,6 @@
 package com.innbucks.userservice.controller;
 
+import com.innbucks.userservice.security.PermissionCatalog;
 import com.innbucks.userservice.dto.ApiResult;
 import com.innbucks.userservice.dto.UpdateActiveStatusDTO;
 import com.innbucks.userservice.dto.UpdateRolesDTO;
@@ -44,7 +45,7 @@ public class AdminUserController {
     private final com.innbucks.userservice.service.MfaService mfaService;
 
     @PostMapping("/{id}/mfa/reset")
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.USERS_MFA_RESET + "')")
     @Operation(summary = "Reset a user's 2FA (lost authenticator + lost backup codes)",
             description = """
                     Wipes the target's TOTP secret + all unused backup codes, leaving them in the
@@ -68,7 +69,7 @@ public class AdminUserController {
     }
 
     @GetMapping
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.USERS_READ + "')")
     @Operation(
             summary = "List system users (no customers, no SUPER_ADMIN)",
             description = "Returns user accounts for the SUPER_ADMIN portal: every role **except CUSTOMER** " +
@@ -143,8 +144,8 @@ public class AdminUserController {
             users = (active != null) ? userRepository.findByActive(active) : userRepository.findAll();
         } else {
             users = (active != null)
-                    ? userRepository.findByActiveExcludingRole(active, User.Role.CUSTOMER)
-                    : userRepository.findAllExcludingRole(User.Role.CUSTOMER);
+                    ? userRepository.findByActiveExcludingRole(active, User.Role.CUSTOMER.name())
+                    : userRepository.findAllExcludingRole(User.Role.CUSTOMER.name());
         }
 
         // SUPER_ADMIN never appears in any listing — it's the platform-owner
@@ -183,7 +184,7 @@ public class AdminUserController {
     // Product staff need this to filter the platform-wide event list by
     // organizer — we gave them every organizer's events and no way to narrow
     // them. Read-only list of staff account names; no write path is widened.
-    @PreAuthorize("hasAnyRole('SUPER_ADMIN','PRODUCT_OFFICER','PRODUCT_MANAGER')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.USERS_MERCHANTS_READ + "')")
     @Operation(
             summary = "List merchant admins and event organizers",
             description = "Returns user accounts carrying the **MERCHANT_ADMIN** role (people who " +
@@ -256,7 +257,7 @@ public class AdminUserController {
     public ResponseEntity<ApiResult<List<UserResponseDTO>>> listMerchants(
             @RequestParam(name = "active", required = false) Boolean active) {
 
-        var businessRoles = java.util.EnumSet.of(
+        var businessRoles = User.roleNames(
                 User.Role.MERCHANT_ADMIN, User.Role.EVENT_ORGANIZER);
 
         List<User> users = (active != null)
@@ -285,7 +286,7 @@ public class AdminUserController {
     }
 
     @PutMapping("/{id}/active")
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.USERS_ACTIVATION_WRITE + "')")
     @Operation(
             summary = "Activate or deactivate a user",
             description = "Sets the `active` flag on the specified user account. Only an active user can log in. " +
@@ -352,7 +353,7 @@ public class AdminUserController {
     }
 
     @PutMapping("/{id}/roles")
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.USERS_ROLES_WRITE + "')")
     @Operation(
             summary = "Replace a user's roles",
             description = """
@@ -479,7 +480,7 @@ public class AdminUserController {
     }
 
     @PostMapping("/{id}/reset-temp-password")
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.USERS_PASSWORD_RESET + "')")
     @Operation(
             summary = "Reset a system user's temporary password",
             description = "Mints a **fresh random temporary password** for the user, flags it must-change, " +
