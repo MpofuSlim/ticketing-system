@@ -1,8 +1,10 @@
 package com.innbucks.userservice.service;
 
+import com.innbucks.userservice.dto.BulkShopUserResultDTO;
 import com.innbucks.userservice.dto.CreateShopAdminDTO;
 import com.innbucks.userservice.dto.CreateShopUserDTO;
 import com.innbucks.userservice.dto.UserResponseDTO;
+import com.innbucks.userservice.util.CsvParser;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.event.CredentialDeliveryRequested;
 import com.innbucks.userservice.integration.LoyaltyServiceClient;
@@ -52,6 +54,19 @@ public class ShopStaffService {
     private final PasswordEncoder passwordEncoder;
     private final LoyaltyServiceClient loyaltyServiceClient;
     private final ApplicationEventPublisher eventPublisher;
+    /** Bean validator, used to run the {@code CreateShopUserDTO} constraints on each
+     *  CSV row exactly as {@code @Valid} would on the single-create body. */
+    private final jakarta.validation.Validator validator;
+    /** Self reference resolved through the Spring proxy, so a per-row
+     *  {@link #createShopUser} call in {@link #bulkImportShopUsersCsv} crosses the
+     *  proxy and gets its OWN transaction — one bad row rolls back alone. A direct
+     *  {@code this.createShopUser(...)} would bypass the proxy and share (and
+     *  poison) a single transaction. */
+    private final org.springframework.beans.factory.ObjectProvider<ShopStaffService> self;
+
+    /** Upper bound on rows per bulk upload — a guard rail on an unbounded import,
+     *  not a product limit; split larger files. */
+    static final int MAX_BULK_ROWS = 1000;
 
     /** Deployment country pin (ISO 3166-1 alpha-2). Shop staff are anchored
      *  to this cell — home_country is the deployment country, not derived
@@ -117,6 +132,156 @@ public class ShopStaffService {
                 staff.getId(), staff.getFirstName(), staff.getEmail(), staff.getPhoneNumber(),
                 tempPassword, CredentialDeliveryRequested.Reason.ONBOARDING));
         return UserResponseDTO.from(staff);
+    }
+
+    /**
+     * Bulk-onboard SHOP_USERs from a CSV, as a batch version of
+     * {@link #createShopUser}. Every user is created at the caller's own shop —
+     * there is no per-row shopId, exactly like the single endpoint — so the CSV
+     * carries only the person: {@code firstName,middleName,lastName,email,phoneNumber}
+     * (middleName optional; column order/casing/spacing are tolerated).
+     *
+     * <p><b>Deliberately NOT {@code @Transactional}.</b> Each row is created via
+     * {@link #createShopUser} through the Spring proxy ({@link #self}), so it gets
+     * its own transaction: a duplicate email or bad phone rolls back that one row
+     * and the rest still commit. Wrapping the whole import in one transaction
+     * would let a single bad row discard an otherwise-good file — the wrong
+     * behaviour for an import an operator will iterate on.
+     *
+     * <p>Caller eligibility (must be a SHOP_ADMIN with shop scope) is checked once
+     * up front so an ineligible caller gets one clean 403/400 rather than the same
+     * error repeated on every row.
+     */
+    public BulkShopUserResultDTO bulkImportShopUsersCsv(String csv) {
+        User caller = requireCaller();
+        if (!caller.hasRole(User.Role.SHOP_ADMIN)) {
+            throw forbidden("Only SHOP_ADMIN can create shop users");
+        }
+        if (caller.getLoyaltyShopId() == null || caller.getLoyaltyMerchantId() == null) {
+            throw badRequest("Your SHOP_ADMIN account is missing shop scope; contact a merchant admin");
+        }
+
+        List<List<String>> rows = CsvParser.parse(csv);
+
+        // First non-blank row is the header; remember its true file-line number so
+        // data-row line numbers reported back match what the operator sees.
+        List<String> header = null;
+        int headerLineNo = 0;
+        int lineNo = 0;
+        for (List<String> row : rows) {
+            lineNo++;
+            if (!CsvParser.isBlank(row)) { header = row; headerLineNo = lineNo; break; }
+        }
+        if (header == null) {
+            throw badRequest("CSV is empty — expected a header row (firstName,middleName,lastName,email,phoneNumber) "
+                    + "and at least one data row.");
+        }
+
+        java.util.Map<String, Integer> col = new java.util.HashMap<>();
+        for (int i = 0; i < header.size(); i++) {
+            col.putIfAbsent(normalizeHeader(header.get(i)), i);
+        }
+        // Resolve as primitive int (-1 = absent) so row access never unboxes a
+        // nullable Integer. phoneNumber/middleName accept a short alias.
+        int firstNameIdx = columnIndex(col, "firstname");
+        int lastNameIdx = columnIndex(col, "lastname");
+        int emailIdx = columnIndex(col, "email");
+        int phoneIdx = columnIndex(col, "phonenumber", "phone");
+        int middleNameIdx = columnIndex(col, "middlename", "middle"); // -1 when absent
+        if (firstNameIdx < 0 || lastNameIdx < 0 || emailIdx < 0 || phoneIdx < 0) {
+            throw badRequest("CSV header must contain the columns: firstName, lastName, email, phoneNumber "
+                    + "(middleName optional).");
+        }
+
+        // Collect the data rows (skip blank lines) with their file-line numbers.
+        // rows is 0-based, so the file line for index r is r + 1.
+        record DataRow(int line, List<String> fields) {}
+        List<DataRow> dataRows = new java.util.ArrayList<>();
+        for (int r = headerLineNo; r < rows.size(); r++) {
+            List<String> row = rows.get(r);
+            if (CsvParser.isBlank(row)) continue;
+            dataRows.add(new DataRow(r + 1, row));
+        }
+        if (dataRows.isEmpty()) {
+            throw badRequest("CSV has a header but no data rows.");
+        }
+        if (dataRows.size() > MAX_BULK_ROWS) {
+            throw badRequest("CSV has " + dataRows.size() + " data rows; the maximum per upload is "
+                    + MAX_BULK_ROWS + ". Split the file and upload in batches.");
+        }
+
+        List<BulkShopUserResultDTO.RowResult> results = new java.util.ArrayList<>(dataRows.size());
+        int created = 0;
+        int failed = 0;
+        for (DataRow dr : dataRows) {
+            String email = at(dr.fields(), emailIdx);
+            CreateShopUserDTO dto = new CreateShopUserDTO();
+            dto.setFirstName(at(dr.fields(), firstNameIdx));
+            dto.setLastName(at(dr.fields(), lastNameIdx));
+            dto.setEmail(email);
+            dto.setPhoneNumber(at(dr.fields(), phoneIdx));
+            String middle = at(dr.fields(), middleNameIdx); // "" when absent (-1) or blank
+            dto.setMiddleName(middle.isBlank() ? null : middle);
+
+            // Run the SAME bean constraints @Valid enforces on the single-create body.
+            var violations = validator.validate(dto);
+            if (!violations.isEmpty()) {
+                results.add(BulkShopUserResultDTO.RowResult.failed(dr.line(), email, joinViolations(violations)));
+                failed++;
+                continue;
+            }
+            try {
+                // Through the proxy → its own transaction; a failure here rolls
+                // back only this row. Re-checks caller scope (harmless, already
+                // validated above).
+                self.getObject().createShopUser(dto);
+                results.add(BulkShopUserResultDTO.RowResult.created(dr.line(), email));
+                created++;
+            } catch (ResponseStatusException e) {
+                results.add(BulkShopUserResultDTO.RowResult.failed(dr.line(), email,
+                        e.getReason() == null ? "Rejected" : e.getReason()));
+                failed++;
+            } catch (RuntimeException e) {
+                log.warn("Bulk shop-user import row {} failed unexpectedly: {}", dr.line(), e.toString());
+                results.add(BulkShopUserResultDTO.RowResult.failed(dr.line(), email,
+                        "Unexpected error creating this user"));
+                failed++;
+            }
+        }
+        log.info("Bulk shop-user import by={} total={} created={} failed={}",
+                caller.getEmail(), dataRows.size(), created, failed);
+        return new BulkShopUserResultDTO(dataRows.size(), created, failed, results);
+    }
+
+    /** Header name → canonical key: lower-cased, spaces/underscores removed, so
+     *  "First Name", "first_name" and "firstName" all map to "firstname". */
+    private static String normalizeHeader(String h) {
+        return h == null ? "" : h.trim().toLowerCase().replaceAll("[\\s_]", "");
+    }
+
+    /** First present column index among the given normalized names, or -1 when
+     *  none is in the header. Primitive return so row access never unboxes a
+     *  nullable Integer. */
+    private static int columnIndex(java.util.Map<String, Integer> col, String... names) {
+        for (String name : names) {
+            Integer i = col.get(name);
+            if (i != null) return i;
+        }
+        return -1;
+    }
+
+    /** Field at an index, trimmed; empty when the row is short (ragged CSV). */
+    private static String at(List<String> row, int idx) {
+        if (idx < 0 || idx >= row.size()) return "";
+        String v = row.get(idx);
+        return v == null ? "" : v.trim();
+    }
+
+    private static String joinViolations(java.util.Set<? extends jakarta.validation.ConstraintViolation<?>> violations) {
+        return violations.stream()
+                .map(v -> v.getPropertyPath() + ": " + v.getMessage())
+                .sorted()
+                .collect(java.util.stream.Collectors.joining("; "));
     }
 
     @Transactional(readOnly = true)

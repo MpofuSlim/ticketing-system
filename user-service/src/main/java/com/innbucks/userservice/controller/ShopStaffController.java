@@ -1,6 +1,7 @@
 package com.innbucks.userservice.controller;
 
 import com.innbucks.userservice.dto.ApiResult;
+import com.innbucks.userservice.dto.BulkShopUserResultDTO;
 import com.innbucks.userservice.dto.CreateShopAdminDTO;
 import com.innbucks.userservice.dto.CreateShopUserDTO;
 import com.innbucks.userservice.dto.UserResponseDTO;
@@ -8,17 +9,23 @@ import com.innbucks.userservice.service.ShopStaffService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
+import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.server.ResponseStatusException;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.UUID;
 
@@ -165,6 +172,102 @@ public class ShopStaffController {
         UserResponseDTO data = shopStaffService.createShopUser(req);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Shop user created", data));
+    }
+
+    @PostMapping(value = "/users/bulk", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasRole('SHOP_ADMIN')")
+    @Operation(
+            summary = "Bulk-onboard SHOP_USERs from a CSV",
+            description = "Batch version of `POST /admin/shop-staff/users`. Upload a CSV (multipart field " +
+                          "`file`) with a header row and one SHOP_USER per line; every user is created at " +
+                          "the caller's own shop (there is no per-row shopId, exactly like the single " +
+                          "endpoint). Columns: `firstName,middleName,lastName,email,phoneNumber` — " +
+                          "middleName optional; column order, casing and spacing are tolerated. " +
+                          "Fetch a starter file from `GET /admin/shop-staff/users/bulk/template`.\n\n" +
+                          "The import is **best-effort per row**: each row is created in its own " +
+                          "transaction, so a duplicate email or invalid phone fails on its own and every " +
+                          "good row still lands. The response reports each row's outcome (by file line) so " +
+                          "you can fix and re-upload only the failures. Every created user gets a one-time " +
+                          "temporary password delivered over email/SMS, exactly as the single-create path " +
+                          "does. Max 1000 rows per upload. Requires **SHOP_ADMIN** role."
+    )
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "Import processed — see per-row results (some rows may have failed)",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Bulk import processed",
+                                      "data": {
+                                        "total": 3,
+                                        "created": 2,
+                                        "failed": 1,
+                                        "results": [
+                                          { "line": 2, "email": "rufaro@pizza-avondale.co.zw", "status": "CREATED", "error": null },
+                                          { "line": 3, "email": "tanaka@pizza-avondale.co.zw", "status": "CREATED", "error": null },
+                                          { "line": 4, "email": "rufaro@pizza-avondale.co.zw", "status": "FAILED", "error": "Email already registered" }
+                                        ]
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400", description = "Empty file, missing/blank header, no data rows, wrong columns, over the row limit, or the caller's SHOP_ADMIN account has no shop scope",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "CSV header must contain the columns: firstName, lastName, email, phoneNumber (middleName optional).",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403", description = "Caller is not a SHOP_ADMIN",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "403 FORBIDDEN", "message": "Only SHOP_ADMIN can create shop users", "data": null }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<BulkShopUserResultDTO>> bulkCreateShopUsers(
+            @RequestParam("file")
+            @Schema(type = "string", format = "binary", description = "CSV file of shop users")
+            MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "No file uploaded, or the file is empty.");
+        }
+        String csv;
+        try {
+            csv = new String(file.getBytes(), StandardCharsets.UTF_8);
+        } catch (java.io.IOException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Could not read the uploaded file.");
+        }
+        BulkShopUserResultDTO data = shopStaffService.bulkImportShopUsersCsv(csv);
+        return ResponseEntity.ok(ApiResult.ok("Bulk import processed", data));
+    }
+
+    @GetMapping(value = "/users/bulk/template", produces = "text/csv")
+    @PreAuthorize("hasAnyRole('SHOP_ADMIN','MERCHANT_ADMIN')")
+    @Operation(
+            summary = "Download the bulk-import CSV template",
+            description = "Returns a ready-to-fill CSV with the exact header the bulk import expects plus " +
+                          "one example row, so the operator's file matches the parser. Serve it behind a " +
+                          "'Download template' button on the bulk-upload screen."
+    )
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "CSV template",
+                    content = @Content(mediaType = "text/csv",
+                            examples = @ExampleObject(value =
+                                    "firstName,middleName,lastName,email,phoneNumber\\n"
+                                  + "Rufaro,T,Ncube,rufaro@pizza-avondale.co.zw,+263772345678\\n")))
+    })
+    public ResponseEntity<String> bulkTemplate() {
+        String template = "firstName,middleName,lastName,email,phoneNumber\n"
+                + "Rufaro,T,Ncube,rufaro@pizza-avondale.co.zw,+263772345678\n";
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"shop-users-template.csv\"")
+                .contentType(MediaType.parseMediaType("text/csv"))
+                .body(template);
     }
 
     @GetMapping("/mine")

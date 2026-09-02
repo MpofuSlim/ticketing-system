@@ -194,6 +194,20 @@ public class GlobalExceptionHandler {
     // (table names, stack-trace fragments, library jargon), so it goes to
     // logs only — the customer sees a generic message. Prefer adding a typed
     // exception + dedicated handler over relying on this fallback.
+    /**
+     * A multipart upload exceeded the configured size limit (e.g. the bulk
+     * shop-staff CSV import). A client error, so 400 with a clear message —
+     * not the generic 400 the RuntimeException catch-all below would give.
+     */
+    @ExceptionHandler(org.springframework.web.multipart.MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiResult<Void>> handleMaxUpload(
+            org.springframework.web.multipart.MaxUploadSizeExceededException ex) {
+        log.warn("Upload rejected — exceeds max size: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResult.error(HttpStatus.BAD_REQUEST,
+                        "The uploaded file is too large. Split it into smaller batches and try again."));
+    }
+
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<ApiResult<Void>> handleRuntime(RuntimeException ex) {
         log.warn("RuntimeException ({}): {}", ex.getClass().getSimpleName(), ex.getMessage());
