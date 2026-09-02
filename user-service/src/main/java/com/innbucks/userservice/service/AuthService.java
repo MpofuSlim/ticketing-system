@@ -75,6 +75,19 @@ public class AuthService implements ApplicationEventPublisherAware {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.innbucks.userservice.config.SecurityMetrics securityMetrics;
 
+    /**
+     * Expands the account's roles into the {@code perms} JWT claim (V35).
+     * Field-injected for the same reason as the collaborators above — the many
+     * AuthServiceTest construction sites shouldn't have to widen.
+     *
+     * <p>Null in a plain unit test means an empty {@code perms} claim, which is
+     * exactly what a pre-V35 token carries: the holder authorizes through
+     * {@code hasRole} as before. So a missing resolver narrows what the token can
+     * do, never widens it.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.innbucks.userservice.security.PermissionResolver permissionResolver;
+
     /** Null-safe security-metric emit — no-op when SecurityMetrics isn't wired
      *  (plain unit tests). Keeps the call sites free of repeated null checks. */
     private void sec(java.util.function.Consumer<com.innbucks.userservice.config.SecurityMetrics> op) {
@@ -224,7 +237,12 @@ public class AuthService implements ApplicationEventPublisherAware {
                 request.getEmail(), request.getDefaultServices());
 
         Set<String> bundles = parseBundles(request.getDefaultServices());
-        Set<User.Role> roles = Services.rolesFor(bundles);
+        // Services.rolesFor still speaks the built-in Role enum — bundle-to-role
+        // is a fixed platform mapping, not something an operator composes — so
+        // convert to the names User.roles now holds.
+        Set<String> roles = Services.rolesFor(bundles).stream()
+                .map(Enum::name)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
         if (roles.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "We don't have a role available for the services you selected.");
@@ -976,7 +994,17 @@ public class AuthService implements ApplicationEventPublisherAware {
             organizerUuid = null;
         }
 
-        String newToken = jwtUtil.generateToken(subject, roleNames, new ArrayList<>(microservices),
+        // Expand the account's roles into the flat permission set the token
+        // carries (V35). Resolved here, at the single mint site, so a permission
+        // change reaches a holder on their next login or refresh — the same
+        // latency the roles claim has always had, and bumping tokenVersion is
+        // the same lever for forcing it sooner.
+        List<String> permissions = permissionResolver == null
+                ? List.of()
+                : new ArrayList<>(permissionResolver.resolve(roleNames));
+
+        String newToken = jwtUtil.generateToken(subject, roleNames, permissions,
+                new ArrayList<>(microservices),
                 tier, verified, user.getPhoneNumber(), loyaltyMerchantId, loyaltyShopId,
                 firstName, middleName, lastName, user.getTokenVersion(), country,
                 user.getUserUuid(), organizerUuid, user.isMustChangePassword());
@@ -1032,8 +1060,15 @@ public class AuthService implements ApplicationEventPublisherAware {
         return parsed;
     }
 
-    private List<String> roleNames(Set<User.Role> roles) {
+    /**
+     * The account's role names for the JWT claim and the auth response. Since
+     * V35 {@code User.roles} already holds names, so this is now just a
+     * null-tolerant copy — kept as a named method because both call sites read
+     * better for it and it is the one place to change if the claim shape ever
+     * needs filtering.
+     */
+    private List<String> roleNames(Set<String> roles) {
         if (roles == null) return List.of();
-        return roles.stream().map(Enum::name).collect(Collectors.toList());
+        return List.copyOf(roles);
     }
 }

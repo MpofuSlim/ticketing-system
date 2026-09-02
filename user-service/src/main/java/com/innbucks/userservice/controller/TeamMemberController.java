@@ -1,5 +1,6 @@
 package com.innbucks.userservice.controller;
 
+import com.innbucks.userservice.security.PermissionCatalog;
 import com.innbucks.userservice.dto.ApiResult;
 import com.innbucks.userservice.dto.CreateTeamMemberDTO;
 import com.innbucks.userservice.dto.UserResponseDTO;
@@ -54,7 +55,7 @@ public class TeamMemberController {
     // caller's organizerUuid claim, which SUPER_ADMIN tokens don't carry.
     // Admin-create would need an organizerUuid in the request body — a
     // separate contract change tracked as a follow-up.
-    @PreAuthorize("hasRole('EVENT_ORGANIZER')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.TEAM_MEMBERS_WRITE + "')")
     @Operation(
             summary = "Onboard a TEAM_MEMBER under your organizer account",
             description = "Creates a new TEAM_MEMBER user stamped with the calling organizer's " +
@@ -115,7 +116,7 @@ public class TeamMemberController {
     }
 
     @GetMapping
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.TEAM_MEMBERS_READ + "')")
     @Operation(
             summary = "List every team member under your organizer account",
             description = "Returns every TEAM_MEMBER the calling organizer has created, active and " +
@@ -164,7 +165,7 @@ public class TeamMemberController {
     }
 
     @GetMapping("/{teamMemberUuid}")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.TEAM_MEMBERS_READ + "')")
     @Operation(
             summary = "Retrieve one of your team members by uuid",
             description = "Returns the team member identified by `teamMemberUuid` if it belongs to " +
@@ -212,7 +213,7 @@ public class TeamMemberController {
     }
 
     @DeleteMapping("/{teamMemberUuid}")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.TEAM_MEMBERS_MANAGE + "')")
     @Operation(
             summary = "Disable a team member (soft-delete)",
             description = "Marks the team member inactive, bumps their token_version so every " +
@@ -264,7 +265,7 @@ public class TeamMemberController {
     }
 
     @PatchMapping("/{teamMemberUuid}/enable")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.TEAM_MEMBERS_MANAGE + "')")
     @Operation(
             summary = "Re-enable a previously disabled team member",
             description = "Flips `active` back to true. The member must log in again (the disable " +
@@ -313,7 +314,7 @@ public class TeamMemberController {
     }
 
     @PostMapping("/{teamMemberUuid}/reset-password")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.TEAM_MEMBERS_MANAGE + "')")
     @Operation(
             summary = "Re-issue a team member's temporary password",
             description = "Mints a fresh 10-character temporary password for the team member and " +
@@ -363,7 +364,7 @@ public class TeamMemberController {
     }
 
     @GetMapping("/{teamMemberUuid}/events")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.TEAM_MEMBERS_READ + "')")
     @Operation(
             summary = "List the events a team member is assigned to",
             description = "Returns the event IDs this team member may scan. **Deny-by-default**: " +
@@ -396,7 +397,7 @@ public class TeamMemberController {
     }
 
     @PutMapping("/{teamMemberUuid}/events/{eventId}")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.TEAM_MEMBERS_MANAGE + "')")
     @Operation(
             summary = "Assign a team member to an event",
             description = "Grants the team member access to this event. **Deny-by-default**: without " +
@@ -433,7 +434,7 @@ public class TeamMemberController {
     }
 
     @DeleteMapping("/{teamMemberUuid}/events/{eventId}")
-    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.TEAM_MEMBERS_MANAGE + "')")
     @Operation(
             summary = "Remove a team member's event assignment",
             description = "Revokes the team member's access to this event. Idempotent. If this was " +

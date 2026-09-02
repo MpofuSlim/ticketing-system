@@ -154,7 +154,7 @@ public class ServiceRequestService {
         user.getDefaultServices().add(req.getService());
         User.Role grantedRole = Services.BUNDLE_ROLES.get(req.getService());
         if (grantedRole != null) {
-            user.getRoles().add(grantedRole);
+            user.getRoles().add(grantedRole.name());
         }
         userRepository.save(user);
 

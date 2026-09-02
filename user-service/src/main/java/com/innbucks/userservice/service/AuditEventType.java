@@ -92,6 +92,34 @@ public enum AuditEventType {
     USER_ROLES_CHANGED,
 
     /**
+     * A role was created through {@code POST /admin/roles} (V35). Carries the
+     * role name and the permissions it was granted.
+     *
+     * <p>Audited for the same reason {@link #USER_ROLES_CHANGED} is, one level
+     * up: since roles became data, "what could this role do at the time" is no
+     * longer answerable from the code, and the current table only shows the end
+     * state. Without these three events, an admin could mint a role, use it, and
+     * delete it, leaving nothing behind.
+     */
+    ROLE_CREATED,
+
+    /**
+     * A role's permission set was replaced through
+     * {@code PUT /admin/roles/{name}/permissions}. Records BOTH the previous and
+     * new sets — a temporary widening that is reverted is exactly the shape of
+     * event the end state cannot show.
+     */
+    ROLE_PERMISSIONS_CHANGED,
+
+    /**
+     * A custom role was deleted through {@code DELETE /admin/roles/{name}}.
+     * Records the permissions it held, so the row remains interpretable after
+     * the role itself is gone. Never fired for a built-in (refused) or for a
+     * role any account still holds (refused).
+     */
+    ROLE_DELETED,
+
+    /**
      * X-Internal-Token validation failed on a /users/internal/** endpoint.
      * Fires from every Internal*Controller after MessageDigest.isEqual rejects
      * (or the presented header is missing / the server-side token is unset).

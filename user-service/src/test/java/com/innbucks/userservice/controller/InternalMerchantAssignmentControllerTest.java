@@ -61,7 +61,7 @@ class InternalMerchantAssignmentControllerTest {
         AuditService audit = mock(AuditService.class);
         UUID a = UUID.randomUUID();
         UUID b = UUID.randomUUID();
-        when(repo.findDistinctLoyaltyMerchantIdsByRole(User.Role.MERCHANT_ADMIN))
+        when(repo.findDistinctLoyaltyMerchantIdsByRole(User.Role.MERCHANT_ADMIN.name()))
                 .thenReturn(List.of(a, b));
 
         ResponseEntity<?> resp = controller(repo, TOKEN, audit)
@@ -133,7 +133,7 @@ class InternalMerchantAssignmentControllerTest {
     void emptyResult_returns200_withEmptyList() {
         UserRepository repo = mock(UserRepository.class);
         AuditService audit = mock(AuditService.class);
-        when(repo.findDistinctLoyaltyMerchantIdsByRole(User.Role.MERCHANT_ADMIN))
+        when(repo.findDistinctLoyaltyMerchantIdsByRole(User.Role.MERCHANT_ADMIN.name()))
                 .thenReturn(List.of());
 
         ResponseEntity<?> resp = controller(repo, TOKEN, audit)

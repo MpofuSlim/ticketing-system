@@ -69,7 +69,7 @@ public class InternalMerchantAssignmentController {
             return ResponseEntity.badRequest()
                     .body(ApiResult.error(HttpStatus.BAD_REQUEST, "Unknown role: " + role));
         }
-        List<String> ids = userRepository.findDistinctLoyaltyMerchantIdsByRole(parsed).stream()
+        List<String> ids = userRepository.findDistinctLoyaltyMerchantIdsByRole(parsed.name()).stream()
                 .filter(java.util.Objects::nonNull)
                 .map(UUID::toString)
                 .collect(Collectors.toList());

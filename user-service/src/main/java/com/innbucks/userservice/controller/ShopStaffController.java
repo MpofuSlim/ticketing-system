@@ -1,5 +1,6 @@
 package com.innbucks.userservice.controller;
 
+import com.innbucks.userservice.security.PermissionCatalog;
 import com.innbucks.userservice.dto.ApiResult;
 import com.innbucks.userservice.dto.BulkShopUserResultDTO;
 import com.innbucks.userservice.dto.CreateShopAdminDTO;
@@ -49,7 +50,7 @@ public class ShopStaffController {
     private final ShopStaffService shopStaffService;
 
     @PostMapping("/admins")
-    @PreAuthorize("hasRole('MERCHANT_ADMIN')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.SHOP_ADMINS_WRITE + "')")
     @Operation(
             summary = "Onboard a SHOP_ADMIN under one of your shops",
             description = "Creates a new SHOP_ADMIN user attached to the supplied shopId. The shop " +
@@ -112,7 +113,7 @@ public class ShopStaffController {
     }
 
     @PostMapping("/users")
-    @PreAuthorize("hasRole('SHOP_ADMIN')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.SHOP_USERS_WRITE + "')")
     @Operation(
             summary = "Onboard a SHOP_USER at your shop",
             description = "Creates a new SHOP_USER (cashier / operator) attached to the caller's " +
@@ -175,7 +176,7 @@ public class ShopStaffController {
     }
 
     @PostMapping(value = "/users/bulk", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    @PreAuthorize("hasRole('SHOP_ADMIN')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.SHOP_USERS_WRITE + "')")
     @Operation(
             summary = "Bulk-onboard SHOP_USERs from a CSV",
             description = "Batch version of `POST /admin/shop-staff/users`. Upload a CSV (multipart field " +
@@ -246,7 +247,7 @@ public class ShopStaffController {
     }
 
     @GetMapping(value = "/users/bulk/template", produces = "text/csv")
-    @PreAuthorize("hasAnyRole('SHOP_ADMIN','MERCHANT_ADMIN')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.SHOP_STAFF_READ + "')")
     @Operation(
             summary = "Download the bulk-import CSV template",
             description = "Returns a ready-to-fill CSV with the exact header the bulk import expects plus " +
@@ -271,7 +272,7 @@ public class ShopStaffController {
     }
 
     @GetMapping("/mine")
-    @PreAuthorize("hasAnyRole('SHOP_ADMIN','MERCHANT_ADMIN')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.SHOP_STAFF_READ + "')")
     @Operation(
             summary = "List the caller's shop staff",
             description = "Returns the shop staff the caller manages. For a **SHOP_ADMIN** this is " +
@@ -347,7 +348,7 @@ public class ShopStaffController {
     }
 
     @GetMapping("/by-merchant/{merchantId}")
-    @PreAuthorize("hasRole('MERCHANT_ADMIN')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.SHOP_STAFF_MERCHANT_READ + "')")
     @Operation(
             summary = "List every staff member under a merchant",
             description = "Returns every SHOP_ADMIN and SHOP_USER attached to any shop under the " +
@@ -413,7 +414,7 @@ public class ShopStaffController {
     }
 
     @GetMapping("/by-shop/{shopId}")
-    @PreAuthorize("hasRole('MERCHANT_ADMIN')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.SHOP_STAFF_MERCHANT_READ + "')")
     @Operation(
             summary = "List staff at a given shop",
             description = "Returns every user attached to the supplied shop. The shop must belong to " +
@@ -487,7 +488,7 @@ public class ShopStaffController {
     }
 
     @PostMapping("/{userUuid}/reset-password")
-    @PreAuthorize("hasAnyRole('SHOP_ADMIN','MERCHANT_ADMIN')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.SHOP_STAFF_PASSWORD_RESET + "')")
     @Operation(
             summary = "Re-issue a shop-staff member's temporary password",
             description = "Mints a fresh temporary password for a shop-staff member (SHOP_ADMIN or " +

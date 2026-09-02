@@ -85,7 +85,7 @@ class TeamMemberServiceTest {
                 .firstName("Olive")
                 .lastName("Mutsa")
                 .phoneNumber("+263771234500")
-                .roles(EnumSet.of(User.Role.EVENT_ORGANIZER))
+                .roles(User.roleNames(User.Role.EVENT_ORGANIZER))
                 .active(true)
                 .build();
     }
@@ -98,7 +98,7 @@ class TeamMemberServiceTest {
                 .firstName("Tariro")
                 .lastName("Chikomo")
                 .phoneNumber("+263773456789")
-                .roles(EnumSet.of(User.Role.TEAM_MEMBER))
+                .roles(User.roleNames(User.Role.TEAM_MEMBER))
                 .createdByOrganizerUuid(organizerUuid)
                 .tokenVersion(3L)
                 .active(true)
@@ -141,7 +141,7 @@ class TeamMemberServiceTest {
         assertThat(result.getRoles()).containsExactly("TEAM_MEMBER");
         assertThat(result.getCreatedByOrganizerUuid()).isEqualTo(organizerUuid);
         assertThat(result.isActive()).isTrue();
-        assertThat(saved.getValue().getRoles()).containsExactly(User.Role.TEAM_MEMBER);
+        assertThat(saved.getValue().getRoles()).containsExactly(User.Role.TEAM_MEMBER.name());
         assertThat(saved.getValue().getCreatedByOrganizerUuid()).isEqualTo(organizerUuid);
         assertThat(saved.getValue().getHomeCountry()).isEqualTo("ZW");
     }
@@ -166,7 +166,7 @@ class TeamMemberServiceTest {
                 .id(2L).userUuid(UUID.randomUUID())
                 .email("shopadmin@example.com").firstName("S").lastName("A")
                 .phoneNumber("+263771111111")
-                .roles(EnumSet.of(User.Role.SHOP_ADMIN))
+                .roles(User.roleNames(User.Role.SHOP_ADMIN))
                 .active(true).build();
         authenticateAs(shopAdmin);
 
@@ -215,7 +215,7 @@ class TeamMemberServiceTest {
                 .id(7L).userUuid(someoneUuid)
                 .email("c@example.com").firstName("C").lastName("X")
                 .phoneNumber("+263778888888")
-                .roles(EnumSet.of(User.Role.CUSTOMER))
+                .roles(User.roleNames(User.Role.CUSTOMER))
                 .active(true).build();
         when(userRepository.findByUserUuid(someoneUuid)).thenReturn(Optional.of(customer));
 
@@ -525,7 +525,7 @@ class TeamMemberServiceTest {
                 .firstName("Sys")
                 .lastName("Admin")
                 .phoneNumber("+263770000000")
-                .roles(EnumSet.of(User.Role.SUPER_ADMIN))
+                .roles(User.roleNames(User.Role.SUPER_ADMIN))
                 .active(true)
                 .build();
     }
@@ -551,7 +551,7 @@ class TeamMemberServiceTest {
         User memberB = teamMember(UUID.randomUUID(), orgB);
         memberB.setId(100L);
         memberB.setEmail("staff-b@example.com");
-        when(userRepository.findByAnyRole(List.of(User.Role.TEAM_MEMBER)))
+        when(userRepository.findByAnyRole(User.roleNames(User.Role.TEAM_MEMBER)))
                 .thenReturn(List.of(memberA, memberB));
 
         List<UserResponseDTO> out = service.listMyTeam();
@@ -567,7 +567,7 @@ class TeamMemberServiceTest {
         // The whole point: admin must never see a 403 here. With no team
         // members anywhere on the platform we return [] cleanly.
         authenticateAsSuperAdmin(superAdmin());
-        when(userRepository.findByAnyRole(List.of(User.Role.TEAM_MEMBER)))
+        when(userRepository.findByAnyRole(User.roleNames(User.Role.TEAM_MEMBER)))
                 .thenReturn(List.of());
 
         assertThat(service.listMyTeam()).isEmpty();

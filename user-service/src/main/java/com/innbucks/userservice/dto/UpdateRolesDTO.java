@@ -16,17 +16,25 @@ import java.util.Set;
 public class UpdateRolesDTO {
 
     /**
-     * The complete role set the account should end up with. Deserialized straight
-     * to the {@link User.Role} enum, so an unrecognised name is a 400 from Jackson
-     * before the controller ever runs — the endpoint can never persist a role the
-     * platform doesn't know about.
+     * The complete role set the account should end up with.
+     *
+     * <p><b>Strings, not the {@link User.Role} enum, as of V35.</b> Roles are now
+     * data — an operator creates them with {@code POST /admin/roles} — so an enum
+     * here would make exactly the roles worth creating un-assignable.
+     *
+     * <p>The validation that Jackson's enum binding used to provide for free has
+     * moved to {@code UserAdminService.setRoles}, which checks every name against
+     * the {@code roles} table and 400s listing the unknown ones. Same status code
+     * as before, a better message, and the check now covers operator-created
+     * roles too — but it is service-layer, so a programmatic caller that skips
+     * the service would no longer be caught. Nothing does today.
      */
     @NotEmpty(message = "roles must contain at least one role")
     @ArraySchema(
             arraySchema = @Schema(
                     description = """
-                            Complete role set for the account. Every value must be one of the platform's \
-                            nine roles:
+                            Complete role set for the account. Every value must name a role that \
+                            exists — list them with `GET /admin/roles`. The nine built-in roles are:
 
                             * `SUPER_ADMIN` — platform owner. Seeded once from `BOOTSTRAP_ADMIN_PASSWORD` \
                             and **never grantable or revocable through this endpoint** (403 either way).
@@ -44,8 +52,12 @@ public class UpdateRolesDTO {
                             * `SHOP_USER` — operates the POS at one loyalty shop. Requires the same shop \
                             scoping, assigned by `POST /admin/shop-staff/users`.
                             * `CUSTOMER` — end user who earns and redeems loyalty points and buys tickets.
+
+                            Any role an operator has created with `POST /admin/roles` is equally \
+                            assignable here, by name. An unknown name is a 400 listing the names that \
+                            did not resolve.
                             """,
                     example = "[\"EVENT_ORGANIZER\", \"CUSTOMER\"]"),
-            schema = @Schema(implementation = User.Role.class))
-    private Set<User.Role> roles;
+            schema = @Schema(type = "string", example = "EVENT_ORGANIZER"))
+    private Set<String> roles;
 }

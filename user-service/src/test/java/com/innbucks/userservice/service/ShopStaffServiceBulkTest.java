@@ -80,7 +80,7 @@ class ShopStaffServiceBulkTest {
 
     private void authenticateAsShopAdmin(UUID shopId, UUID merchantId) {
         User admin = User.builder().email("admin@shop.co.zw")
-                .roles(EnumSet.of(User.Role.SHOP_ADMIN))
+                .roles(User.roleNames(User.Role.SHOP_ADMIN))
                 .loyaltyShopId(shopId).loyaltyMerchantId(merchantId).build();
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(admin.getEmail(), null));
@@ -163,7 +163,7 @@ class ShopStaffServiceBulkTest {
     @Test
     void notShopAdmin_rejectedOnceWith403_beforeParsing() {
         User merchantAdmin = User.builder().email("merchant@x.co.zw")
-                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
                 .loyaltyMerchantId(MERCHANT).build();
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(merchantAdmin.getEmail(), null));

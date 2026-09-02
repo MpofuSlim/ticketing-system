@@ -17,7 +17,8 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
-import java.util.EnumSet;
+import java.util.LinkedHashSet;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -60,6 +61,14 @@ public class UserAdminService {
      * so a plain constructor dependency is both clearer and easier to assert on.
      */
     private final com.innbucks.userservice.security.TokenVersionPublisher tokenVersionPublisher;
+    /**
+     * Validates the role names {@link #setRoles} is asked to assign. Needed as of
+     * V35: roles used to deserialize to the {@code User.Role} enum, so Jackson
+     * rejected an unknown name before the controller ran; now that they are
+     * strings naming rows in {@code roles}, this is the only thing standing
+     * between a typo and an account that authenticates but authorizes nowhere.
+     */
+    private final com.innbucks.userservice.repository.RoleRepository roleRepository;
 
     /**
      * Backward-compatible overload used by unit tests / callers that don't have
@@ -256,25 +265,43 @@ public class UserAdminService {
      * managed by BOOTSTRAP_ADMIN_PASSWORD" property.
      */
     @Transactional
-    public User setRoles(Long id, Set<User.Role> roles, String adminEmail, AuditContext auditContext) {
+    public User setRoles(Long id, Set<String> roles, String adminEmail, AuditContext auditContext) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new NotFoundException("User not found: " + id));
 
-        // Normalize the input up front: copy into an EnumSet, tolerating a null
-        // from a programmatic caller, and validate the COPY. Everything below
-        // then reads one well-typed set instead of the raw argument.
-        // (EnumSet.copyOf(Collection) can't do this — it throws on an empty
-        // non-EnumSet argument, which is precisely the case being rejected.)
+        // Normalize the input up front and validate the COPY, so everything
+        // below reads one well-formed set instead of the raw argument.
         //
         // Bean validation (@NotEmpty) already covers the HTTP path; the empty
         // check keeps the invariant for any programmatic caller. An account with
         // no roles could authenticate but authorize for nothing — a silent
         // brick, not a state any caller means to reach.
-        Set<User.Role> requested = EnumSet.noneOf(User.Role.class);
-        if (roles != null) requested.addAll(roles);
+        Set<String> requested = new LinkedHashSet<>();
+        if (roles != null) {
+            for (String role : roles) {
+                if (role != null && !role.isBlank()) requested.add(role.trim().toUpperCase(Locale.ROOT));
+            }
+        }
         if (requested.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "roles must contain at least one role");
+        }
+
+        // Existence check against the roles table. This guard is LOAD-BEARING as
+        // of V35 and did not need to exist before: roles used to deserialize
+        // straight to the User.Role enum, so Jackson rejected an unknown name
+        // with a 400 before the controller ran. Now that roles are data and the
+        // DTO takes strings, nothing upstream validates them — without this,
+        // "EVENT_ORGANISER" would persist happily and grant nothing, presenting
+        // as a user who authenticates fine and is refused everywhere.
+        Set<String> known = new LinkedHashSet<>();
+        roleRepository.findAllByNameIn(requested).forEach(r -> known.add(r.getName()));
+        if (!known.containsAll(requested)) {
+            Set<String> unknown = new LinkedHashSet<>(requested);
+            unknown.removeAll(known);
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Unknown role(s): " + String.join(", ", unknown)
+                            + ". List the available roles with GET /admin/roles.");
         }
 
         if (user.hasRole(User.Role.SUPER_ADMIN)) {
@@ -284,7 +311,7 @@ public class UserAdminService {
                     "The SUPER_ADMIN account's roles cannot be changed.");
         }
 
-        if (requested.contains(User.Role.SUPER_ADMIN)) {
+        if (requested.contains(User.Role.SUPER_ADMIN.name())) {
             log.warn("setRoles refused SUPER_ADMIN grant userId={} by={}",
                     id, adminEmail == null ? "system" : adminEmail);
             throw new ResponseStatusException(HttpStatus.FORBIDDEN,
@@ -299,30 +326,25 @@ public class UserAdminService {
         // fails inside every handler ("caller's JWT has no shopId") — a broken
         // account that looks correctly provisioned. Refuse up front and name the
         // endpoint that does the stamping.
-        if ((requested.contains(User.Role.SHOP_ADMIN) || requested.contains(User.Role.SHOP_USER))
+        if ((requested.contains(User.Role.SHOP_ADMIN.name()) || requested.contains(User.Role.SHOP_USER.name()))
                 && (user.getLoyaltyMerchantId() == null || user.getLoyaltyShopId() == null)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "SHOP_ADMIN and SHOP_USER require the account to be scoped to a loyalty "
                             + "merchant and shop; create shop staff via POST /admin/shop-staff/admins "
                             + "or POST /admin/shop-staff/users instead.");
         }
-        if (requested.contains(User.Role.TEAM_MEMBER) && user.getCreatedByOrganizerUuid() == null) {
+        if (requested.contains(User.Role.TEAM_MEMBER.name()) && user.getCreatedByOrganizerUuid() == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "TEAM_MEMBER requires the account to be stamped with its parent EVENT_ORGANIZER; "
                             + "create team members via POST /event-organizer/team-members instead.");
         }
 
-        // EnumSet.copyOf(Collection) throws on an empty non-EnumSet argument, so
-        // build the copies by hand — `previous` is legitimately empty on a row
-        // that carries no roles, and that must not blow up the audit.
-        //
         // No null-guard on getRoles(): the field is initialised at its
-        // declaration (@Builder.Default EnumSet.noneOf) and Hibernate always
+        // declaration (@Builder.Default LinkedHashSet) and Hibernate always
         // injects a collection wrapper for an @ElementCollection, so it is
         // non-null on every path into here. Qodana flagged the guard as dead.
-        Set<User.Role> current = user.getRoles();
-        Set<User.Role> previous = EnumSet.noneOf(User.Role.class);
-        previous.addAll(current);
+        Set<String> current = user.getRoles();
+        Set<String> previous = new LinkedHashSet<>(current);
 
         // Idempotent: re-submitting the current set is a no-op. Skipping the
         // token bump here matters — otherwise a UI that PUTs on every save would
@@ -355,8 +377,8 @@ public class UserAdminService {
                 String.valueOf(saved.getId()), AuditService.TARGET_TYPE_USER,
                 Map.of(
                         "targetEmail", saved.getEmail() == null ? "" : saved.getEmail(),
-                        "previousRoles", previous.stream().map(Enum::name).sorted().toList(),
-                        "newRoles", requested.stream().map(Enum::name).sorted().toList()),
+                        "previousRoles", previous.stream().sorted().toList(),
+                        "newRoles", requested.stream().sorted().toList()),
                 auditContext == null ? AuditContext.none() : auditContext);
 
         return saved;

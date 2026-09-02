@@ -331,7 +331,7 @@ public class OtpService {
                     .lastName("Pending")
                     .phoneNumber(pending.getPhoneNumber())
                     .password(pending.getPasswordHash())
-                    .roles(EnumSet.of(User.Role.CUSTOMER))
+                    .roles(User.roleNames(User.Role.CUSTOMER))
                     .mfaEnabled(false)
                     .active(true)
                     // Customers self-onboard via OTP — there is no SUPER_ADMIN

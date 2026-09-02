@@ -166,6 +166,64 @@ Concretely:
   `ShopStaffController` (user-service) for the canonical shape — copy
   that style for new controllers.
 
+## Roles are DATA, permissions are CODE (user-service V35)
+
+**An operator creates roles at runtime (`POST /admin/roles`); permissions are a
+fixed vocabulary defined in `PermissionCatalog.java` and can only be added by a
+code change.** That asymmetry is the whole design, not an unfinished half of it:
+
+- A permission is real only because a `@PreAuthorize` names it. One invented at
+  runtime would be a string nothing consults — exactly the inert-label trap
+  `PRODUCT_OFFICER` sat in for months ("no `@PreAuthorize` names them, so a
+  holder is authorized for exactly what a role-less account is"). So there is
+  **no `POST /admin/permissions`, deliberately** — don't add one.
+- A role is just a named bundle of permissions that already exist and are
+  already enforced, so composing one is useful the instant it is saved.
+
+Concretely, when you add a permission: add the constant to `PermissionCatalog`,
+use it in the `@PreAuthorize`, and **grant it to the built-in roles that should
+hold it in a migration**. `PermissionCatalogInitializer` upserts the catalog
+into the `permissions` table at boot, so the permission itself needs no
+migration — only the grants do. **Never enumerate permissions for
+`SUPER_ADMIN`**: it holds the `*` wildcard, which `PermissionResolver` expands
+against the live catalog at token-mint time. Enumerating would silently lock the
+platform owner out of every endpoint added afterwards, presenting as a
+mysterious 403 that reads like a bug in the new endpoint.
+
+Other load-bearing details:
+
+- **`User.roles` is `Set<String>`, not the `User.Role` enum.** The enum survives
+  as a constants holder for the nine built-ins, so code says
+  `Role.SUPER_ADMIN.name()` rather than a literal and a typo fails the build.
+  `user_roles.role` was always `VARCHAR(255)` with no CHECK (V3; V22 dropped a
+  stray one), so this needed no migration. Don't add a role constant to the enum
+  for a new operator-facing role — create it through the API. Add one only when
+  this service's code must name it.
+- **`UserAdminService.setRoles` validates names against the `roles` table, and
+  that check is load-bearing.** It did not need to exist before: Jackson's enum
+  binding used to 400 an unknown name before the controller ran. Now nothing
+  upstream does, so without it `EVENT_ORGANISER` would persist happily and
+  present as a user who authenticates fine and is refused everywhere.
+- **Roles and permissions become authorities in different namespaces** —
+  `ROLE_<UPPER_SNAKE>` vs the bare, lowercase, colon-namespaced permission code.
+  They cannot collide, and `PermissionResolverTest` pins that. Both are granted
+  by `JwtFilter` because the `hasRole` → `hasAuthority` migration runs one
+  service at a time.
+- **Only user-service's own checks are migrated.** booking/event/seat still use
+  `hasRole`, so a custom role grants nothing there yet. Worse and more subtle:
+  `ShopStaffService` and `TeamMemberService` keep **service-layer** built-in-role
+  guards, so a custom role holding `shop-admins:write` or `team-members:write`
+  passes `@PreAuthorize` and is then refused inside the service. Those handlers
+  derive the caller's merchant/shop scope from the role, so making them
+  role-agnostic is a design change, not a rename. Both sites carry a NOTE.
+- Deleting a role any account still holds is refused (409), and built-ins can
+  never be deleted or renamed — code references them by literal name, so a
+  rename would stop matching silently rather than fail loudly. Their permissions
+  *are* editable; that is the supported way to change what a built-in can do.
+- `ROLE_CREATED` / `ROLE_PERMISSIONS_CHANGED` / `ROLE_DELETED` go through the
+  tamper-evident audit chain, because "who could do what, when" is no longer
+  answerable from the code once roles are data.
+
 ## Timestamps — store everything in UTC
 
 The user/booking/seat/event services map timestamps as `LocalDateTime`

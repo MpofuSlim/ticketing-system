@@ -124,7 +124,7 @@ class AuthServiceTest {
         assertEquals("hashed", saved.getValue().getPassword());
         assertFalse(saved.getValue().isActive());
         assertFalse(saved.getValue().isApproved());
-        assertTrue(saved.getValue().getRoles().contains(User.Role.MERCHANT_ADMIN));
+        assertTrue(saved.getValue().getRoles().contains(User.Role.MERCHANT_ADMIN.name()));
         // Bundle list (not the expanded microservices) is what we store and surface
         assertEquals(new LinkedHashSet<>(List.of("loyalty")), saved.getValue().getDefaultServices());
         // Tenant profile is created only for business accounts (isBusiness=true).
@@ -150,7 +150,7 @@ class AuthServiceTest {
 
         ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
         verify(userRepo).save(saved.capture());
-        assertTrue(saved.getValue().getRoles().contains(User.Role.EVENT_ORGANIZER));
+        assertTrue(saved.getValue().getRoles().contains(User.Role.EVENT_ORGANIZER.name()));
         assertEquals(List.of("ticketing"), response.getDefaultServices());
         // No tenant profile for a non-business registration.
         verify(tenantRepo, never()).save(any());
@@ -172,8 +172,8 @@ class AuthServiceTest {
 
         ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
         verify(userRepo).save(saved.capture());
-        assertTrue(saved.getValue().getRoles().contains(User.Role.EVENT_ORGANIZER));
-        assertTrue(saved.getValue().getRoles().contains(User.Role.MERCHANT_ADMIN));
+        assertTrue(saved.getValue().getRoles().contains(User.Role.EVENT_ORGANIZER.name()));
+        assertTrue(saved.getValue().getRoles().contains(User.Role.MERCHANT_ADMIN.name()));
         // Stored bundles, not the expanded set
         assertEquals(new LinkedHashSet<>(List.of("ticketing", "loyalty")),
                 saved.getValue().getDefaultServices());
@@ -290,14 +290,14 @@ class AuthServiceTest {
         User user = User.builder()
                 .id(1L)
                 .email("u@example.com").password("hashed")
-                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
                 .defaultServices(new LinkedHashSet<>(List.of("loyalty")))
                 .active(true).mfaEnabled(false).build();
         when(userRepo.findByEmail("u@example.com")).thenReturn(Optional.of(user));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
         // The JWT services claim should be the expanded microservices for the loyalty bundle.
         // MERCHANT_ADMIN — JwtUtil emits no name claims for staff roles.
-        when(jwt.generateToken(eq("u@example.com"), eq(List.of("MERCHANT_ADMIN")),
+        when(jwt.generateToken(eq("u@example.com"), eq(List.of("MERCHANT_ADMIN")), any(),
                 eq(List.of("loyalty", "payments")), eq(4), eq(true), isNull(), isNull(), isNull(),
                 isNull(), isNull(), isNull(), anyLong(), isNull(), any(), any(), anyBoolean())).thenReturn("tok");
 
@@ -321,14 +321,14 @@ class AuthServiceTest {
         User user = User.builder()
                 .id(1L)
                 .email("admin@innbucks.co.zw").password("hashed")
-                .roles(EnumSet.of(User.Role.SUPER_ADMIN))
+                .roles(User.roleNames(User.Role.SUPER_ADMIN))
                 .defaultServices(new LinkedHashSet<>(List.of("ticketing", "loyalty")))
                 .active(true).build();
         when(userRepo.findByEmail("admin@innbucks.co.zw")).thenReturn(Optional.of(user));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
         // This superadmin has no stored country, so the JWT country claim
         // defaults to Zimbabwe (see login_superAdminWithoutCountry_* below).
-        when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), isNull(), isNull(), isNull(),
+        when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), isNull(), isNull(), isNull(),
                 any(), any(), any(), anyLong(), eq("Zimbabwe"), any(), any(), anyBoolean())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
@@ -342,7 +342,7 @@ class AuthServiceTest {
 
         // Verify the JWT was issued with the expanded set covering every microservice.
         ArgumentCaptor<List<String>> servicesCaptor = ArgumentCaptor.forClass(List.class);
-        verify(jwt).generateToken(any(), any(), servicesCaptor.capture(), anyInt(), anyBoolean(), isNull(), isNull(), isNull(),
+        verify(jwt).generateToken(any(), any(), any(), servicesCaptor.capture(), anyInt(), anyBoolean(), isNull(), isNull(), isNull(),
                 any(), any(), any(), anyLong(), eq("Zimbabwe"), any(), any(), anyBoolean());
         List<String> services = servicesCaptor.getValue();
         assertTrue(services.contains("events"));
@@ -364,11 +364,11 @@ class AuthServiceTest {
         User user = User.builder()
                 .id(1L)
                 .email("admin@innbucks.co.zw").password("hashed")
-                .roles(EnumSet.of(User.Role.SUPER_ADMIN))
+                .roles(User.roleNames(User.Role.SUPER_ADMIN))
                 .active(true).build(); // no country stored
         when(userRepo.findByEmail("admin@innbucks.co.zw")).thenReturn(Optional.of(user));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
-        when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+        when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
                 any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
@@ -378,7 +378,7 @@ class AuthServiceTest {
                 .login(req, null, com.innbucks.userservice.service.AuditContext.none());
 
         ArgumentCaptor<String> countryCaptor = ArgumentCaptor.forClass(String.class);
-        verify(jwt).generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+        verify(jwt).generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
                 any(), any(), any(), anyLong(), countryCaptor.capture(), any(), any(), anyBoolean());
         assertEquals("Zimbabwe", countryCaptor.getValue(),
                 "SUPER_ADMIN with no stored country must default the JWT country claim to Zimbabwe");
@@ -394,12 +394,12 @@ class AuthServiceTest {
         User user = User.builder()
                 .id(2L)
                 .email("admin-ke@innbucks.co.ke").password("hashed")
-                .roles(EnumSet.of(User.Role.SUPER_ADMIN))
+                .roles(User.roleNames(User.Role.SUPER_ADMIN))
                 .country("Kenya")
                 .active(true).build();
         when(userRepo.findByEmail("admin-ke@innbucks.co.ke")).thenReturn(Optional.of(user));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
-        when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+        when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
                 any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
@@ -409,7 +409,7 @@ class AuthServiceTest {
                 .login(req, null, com.innbucks.userservice.service.AuditContext.none());
 
         ArgumentCaptor<String> countryCaptor = ArgumentCaptor.forClass(String.class);
-        verify(jwt).generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+        verify(jwt).generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
                 any(), any(), any(), anyLong(), countryCaptor.capture(), any(), any(), anyBoolean());
         assertEquals("Kenya", countryCaptor.getValue(),
                 "An explicit country on a SUPER_ADMIN must NOT be overridden by the Zimbabwe default");
@@ -425,14 +425,14 @@ class AuthServiceTest {
         User user = User.builder()
                 .id(7L)
                 .phoneNumber("+263777000099").password("hashed")
-                .roles(EnumSet.of(User.Role.CUSTOMER))
+                .roles(User.roleNames(User.Role.CUSTOMER))
                 .active(true).mfaEnabled(false).build();
         CustomerProfile profile = CustomerProfile.builder()
                 .user(user).registrationTier(2).verified(false).build();
         when(userRepo.findByPhoneNumber("+263777000099")).thenReturn(Optional.of(user));
         when(customerRepo.findByUserId(7L)).thenReturn(Optional.of(profile));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
-        when(jwt.generateToken(eq("+263777000099"), eq(List.of("CUSTOMER")),
+        when(jwt.generateToken(eq("+263777000099"), eq(List.of("CUSTOMER")), any(),
                 any(), eq(2), eq(false), eq("+263777000099"), isNull(), isNull(),
                 any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean())).thenReturn("tok");
 
@@ -458,7 +458,7 @@ class AuthServiceTest {
         // reaches the password check — an unapproved account would short-circuit
         // to the pending-approval branch instead.
         User user = User.builder().email("u@example.com").password("hashed")
-                .roles(EnumSet.of(User.Role.CUSTOMER)).active(true).approved(true).build();
+                .roles(User.roleNames(User.Role.CUSTOMER)).active(true).approved(true).build();
         when(userRepo.findByEmail("u@example.com")).thenReturn(Optional.of(user));
         when(encoder.matches(any(), any())).thenReturn(false);
 
@@ -480,7 +480,7 @@ class AuthServiceTest {
         // one has a real password and must fall through to the not-active check
         // after the password matches, NOT the pending-approval branch.
         User user = User.builder().email("u@example.com").password("hashed")
-                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
                 .active(false).approved(true).build();
         when(userRepo.findByEmail("u@example.com")).thenReturn(Optional.of(user));
         when(encoder.matches(any(), any())).thenReturn(true);
@@ -503,7 +503,7 @@ class AuthServiceTest {
         // NOT the generic "Invalid credentials" — and must never even reach the
         // password check (a pending account has no real password to match).
         User user = User.builder().id(42L).email("pending@example.com").password("placeholder-hash")
-                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
                 .active(false).approved(false).build();
         when(userRepo.findByEmail("pending@example.com")).thenReturn(Optional.of(user));
 
@@ -540,13 +540,13 @@ class AuthServiceTest {
         PasswordEncoder encoder = mock(PasswordEncoder.class);
         JwtUtil jwt = mock(JwtUtil.class);
         User user = User.builder().id(1L).email("u@example.com").password("hashed")
-                .roles(EnumSet.of(User.Role.CUSTOMER)).active(true).mfaEnabled(true).build();
+                .roles(User.roleNames(User.Role.CUSTOMER)).active(true).mfaEnabled(true).build();
         CustomerProfile profile = CustomerProfile.builder()
                 .user(user).registrationTier(1).verified(false).build();
         when(userRepo.findByEmail(any())).thenReturn(Optional.of(user));
         when(customerRepo.findByUserId(1L)).thenReturn(Optional.of(profile));
         when(encoder.matches(any(), any())).thenReturn(true);
-        when(jwt.generateToken(eq("u@example.com"), eq(List.of("CUSTOMER")),
+        when(jwt.generateToken(eq("u@example.com"), eq(List.of("CUSTOMER")), any(),
                 any(), anyInt(), anyBoolean(), isNull(), isNull(), isNull(),
                 any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean())).thenReturn("tok");
 
@@ -580,14 +580,14 @@ class AuthServiceTest {
                 .firstName("U").lastName("U")
                 .phoneNumber("0777000042")
                 .password("hashed")
-                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
                 .defaultServices(new LinkedHashSet<>(List.of("loyalty")))
                 .active(true)
                 .tokenVersion(7L) // already had 7 prior sessions
                 .build();
         when(userRepo.findByEmail("u@example.com")).thenReturn(Optional.of(user));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
-        when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+        when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
                 any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean())).thenReturn("tok");
 
         LoginRequestDTO req = new LoginRequestDTO();
@@ -604,7 +604,7 @@ class AuthServiceTest {
         // pre-login one (7) — otherwise the very token we just issued would
         // be rejected by JwtFilter on the next request.
         ArgumentCaptor<Long> versionCaptor = ArgumentCaptor.forClass(Long.class);
-        verify(jwt).generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+        verify(jwt).generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
                 any(), any(), any(), versionCaptor.capture(), isNull(), any(), any(), anyBoolean());
         assertEquals(8L, versionCaptor.getValue());
     }
@@ -628,14 +628,14 @@ class AuthServiceTest {
                 .email("u@example.com")
                 .phoneNumber("0777000042")
                 .password("hashed")
-                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
                 .defaultServices(new LinkedHashSet<>(List.of("loyalty")))
                 .active(true)
                 .tokenVersion(7L)
                 .build();
         when(userRepo.findByEmail("u@example.com")).thenReturn(Optional.of(user));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
-        when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+        when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
                 any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean())).thenReturn("tok");
 
         AuthService svc = newService(userRepo, mock(TenantProfileRepository.class),
@@ -657,7 +657,7 @@ class AuthServiceTest {
                 .id(101L)
                 .email("alice@example.com")
                 .password("hashed")
-                .roles(EnumSet.of(User.Role.CUSTOMER))
+                .roles(User.roleNames(User.Role.CUSTOMER))
                 .active(true)
                 .failedLoginAttempts(attempts)
                 .lockedUntil(lockedUntil)
@@ -819,7 +819,7 @@ class AuthServiceTest {
         CustomerProfile profile = CustomerProfile.builder().user(user).registrationTier(2).verified(true).build();
         when(customerRepo.findByUserId(101L)).thenReturn(Optional.of(profile));
         when(encoder.matches("right", "hashed")).thenReturn(true);
-        when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+        when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
                 any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean())).thenReturn("tok");
 
         AuthResponseDTO resp = newService(userRepo, mock(TenantProfileRepository.class),
@@ -952,7 +952,7 @@ class AuthServiceTest {
         CustomerProfile profile = CustomerProfile.builder().user(user).registrationTier(2).verified(true).build();
         when(customerRepo.findByUserId(101L)).thenReturn(Optional.of(profile));
         when(encoder.matches("right", "hashed")).thenReturn(true);
-        when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+        when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
                 any(), any(), any(), anyLong(), isNull(), any(), any(), anyBoolean())).thenReturn("tok");
 
         newService(userRepo, mock(TenantProfileRepository.class), customerRepo, encoder, jwt)
@@ -1001,7 +1001,7 @@ class AuthServiceTest {
         PasswordEncoder encoder = mock(PasswordEncoder.class);
         User user = User.builder()
                 .id(1L).email("alice@x.co").password("hashed-current")
-                .roles(EnumSet.of(User.Role.CUSTOMER)).active(true).build();
+                .roles(User.roleNames(User.Role.CUSTOMER)).active(true).build();
         when(userRepo.findByEmail("alice@x.co")).thenReturn(Optional.of(user));
         when(encoder.matches("wrong", "hashed-current")).thenReturn(false);
 
@@ -1021,7 +1021,7 @@ class AuthServiceTest {
         PasswordEncoder encoder = mock(PasswordEncoder.class);
         User user = User.builder()
                 .id(1L).email("alice@x.co").password("hashed-same")
-                .roles(EnumSet.of(User.Role.CUSTOMER)).active(true).build();
+                .roles(User.roleNames(User.Role.CUSTOMER)).active(true).build();
         when(userRepo.findByEmail("alice@x.co")).thenReturn(Optional.of(user));
         when(encoder.matches("same", "hashed-same")).thenReturn(true);
 
@@ -1048,7 +1048,7 @@ class AuthServiceTest {
         User user = User.builder()
                 .id(7L).email("alice@x.co").password("hashed-current")
                 .tokenVersion(3L)
-                .roles(EnumSet.of(User.Role.CUSTOMER)).active(true).build();
+                .roles(User.roleNames(User.Role.CUSTOMER)).active(true).build();
         when(userRepo.findByEmail("alice@x.co")).thenReturn(Optional.of(user));
         when(userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
         when(encoder.matches("current", "hashed-current")).thenReturn(true);
@@ -1088,7 +1088,7 @@ class AuthServiceTest {
                 .id(55L)
                 .email("ops@innbucks.co.zw")
                 .password("hashed")
-                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
                 .defaultServices(new LinkedHashSet<>(List.of("loyalty")))
                 .active(true)
                 .mfaEnabled(true)
@@ -1122,7 +1122,7 @@ class AuthServiceTest {
         when(userRepo.findByEmail("ops@innbucks.co.zw")).thenReturn(Optional.of(user));
         when(encoder.matches("pw", "hashed")).thenReturn(true);
         when(refreshTokenService.issueNewFamily(any(), any())).thenReturn("refresh");
-        when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+        when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
                 any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean())).thenReturn("tok");
 
         com.innbucks.userservice.security.MfaPolicy policy =
@@ -1237,7 +1237,7 @@ class AuthServiceTest {
         User user = mfaSystemUser();
         when(userRepo.findById(55L)).thenReturn(Optional.of(user));
         when(refreshTokenService.issueNewFamily(any(), any())).thenReturn("refresh");
-        when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+        when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
                 any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean())).thenReturn("tok");
 
         com.innbucks.userservice.security.MfaTokenService tokenService =
@@ -1328,7 +1328,7 @@ class AuthServiceTest {
         user.setMfaFailedAttempts(3); // pretend 3 prior wrong codes
         when(userRepo.findById(55L)).thenReturn(Optional.of(user));
         when(refreshTokenService.issueNewFamily(any(), any())).thenReturn("refresh");
-        when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+        when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
                 any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean())).thenReturn("tok");
 
         com.innbucks.userservice.security.MfaTokenService tokenService =
@@ -1361,7 +1361,7 @@ class AuthServiceTest {
         User user = mfaSystemUser();
         when(userRepo.findById(55L)).thenReturn(Optional.of(user));
         when(refreshTokenService.issueNewFamily(any(), any())).thenReturn("refresh");
-        when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+        when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
                 any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean())).thenReturn("tok");
 
         com.innbucks.userservice.security.MfaTokenService tokenService =
@@ -1396,7 +1396,7 @@ class AuthServiceTest {
         User user = mfaSystemUser();
         when(userRepo.findById(55L)).thenReturn(Optional.of(user));
         when(refreshTokenService.issueNewFamily(any(), any())).thenReturn("refresh");
-        when(jwt.generateToken(any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+        when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
                 any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean())).thenReturn("tok");
 
         com.innbucks.userservice.security.MfaTokenService tokenService =
@@ -1426,7 +1426,7 @@ class AuthServiceTest {
         User user = User.builder()
                 .id(7L).email("alice@x.co").password("hashed-current")
                 .tokenVersion(3L)
-                .roles(EnumSet.of(User.Role.CUSTOMER)).active(true).build();
+                .roles(User.roleNames(User.Role.CUSTOMER)).active(true).build();
         when(userRepo.findByEmail("alice@x.co")).thenReturn(Optional.of(user));
         when(userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
         when(encoder.matches("current", "hashed-current")).thenReturn(true);

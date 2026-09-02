@@ -57,12 +57,16 @@ public interface UserRepository extends JpaRepository<User, Long> {
      * administrators / staff while keeping the (much larger) customer
      * population off the page. `NOT MEMBER OF` is the JPA-standard way to
      * filter an @ElementCollection without dropping to a native query.
+     *
+     * <p>Takes a role NAME rather than the {@code User.Role} enum as of V35:
+     * {@code u.roles} is a {@code Set<String>} now, so an enum parameter would
+     * compile and then fail to match anything at runtime.
      */
     @Query("SELECT u FROM User u WHERE :role NOT MEMBER OF u.roles")
-    List<User> findAllExcludingRole(@Param("role") User.Role role);
+    List<User> findAllExcludingRole(@Param("role") String role);
 
     @Query("SELECT u FROM User u WHERE u.active = :active AND :role NOT MEMBER OF u.roles")
-    List<User> findByActiveExcludingRole(@Param("active") boolean active, @Param("role") User.Role role);
+    List<User> findByActiveExcludingRole(@Param("active") boolean active, @Param("role") String role);
 
     /**
      * Users carrying ANY of the supplied roles. Backs the SUPER_ADMIN
@@ -76,10 +80,10 @@ public interface UserRepository extends JpaRepository<User, Long> {
      * otherwise produce.
      */
     @Query("SELECT DISTINCT u FROM User u JOIN u.roles r WHERE r IN :roles")
-    List<User> findByAnyRole(@Param("roles") Collection<User.Role> roles);
+    List<User> findByAnyRole(@Param("roles") Collection<String> roles);
 
     @Query("SELECT DISTINCT u FROM User u JOIN u.roles r WHERE u.active = :active AND r IN :roles")
-    List<User> findByActiveAndAnyRole(@Param("active") boolean active, @Param("roles") Collection<User.Role> roles);
+    List<User> findByActiveAndAnyRole(@Param("active") boolean active, @Param("roles") Collection<String> roles);
 
     /**
      * Distinct {@code loyalty_merchant_id} values from every user carrying
@@ -93,7 +97,7 @@ public interface UserRepository extends JpaRepository<User, Long> {
      */
     @Query("SELECT DISTINCT u.loyaltyMerchantId FROM User u JOIN u.roles r "
             + "WHERE r = :role AND u.loyaltyMerchantId IS NOT NULL")
-    List<UUID> findDistinctLoyaltyMerchantIdsByRole(@Param("role") User.Role role);
+    List<UUID> findDistinctLoyaltyMerchantIdsByRole(@Param("role") String role);
 
     /**
      * Project-only lookup for the token_version column. JwtFilter calls this

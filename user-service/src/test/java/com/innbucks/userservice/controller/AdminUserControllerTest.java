@@ -52,7 +52,7 @@ class AdminUserControllerTest {
                 .email("test-bundles@example.com")
                 .phoneNumber("+1234567890")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.EVENT_ORGANIZER, User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.EVENT_ORGANIZER, User.Role.MERCHANT_ADMIN))
                 .defaultServices(new LinkedHashSet<>(List.of("ticketing", "loyalty")))
                 .active(true)
                 .build();
@@ -82,7 +82,7 @@ class AdminUserControllerTest {
                 .email("inactive-user@example.com")
                 .phoneNumber("+0987654321")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.EVENT_ORGANIZER))
+                .roles(User.roleNames(User.Role.EVENT_ORGANIZER))
                 .defaultServices(new LinkedHashSet<>(List.of("ticketing")))
                 .active(false)
                 .build();
@@ -113,7 +113,7 @@ class AdminUserControllerTest {
                 .email("sysadmin-default@example.com")
                 .phoneNumber("+260000000001")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
                 .active(true)
                 .build();
         User customer = User.builder()
@@ -122,7 +122,7 @@ class AdminUserControllerTest {
                 .email("customer-default@example.com")
                 .phoneNumber("+260000000002")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.CUSTOMER))
+                .roles(User.roleNames(User.Role.CUSTOMER))
                 .active(true)
                 .build();
         userRepository.save(systemUser);
@@ -149,7 +149,7 @@ class AdminUserControllerTest {
                 .email("customer-optin@example.com")
                 .phoneNumber("+260000000003")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.CUSTOMER))
+                .roles(User.roleNames(User.Role.CUSTOMER))
                 .active(true)
                 .build();
         userRepository.save(customer);
@@ -175,7 +175,7 @@ class AdminUserControllerTest {
                 .firstName("Rumbi").lastName("Moyo")
                 .email("rumbi-listusers@showtime.co.zw").phoneNumber("+263772999000")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.EVENT_ORGANIZER))
+                .roles(User.roleNames(User.Role.EVENT_ORGANIZER))
                 .defaultServices(new LinkedHashSet<>(List.of("ticketing")))
                 .active(true)
                 .business(true)
@@ -198,7 +198,7 @@ class AdminUserControllerTest {
                 .firstName("Farai").lastName("Dube")
                 .email("farai-listusers@example.com").phoneNumber("+263773111222")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.SHOP_ADMIN))
+                .roles(User.roleNames(User.Role.SHOP_ADMIN))
                 .active(true)
                 .build();
         userRepository.save(shopAdmin);
@@ -243,7 +243,7 @@ class AdminUserControllerTest {
                 .email("loyalty-org@example.com")
                 .phoneNumber("+1111111111")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
                 .defaultServices(new LinkedHashSet<>(List.of("loyalty")))
                 .active(false)
                 .build();
@@ -268,7 +268,7 @@ class AdminUserControllerTest {
                 .firstName("Tendai").lastName("Ncube")
                 .email("tendai@acme-merch.co.zw").phoneNumber("+263772345678")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
                 .defaultServices(new LinkedHashSet<>(List.of("loyalty")))
                 .active(true)
                 .business(true)
@@ -291,7 +291,7 @@ class AdminUserControllerTest {
                 .firstName("Rumbi").lastName("Moyo")
                 .email("organizer@example.com").phoneNumber("+263770000001")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.EVENT_ORGANIZER))
+                .roles(User.roleNames(User.Role.EVENT_ORGANIZER))
                 .defaultServices(new LinkedHashSet<>(List.of("ticketing")))
                 .active(true)
                 .build();
@@ -302,7 +302,7 @@ class AdminUserControllerTest {
                 .firstName("Kuda").lastName("Dube")
                 .email("both@example.com").phoneNumber("+263770000009")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.EVENT_ORGANIZER, User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.EVENT_ORGANIZER, User.Role.MERCHANT_ADMIN))
                 .defaultServices(new LinkedHashSet<>(List.of("ticketing", "loyalty")))
                 .active(true)
                 .build();
@@ -313,7 +313,7 @@ class AdminUserControllerTest {
                 .firstName("Shop").lastName("Admin")
                 .email("shop-admin@example.com").phoneNumber("+263770000004")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.SHOP_ADMIN))
+                .roles(User.roleNames(User.Role.SHOP_ADMIN))
                 .active(true)
                 .build();
         userRepository.save(shopAdmin);
@@ -345,7 +345,7 @@ class AdminUserControllerTest {
                 .firstName("Active").lastName("Merchant")
                 .email("active-merch@example.com").phoneNumber("+263770000002")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
                 .defaultServices(new LinkedHashSet<>(List.of("loyalty")))
                 .active(true)
                 .build();
@@ -355,7 +355,7 @@ class AdminUserControllerTest {
                 .firstName("Pending").lastName("Merchant")
                 .email("pending-merch@example.com").phoneNumber("+263770000003")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
                 .defaultServices(new LinkedHashSet<>(List.of("loyalty")))
                 .active(false)
                 .build();
@@ -366,7 +366,7 @@ class AdminUserControllerTest {
                 .firstName("Pending").lastName("Organizer")
                 .email("pending-organizer@example.com").phoneNumber("+263770000005")
                 .password(passwordEncoder.encode("Password123"))
-                .roles(EnumSet.of(User.Role.EVENT_ORGANIZER))
+                .roles(User.roleNames(User.Role.EVENT_ORGANIZER))
                 .defaultServices(new LinkedHashSet<>(List.of("ticketing")))
                 .active(false)
                 .build();

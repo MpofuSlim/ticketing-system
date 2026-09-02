@@ -98,6 +98,7 @@ public class JwtFilter extends OncePerRequestFilter {
                 return;
             }
             List<String> roles = jwtUtil.extractRoles(token);
+            List<String> permissions = jwtUtil.extractPermissions(token);
             List<String> services = jwtUtil.extractServices(token);
             Integer tier = jwtUtil.extractTier(token);
             Boolean verified = jwtUtil.extractVerified(token);
@@ -106,6 +107,21 @@ public class JwtFilter extends OncePerRequestFilter {
             for (String role : roles) {
                 if (role != null && !role.isBlank()) {
                     authorities.add(new SimpleGrantedAuthority("ROLE_" + role));
+                }
+            }
+            // Permissions (V35) are granted as BARE authorities — no prefix — so
+            // a check reads hasAuthority('users:read'). Roles keep their ROLE_
+            // prefix because hasRole() adds it implicitly.
+            //
+            // Both are granted, deliberately: the migration from hasRole to
+            // hasAuthority is running one service at a time, so a token has to
+            // satisfy whichever style each check still uses. The colon in a
+            // permission code also makes the two namespaces impossible to
+            // confuse — no role name can produce 'users:read', since role names
+            // are UPPER_SNAKE_CASE (RoleAdminService.VALID_NAME).
+            for (String permission : permissions) {
+                if (permission != null && !permission.isBlank()) {
+                    authorities.add(new SimpleGrantedAuthority(permission));
                 }
             }
             for (String service : services) {

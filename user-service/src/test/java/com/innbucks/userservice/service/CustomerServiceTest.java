@@ -71,7 +71,7 @@ class CustomerServiceTest {
                 .lastName("Moyo")
                 .phoneNumber(phone)
                 .password("hashed")
-                .roles(EnumSet.of(User.Role.CUSTOMER))
+                .roles(User.roleNames(User.Role.CUSTOMER))
                 .active(true)
                 .build();
     }
@@ -261,7 +261,7 @@ class CustomerServiceTest {
                 .lastName("A")
                 .phoneNumber("+263770000002")
                 .password("hashed")
-                .roles(EnumSet.of(User.Role.SHOP_ADMIN))
+                .roles(User.roleNames(User.Role.SHOP_ADMIN))
                 .active(true)
                 .build();
         when(userRepo.findByPhoneNumber("+263770000002")).thenReturn(Optional.of(shopAdmin));

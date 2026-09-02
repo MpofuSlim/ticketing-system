@@ -1,5 +1,6 @@
 package com.innbucks.userservice.controller;
 
+import com.innbucks.userservice.security.PermissionCatalog;
 import com.innbucks.userservice.dto.ApiResult;
 import com.innbucks.userservice.dto.ServiceRequestResponseDTO;
 import com.innbucks.userservice.service.ServiceRequestService;
@@ -30,7 +31,7 @@ public class AdminServiceRequestController {
     private final ServiceRequestService serviceRequestService;
 
     @GetMapping
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.SERVICE_REQUESTS_READ + "')")
     @Operation(
             summary = "List pending service requests",
             description = "Returns every service request with status=PENDING, oldest first. Requires **SUPER_ADMIN** role."
@@ -76,7 +77,7 @@ public class AdminServiceRequestController {
     }
 
     @PutMapping("/{id}/approve")
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.SERVICE_REQUESTS_APPROVE + "')")
     @Operation(
             summary = "Approve a pending service request",
             description = "Adds the requested bundle to the user's defaultServices and grants the matching role. " +

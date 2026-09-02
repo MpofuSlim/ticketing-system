@@ -75,7 +75,7 @@ class ShopStaffServiceTest {
 
     private User merchantAdmin(UUID merchantId) {
         return User.builder().email("merchant@x.com")
-                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
                 .loyaltyMerchantId(merchantId).build();
     }
 
@@ -136,7 +136,7 @@ class ShopStaffServiceTest {
         UUID shopId = UUID.randomUUID();
         UUID merchantId = UUID.randomUUID();
         authenticateAs(User.builder().email("shopadmin@x.com")
-                .roles(EnumSet.of(User.Role.SHOP_ADMIN))
+                .roles(User.roleNames(User.Role.SHOP_ADMIN))
                 .loyaltyShopId(shopId).loyaltyMerchantId(merchantId).build());
         when(userRepository.existsByEmail("rufaro@shop.co.zw")).thenReturn(false);
         when(userRepository.existsByPhoneNumberAndHomeCountry("+263772345678", "ZW")).thenReturn(false);
@@ -162,7 +162,7 @@ class ShopStaffServiceTest {
                 .id(74L).userUuid(userUuid)
                 .email("rufaro@pizza.co.zw").firstName("Rufaro").lastName("Ncube")
                 .phoneNumber("+263772345678")
-                .roles(EnumSet.of(User.Role.SHOP_USER))
+                .roles(User.roleNames(User.Role.SHOP_USER))
                 .loyaltyMerchantId(merchantId).loyaltyShopId(shopId)
                 .active(true).build();
     }
@@ -172,7 +172,7 @@ class ShopStaffServiceTest {
                 .id(73L).userUuid(userUuid)
                 .email("tendai@pizza.co.zw").firstName("Tendai").lastName("Moyo")
                 .phoneNumber("+263771234567")
-                .roles(EnumSet.of(User.Role.SHOP_ADMIN))
+                .roles(User.roleNames(User.Role.SHOP_ADMIN))
                 .loyaltyMerchantId(merchantId).loyaltyShopId(shopId)
                 .active(true).build();
     }
@@ -183,7 +183,7 @@ class ShopStaffServiceTest {
         UUID merchantId = UUID.randomUUID();
         UUID targetUuid = UUID.randomUUID();
         User caller = User.builder().id(1L).email("shopadmin@x.com")
-                .roles(EnumSet.of(User.Role.SHOP_ADMIN))
+                .roles(User.roleNames(User.Role.SHOP_ADMIN))
                 .loyaltyMerchantId(merchantId).loyaltyShopId(shopId).build();
         authenticateAs(caller);
         User target = shopUser(targetUuid, merchantId, shopId);
@@ -209,7 +209,7 @@ class ShopStaffServiceTest {
         UUID targetShopId = UUID.randomUUID();
         UUID targetUuid = UUID.randomUUID();
         User caller = User.builder().id(1L).email("merchantadmin@x.com")
-                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
                 .loyaltyMerchantId(merchantId).build();
         authenticateAs(caller);
         User target = shopAdminTarget(targetUuid, merchantId, targetShopId);
@@ -234,7 +234,7 @@ class ShopStaffServiceTest {
         UUID otherShopId = UUID.randomUUID();
         UUID targetUuid = UUID.randomUUID();
         User caller = User.builder().id(1L).email("shopadmin@x.com")
-                .roles(EnumSet.of(User.Role.SHOP_ADMIN))
+                .roles(User.roleNames(User.Role.SHOP_ADMIN))
                 .loyaltyMerchantId(merchantId).loyaltyShopId(callerShopId).build();
         authenticateAs(caller);
         // Target is a SHOP_USER at a DIFFERENT shop within the same merchant.
@@ -256,7 +256,7 @@ class ShopStaffServiceTest {
         UUID shopId = UUID.randomUUID();
         UUID peerUuid = UUID.randomUUID();
         User caller = User.builder().id(1L).email("shopadmin@x.com")
-                .roles(EnumSet.of(User.Role.SHOP_ADMIN))
+                .roles(User.roleNames(User.Role.SHOP_ADMIN))
                 .loyaltyMerchantId(merchantId).loyaltyShopId(shopId).build();
         authenticateAs(caller);
         when(userRepository.findByUserUuid(peerUuid))
@@ -274,7 +274,7 @@ class ShopStaffServiceTest {
         UUID otherMerchant = UUID.randomUUID();
         UUID targetUuid = UUID.randomUUID();
         User caller = User.builder().id(1L).email("merchant@x.com")
-                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
                 .loyaltyMerchantId(callerMerchant).build();
         authenticateAs(caller);
         when(userRepository.findByUserUuid(targetUuid))
@@ -356,7 +356,7 @@ class ShopStaffServiceTest {
 
     private User merchantAdminNoBinding(String email) {
         return User.builder().email(email)
-                .roles(EnumSet.of(User.Role.MERCHANT_ADMIN))
+                .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
                 .build();
     }
 
@@ -439,7 +439,7 @@ class ShopStaffServiceTest {
     void listForCallerShop_shopAdmin_stillReturnsOwnShopStaff() {
         UUID shopId = UUID.randomUUID();
         authenticateAs(User.builder().email("shopadmin@x.com")
-                .roles(EnumSet.of(User.Role.SHOP_ADMIN))
+                .roles(User.roleNames(User.Role.SHOP_ADMIN))
                 .loyaltyShopId(shopId).build());
         when(userRepository.findByLoyaltyShopId(shopId))
                 .thenReturn(List.of(shopUser(UUID.randomUUID(), UUID.randomUUID(), shopId)));
