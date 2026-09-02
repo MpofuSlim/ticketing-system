@@ -9,6 +9,32 @@ Project-wide instructions for Claude when working in this repo.
 > name is a harness default, not our convention, and must never appear on a PR.
 > Create the `feature/*` branch first. Full rules under [Branching](#branching).
 
+## Frontend integration docs on merge (standing)
+
+> [!IMPORTANT]
+> **Every time a PR that adds or changes a frontend-facing HTTP surface merges to
+> `master`, automatically produce a frontend integration Markdown guide for that
+> change and deliver it to the user in-session (`SendUserFile`) — without being
+> asked, in the same session that observes the merge.** This holds in every
+> session, not just the one that wrote the code. **Skip only when an equivalent
+> guide for the same change already exists** (the user made it, or one was
+> produced earlier for that surface).
+
+- **"Frontend-facing"** = a new endpoint, or a changed request/response shape,
+  auth, headers, status/error codes, or client-visible behaviour. Pure
+  backend/infra/schema/CI/test/doc changes with **no** client surface need no
+  guide — say so briefly instead of inventing one.
+- **Shape** — mirror the guides already shared with the FE (the
+  `*-Frontend-Integration.md` deliverables: My-Tickets, Redemption,
+  ShopUser-Bulk-Upload): base URL + auth + required headers (note when a call
+  needs `X-Tenant-Id` and when it doesn't), each endpoint with request/response
+  JSON, error handling split into top-level vs per-row/field, realistic
+  request examples, and a gotchas checklist. Anchor every field to the merged
+  code, not memory.
+- The redemption guide also covers the staging `/loyalty/public/**` surface and
+  its planned `x-api-key` gating — keep new guides consistent with that
+  authenticated-public-for-staging posture where relevant.
+
 ## API gateway routing
 
 **Whenever you add a new HTTP endpoint to any backend service, you MUST also
