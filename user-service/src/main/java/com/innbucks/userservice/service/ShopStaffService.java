@@ -181,25 +181,26 @@ public class ShopStaffService {
         for (int i = 0; i < header.size(); i++) {
             col.putIfAbsent(normalizeHeader(header.get(i)), i);
         }
-        Integer firstNameIdx = col.get("firstname");
-        Integer lastNameIdx = col.get("lastname");
-        Integer emailIdx = col.get("email");
-        Integer phoneIdx = col.containsKey("phonenumber") ? col.get("phonenumber") : col.get("phone");
-        Integer middleNameIdx = col.containsKey("middlename") ? col.get("middlename") : col.get("middle");
-        if (firstNameIdx == null || lastNameIdx == null || emailIdx == null || phoneIdx == null) {
+        // Resolve as primitive int (-1 = absent) so row access never unboxes a
+        // nullable Integer. phoneNumber/middleName accept a short alias.
+        int firstNameIdx = columnIndex(col, "firstname");
+        int lastNameIdx = columnIndex(col, "lastname");
+        int emailIdx = columnIndex(col, "email");
+        int phoneIdx = columnIndex(col, "phonenumber", "phone");
+        int middleNameIdx = columnIndex(col, "middlename", "middle"); // -1 when absent
+        if (firstNameIdx < 0 || lastNameIdx < 0 || emailIdx < 0 || phoneIdx < 0) {
             throw badRequest("CSV header must contain the columns: firstName, lastName, email, phoneNumber "
                     + "(middleName optional).");
         }
 
         // Collect the data rows (skip blank lines) with their file-line numbers.
+        // rows is 0-based, so the file line for index r is r + 1.
         record DataRow(int line, List<String> fields) {}
         List<DataRow> dataRows = new java.util.ArrayList<>();
-        lineNo = headerLineNo;
         for (int r = headerLineNo; r < rows.size(); r++) {
             List<String> row = rows.get(r);
-            lineNo = r + 1;
             if (CsvParser.isBlank(row)) continue;
-            dataRows.add(new DataRow(lineNo, row));
+            dataRows.add(new DataRow(r + 1, row));
         }
         if (dataRows.isEmpty()) {
             throw badRequest("CSV has a header but no data rows.");
@@ -219,8 +220,8 @@ public class ShopStaffService {
             dto.setLastName(at(dr.fields(), lastNameIdx));
             dto.setEmail(email);
             dto.setPhoneNumber(at(dr.fields(), phoneIdx));
-            String middle = middleNameIdx == null ? null : at(dr.fields(), middleNameIdx);
-            dto.setMiddleName(middle == null || middle.isBlank() ? null : middle);
+            String middle = at(dr.fields(), middleNameIdx); // "" when absent (-1) or blank
+            dto.setMiddleName(middle.isBlank() ? null : middle);
 
             // Run the SAME bean constraints @Valid enforces on the single-create body.
             var violations = validator.validate(dto);
@@ -256,6 +257,17 @@ public class ShopStaffService {
      *  "First Name", "first_name" and "firstName" all map to "firstname". */
     private static String normalizeHeader(String h) {
         return h == null ? "" : h.trim().toLowerCase().replaceAll("[\\s_]", "");
+    }
+
+    /** First present column index among the given normalized names, or -1 when
+     *  none is in the header. Primitive return so row access never unboxes a
+     *  nullable Integer. */
+    private static int columnIndex(java.util.Map<String, Integer> col, String... names) {
+        for (String name : names) {
+            Integer i = col.get(name);
+            if (i != null) return i;
+        }
+        return -1;
     }
 
     /** Field at an index, trimmed; empty when the row is short (ragged CSV). */
