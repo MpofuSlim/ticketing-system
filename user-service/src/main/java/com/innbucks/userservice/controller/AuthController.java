@@ -48,6 +48,7 @@ public class AuthController {
     private final OtpService otpService;
     private final CellAffinityChecker cellAffinityChecker;
     private final JwtUtil jwtUtil;
+    private final com.innbucks.userservice.security.LoyaltySessionTokenIssuer loyaltySessionTokenIssuer;
     private final LoginRateLimiter loginRateLimiter;
     private final AuditService auditService;
     private final PasswordResetService passwordResetService;
@@ -914,32 +915,66 @@ public class AuthController {
                     (deleted from the database) and — if the phone belongs to a customer — their
                     `phoneVerified` flag is flipped to `true`. Three wrong submissions invalidate the OTP,
                     forcing the user to request a fresh one.
+
+                    **The OTP is the phone-ownership proof**, so a success also (a) registers the number with
+                    loyalty-service — activating every loyalty projection of that phone, so the customer can
+                    finally spend what has accrued for them — and (b) returns a **loyalty-scoped bearer
+                    token** in `data.loyaltyToken`.
+
+                    That token is for `/loyalty/**` ONLY. It carries **no roles**, so booking, payment, event
+                    and seat all reject it — it is not a general login. Send it as
+                    `Authorization: Bearer <token>` so the app can use loyalty's **authenticated**
+                    transfer/redeem endpoints, which bind every action to the caller's own phone, instead of
+                    the unauthenticated `/loyalty/public/**` surface where any caller can name any number.
+
+                    There is no refresh: when it expires, verify a fresh OTP.
                     """)
             @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
-                    description = "OTP verified and consumed",
+                    description = "OTP verified and consumed; loyalty session issued",
                     content = @Content(
                             mediaType = "application/json",
                             examples = @ExampleObject(name = "OTP verified", value = """
                                     {
                                       "code": "200 OK",
                                       "message": "OTP verified",
-                                      "data": null
+                                      "data": {
+                                        "phoneNumber": "+263771234567",
+                                        "loyaltyToken": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIrMjYzNzcxMjM0NTY3In0.sig",
+                                        "expiresInSeconds": 43200
+                                      }
                                     }
                                     """)
                     )
             ),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "OTP invalid or expired")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "OTP invalid or expired",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Rejected", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "Invalid or expired OTP",
+                                      "data": null
+                                    }
+                                    """)))
     })
-    public ResponseEntity<ApiResult<Void>> verifyOtp(@Valid @RequestBody OtpVerifyDTO request) {
+    public ResponseEntity<ApiResult<OtpVerifyResponseDTO>> verifyOtp(@Valid @RequestBody OtpVerifyDTO request) {
         log.info("OTP verify phone={}", MsisdnMasking.mask(request.getPhoneNumber()));
         boolean ok = otpService.verifyOtp(request.getPhoneNumber(), request.getCode());
         if (!ok) {
             return ResponseEntity.badRequest()
                     .body(ApiResult.error(HttpStatus.BAD_REQUEST, "Invalid or expired OTP"));
         }
-        return ResponseEntity.ok(ApiResult.ok("OTP verified", null));
+        // Scope the token to the number the OTP was VERIFIED against, in the
+        // same canonical spelling OtpService keyed the code by — never to a
+        // second phone field a caller might also have sent. The proof and the
+        // token must name the same number or the token asserts something the
+        // OTP did not establish.
+        String verifiedPhone = otpService.canonicalPhone(request.getPhoneNumber());
+        return ResponseEntity.ok(ApiResult.ok("OTP verified", new OtpVerifyResponseDTO(
+                verifiedPhone,
+                loyaltySessionTokenIssuer.issue(verifiedPhone),
+                loyaltySessionTokenIssuer.ttlSeconds())));
     }
 
     @PostMapping("/forgot-password")
