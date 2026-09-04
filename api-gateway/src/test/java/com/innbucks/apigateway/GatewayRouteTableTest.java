@@ -55,7 +55,7 @@ class GatewayRouteTableTest {
             "payment-internal-deny", "payment-service-read-route",
             "payments-innbucks-write-route", "ecocash-notify-write-route",
             "payment-service-write-route",
-            "loyalty-internal-deny", "loyalty-service-route",
+            "loyalty-internal-deny", "loyalty-partner-registration-route", "loyalty-service-route",
             "marketplace-internal-deny", "marketplace-service-route",
             "user-service-proxy-route", "event-service-proxy-route",
             "seat-service-proxy-route", "booking-service-proxy-route",
@@ -92,6 +92,7 @@ class GatewayRouteTableTest {
             "scans-route", "brand-assets-route",
             "payment-service-read-route", "payments-innbucks-write-route",
             "ecocash-notify-write-route", "payment-service-write-route",
+            "loyalty-partner-registration-route",
             "loyalty-service-route", "marketplace-service-route");
 
     private static final List<String> API_DOCS_PROXY_ROUTES = List.of(
@@ -110,7 +111,11 @@ class GatewayRouteTableTest {
             // Not SMS-cost or payment, but the same fail-open hazard: this route
             // is unauthenticated and enumerable, so its limiter is the only
             // access control it has.
-            "booking-public-phone-route");
+            "booking-public-phone-route",
+            // Same hazard again: an edge-reachable machine endpoint whose
+            // shared-key auth mode is brute-forceable. A fail-OPEN limiter would
+            // remove the only cap on guessing that key during a Redis outage.
+            "loyalty-partner-registration-route");
 
     @Autowired
     RouteDefinitionLocator locator;
@@ -237,6 +242,51 @@ class GatewayRouteTableTest {
         assertThat(predicateArgs("booking-public-phone-route", "Method")).containsExactly("GET");
         assertThat(predicateArgs("booking-public-phone-route", "Path"))
                 .containsExactly("/bookings/public/phone/**");
+    }
+
+    @Test
+    void loyaltyPartnerRegistrationRouteIsIpKeyedFailsSafeAndPrecedesTheCatchAll() {
+        // The channel that tells loyalty a phone's owner has proven they hold it
+        // (InnRewards V40). Three properties, each guarding a different way this
+        // silently becomes useless or dangerous.
+        //
+        // 1. ORDER. /loyalty/** is a catch-all with no Method predicate, so if
+        //    this route stops preceding it the partner call still WORKS — it
+        //    just quietly rides the catch-all's limiter instead. Nothing else
+        //    would ever surface that, which is what makes it worth pinning.
+        List<String> order = orderedIds();
+        int partner = order.indexOf("loyalty-partner-registration-route");
+        assertThat(partner).as("loyalty-partner-registration-route must be defined").isGreaterThanOrEqualTo(0);
+        assertThat(partner)
+                .as("must match before the /loyalty/** catch-all, or it inherits the bearer-keyed limiter")
+                .isLessThan(order.indexOf("loyalty-service-route"));
+
+        // 2. IP-KEYED. The catch-all's gatewayKeyResolver keys on the RAW
+        //    Authorization header, which the caller controls, so a rotating
+        //    garbage bearer mints a fresh bucket per request and the cap never
+        //    engages. That matters more here than on most routes: in shared-key
+        //    auth mode this endpoint's credential is exactly what an attacker
+        //    would brute-force, and the limiter is what makes that infeasible.
+        boolean ipKeyed = route("loyalty-partner-registration-route").getFilters().stream()
+                .filter(f -> "RequestRateLimiter".equals(f.getName()))
+                .flatMap(f -> f.getArgs().values().stream())
+                .anyMatch(v -> v != null && v.contains("preAuthIpKeyResolver"));
+        assertThat(ipKeyed)
+                .as("must key on IP, never the caller-controlled Authorization header")
+                .isTrue();
+        assertThat(usesResilientLimiter("loyalty-partner-registration-route"))
+                .as("must fail SAFE — a Redis outage must not lift the cap on key guessing")
+                .isTrue();
+
+        // 3. SCOPE. POST and the exact path only. A widened predicate here would
+        //    pull the rest of /loyalty/partner (or other methods) onto a route
+        //    shaped for one specific machine call.
+        assertThat(predicateArgs("loyalty-partner-registration-route", "Method")).containsExactly("POST");
+        assertThat(predicateArgs("loyalty-partner-registration-route", "Path"))
+                .containsExactly("/loyalty/partner/registrations");
+        assertThat(route("loyalty-partner-registration-route").getUri())
+                .as("targets loyalty-service by Eureka name, like every other service route")
+                .hasToString("lb://loyalty-service");
     }
 
     @Test

@@ -432,6 +432,45 @@ spring:
               predicates:
                 - Path=/loyalty/internal/**
 
+            # Partner registration (InnRewards V40). The channel by which the
+            # middleware fronting the customer app's authentication tells loyalty
+            # that a phone's owner has proven they hold it — which is what makes
+            # their loyalty account spendable.
+            #
+            # Unlike /loyalty/internal/**, this one is MEANT to be reachable from
+            # the edge: the asserting party runs outside the cluster. It needs its
+            # own route rather than the /loyalty/** catch-all for one reason —
+            # the catch-all keys its limiter on the raw Authorization header
+            # (gatewayKeyResolver), which the CALLER controls, so a rotating
+            # garbage bearer mints a fresh bucket per request and there is
+            # effectively no cap. That is the bypass preAuthIpKeyResolver exists
+            # to close, and it matters here because the endpoint's shared-key
+            # auth mode is exactly what an attacker would want to brute-force.
+            #
+            # POST-only and the exact path, so anything else added under
+            # /loyalty/partner later falls through to the catch-all deliberately
+            # rather than inheriting this route's shape by accident.
+            #
+            # Rate: a legitimate caller makes one call per customer login, and a
+            # bulk replay of an existing customer base is the only burst we
+            # expect — hence 5/s with burst 20, tunable per host.
+            - id: loyalty-partner-registration-route
+              uri: lb://loyalty-service
+              predicates:
+                - Path=/loyalty/partner/registrations
+                - Method=POST
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${LOYALTY_PARTNER_REGISTRATION_RATE_LIMIT_REPLENISH_PER_SECOND:5}
+                    redis-rate-limiter.burstCapacity: ${LOYALTY_PARTNER_REGISTRATION_RATE_LIMIT_BURST_CAPACITY:20}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@preAuthIpKeyResolver}"
+                    # Fail-SAFE: keep throttling if Redis is down. The stock
+                    # limiter fails OPEN, which here would remove the only cap on
+                    # guessing a shared partner key during an outage.
+                    rate-limiter: "#{@resilientRedisRateLimiter}"
+
             - id: loyalty-service-route
               uri: lb://loyalty-service
               predicates:
