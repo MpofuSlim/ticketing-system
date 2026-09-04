@@ -98,6 +98,19 @@ public class OtpService {
     }
 
     /**
+     * The canonical E.164 spelling this service keys OTPs by.
+     *
+     * <p>Exposed so a caller minting a token off the back of a verification
+     * scopes it to the SAME string the code was verified against. A client may
+     * send {@code 0771234567} and get a token for {@code +263771234567}; the
+     * two must not diverge, or the token would name a number the OTP never
+     * proved.
+     */
+    public String canonicalPhone(String phoneNumber) {
+        return normalize(phoneNumber);
+    }
+
+    /**
      * Send a password-reset OTP to a PHONE (SMS, WhatsApp fallback). The OTP is
      * keyed by the phone. The existing-user gate lives in PasswordResetService
      * (which resolves the user first), so this just mints + dispatches. Same
@@ -312,6 +325,30 @@ public class OtpService {
      * {@code phoneVerified = true}.
      */
     private void finalizeVerification(String phoneNumber) {
+        materializeOrRefreshLocalAccount(phoneNumber);
+        // Tell loyalty on EVERY successful verify, unconditionally.
+        //
+        // This used to fire only from inside the two branches below — the
+        // pending-registration materialisation and the existing-customer
+        // first-verify — which silently skipped the case that matters most now:
+        // a customer of the mobile app, who authenticates against InnBucks and
+        // therefore has NO user row here and NO pending registration. Their OTP
+        // verified fine and loyalty was never told, so their loyalty account
+        // stayed PENDING forever: earning and receiving, every spend refused.
+        // That is the whole population this flow exists for.
+        //
+        // Unconditional is also simply correct: the OTP is the proof, and it is
+        // the same proof whichever local account state happens to exist. It is
+        // idempotent on the loyalty side (registerPhone reports
+        // newlyRegistered=false on a repeat), so a re-verify costs one internal
+        // call and changes nothing.
+        //
+        // Best-effort, as before: a webhook failure must not roll back a
+        // verification the customer legitimately completed.
+        loyaltyServiceClient.promoteUserByPhone(phoneNumber);
+    }
+
+    private void materializeOrRefreshLocalAccount(String phoneNumber) {
         var pendingOpt = pendingRegistrationRepository.findByPhoneNumber(phoneNumber);
         if (pendingOpt.isPresent()) {
             PendingRegistration pending = pendingOpt.get();
@@ -355,12 +392,9 @@ public class OtpService {
             pendingRegistrationRepository.delete(pending);
             log.info("Customer account materialised from pending registration phone={} userId={}",
                     MsisdnMasking.mask(phoneNumber), user.getId());
-            // Tell loyalty-service this phone has now registered so every
-            // PENDING LoyaltyUser row matching it (created by prior voucher
-            // issues, transactions, P2P transfers) flips ACTIVE and the
-            // customer can finally spend whatever was accrued for them.
-            // Best-effort: webhook failure does NOT roll back registration.
-            loyaltyServiceClient.promoteUserByPhone(phoneNumber);
+            // The loyalty promotion that used to live here now runs
+            // unconditionally in finalizeVerification, for every verify —
+            // see the note there.
             return;
         }
         userRepository.findByPhoneNumber(phoneNumber)
@@ -373,10 +407,10 @@ public class OtpService {
                     profile.setPhoneVerifiedAt(LocalDateTime.now(ZoneOffset.UTC));
                     if (!profile.isPhoneVerified()) {
                         profile.setPhoneVerified(true);
-                        // First time this phone has been verified — same
-                        // signal to loyalty as the pending-registration path.
-                        loyaltyServiceClient.promoteUserByPhone(phoneNumber);
                     }
+                    // The loyalty promotion that used to be nested in that
+                    // first-verify branch now runs unconditionally in
+                    // finalizeVerification — see the note there.
                     customerProfileRepository.save(profile);
                 });
     }
