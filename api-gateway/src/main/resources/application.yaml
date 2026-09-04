@@ -471,6 +471,48 @@ spring:
                     # guessing a shared partner key during an outage.
                     rate-limiter: "#{@resilientRedisRateLimiter}"
 
+            # Loyalty session renewal (InnRewards V43). The two calls that let a
+            # customer's app renew its 12h loyalty session without a second SMS
+            # OTP: POST /loyalty/session/refresh rotates the refresh token,
+            # /logout ends the chain. (Their sibling /loyalty/session/exchange
+            # is NOT here — it authenticates with a real bearer, so the
+            # catch-all's shape is correct for it.)
+            #
+            # These two carry no Authorization header by design: the credential
+            # is the refresh token in the BODY, and the access token they exist
+            # to replace has usually expired by the time they are called. That
+            # is exactly why they cannot ride the /loyalty/** catch-all — its
+            # gatewayKeyResolver keys on the raw Authorization header, so an
+            # unauthenticated caller keys on the empty string (one shared bucket
+            # for the whole internet) or, worse, mints a fresh bucket per request
+            # with a rotating garbage bearer. Either way the cap does not
+            # engage on the one endpoint here that accepts a secret from an
+            # anonymous caller.
+            #
+            # Fail-SAFE limiter for the same reason as the partner route: the
+            # stock limiter fails OPEN, which during a Redis outage would remove
+            # the only cap on guessing refresh tokens.
+            #
+            # POST-only and the two exact paths, so anything added under
+            # /loyalty/session later falls through to the catch-all deliberately
+            # rather than inheriting an unauthenticated route's shape.
+            #
+            # Rate: a legitimate app refreshes about twice a day per device and
+            # signs out rarely, so this is generous even for a shared NAT.
+            - id: loyalty-session-refresh-route
+              uri: lb://loyalty-service
+              predicates:
+                - Path=/loyalty/session/refresh,/loyalty/session/logout
+                - Method=POST
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${LOYALTY_SESSION_REFRESH_RATE_LIMIT_REPLENISH_PER_SECOND:5}
+                    redis-rate-limiter.burstCapacity: ${LOYALTY_SESSION_REFRESH_RATE_LIMIT_BURST_CAPACITY:20}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@preAuthIpKeyResolver}"
+                    rate-limiter: "#{@resilientRedisRateLimiter}"
+
             - id: loyalty-service-route
               uri: lb://loyalty-service
               predicates:
