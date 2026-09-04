@@ -209,6 +209,37 @@ public class JwtUtil {
                 .compact();
     }
 
+    /**
+     * Mints the phone-scoped session token a customer earns by proving, via
+     * OTP, that they hold a number. Policy (who gets one, what scope, how long)
+     * lives in {@link LoyaltySessionTokenIssuer}; this method owns only the
+     * signing, so the HS256→RS256 migration carries it along with every other
+     * token instead of leaving a second signer behind.
+     *
+     * <p>Deliberately mints <b>no {@code roles} claim at all</b>. Every service
+     * that gates customer endpoints on {@code hasRole('CUSTOMER')} therefore
+     * rejects it; only loyalty, which recognises the {@code services} scope,
+     * grants a role for it. See {@link LoyaltySessionTokenIssuer} for why that
+     * asymmetry is the entire safety argument.
+     *
+     * <p>Takes an explicit TTL rather than reusing {@code jwt.expiration}: this
+     * token carries no {@code userId}, so the fleet's tokenVersion revocation
+     * cannot reach it and its lifetime IS its revocation story.
+     */
+    public String generateScopedPhoneToken(String phoneNumber, String scope, long ttlMillis) {
+        return applySignature(Jwts.builder()
+                .id(UUID.randomUUID().toString())
+                .subject(phoneNumber)
+                .claim("roles", List.of())
+                .claim("services", List.of(scope))
+                .claim("phoneNumber", phoneNumber)
+                .issuer(TOKEN_ISSUER)
+                .audience().add(TOKEN_AUDIENCE).and()
+                .issuedAt(new Date())
+                .expiration(new Date(System.currentTimeMillis() + ttlMillis)))
+                .compact();
+    }
+
     public String extractType(String token) {
         return getClaims(token).get("type", String.class);
     }
