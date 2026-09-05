@@ -55,7 +55,8 @@ class GatewayRouteTableTest {
             "payment-internal-deny", "payment-service-read-route",
             "payments-innbucks-write-route", "ecocash-notify-write-route",
             "payment-service-write-route",
-            "loyalty-internal-deny", "loyalty-partner-registration-route", "loyalty-service-route",
+            "loyalty-internal-deny", "loyalty-partner-registration-route",
+            "loyalty-session-refresh-route", "loyalty-service-route",
             "marketplace-internal-deny", "marketplace-service-route",
             "user-service-proxy-route", "event-service-proxy-route",
             "seat-service-proxy-route", "booking-service-proxy-route",
@@ -92,7 +93,7 @@ class GatewayRouteTableTest {
             "scans-route", "brand-assets-route",
             "payment-service-read-route", "payments-innbucks-write-route",
             "ecocash-notify-write-route", "payment-service-write-route",
-            "loyalty-partner-registration-route",
+            "loyalty-partner-registration-route", "loyalty-session-refresh-route",
             "loyalty-service-route", "marketplace-service-route");
 
     private static final List<String> API_DOCS_PROXY_ROUTES = List.of(
@@ -115,7 +116,11 @@ class GatewayRouteTableTest {
             // Same hazard again: an edge-reachable machine endpoint whose
             // shared-key auth mode is brute-forceable. A fail-OPEN limiter would
             // remove the only cap on guessing that key during a Redis outage.
-            "loyalty-partner-registration-route");
+            "loyalty-partner-registration-route",
+            // And again: an unauthenticated endpoint that accepts a secret in
+            // its body. The limiter is the only thing capping how fast refresh
+            // tokens can be guessed.
+            "loyalty-session-refresh-route");
 
     @Autowired
     RouteDefinitionLocator locator;
@@ -285,6 +290,53 @@ class GatewayRouteTableTest {
         assertThat(predicateArgs("loyalty-partner-registration-route", "Path"))
                 .containsExactly("/loyalty/partner/registrations");
         assertThat(route("loyalty-partner-registration-route").getUri())
+                .as("targets loyalty-service by Eureka name, like every other service route")
+                .hasToString("lb://loyalty-service");
+    }
+
+    @Test
+    void loyaltySessionRefreshRouteIsIpKeyedFailsSafeAndPrecedesTheCatchAll() {
+        // The two calls that renew a customer's loyalty session without a second
+        // SMS OTP (InnRewards V43). They are the only /loyalty/** paths reachable
+        // WITHOUT an Authorization header — their credential is the refresh token
+        // in the body — which is exactly what makes each assertion below matter.
+        //
+        // 1. ORDER. /loyalty/** is a catch-all, so losing this route's precedence
+        //    does not break the call: it quietly rides the catch-all's
+        //    bearer-keyed limiter instead. Nothing else would surface that.
+        List<String> order = orderedIds();
+        int refresh = order.indexOf("loyalty-session-refresh-route");
+        assertThat(refresh).as("loyalty-session-refresh-route must be defined").isGreaterThanOrEqualTo(0);
+        assertThat(refresh)
+                .as("must match before the /loyalty/** catch-all, or it inherits the bearer-keyed limiter")
+                .isLessThan(order.indexOf("loyalty-service-route"));
+
+        // 2. IP-KEYED and fail-SAFE. gatewayKeyResolver keys on the raw
+        //    Authorization header, which these callers do not send — so under
+        //    the catch-all the whole internet would share one bucket keyed on
+        //    the empty string, or an attacker would mint a fresh bucket per
+        //    request with a rotating garbage bearer. The limiter is the only
+        //    thing capping how fast refresh tokens can be guessed, so it must
+        //    also keep throttling when Redis is down.
+        boolean ipKeyed = route("loyalty-session-refresh-route").getFilters().stream()
+                .filter(f -> "RequestRateLimiter".equals(f.getName()))
+                .flatMap(f -> f.getArgs().values().stream())
+                .anyMatch(v -> v != null && v.contains("preAuthIpKeyResolver"));
+        assertThat(ipKeyed)
+                .as("must key on IP — these callers send no Authorization header at all")
+                .isTrue();
+        assertThat(usesResilientLimiter("loyalty-session-refresh-route"))
+                .as("must fail SAFE — a Redis outage must not lift the cap on token guessing")
+                .isTrue();
+
+        // 3. SCOPE. POST and the two exact paths. Widening this would pull the
+        //    rest of /loyalty/session onto an unauthenticated route's shape —
+        //    most importantly the sibling /loyalty/session/exchange, which DOES
+        //    require a phone-scoped bearer and must not be listed here.
+        assertThat(predicateArgs("loyalty-session-refresh-route", "Method")).containsExactly("POST");
+        assertThat(predicateArgs("loyalty-session-refresh-route", "Path"))
+                .containsExactlyInAnyOrder("/loyalty/session/refresh", "/loyalty/session/logout");
+        assertThat(route("loyalty-session-refresh-route").getUri())
                 .as("targets loyalty-service by Eureka name, like every other service route")
                 .hasToString("lb://loyalty-service");
     }
