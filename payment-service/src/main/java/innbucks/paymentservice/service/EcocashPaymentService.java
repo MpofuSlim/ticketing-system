@@ -3,6 +3,7 @@ package innbucks.paymentservice.service;
 import innbucks.paymentservice.client.EcocashApiException;
 import innbucks.paymentservice.client.EcocashApiTransientException;
 import innbucks.paymentservice.client.EcocashChargeStatus;
+import innbucks.paymentservice.client.EcocashCurrencies;
 import innbucks.paymentservice.client.EcocashEipClient;
 import innbucks.paymentservice.client.EcocashProperties;
 import innbucks.paymentservice.config.PaymentMetrics;
@@ -14,6 +15,7 @@ import innbucks.paymentservice.order.OrderGatewayRegistry;
 import innbucks.paymentservice.order.OrderSnapshot;
 import innbucks.paymentservice.order.OrderType;
 import innbucks.paymentservice.service.InnbucksPaymentService.InvalidPaymentRequestException;
+import jakarta.annotation.PostConstruct;
 import lombok.Builder;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -98,6 +100,33 @@ public class EcocashPaymentService {
     @Value("${innbucks.currency:USD}")
     private String cellCurrency;
 
+    /**
+     * Surface an EcoCash-incompatible cell currency at BOOT, not at the first
+     * customer attempt — the same posture as the client's HALF-PROVISIONED
+     * notify-URL check.
+     *
+     * <p>This is the quietest misconfiguration on the rail. The cell currency
+     * is written to the ledger AND sent on the wire (the same string), so a
+     * value EcoCash does not accept does not merely fail one payment: every
+     * charge that falls back to it is refused, and a value the QUERY
+     * *normalises* (e.g. a numeric ISO code — preprod echoes {@code "840"}
+     * back as {@code "USD"}) would instead let charges succeed and then park
+     * 100% of them IN_DOUBT on the echo check, with no error anywhere.
+     *
+     * <p>Logs rather than fails boot, deliberately: this rail may be unused on
+     * a cell, and taking payment-service down for it would be disproportionate
+     * — the charge-time guard in {@link #startCharge} is what actually refuses.
+     */
+    @PostConstruct
+    void warnOnUnsupportedCellCurrency() {
+        if (ecocashClient.isConfigured() && !EcocashCurrencies.isSupported(cellCurrency)) {
+            log.error("EcoCash rail: innbucks.currency='{}' is not a currency EcoCash accepts {}. "
+                    + "Every EcoCash charge that falls back to the cell currency will be REFUSED (503). "
+                    + "Set it to a supported alpha-3 code — see EcocashCurrencies.",
+                    cellCurrency, EcocashCurrencies.SUPPORTED);
+        }
+    }
+
     /** Whether the rail can talk to its gateway (poller predicate). */
     public boolean isRailConfigured() {
         return ecocashClient.isConfigured();
@@ -160,8 +189,41 @@ public class EcocashPaymentService {
             throw new InvalidPaymentRequestException(
                     capitalize(noun) + " has no positive amount; cannot request payment", 422);
         }
-        String currency = snapshot.currency();
-        if (currency == null || currency.isBlank()) currency = cellCurrency;
+        // Canonicalise ONCE. The same string is written to the ledger and sent
+        // on the wire, and echoMismatch compares the query echo against the
+        // ledger — so trimming/casing here is what keeps that comparison
+        // byte-honest.
+        boolean currencyFromCell = false;
+        String currency = EcocashCurrencies.canonical(snapshot.currency());
+        if (currency == null) {
+            currency = EcocashCurrencies.canonical(cellCurrency);
+            currencyFromCell = true;
+        }
+        // Refuse an unsupported currency BEFORE the hold, the ledger row and
+        // the wire. This CANNOT be left to EcoCash to reject: measured on
+        // preprod, an unsupported currencyCode comes back as their edge WAF's
+        // text/html "Request Rejected" page, which the client correctly treats
+        // as INFRASTRUCTURE (transient) rather than a status — so the row would
+        // sit in TOKEN_ISSUED and the poller would retry it forever, holding
+        // the order's ONLY payment slot across all three rails. See
+        // EcocashCurrencies for the full reasoning.
+        if (!EcocashCurrencies.isSupported(currency)) {
+            metrics.incEcocashCharge("unsupported_currency");
+            if (currencyFromCell) {
+                // Server-side misconfiguration: nothing the customer can fix,
+                // and every EcoCash charge on this cell is affected.
+                log.error("[ecocash] charge refused: cell currency innbucks.currency='{}' is not "
+                        + "accepted by EcoCash {}. EVERY EcoCash charge on this cell will be refused "
+                        + "until it is corrected.", cellCurrency, EcocashCurrencies.SUPPORTED);
+                throw new InvalidPaymentRequestException(
+                        "EcoCash payments are not available on this deployment", 503);
+            }
+            log.warn("[ecocash] charge refused: {} {} is priced in {}, which EcoCash does not accept {}",
+                    noun, orderRef, currency, EcocashCurrencies.SUPPORTED);
+            throw new InvalidPaymentRequestException(
+                    "EcoCash cannot take payment in " + currency
+                            + " — please use another payment method", 422);
+        }
         String customerMsisdn = snapshot.payerMsisdn();
         if (customerMsisdn == null || customerMsisdn.isBlank()) {
             throw new InvalidPaymentRequestException(
