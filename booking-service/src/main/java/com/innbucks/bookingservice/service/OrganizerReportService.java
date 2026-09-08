@@ -28,6 +28,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import com.innbucks.bookingservice.repository.OrganizerReportRepository;
 
@@ -185,8 +186,12 @@ public class OrganizerReportService {
         Range r = resolveRange(from, to);
         List<Booking> confirmed = repository.findConfirmedWithItems(organizerUuid, eventId, r.start(), r.end());
 
+        // V22 appends customerName + attendees (named guests on the booking's
+        // tickets, "; "-joined, names only). Still one row per BOOKING — this
+        // is the accountant's ledger, not the guest list; the per-ticket guest
+        // list with contacts is GET /bookings/by-event/{id}.
         StringBuilder sb = new StringBuilder();
-        sb.append("confirmationNumber,eventId,createdAt,ticketsSold,totalAmount,cashAmount,pointsUsed,phone\n");
+        sb.append("confirmationNumber,eventId,createdAt,ticketsSold,totalAmount,cashAmount,pointsUsed,phone,customerName,attendees\n");
         for (Booking b : confirmed) {
             sb.append(csv(b.getConfirmationNumber())).append(',')
               .append(csv(b.getEventId())).append(',')
@@ -195,9 +200,21 @@ public class OrganizerReportService {
               .append(scale2(nz(b.getTotalAmount()))).append(',')
               .append(scale2(nz(b.getCashAmount()))).append(',')
               .append(scale2(nz(b.getPointsUsed()))).append(',')
-              .append(csv(MsisdnMasking.mask(b.getPhoneNumber()))).append('\n');
+              .append(csv(MsisdnMasking.mask(b.getPhoneNumber()))).append(',')
+              .append(csv(b.getCustomerName())).append(',')
+              .append(csv(attendeeNames(b))).append('\n');
         }
         return sb.toString();
+    }
+
+    /** Named attendees across the booking's tickets, "; "-joined; empty when none. */
+    private static String attendeeNames(Booking b) {
+        if (b.getItems() == null) return "";
+        return b.getItems().stream()
+                .map(BookingItem::getAttendeeName)
+                .filter(n -> n != null && !n.isBlank())
+                .map(String::trim)
+                .collect(Collectors.joining("; "));
     }
 
     /** Validate + default the [from, to] window into a half-open instant range. */

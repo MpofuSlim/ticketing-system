@@ -41,6 +41,7 @@ class BookingControllerPhoneValidationTest {
     private static CreateBookingRequestDTO bookingWithPhone(String phone) {
         CreateBookingRequestDTO req = new CreateBookingRequestDTO();
         req.setEventId(UUID.randomUUID());
+        req.setCustomerName("Alice Moyo"); // V22: required for a guest
         req.setPhoneNumber(phone);
         CreateBookingRequestDTO.SeatItemRequest seat = new CreateBookingRequestDTO.SeatItemRequest();
         seat.setCategoryId(UUID.randomUUID());

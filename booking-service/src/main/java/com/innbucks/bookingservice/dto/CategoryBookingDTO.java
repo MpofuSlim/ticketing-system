@@ -20,6 +20,11 @@ public class CategoryBookingDTO {
     private UUID bookingId;
     private String userEmail;
     /**
+     * The PURCHASER's full name (V22) — who paid for the booking this ticket
+     * belongs to. Null on bookings that pre-date the column.
+     */
+    private String customerName;
+    /**
      * The purchaser's phone number, as captured on the booking. Surfaced so an
      * organizer can actually contact the buyer from the bookings report —
      * guest checkouts frequently have no {@code userEmail}, which left the
@@ -42,6 +47,22 @@ public class CategoryBookingDTO {
     private Integer seatNumber;
     private String ticketNumber;
     private BigDecimal priceAtBooking;
+    /**
+     * Named attendee for THIS ticket (V22), when the purchaser gave one; null
+     * = the purchaser's own ticket. This is the "who is actually coming"
+     * answer: one row per ticket, so a 3-ticket booking with two named guests
+     * yields three rows — one with no attendee (the buyer) and two named.
+     * Contact fields follow the same organizer-scoped PII rule as
+     * {@link #phoneNumber}.
+     */
+    private String attendeeName;
+    private String attendeeEmail;
+    private String attendeePhone;
+    /**
+     * Convenience: {@code attendeeName} when set, else {@code customerName} —
+     * the name to print on a guest list without the consumer re-deriving it.
+     */
+    private String holderName;
     private LocalDateTime bookedAt;
     private LocalDateTime updatedAt;
     // For PENDING bookings: the instant the seat hold lapses. Null for

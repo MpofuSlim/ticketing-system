@@ -58,6 +58,12 @@ public class ScanTicketResponseDTO {
                           "renamed — denormalised at scan time so the audit trail is stable.")
     private String redeemedByName;
 
+    @Schema(example = "Tendai Ncube", nullable = true,
+            description = "Who this ticket was issued to — the named attendee if the purchaser gave one, "
+                          + "otherwise the purchaser. Present on ALLOWED and ALREADY_REDEEMED so gate staff "
+                          + "can greet the holder / check an ID; null for bookings that pre-date names.")
+    private String holderName;
+
     public enum Status {
         ALLOWED,
         ALREADY_REDEEMED,

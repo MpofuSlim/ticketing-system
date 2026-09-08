@@ -238,6 +238,50 @@ Other load-bearing details:
   tamper-evident audit chain, because "who could do what, when" is no longer
   answerable from the code once roles are data.
 
+## Bookings carry WHO is coming (booking-service V22)
+
+`bookings.customer_name` is the purchaser's full name; `booking_items.attendee_*`
+(name/email/phone) is an OPTIONAL per-ticket guest. Together they turn the
+organizer's bookings view from a list of MSISDNs into a guest list.
+
+- **`customerName` is required at `POST /bookings`**, resolved in the controller:
+  body value wins, an authenticated customer falls back to the JWT's
+  `firstName`/`lastName`, a guest with neither is a `400 "Please provide your
+  full name."`. The resolved value is written BACK onto the request before the
+  service reads it (same convention as `phoneNumber`); the service re-checks it
+  as defence in depth. Nullable in the DB only for pre-V22 rows.
+- **Tickets are issued in REQUEST order, not grouped by category.** `items[i]`
+  is `seats[i]`. The old loop iterated `qtyByCategory` and would have shuffled a
+  guest's name onto the wrong ticket whenever categories interleaved. Capacity
+  is still claimed per category; only the item build order changed.
+- **An attendee phone is validated + canonicalised exactly like the
+  purchaser's** (`MsisdnValidator`, 400 naming the attendee on a bad number).
+  Skipping that would store a malformed MSISDN and lose that guest's QR at
+  Twilio (63024) with nothing in our logs.
+- **Attendee contact is PII with the same posture as the purchaser's.** It
+  travels on the AUTHENTICATED views (`BookingResponseDTO` via
+  `toItemDTOs(booking, true)`, `CategoryBookingDTO`) and is NEVER set on the
+  public magic-link / phone-wallet views (`toItemDTOs(booking, false)`,
+  `toPublicDTO`), where the `@JsonInclude(NON_NULL)` on the two contact fields
+  keeps the keys out of the payload entirely. The attendee NAME is on every
+  view — it is printed on the ticket face and is what tells a buyer which QR to
+  hand to whom. Don't add the contact to a public DTO.
+- **Delivery: the purchaser still receives every ticket; a named attendee with
+  their OWN contact additionally receives THEIR ticket** (`TicketDeliveryService`
+  — one QR to their phone, a one-ticket email to their address). A contact equal
+  to the purchaser's is skipped, not double-sent. Each attendee is its own
+  best-effort unit; `Outcome.attendeeDeliveriesSent/Total` report it and the
+  resend endpoint re-runs it.
+- **`holderName`** (= attendee if named, else purchaser) is on `CategoryBookingDTO`
+  and on the scan response (`ALLOWED` / `ALREADY_REDEEMED`) so the gate can greet
+  or ID-check the holder; the ticket HTML/email print "Ticket for <holder>".
+- The organizer CSV export gained `customerName` + `attendees` (names, `; `-joined)
+  and stays one row per BOOKING — it is the accountant's ledger; the per-ticket
+  guest list with contacts is `GET /bookings/by-event/{id}`.
+- **Not done, deliberately:** attendees do NOT get the pre-event reminders or the
+  event-change/cancel notifications — those still go to the purchaser only.
+  Extending them is a separate decision (it multiplies SMS cost per booking).
+
 ## Timestamps — store everything in UTC
 
 The user/booking/seat/event services map timestamps as `LocalDateTime`

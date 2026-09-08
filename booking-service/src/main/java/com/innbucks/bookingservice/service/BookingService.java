@@ -142,10 +142,24 @@ public class BookingService {
         // concurrent bookers randomly collided on the same seat UUIDs even
         // when capacity remained).
 
-        // Collapse the per-ticket request into a quantity per category.
+        // Defence in depth — the controller resolves this (body, else JWT
+        // name) and 400s when neither exists. A caller reaching the service
+        // directly without one is a wiring bug, not a booking.
+        String customerName = request.getCustomerName() == null ? null : request.getCustomerName().trim();
+        if (customerName == null || customerName.isEmpty()) {
+            throw new BadRequestException("Please provide your full name.");
+        }
+
+        // Collapse the per-ticket request into a quantity per category (the
+        // capacity claim is per category), but ALSO keep the per-ticket order
+        // — each request entry may name its own attendee, and the ticket
+        // issued for entry i must carry entry i's attendee, not be reshuffled
+        // by category grouping.
         Map<UUID, Integer> qtyByCategory = new LinkedHashMap<>();
+        List<TicketSpec> ticketSpecs = new ArrayList<>(request.getSeats().size());
         for (CreateBookingRequestDTO.SeatItemRequest item : request.getSeats()) {
             qtyByCategory.merge(item.getCategoryId(), 1, Integer::sum);
+            ticketSpecs.add(TicketSpec.of(item));
         }
 
         // Resolve each category's capacity + price + owning event from
@@ -191,6 +205,7 @@ public class BookingService {
 
         Booking booking = Booking.builder()
                 .userEmail(userEmail)
+                .customerName(customerName)
                 .phoneNumber(phoneNumber)
                 .eventId(request.getEventId())
                 .tenantUserUuid(tenantUserUuid)
@@ -201,7 +216,30 @@ public class BookingService {
                 .build();
 
         // === Write phase — the ONLY place a DB connection is held. ===
-        return txTemplate.execute(status -> persistBooking(booking, qtyByCategory, categoryById, userEmail));
+        return txTemplate.execute(status ->
+                persistBooking(booking, qtyByCategory, categoryById, ticketSpecs, userEmail));
+    }
+
+    /**
+     * One requested ticket, in request order: its category plus the optional
+     * attendee the purchaser named for it. Resolved from the request BEFORE
+     * the write transaction so persistBooking is pure writes.
+     */
+    private record TicketSpec(UUID categoryId, String attendeeName, String attendeeEmail, String attendeePhone) {
+        static TicketSpec of(CreateBookingRequestDTO.SeatItemRequest item) {
+            CreateBookingRequestDTO.AttendeeRequest a = item.getAttendee();
+            if (a == null) {
+                return new TicketSpec(item.getCategoryId(), null, null, null);
+            }
+            return new TicketSpec(item.getCategoryId(),
+                    blankToNull(a.getFullName()), blankToNull(a.getEmail()), blankToNull(a.getPhoneNumber()));
+        }
+
+        private static String blankToNull(String v) {
+            if (v == null) return null;
+            String t = v.trim();
+            return t.isEmpty() ? null : t;
+        }
     }
 
     /**
@@ -214,6 +252,7 @@ public class BookingService {
     private BookingResponseDTO persistBooking(Booking booking,
                                               Map<UUID, Integer> qtyByCategory,
                                               Map<UUID, CategoryLookupDTO> categoryById,
+                                              List<TicketSpec> ticketSpecs,
                                               String userEmail) {
         // Claim capacity atomically, per category, in THIS transaction. The
         // per-category counter — not a seat row — is the oversell guard now.
@@ -254,23 +293,27 @@ public class BookingService {
         // no assigned seat, so seatId is a synthetic per-ticket UUID (keeps the
         // column non-null and the legacy uq_active_booking_item_per_seat index
         // trivially satisfied) and row/seat labels are GA placeholders.
-        List<BookingItem> items = new ArrayList<>();
+        //
+        // Issued in REQUEST order (not grouped by category) so ticket i is the
+        // one the purchaser described at seats[i] — that is the only way the
+        // attendee they named for it lands on the right ticket.
+        List<BookingItem> items = new ArrayList<>(ticketSpecs.size());
         int ticketIndex = 1;
-        for (Map.Entry<UUID, Integer> e : qtyByCategory.entrySet()) {
-            UUID categoryId = e.getKey();
-            CategoryLookupDTO category = categoryById.get(categoryId);
-            for (int i = 0; i < e.getValue(); i++) {
-                items.add(BookingItem.builder()
-                        .booking(booking)
-                        .seatId(UUID.randomUUID())
-                        .categoryId(categoryId)
-                        .rowLabel("GA")
-                        .seatNumber(ticketIndex++)
-                        .categoryName(category.getName())
-                        .priceAtBooking(category.getPrice())
-                        .ticketNumber(generateTicketNumber())
-                        .build());
-            }
+        for (TicketSpec spec : ticketSpecs) {
+            CategoryLookupDTO category = categoryById.get(spec.categoryId());
+            items.add(BookingItem.builder()
+                    .booking(booking)
+                    .seatId(UUID.randomUUID())
+                    .categoryId(spec.categoryId())
+                    .rowLabel("GA")
+                    .seatNumber(ticketIndex++)
+                    .categoryName(category.getName())
+                    .priceAtBooking(category.getPrice())
+                    .ticketNumber(generateTicketNumber())
+                    .attendeeName(spec.attendeeName())
+                    .attendeeEmail(spec.attendeeEmail())
+                    .attendeePhone(spec.attendeePhone())
+                    .build());
         }
         bookingItemRepository.saveAllAndFlush(items);
         booking.setItems(items);
@@ -455,7 +498,12 @@ public class BookingService {
         return CategoryBookingDTO.builder()
                 .bookingId(b.getId())
                 .userEmail(b.getUserEmail())
+                .customerName(b.getCustomerName())
                 .phoneNumber(b.getPhoneNumber())
+                .attendeeName(item.getAttendeeName())
+                .attendeeEmail(item.getAttendeeEmail())
+                .attendeePhone(item.getAttendeePhone())
+                .holderName(item.holderName())
                 .eventId(b.getEventId())
                 .status(b.getStatus())
                 .confirmationNumber(b.getConfirmationNumber())
@@ -561,7 +609,8 @@ public class BookingService {
                     .window(window)
                     .live(window == TicketWindow.LIVE)
                     .totalAmount(booking.getTotalAmount())
-                    .items(toItemDTOs(booking))
+                    // PUBLIC surface: attendee NAME only, never their contact.
+                    .items(toItemDTOs(booking, false))
                     .createdAt(booking.getCreatedAt())
                     .build());
         }
@@ -592,7 +641,16 @@ public class BookingService {
         return a.getWindow() == TicketWindow.PAST ? sb.compareTo(sa) : sa.compareTo(sb);
     };
 
-    private List<BookingItemDTO> toItemDTOs(Booking booking) {
+    /**
+     * Item projection with the scannable QR.
+     *
+     * @param includeAttendeeContact true on the AUTHENTICATED booking views
+     *        (owner/admin/organizer-scoped), where the attendee's email/phone
+     *        belong; false on the PUBLIC ones (magic-link, phone wallet), which
+     *        get the attendee NAME only — the name is on the ticket face, the
+     *        contact is PII an enumerating caller must not harvest.
+     */
+    private List<BookingItemDTO> toItemDTOs(Booking booking, boolean includeAttendeeContact) {
         return booking.getItems() == null
                 ? List.of()
                 : booking.getItems().stream()
@@ -605,6 +663,9 @@ public class BookingService {
                                 .priceAtBooking(i.getPriceAtBooking())
                                 .ticketNumber(i.getTicketNumber())
                                 .qrCode(qrCodeGenerator.toDataUri(i.getTicketNumber()))
+                                .attendeeName(i.getAttendeeName())
+                                .attendeeEmail(includeAttendeeContact ? i.getAttendeeEmail() : null)
+                                .attendeePhone(includeAttendeeContact ? i.getAttendeePhone() : null)
                                 .build())
                         .collect(Collectors.toList());
     }
@@ -728,6 +789,8 @@ public class BookingService {
                             .priceAtBooking(i.getPriceAtBooking())
                             .ticketNumber(confirmed ? i.getTicketNumber() : null)
                             .qrCode(confirmed ? qrCodeGenerator.toDataUri(i.getTicketNumber()) : null)
+                            // Name only — public view; attendee contact stays server-side.
+                            .attendeeName(i.getAttendeeName())
                             .build())
                   .collect(Collectors.toList());
 
@@ -1120,11 +1183,13 @@ public class BookingService {
     }
 
     private BookingResponseDTO toDTO(Booking booking) {
-        List<BookingItemDTO> itemDTOs = toItemDTOs(booking);
+        // Authenticated/owner view: the full attendee record travels.
+        List<BookingItemDTO> itemDTOs = toItemDTOs(booking, true);
 
         return BookingResponseDTO.builder()
                 .id(booking.getId())
                 .userEmail(booking.getUserEmail())
+                .customerName(booking.getCustomerName())
                 .phoneNumber(booking.getPhoneNumber())
                 .eventId(booking.getEventId())
                 .tenantUserUuid(booking.getTenantUserUuid())

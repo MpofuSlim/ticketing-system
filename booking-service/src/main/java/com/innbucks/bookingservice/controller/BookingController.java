@@ -79,7 +79,13 @@ public class BookingController {
 
     @PostMapping
     @Operation(summary = "Create booking", description = "Creates a new pending booking. The phone number is taken from the JWT when present, otherwise from the request body's `phoneNumber`. " +
-            "Open to every customer — registration tier does not gate booking. A flat per-booking seat ceiling (`app.booking.max-seats-per-booking`, default 20) applies equally to everyone.")
+            "Open to every customer — registration tier does not gate booking. A flat per-booking seat ceiling (`app.booking.max-seats-per-booking`, default 20) applies equally to everyone.\n\n" +
+            "**Purchaser name (V22):** `customerName` is required for guest bookings; an authenticated customer may omit it and the " +
+            "name on their profile (JWT firstName/lastName) is used. A value in the body always wins.\n\n" +
+            "**Attendees (V22):** each `seats[i]` may carry an optional `attendee` — who will hold THAT ticket. Tickets are issued " +
+            "in request order, so `items[i]` is `seats[i]`. When an attendee has a `phoneNumber` and/or `email`, that one ticket " +
+            "is ALSO delivered to them directly on confirmation (WhatsApp QR / email) — the purchaser still receives every ticket. " +
+            "An attendee phone is validated exactly like the purchaser's (400 on a malformed number, stored E.164).")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -87,39 +93,71 @@ public class BookingController {
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = BookingResponseDTO.class),
-                            examples = @ExampleObject(name = "Booking created", value = """
+                            examples = @ExampleObject(name = "Booking created (request: {\"eventId\":\"3fa85f64-...\",\"customerName\":\"Alice Moyo\",\"phoneNumber\":\"+263771234567\",\"userEmail\":\"alice@example.com\",\"seats\":[{\"categoryId\":\"8f1d4a3e-...\"},{\"categoryId\":\"8f1d4a3e-...\",\"attendee\":{\"fullName\":\"Tendai Ncube\",\"phoneNumber\":\"+263772000000\",\"email\":\"tendai@example.com\"}}]})", value = """
                                     {
                                       "code": "201 CREATED",
                                       "message": "Booking created successfully",
                                       "data": {
                                         "id": "a3b9c1d2-1234-5678-9abc-def012345678",
                                         "userEmail": "alice@example.com",
+                                        "customerName": "Alice Moyo",
+                                        "phoneNumber": "+263771234567",
                                         "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                         "confirmationNumber": "INN-20260502-AB12CD",
                                         "status": "PENDING",
-                                        "totalAmount": 100.00,
+                                        "totalAmount": 200.00,
+                                        "tenantUserUuid": "7e9a1c2b-4d5f-46a7-89b0-1c2d3e4f5a6b",
+                                        "pointsUsed": null,
+                                        "cashAmount": null,
                                         "items": [
                                           {
                                             "seatId": "11111111-2222-3333-4444-555555555555",
                                             "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
                                             "categoryName": "VIP",
-                                            "rowLabel": "A",
-                                            "seatNumber": 12,
+                                            "rowLabel": "GA",
+                                            "seatNumber": 1,
                                             "priceAtBooking": 100.00,
                                             "ticketNumber": "20260502-12345A",
-                                            "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)"
+                                            "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)",
+                                            "attendeeName": null
+                                          },
+                                          {
+                                            "seatId": "22222222-3333-4444-5555-666666666666",
+                                            "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                            "categoryName": "VIP",
+                                            "rowLabel": "GA",
+                                            "seatNumber": 2,
+                                            "priceAtBooking": 100.00,
+                                            "ticketNumber": "20260502-67890B",
+                                            "qrCode": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAQAAACX...(truncated)",
+                                            "attendeeName": "Tendai Ncube",
+                                            "attendeeEmail": "tendai@example.com",
+                                            "attendeePhone": "+263772000000"
                                           }
                                         ],
-                                        "createdAt": "2026-05-02T15:45:00",
-                                        "updatedAt": "2026-05-02T15:45:00",
-                                        "expiresAt": "2026-05-02T15:50:00"
+                                        "createdAt": "2026-05-02T15:45:00Z",
+                                        "updatedAt": null,
+                                        "expiresAt": "2026-05-02T15:50:00Z"
                                       }
                                     }
                                     """)
                     )
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Validation or domain error (includes exceeding the per-booking seat ceiling)")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400",
+                    description = "Validation or domain error (includes exceeding the per-booking seat ceiling, a missing purchaser name, or a malformed purchaser/attendee phone)",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Missing purchaser name (guest)", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "Please provide your full name.", "data": null }
+                                    """),
+                            @ExampleObject(name = "Malformed attendee phone", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "The phone number for attendee \\"Tendai Ncube\\" doesn't look valid. Please enter it in full international format, e.g. +263772000000.", "data": null }
+                                    """),
+                            @ExampleObject(name = "Bean validation (per-field)", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "seats[1].attendee.fullName": "Attendee full name is required", "seats[1].attendee.email": "Attendee email is not a valid email address" } }
+                                    """)
+                    }))
     })
     public ResponseEntity<ApiResult<BookingResponseDTO>> createBooking(
             @Valid @RequestBody CreateBookingRequestDTO request,
@@ -184,9 +222,49 @@ public class BookingController {
         if (userEmail != null && userEmail.isBlank()) {
             userEmail = null;
         }
-        log.info("POST /bookings userEmailDomain={} phoneNumber={} eventId={} seats={}",
+
+        // The purchaser's full name (V22). Body value wins; an authenticated
+        // customer falls back to the JWT's firstName/lastName so the existing
+        // app flow keeps working without a form change; a guest must supply
+        // it. Resolved here and written BACK onto the request so the service
+        // reads one authoritative value — same convention as phoneNumber.
+        String customerName = trimToNull(request.getCustomerName());
+        if (customerName == null && authenticated) {
+            customerName = jwtDisplayName(authentication);
+        }
+        if (customerName == null) {
+            throw new BadRequestException("Please provide your full name.");
+        }
+        request.setCustomerName(customerName);
+
+        // Per-ticket attendees (V22): trim, and validate + canonicalise any
+        // attendee phone exactly as the purchaser's — a malformed number
+        // would otherwise be stored and fail silently at Twilio when that
+        // attendee's QR is sent. Written back normalised.
+        for (CreateBookingRequestDTO.SeatItemRequest seat : request.getSeats()) {
+            CreateBookingRequestDTO.AttendeeRequest attendee = seat.getAttendee();
+            if (attendee == null) {
+                continue;
+            }
+            String fullName = trimToNull(attendee.getFullName());
+            attendee.setFullName(fullName);
+            attendee.setEmail(trimToNull(attendee.getEmail()));
+            String attendeePhone = trimToNull(attendee.getPhoneNumber());
+            attendee.setPhoneNumber(attendeePhone); // blank -> null; replaced by E.164 below when present
+            if (attendeePhone != null) {
+                String normalizedAttendeePhone = com.innbucks.bookingservice.util.MsisdnValidator
+                        .normalizeToE164(attendeePhone, deploymentCountry)
+                        .orElseThrow(() -> new BadRequestException(
+                                "The phone number for attendee \"" + fullName + "\" doesn't look valid. "
+                                        + "Please enter it in full international format, e.g. +263772000000."));
+                attendee.setPhoneNumber(normalizedAttendeePhone);
+            }
+        }
+
+        log.info("POST /bookings userEmailDomain={} phoneNumber={} eventId={} seats={} attendees={}",
                 userEmail == null ? "" : userEmail.replaceAll("(?s)^.*@", ""),
-                MsisdnMasking.mask(phoneNumber), request.getEventId(), request.getSeats().size());
+                MsisdnMasking.mask(phoneNumber), request.getEventId(), request.getSeats().size(),
+                request.getSeats().stream().filter(s -> s.getAttendee() != null).count());
         BookingResponseDTO created = bookingService.createBooking(userEmail, phoneNumber, request);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Booking created successfully", created));
@@ -195,6 +273,29 @@ public class BookingController {
     private String extractPhoneNumber(Authentication authentication) {
         Object details = authentication.getDetails();
         return details instanceof JwtAuthDetails d ? d.phoneNumber() : null;
+    }
+
+    /**
+     * "First Last" from the JWT's name claims, or null when the token carries
+     * neither (system users, pre-name tokens) — in which case the body must
+     * supply the purchaser's name.
+     */
+    private static String jwtDisplayName(Authentication authentication) {
+        Object details = authentication.getDetails();
+        if (!(details instanceof JwtAuthDetails d)) {
+            return null;
+        }
+        String first = trimToNull(d.firstName());
+        String last = trimToNull(d.lastName());
+        if (first == null) return last;
+        if (last == null) return first;
+        return first + " " + last;
+    }
+
+    private static String trimToNull(String v) {
+        if (v == null) return null;
+        String t = v.trim();
+        return t.isEmpty() ? null : t;
     }
 
     @GetMapping("/my")
@@ -687,7 +788,10 @@ public class BookingController {
             summary = "List bookings by seat category",
             description = "Analytics endpoint. Returns one row per booked seat in the given category, " +
                     "including who bought it and when. Includes CANCELLED bookings — filter client-side if you need " +
-                    "to exclude them. Restricted to EVENT_ORGANIZER because it exposes customer emails."
+                    "to exclude them. Restricted to EVENT_ORGANIZER because it exposes customer emails.\n\n" +
+                    "**Who is coming (V22):** every row carries the purchaser's `customerName`, and — when the purchaser " +
+                    "named a guest for that ticket — `attendeeName`/`attendeeEmail`/`attendeePhone`. `holderName` is " +
+                    "the attendee if named, else the purchaser: print that for a guest list."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -704,35 +808,47 @@ public class BookingController {
                                         {
                                           "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
                                           "userEmail": "alice@example.com",
+                                          "customerName": "Alice Moyo",
+                                          "phoneNumber": "+263771234567",
                                           "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                           "status": "CONFIRMED",
                                           "confirmationNumber": "INN-20260502-AB12CD",
                                           "seatId": "11111111-2222-3333-4444-555555555555",
                                           "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
                                           "categoryName": "VIP",
-                                          "rowLabel": "A",
-                                          "seatNumber": 12,
+                                          "rowLabel": "GA",
+                                          "seatNumber": 1,
                                           "ticketNumber": "20260502-12345A",
                                           "priceAtBooking": 100.00,
-                                          "bookedAt": "2026-05-02T15:45:00",
-                                          "updatedAt": "2026-05-02T15:45:00",
+                                          "attendeeName": null,
+                                          "attendeeEmail": null,
+                                          "attendeePhone": null,
+                                          "holderName": "Alice Moyo",
+                                          "bookedAt": "2026-05-02T15:45:00Z",
+                                          "updatedAt": "2026-05-02T15:46:00Z",
                                           "expiresAt": null
                                         },
                                         {
-                                          "bookingId": "b4c0d2e3-2345-6789-abcd-ef0123456789",
-                                          "userEmail": "bob@example.com",
+                                          "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                          "userEmail": "alice@example.com",
+                                          "customerName": "Alice Moyo",
+                                          "phoneNumber": "+263771234567",
                                           "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-                                          "status": "CANCELLED",
-                                          "confirmationNumber": "INN-20260501-EF34GH",
+                                          "status": "CONFIRMED",
+                                          "confirmationNumber": "INN-20260502-AB12CD",
                                           "seatId": "22222222-3333-4444-5555-666666666666",
                                           "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
                                           "categoryName": "VIP",
-                                          "rowLabel": "A",
-                                          "seatNumber": 13,
-                                          "ticketNumber": "20260501-67890B",
+                                          "rowLabel": "GA",
+                                          "seatNumber": 2,
+                                          "ticketNumber": "20260502-67890B",
                                           "priceAtBooking": 100.00,
-                                          "bookedAt": "2026-05-01T10:30:00",
-                                          "updatedAt": "2026-05-01T11:00:00",
+                                          "attendeeName": "Tendai Ncube",
+                                          "attendeeEmail": "tendai@example.com",
+                                          "attendeePhone": "+263772000000",
+                                          "holderName": "Tendai Ncube",
+                                          "bookedAt": "2026-05-02T15:45:00Z",
+                                          "updatedAt": "2026-05-02T15:46:00Z",
                                           "expiresAt": null
                                         }
                                       ]
@@ -762,7 +878,10 @@ public class BookingController {
             description = "Analytics endpoint. Returns one row per booked seat across every category " +
                     "in the given event. Includes CANCELLED bookings — caller filters. " +
                     "Used by seat-service to build event-level analytics in a single round-trip. " +
-                    "Restricted to EVENT_ORGANIZER because it exposes customer emails."
+                    "Restricted to EVENT_ORGANIZER because it exposes customer emails.\n\n" +
+                    "**This is the organizer's guest list (V22):** one row per ticket, each with the purchaser's " +
+                    "`customerName` and, when named, the ticket's `attendeeName`/`attendeeEmail`/`attendeePhone`. " +
+                    "`holderName` = attendee if named, else purchaser. Filter `status == CONFIRMED` for who has actually paid."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -779,36 +898,71 @@ public class BookingController {
                                         {
                                           "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
                                           "userEmail": "alice@example.com",
+                                          "customerName": "Alice Moyo",
+                                          "phoneNumber": "+263771234567",
                                           "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                           "status": "CONFIRMED",
                                           "confirmationNumber": "INN-20260502-AB12CD",
                                           "seatId": "11111111-2222-3333-4444-555555555555",
                                           "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
                                           "categoryName": "VIP",
-                                          "rowLabel": "A",
-                                          "seatNumber": 12,
+                                          "rowLabel": "GA",
+                                          "seatNumber": 1,
                                           "ticketNumber": "20260502-12345A",
                                           "priceAtBooking": 100.00,
-                                          "bookedAt": "2026-05-02T15:45:00",
-                                          "updatedAt": "2026-05-02T15:45:00",
+                                          "attendeeName": null,
+                                          "attendeeEmail": null,
+                                          "attendeePhone": null,
+                                          "holderName": "Alice Moyo",
+                                          "bookedAt": "2026-05-02T15:45:00Z",
+                                          "updatedAt": "2026-05-02T15:46:00Z",
+                                          "expiresAt": null
+                                        },
+                                        {
+                                          "bookingId": "a3b9c1d2-1234-5678-9abc-def012345678",
+                                          "userEmail": "alice@example.com",
+                                          "customerName": "Alice Moyo",
+                                          "phoneNumber": "+263771234567",
+                                          "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                          "status": "CONFIRMED",
+                                          "confirmationNumber": "INN-20260502-AB12CD",
+                                          "seatId": "22222222-3333-4444-5555-666666666666",
+                                          "categoryId": "8f1d4a3e-1c0f-4d19-9a0b-1f4d9b6a7c11",
+                                          "categoryName": "VIP",
+                                          "rowLabel": "GA",
+                                          "seatNumber": 2,
+                                          "ticketNumber": "20260502-67890B",
+                                          "priceAtBooking": 100.00,
+                                          "attendeeName": "Tendai Ncube",
+                                          "attendeeEmail": "tendai@example.com",
+                                          "attendeePhone": "+263772000000",
+                                          "holderName": "Tendai Ncube",
+                                          "bookedAt": "2026-05-02T15:45:00Z",
+                                          "updatedAt": "2026-05-02T15:46:00Z",
                                           "expiresAt": null
                                         },
                                         {
                                           "bookingId": "c5d1e3f4-3456-7890-abcd-ef0123456789",
                                           "userEmail": "carol@example.com",
+                                          "customerName": "Carol Dube",
+                                          "phoneNumber": "+263773000000",
                                           "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
                                           "status": "PENDING",
                                           "confirmationNumber": "INN-20260502-IJ56KL",
                                           "seatId": "33333333-4444-5555-6666-777777777777",
                                           "categoryId": "9e2c5b4f-2d1f-4a28-8b1c-2e5c8a7b6d22",
                                           "categoryName": "GA",
-                                          "rowLabel": "F",
-                                          "seatNumber": 4,
+                                          "rowLabel": "GA",
+                                          "seatNumber": 1,
                                           "ticketNumber": "20260502-99999C",
                                           "priceAtBooking": 60.00,
-                                          "bookedAt": "2026-05-02T14:00:00",
-                                          "updatedAt": "2026-05-02T14:00:00",
-                                          "expiresAt": "2026-05-02T14:05:00"
+                                          "attendeeName": null,
+                                          "attendeeEmail": null,
+                                          "attendeePhone": null,
+                                          "holderName": "Carol Dube",
+                                          "bookedAt": "2026-05-02T14:00:00Z",
+                                          "updatedAt": null,
+                                          "expiresAt": "2026-05-02T14:05:00Z"
                                         }
                                       ]
                                     }

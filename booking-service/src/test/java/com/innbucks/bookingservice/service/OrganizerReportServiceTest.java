@@ -231,10 +231,35 @@ class OrganizerReportServiceTest {
         String[] lines = csv.strip().split("\n");
 
         assertThat(lines[0]).isEqualTo(
-                "confirmationNumber,eventId,createdAt,ticketsSold,totalAmount,cashAmount,pointsUsed,phone");
+                "confirmationNumber,eventId,createdAt,ticketsSold,totalAmount,cashAmount,pointsUsed,phone,customerName,attendees");
         assertThat(lines).hasSize(2);
         assertThat(lines[1]).contains(",2,200.00,200.00,0.00,");
         assertThat(lines[1]).doesNotContain("+263772000000"); // raw phone must be masked
+        // Pre-V22 booking: the two new columns are simply empty.
+        assertThat(lines[1]).endsWith(",,");
+    }
+
+    @Test
+    void csv_carriesThePurchaserName_andTheNamedAttendees_namesOnly() {
+        OrganizerReportRepository repo = mock(OrganizerReportRepository.class);
+        LocalDateTime t = LocalDate.of(2026, 5, 2).atTime(15, 45);
+        BookingItem own = item(CAT_VIP, "VIP", "100.00");
+        BookingItem guest = item(CAT_VIP, "VIP", "100.00");
+        guest.setAttendeeName("Tendai Ncube");
+        guest.setAttendeeEmail("tendai@example.com");
+        guest.setAttendeePhone("+263772000000");
+        BookingItem guest2 = item(CAT_VIP, "VIP", "100.00");
+        guest2.setAttendeeName("Rudo, Sibanda"); // comma forces CSV quoting
+        Booking b = confirmed(EVENT_A, "300.00", "300.00", null, t, own, guest, guest2);
+        b.setCustomerName("Alice Moyo");
+        when(repo.findConfirmedWithItems(eq(ORG), any(), any(), any())).thenReturn(List.of(b));
+
+        String csv = service(repo).confirmedBookingsCsv(ORG, EVENT_A, null, null);
+        String[] lines = csv.strip().split("\n");
+
+        assertThat(lines[1]).endsWith(",Alice Moyo,\"Tendai Ncube; Rudo, Sibanda\"");
+        // The ledger is names-only: attendee contact belongs to /bookings/by-event.
+        assertThat(lines[1]).doesNotContain("tendai@example.com").doesNotContain("+263772000000");
     }
 
     @Test

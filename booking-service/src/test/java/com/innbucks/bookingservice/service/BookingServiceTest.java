@@ -71,6 +71,9 @@ class BookingServiceTest {
         UUID eventId = UUID.randomUUID();
         CreateBookingRequestDTO req = new CreateBookingRequestDTO();
         req.setEventId(eventId);
+        // V22: the purchaser's name is required; the controller resolves it
+        // (body or JWT) and writes it onto the request before the service.
+        req.setCustomerName("Alice Moyo");
         List<CreateBookingRequestDTO.SeatItemRequest> seats = new ArrayList<>();
         for (int i = 0; i < prices.length; i++) {
             CreateBookingRequestDTO.SeatItemRequest s = new CreateBookingRequestDTO.SeatItemRequest();
@@ -271,6 +274,150 @@ class BookingServiceTest {
         verify(itemRepo).saveAllAndFlush(itemsCaptor.capture());
         assertEquals(3, itemsCaptor.getValue().size());
         assertEquals(3, resp.getItems().size());
+    }
+
+    // -- V22: purchaser name + per-ticket attendees --------------------------
+
+    @Test
+    void createBooking_persistsThePurchasersName() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        RequestFixture fx = request(new BigDecimal("20.00"));
+        fx.request.setCustomerName("  Alice Moyo  ");
+        BookingService service = newService(bookingRepo, itemRepo, stubClient(fx));
+
+        BookingResponseDTO resp = service.createBooking("alice@example.com", "+263771234567", fx.request);
+
+        ArgumentCaptor<Booking> saved = ArgumentCaptor.forClass(Booking.class);
+        verify(bookingRepo, atLeastOnce()).save(saved.capture());
+        assertEquals("Alice Moyo", saved.getValue().getCustomerName(), "trimmed");
+        assertEquals("Alice Moyo", resp.getCustomerName());
+    }
+
+    @Test
+    void createBooking_withoutAPurchaserName_isRefused_defenceInDepth() {
+        // The controller normally guarantees this; a caller that bypasses it
+        // must not be able to create a nameless booking.
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        RequestFixture fx = request(new BigDecimal("20.00"));
+        fx.request.setCustomerName("   ");
+        BookingService service = newService(bookingRepo, itemRepo, stubClient(fx));
+
+        BadRequestException ex = assertThrows(BadRequestException.class,
+                () -> service.createBooking("alice@example.com", "+263771234567", fx.request));
+        assertTrue(ex.getMessage().contains("full name"));
+        verify(bookingRepo, never()).save(any());
+    }
+
+    @Test
+    void createBooking_issuesTicketsInRequestOrder_soEachAttendeeLandsOnTheTicketTheyWereNamedFor() {
+        // Two categories, interleaved: VIP (guest Tendai), GA (buyer's own),
+        // VIP (guest Rudo). Grouping by category would have put both VIP
+        // tickets first and shifted Rudo's name onto the GA ticket.
+        UUID vip = DEFAULT_CATEGORY_ID;
+        UUID ga = UUID.randomUUID();
+        UUID eventId = UUID.randomUUID();
+
+        CreateBookingRequestDTO req = new CreateBookingRequestDTO();
+        req.setEventId(eventId);
+        req.setCustomerName("Alice Moyo");
+        req.setSeats(List.of(
+                seat(vip, attendee("Tendai Ncube", "tendai@example.com", "+263772000000")),
+                seat(ga, null),
+                seat(vip, attendee("Rudo Sibanda", null, "+263773000000"))));
+
+        SeatServiceClient client = mock(SeatServiceClient.class);
+        when(client.getCategory(vip)).thenReturn(ApiResult.ok("ok", CategoryLookupDTO.builder()
+                .seatCategoryId(vip).eventId(eventId).name("VIP").price(new BigDecimal("100.00"))
+                .totalSeats(DEFAULT_TOTAL_SEATS).availableSeats(DEFAULT_TOTAL_SEATS).build()));
+        when(client.getCategory(ga)).thenReturn(ApiResult.ok("ok", CategoryLookupDTO.builder()
+                .seatCategoryId(ga).eventId(eventId).name("GA").price(new BigDecimal("40.00"))
+                .totalSeats(DEFAULT_TOTAL_SEATS).availableSeats(DEFAULT_TOTAL_SEATS).build()));
+
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingItemRepository itemRepo = mock(BookingItemRepository.class);
+        BookingService service = newService(bookingRepo, itemRepo, client);
+
+        BookingResponseDTO resp = service.createBooking("alice@example.com", "+263771234567", req);
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<BookingItem>> itemsCaptor = ArgumentCaptor.forClass(List.class);
+        verify(itemRepo).saveAllAndFlush(itemsCaptor.capture());
+        List<BookingItem> items = itemsCaptor.getValue();
+        assertEquals(3, items.size());
+
+        assertEquals("VIP", items.get(0).getCategoryName());
+        assertEquals("Tendai Ncube", items.get(0).getAttendeeName());
+        assertEquals("tendai@example.com", items.get(0).getAttendeeEmail());
+        assertEquals("+263772000000", items.get(0).getAttendeePhone());
+
+        assertEquals("GA", items.get(1).getCategoryName());
+        assertNull(items.get(1).getAttendeeName());
+        assertNull(items.get(1).getAttendeeEmail());
+        assertNull(items.get(1).getAttendeePhone());
+
+        assertEquals("VIP", items.get(2).getCategoryName());
+        assertEquals("Rudo Sibanda", items.get(2).getAttendeeName());
+        assertNull(items.get(2).getAttendeeEmail());
+        assertEquals("+263773000000", items.get(2).getAttendeePhone());
+
+        // Sequential ticket index follows request order too.
+        assertEquals(List.of(1, 2, 3), items.stream().map(BookingItem::getSeatNumber).toList());
+        // Total unaffected by ordering: 100 + 40 + 100.
+        assertEquals(0, new BigDecimal("240.00").compareTo(resp.getTotalAmount()));
+        // The authenticated response carries the attendee contact.
+        assertEquals("Tendai Ncube", resp.getItems().get(0).getAttendeeName());
+        assertEquals("+263772000000", resp.getItems().get(0).getAttendeePhone());
+        assertEquals("tendai@example.com", resp.getItems().get(0).getAttendeeEmail());
+    }
+
+    @Test
+    void publicViews_carryTheAttendeeName_butNeverTheirContact() {
+        // The public magic-link view is reachable by anyone holding the UUID:
+        // the name is on the ticket face, the contact is harvestable PII.
+        BookingRepository repo = mock(BookingRepository.class);
+        BookingService service = newService(repo, mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+
+        UUID id = UUID.randomUUID();
+        BookingItem item = BookingItem.builder()
+                .seatId(UUID.randomUUID()).categoryId(DEFAULT_CATEGORY_ID).categoryName("VIP")
+                .priceAtBooking(new BigDecimal("50.00")).ticketNumber("20260619-48291X")
+                .attendeeName("Tendai Ncube").attendeeEmail("tendai@example.com").attendeePhone("+263772000000")
+                .build();
+        Booking confirmed = Booking.builder().id(id).eventId(UUID.randomUUID())
+                .userEmail("alice@example.com").customerName("Alice Moyo")
+                .status(Booking.BookingStatus.CONFIRMED).totalAmount(new BigDecimal("50.00"))
+                .items(List.of(item)).build();
+        when(repo.findById(id)).thenReturn(Optional.of(confirmed));
+
+        var publicView = service.getBookingByIdPublic(id);
+        assertEquals("Tendai Ncube", publicView.getItems().get(0).getAttendeeName());
+        assertNull(publicView.getItems().get(0).getAttendeeEmail());
+        assertNull(publicView.getItems().get(0).getAttendeePhone());
+
+        // The owner's authenticated view has the full record.
+        var ownerView = service.getBookingById(id, "alice@example.com");
+        assertEquals("Alice Moyo", ownerView.getCustomerName());
+        assertEquals("Tendai Ncube", ownerView.getItems().get(0).getAttendeeName());
+        assertEquals("tendai@example.com", ownerView.getItems().get(0).getAttendeeEmail());
+        assertEquals("+263772000000", ownerView.getItems().get(0).getAttendeePhone());
+    }
+
+    private static CreateBookingRequestDTO.SeatItemRequest seat(UUID categoryId,
+                                                                CreateBookingRequestDTO.AttendeeRequest attendee) {
+        CreateBookingRequestDTO.SeatItemRequest s = new CreateBookingRequestDTO.SeatItemRequest();
+        s.setCategoryId(categoryId);
+        s.setAttendee(attendee);
+        return s;
+    }
+
+    private static CreateBookingRequestDTO.AttendeeRequest attendee(String name, String email, String phone) {
+        CreateBookingRequestDTO.AttendeeRequest a = new CreateBookingRequestDTO.AttendeeRequest();
+        a.setFullName(name);
+        a.setEmail(email);
+        a.setPhoneNumber(phone);
+        return a;
     }
 
     @Test

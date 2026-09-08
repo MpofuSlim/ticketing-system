@@ -66,6 +66,10 @@ public class TicketResendController {
                     **SUPER_ADMIN** may resend any booking. Delivery is best-effort per
                     channel — the response reports what was attempted and what succeeded, so
                     the dashboard can show e.g. "email sent, WhatsApp 2/2".
+
+                    **Named attendees (V22)** are re-delivered too: each ticket whose attendee has
+                    a phone/email distinct from the purchaser's gets its own QR/email again;
+                    `attendeeDeliveriesSent`/`attendeeDeliveriesTotal` report that separately.
                     """)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
@@ -81,8 +85,10 @@ public class TicketResendController {
                                         "emailAttempted": true,
                                         "emailSent": true,
                                         "whatsappAttempted": true,
-                                        "qrTicketsSent": 1,
-                                        "qrTicketsTotal": 1
+                                        "qrTicketsSent": 2,
+                                        "qrTicketsTotal": 2,
+                                        "attendeeDeliveriesSent": 1,
+                                        "attendeeDeliveriesTotal": 1
                                       }
                                     }
                                     """))),
