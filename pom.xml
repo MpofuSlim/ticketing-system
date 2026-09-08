@@ -34,7 +34,7 @@
              BOM resolves today; check with
                ./mvnw dependency:list -Dincludes=org.projectlombok:lombok
              before changing it. -->
-        <lombok.version>1.18.46</lombok.version>
+        <lombok.version>1.18.48</lombok.version>
         <!-- 4.0.6 patches two Spring Boot CVEs (CVE-2026-40976 CRITICAL: default-
              web-security bypass; CVE-2026-40973 HIGH: ACE + session hijacking via
              predictable session IDs), and its BOM brings spring-security to 7.0.5
