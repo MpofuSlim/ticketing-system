@@ -44,6 +44,47 @@ public class BookingItem {
     @Column(nullable = false, unique = true)
     private String ticketNumber;
 
+    /**
+     * OPTIONAL named attendee for THIS ticket — who will actually present it
+     * at the gate when the buyer is bringing others. All three null = the
+     * ticket is the purchaser's own (the common case; a one-ticket booking
+     * never needs these). When a phone and/or email is given, this ticket's
+     * QR / confirmation is ALSO delivered to that person directly, so each
+     * guest arrives with their own scannable ticket on their own phone
+     * rather than depending on the buyer forwarding a screenshot.
+     *
+     * <p>{@code attendeePhone} is stored in E.164 — the controller validates
+     * and canonicalises it exactly as it does the purchaser's number, so the
+     * delivery path never hands the WhatsApp gateway a malformed MSISDN.
+     * (V22)
+     */
+    @Column(name = "attendee_name")
+    private String attendeeName;
+
+    @Column(name = "attendee_email")
+    private String attendeeEmail;
+
+    @Column(name = "attendee_phone")
+    private String attendeePhone;
+
+    /**
+     * The person this ticket is for, as the gate/ticket should show it: the
+     * named attendee when there is one, otherwise the purchaser. Null only for
+     * pre-V22 rows whose booking carries no name.
+     */
+    public String holderName() {
+        if (attendeeName != null && !attendeeName.isBlank()) {
+            return attendeeName;
+        }
+        return booking == null ? null : booking.getCustomerName();
+    }
+
+    /** True when at least one attendee contact (phone or email) is present. */
+    public boolean hasAttendeeContact() {
+        return (attendeePhone != null && !attendeePhone.isBlank())
+                || (attendeeEmail != null && !attendeeEmail.isBlank());
+    }
+
     // Denormalised "is this row still locking the seat?" — true while the
     // parent booking is PENDING/CONFIRMED, false when CANCELLED. Kept in
     // sync by a Postgres AFTER UPDATE trigger on bookings (see migration

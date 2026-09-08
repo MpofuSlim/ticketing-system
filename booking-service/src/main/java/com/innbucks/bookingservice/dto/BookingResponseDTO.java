@@ -15,6 +15,8 @@ public class BookingResponseDTO {
 
     private UUID id;
     private String userEmail;
+    // The purchaser's full name (V22). Null only on bookings that pre-date it.
+    private String customerName;
     // Set from the JWT phoneNumber claim at booking time. May be null for
     // system users or older tokens that don't carry the claim.
     private String phoneNumber;

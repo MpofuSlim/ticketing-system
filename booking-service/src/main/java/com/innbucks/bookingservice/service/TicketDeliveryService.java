@@ -8,6 +8,7 @@ import com.innbucks.bookingservice.dto.EventLookupDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
@@ -20,8 +21,8 @@ import java.util.List;
  * and the manual organizer/admin resend
  * ({@link com.innbucks.bookingservice.controller.TicketResendController}).
  *
- * <p>Two INDEPENDENT, best-effort channels — a failure on either never affects
- * the committed booking:
+ * <p>Two INDEPENDENT, best-effort channels to the PURCHASER — a failure on
+ * either never affects the committed booking:
  * <ul>
  *   <li><b>Email</b> (to the booking's {@code userEmail}, if present) — a
  *       plain-text confirmation (booking ref, tickets, total) sent via the
@@ -36,6 +37,15 @@ import java.util.List;
  *       so it renders inline with the QR — there is NO separate
  *       {@code /api/messages/send} text message. One endpoint, one channel.</li>
  * </ul>
+ *
+ * <p><b>Plus, per ticket, the named ATTENDEE (V22).</b> When the purchaser
+ * named who holds a ticket and gave that person a phone and/or email, THAT
+ * ticket — and only that ticket — is also delivered to them directly: its QR
+ * over WhatsApp and a one-ticket confirmation by email. The purchaser still
+ * receives every ticket (they paid, and they may need to forward one), so an
+ * attendee whose contact equals the purchaser's own is skipped rather than
+ * double-sent. Each attendee send is its own best-effort unit: one guest's
+ * bad number never costs another guest their ticket.
  *
  * <p>Trade-off: WhatsApp is the only phone channel. There's no SMS fallback —
  * if WhatsApp delivery fails, the email is the only customer-visible artifact.
@@ -55,6 +65,16 @@ public class TicketDeliveryService {
     private final EmailNotificationClient email;
     private final EventServiceClient eventServiceClient;
 
+    /**
+     * Public edge base for the hosted ticket page — the same value
+     * {@code TicketController} uses. Only consulted for the attendee email,
+     * which links the guest to their ticket online in case the WhatsApp QR
+     * never lands. Blank (unit tests, unprovisioned cell) = no link, the email
+     * still carries the ticket number.
+     */
+    @Value("${innbucks.tickets.public-base-url:}")
+    private String publicBaseUrl = "";
+
     public TicketDeliveryService(WhatsAppNotificationClient whatsApp,
                                  EmailNotificationClient email,
                                  EventServiceClient eventServiceClient) {
@@ -68,12 +88,23 @@ public class TicketDeliveryService {
      * the operator exactly what went out. {@code emailAttempted}/{@code
      * whatsappAttempted} are false when the booking simply has no address /
      * phone for that channel (not a failure).
+     *
+     * <p>{@code attendeeDeliveriesTotal} counts tickets carrying an attendee
+     * contact distinct from the purchaser's; {@code attendeeDeliveriesSent}
+     * how many of those had at least one channel succeed.
      */
     public record Outcome(boolean emailAttempted, boolean emailSent,
-                          boolean whatsappAttempted, int qrTicketsSent, int qrTicketsTotal) {
+                          boolean whatsappAttempted, int qrTicketsSent, int qrTicketsTotal,
+                          int attendeeDeliveriesSent, int attendeeDeliveriesTotal) {
+
+        /** Pre-V22 shape — keeps existing callers/tests compiling. */
+        public Outcome(boolean emailAttempted, boolean emailSent,
+                       boolean whatsappAttempted, int qrTicketsSent, int qrTicketsTotal) {
+            this(emailAttempted, emailSent, whatsappAttempted, qrTicketsSent, qrTicketsTotal, 0, 0);
+        }
 
         public boolean anyChannelAttempted() {
-            return emailAttempted || whatsappAttempted;
+            return emailAttempted || whatsappAttempted || attendeeDeliveriesTotal > 0;
         }
     }
 
@@ -84,6 +115,11 @@ public class TicketDeliveryService {
      * the booking inside a transaction or via a fetch-join).
      */
     public Outcome deliver(Booking booking) {
+        // One event-service round trip for the whole delivery, not one per
+        // channel/attendee.
+        String eventTitle = resolveEventTitle(booking);
+        List<BookingItem> items = booking.getItems() == null ? List.of() : booking.getItems();
+
         boolean emailAttempted = false;
         boolean emailSent = false;
 
@@ -98,7 +134,7 @@ public class TicketDeliveryService {
                 // typographic punctuation in subjects with 400 "Invalid subject".
                 email.sendEmail(emailAddr,
                         "Your InnBucks tickets - booking " + booking.getConfirmationNumber(),
-                        buildConfirmationText(booking),
+                        buildConfirmationText(booking, eventTitle),
                         "CONF-" + booking.getConfirmationNumber() + "-"
                                 + java.util.UUID.randomUUID().toString().substring(0, 6));
                 emailSent = true;
@@ -117,12 +153,25 @@ public class TicketDeliveryService {
         String phone = booking.getPhoneNumber();
         if (phone != null && !phone.isBlank()) {
             whatsappAttempted = true;
-            List<BookingItem> items = booking.getItems() == null ? List.of() : booking.getItems();
             total = items.size();
-            sent = sendQrETickets(booking, phone, items);
+            sent = sendQrETickets(booking, phone, items, eventTitle);
         }
 
-        Outcome outcome = new Outcome(emailAttempted, emailSent, whatsappAttempted, sent, total);
+        // ---- Named attendees: their own ticket, to their own contact ----
+        int attendeeTotal = 0;
+        int attendeeSent = 0;
+        for (BookingItem item : items) {
+            if (!deliverableToAttendee(booking, item)) {
+                continue;
+            }
+            attendeeTotal++;
+            if (deliverToAttendee(booking, item, eventTitle)) {
+                attendeeSent++;
+            }
+        }
+
+        Outcome outcome = new Outcome(emailAttempted, emailSent, whatsappAttempted, sent, total,
+                attendeeSent, attendeeTotal);
         if (!outcome.anyChannelAttempted()) {
             log.warn("Ticket delivery: no email or phone on booking {} — no delivery channel",
                     booking.getConfirmationNumber());
@@ -138,36 +187,15 @@ public class TicketDeliveryService {
      * customer sees the QR image plus the full confirmation text in one render.
      * Each call is independent best-effort. Returns how many sends succeeded.
      */
-    private int sendQrETickets(Booking booking, String phone, List<BookingItem> items) {
+    private int sendQrETickets(Booking booking, String phone, List<BookingItem> items, String eventTitle) {
         if (items.isEmpty()) {
             return 0;
         }
-        String eventName = buildEventNameField(booking);
+        String eventName = buildEventNameField(booking, eventTitle);
         int sent = 0;
         for (BookingItem item : items) {
-            String tn = item.getTicketNumber();
-            if (tn == null || tn.isBlank()) {
-                continue;
-            }
-            // `.png` suffix: the WhatsApp gateway / Twilio media fetch is
-            // happier with a recognised image extension on the URL. The endpoint
-            // serves the identical PNG at both /qr and /qr.png (TicketController),
-            // so this only changes the URL string, not the bytes or Content-Type.
-            //
-            // NOT edge-prefixed, deliberately. The WhatsApp gateway's configured
-            // BASE_URL already ends in `/foundry/brand`, so it builds
-            // BASE_URL + this path = /foundry/brand/bookings/... — which
-            // TicketController serves as an explicit alias for exactly this
-            // reason. Adding the prefix here produces /foundry/brand/foundry/...
-            // and Twilio fails the media fetch with 63019.
-            String qrCodePath = "/bookings/" + booking.getId() + "/tickets/" + tn + "/qr.png";
-            try {
-                whatsApp.sendEventQrCode(phone, eventName, qrCodePath);
+            if (sendQr(booking, item, phone, eventName)) {
                 sent++;
-            } catch (RuntimeException ex) {
-                log.warn("Booking-confirm QR e-ticket failed bookingId={} ticket={} "
-                                + "(other channels/tickets unaffected): {}",
-                        booking.getId(), tn, ex.getMessage());
             }
         }
         if (sent > 0) {
@@ -177,6 +205,90 @@ public class TicketDeliveryService {
         return sent;
     }
 
+    /** One QR template send for one ticket to one phone. Best-effort; true on success. */
+    private boolean sendQr(Booking booking, BookingItem item, String phone, String eventName) {
+        String tn = item.getTicketNumber();
+        if (tn == null || tn.isBlank()) {
+            return false;
+        }
+        // `.png` suffix: the WhatsApp gateway / Twilio media fetch is
+        // happier with a recognised image extension on the URL. The endpoint
+        // serves the identical PNG at both /qr and /qr.png (TicketController),
+        // so this only changes the URL string, not the bytes or Content-Type.
+        //
+        // NOT edge-prefixed, deliberately. The WhatsApp gateway's configured
+        // BASE_URL already ends in `/foundry/brand`, so it builds
+        // BASE_URL + this path = /foundry/brand/bookings/... — which
+        // TicketController serves as an explicit alias for exactly this
+        // reason. Adding the prefix here produces /foundry/brand/foundry/...
+        // and Twilio fails the media fetch with 63019.
+        String qrCodePath = "/bookings/" + booking.getId() + "/tickets/" + tn + "/qr.png";
+        try {
+            whatsApp.sendEventQrCode(phone, eventName, qrCodePath);
+            return true;
+        } catch (RuntimeException ex) {
+            log.warn("Booking-confirm QR e-ticket failed bookingId={} ticket={} "
+                            + "(other channels/tickets unaffected): {}",
+                    booking.getId(), tn, ex.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * A ticket is delivered to its attendee only when there is an attendee
+     * contact AND it is not simply the purchaser's own — the purchaser already
+     * received every ticket, so re-sending to the same number/address would be
+     * a duplicate, not a delivery.
+     */
+    private static boolean deliverableToAttendee(Booking booking, BookingItem item) {
+        if (!item.hasAttendeeContact()) {
+            return false;
+        }
+        boolean phoneIsPurchasers = item.getAttendeePhone() != null
+                && item.getAttendeePhone().equals(booking.getPhoneNumber());
+        boolean emailIsPurchasers = item.getAttendeeEmail() != null
+                && booking.getUserEmail() != null
+                && item.getAttendeeEmail().equalsIgnoreCase(booking.getUserEmail());
+        boolean hasOwnPhone = item.getAttendeePhone() != null && !item.getAttendeePhone().isBlank()
+                && !phoneIsPurchasers;
+        boolean hasOwnEmail = item.getAttendeeEmail() != null && !item.getAttendeeEmail().isBlank()
+                && !emailIsPurchasers;
+        return hasOwnPhone || hasOwnEmail;
+    }
+
+    /**
+     * Deliver ONE ticket to the attendee named on it: QR over WhatsApp (if
+     * they have a phone) and a one-ticket confirmation email (if they have an
+     * address). Best-effort per channel; true when at least one landed.
+     */
+    private boolean deliverToAttendee(Booking booking, BookingItem item, String eventTitle) {
+        boolean any = false;
+        String attendeePhone = item.getAttendeePhone();
+        if (attendeePhone != null && !attendeePhone.isBlank()
+                && !attendeePhone.equals(booking.getPhoneNumber())) {
+            if (sendQr(booking, item, attendeePhone, buildAttendeeEventNameField(booking, item, eventTitle))) {
+                any = true;
+                log.info("Attendee QR e-ticket sent bookingId={} ticket={}", booking.getId(), item.getTicketNumber());
+            }
+        }
+        String attendeeEmail = item.getAttendeeEmail();
+        if (attendeeEmail != null && !attendeeEmail.isBlank()
+                && (booking.getUserEmail() == null || !attendeeEmail.equalsIgnoreCase(booking.getUserEmail()))) {
+            try {
+                email.sendEmail(attendeeEmail,
+                        "Your InnBucks ticket - booking " + booking.getConfirmationNumber(),
+                        buildAttendeeConfirmationText(booking, item, eventTitle),
+                        "ATT-" + booking.getConfirmationNumber() + "-"
+                                + java.util.UUID.randomUUID().toString().substring(0, 6));
+                any = true;
+                log.info("Attendee email sent bookingId={} ticket={}", booking.getId(), item.getTicketNumber());
+            } catch (RuntimeException ex) {
+                log.warn("Attendee email failed bookingId={} ticket={} (other tickets unaffected): {}",
+                        booking.getId(), item.getTicketNumber(), ex.getMessage());
+            }
+        }
+        return any;
+    }
 
     /**
      * Build the value injected into the Twilio template's single
@@ -194,9 +306,9 @@ public class TicketDeliveryService {
      * read awkwardly mid-sentence and the template is already branded
      * transactional copy.
      */
-    private String buildEventNameField(Booking booking) {
+    private String buildEventNameField(Booking booking, String eventTitle) {
         List<BookingItem> items = booking.getItems() == null ? List.of() : booking.getItems();
-        StringBuilder sb = new StringBuilder(resolveEventTitle(booking))
+        StringBuilder sb = new StringBuilder(eventTitle)
                 .append(" (booking ").append(booking.getConfirmationNumber());
         if (items.size() == 1) {
             sb.append(", 1 ticket");
@@ -214,9 +326,30 @@ public class TicketDeliveryService {
             for (int i = 0; i < items.size(); i++) {
                 if (i > 0) sb.append(", ");
                 sb.append(items.get(i).getTicketNumber());
+                String who = items.get(i).getAttendeeName();
+                if (who != null && !who.isBlank()) {
+                    sb.append(" (").append(singleLine(who)).append(')');
+                }
             }
         }
         sb.append(')');
+        return sb.toString();
+    }
+
+    /**
+     * The attendee's variant of {@link #buildEventNameField}: ONE ticket, in
+     * their name, with who booked it — same single-line rule.
+     * <pre>Harare Jazz Festival (ticket for Tendai Ncube, booked by Alice Moyo, booking INN-..., 20260502-12345A)</pre>
+     */
+    private String buildAttendeeEventNameField(Booking booking, BookingItem item, String eventTitle) {
+        StringBuilder sb = new StringBuilder(eventTitle)
+                .append(" (ticket for ").append(singleLine(item.getAttendeeName()));
+        if (booking.getCustomerName() != null && !booking.getCustomerName().isBlank()) {
+            sb.append(", booked by ").append(singleLine(booking.getCustomerName()));
+        }
+        sb.append(", booking ").append(booking.getConfirmationNumber())
+          .append(", ").append(item.getTicketNumber())
+          .append(')');
         return sb.toString();
     }
 
@@ -227,10 +360,14 @@ public class TicketDeliveryService {
      * e-ticket(s) are delivered over WhatsApp, so this email is the textual
      * record and points the customer at that QR for gate entry.
      */
-    private String buildConfirmationText(Booking booking) {
+    private String buildConfirmationText(Booking booking, String eventTitle) {
         List<BookingItem> items = booking.getItems() == null ? List.of() : booking.getItems();
-        StringBuilder sb = new StringBuilder("Hi! Your booking is confirmed.\n\n");
-        sb.append("Event: ").append(resolveEventTitle(booking)).append('\n');
+        StringBuilder sb = new StringBuilder("Hi");
+        if (booking.getCustomerName() != null && !booking.getCustomerName().isBlank()) {
+            sb.append(' ').append(booking.getCustomerName().trim());
+        }
+        sb.append("! Your booking is confirmed.\n\n");
+        sb.append("Event: ").append(eventTitle).append('\n');
         sb.append("Booking reference: ").append(booking.getConfirmationNumber()).append('\n');
         if (!items.isEmpty()) {
             sb.append("Tickets: ").append(items.size()).append('\n');
@@ -246,13 +383,61 @@ public class TicketDeliveryService {
                     sb.append(", ");
                 }
                 sb.append(items.get(i).getTicketNumber());
+                String who = items.get(i).getAttendeeName();
+                if (who != null && !who.isBlank()) {
+                    sb.append(" (").append(who.trim()).append(')');
+                }
             }
             sb.append('\n');
+        }
+        // Tell the buyer which guests were sent their own ticket, so they know
+        // who still needs a forward.
+        long directlyDelivered = items.stream().filter(i -> deliverableToAttendee(booking, i)).count();
+        if (directlyDelivered > 0) {
+            sb.append("Tickets for named attendees with their own contact details have also been sent to them directly.\n");
         }
         sb.append("\nYour scannable e-ticket")
                 .append(items.size() == 1 ? " has" : "s have")
                 .append(" been sent to your WhatsApp — present the QR at the gate.");
         return sb.toString();
+    }
+
+    /**
+     * Plain-text confirmation for ONE attendee's ticket. Names who booked it
+     * (so the email is not a mystery), the ticket number as the gate
+     * reference, and — when the cell has a public base URL — the hosted
+     * ticket page in case the WhatsApp QR doesn't arrive.
+     */
+    private String buildAttendeeConfirmationText(Booking booking, BookingItem item, String eventTitle) {
+        StringBuilder sb = new StringBuilder("Hi ").append(item.getAttendeeName().trim()).append("!\n\n");
+        if (booking.getCustomerName() != null && !booking.getCustomerName().isBlank()) {
+            sb.append(booking.getCustomerName().trim()).append(" has booked a ticket for you.\n\n");
+        } else {
+            sb.append("A ticket has been booked for you.\n\n");
+        }
+        sb.append("Event: ").append(eventTitle).append('\n');
+        sb.append("Booking reference: ").append(booking.getConfirmationNumber()).append('\n');
+        sb.append("Your ticket number: ").append(item.getTicketNumber()).append('\n');
+        if (item.getCategoryName() != null && !item.getCategoryName().isBlank()) {
+            sb.append("Ticket type: ").append(item.getCategoryName()).append('\n');
+        }
+        boolean hasPhone = item.getAttendeePhone() != null && !item.getAttendeePhone().isBlank();
+        if (hasPhone) {
+            sb.append("\nYour scannable e-ticket has been sent to your WhatsApp — present the QR at the gate.");
+        } else {
+            sb.append("\nPresent your ticket number at the gate.");
+        }
+        if (publicBaseUrl != null && !publicBaseUrl.isBlank()) {
+            sb.append("\nView the tickets online: ").append(publicBaseUrl)
+              .append("/bookings/").append(booking.getId()).append("/tickets");
+        }
+        return sb.toString();
+    }
+
+    /** Collapse anything that would break a WhatsApp template variable. */
+    private static String singleLine(String v) {
+        if (v == null) return "";
+        return v.replaceAll("[\\r\\n\\t]+", " ").replaceAll(" {2,}", " ").trim();
     }
 
     /**

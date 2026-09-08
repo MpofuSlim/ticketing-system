@@ -76,8 +76,9 @@ public class TicketScanController {
                                                 "status": "ALLOWED",
                                                 "ticketNumber": "20260619-48291X",
                                                 "bookingItemId": "f1c0d2e3-2345-6789-abcd-ef0123456789",
-                                                "redeemedAt": "2026-06-19T19:42:11",
-                                                "redeemedByName": "Tariro Chikomo"
+                                                "redeemedAt": "2026-06-19T19:42:11Z",
+                                                "redeemedByName": "Tariro Chikomo",
+                                                "holderName": "Tendai Ncube"
                                               }
                                             }
                                             """),
@@ -89,8 +90,9 @@ public class TicketScanController {
                                                 "status": "ALREADY_REDEEMED",
                                                 "ticketNumber": "20260619-48291X",
                                                 "bookingItemId": "f1c0d2e3-2345-6789-abcd-ef0123456789",
-                                                "redeemedAt": "2026-06-19T19:42:11",
-                                                "redeemedByName": "Tariro Chikomo"
+                                                "redeemedAt": "2026-06-19T19:42:11Z",
+                                                "redeemedByName": "Tariro Chikomo",
+                                                "holderName": "Tendai Ncube"
                                               }
                                             }
                                             """),

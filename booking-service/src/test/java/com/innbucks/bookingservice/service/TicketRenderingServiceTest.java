@@ -128,6 +128,57 @@ class TicketRenderingServiceTest {
                 .contains("20260610-T1");
     }
 
+    // -- V22: whose ticket is this ------------------------------------------
+
+    @Test
+    void page_showsTheNamedAttendee_onTheirTicket() {
+        Booking b = booking(Booking.BookingStatus.CONFIRMED);
+        b.setCustomerName("Alice Moyo");
+        b.getItems().get(0).setAttendeeName("Tendai Ncube");
+        b.getItems().get(0).setBooking(b);
+        when(repo.findById(b.getId())).thenReturn(Optional.of(b));
+
+        String html = service.ticketPageHtml(b.getId(), BASE).orElseThrow();
+
+        assertThat(html).contains("Ticket for Tendai Ncube");
+        // The buyer's name must not be printed as the holder of a guest's ticket.
+        assertThat(html).doesNotContain("Ticket for Alice Moyo");
+    }
+
+    @Test
+    void page_fallsBackToThePurchaser_whenNoAttendeeIsNamed() {
+        Booking b = booking(Booking.BookingStatus.CONFIRMED);
+        b.setCustomerName("Alice Moyo");
+        b.getItems().get(0).setBooking(b);
+        when(repo.findById(b.getId())).thenReturn(Optional.of(b));
+
+        String html = service.ticketPageHtml(b.getId(), BASE).orElseThrow();
+
+        assertThat(html).contains("Ticket for Alice Moyo");
+    }
+
+    @Test
+    void page_omitsTheHolderLine_onPreV22BookingsWithNoName() {
+        Booking b = booking(Booking.BookingStatus.CONFIRMED);
+        b.getItems().get(0).setBooking(b);
+        when(repo.findById(b.getId())).thenReturn(Optional.of(b));
+
+        String html = service.ticketPageHtml(b.getId(), BASE).orElseThrow();
+
+        assertThat(html).doesNotContain("Ticket for ");
+    }
+
+    @Test
+    void emailHtml_showsTheHolder_andEscapesIt() {
+        Booking b = booking(Booking.BookingStatus.CONFIRMED);
+        b.getItems().get(0).setAttendeeName("<b>Tendai</b>");
+        b.getItems().get(0).setBooking(b);
+
+        String html = service.confirmationEmailHtml(b, BASE);
+
+        assertThat(html).contains("Ticket for &lt;b&gt;Tendai&lt;/b&gt;").doesNotContain("<b>Tendai</b>");
+    }
+
     @Test
     void rendering_escapesInterpolatedValues() {
         Booking b = booking(Booking.BookingStatus.CONFIRMED);

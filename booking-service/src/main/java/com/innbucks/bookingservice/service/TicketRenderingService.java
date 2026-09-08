@@ -69,6 +69,7 @@ public class TicketRenderingService {
                 .append("h1{font-size:20px;margin:0 0 4px}.sub{color:#cbd5e1;font-size:14px;margin:0 0 20px}")
                 .append(".tkt{background:#13283f;border-radius:14px;padding:20px;margin-bottom:16px;text-align:center}")
                 .append(".tkt img{width:220px;height:220px;background:#fff;padding:10px;border-radius:10px}")
+                .append(".who{color:#e2e8f0;font-size:15px;margin-top:10px}")
                 .append(".cat{font-weight:600;font-size:16px;margin:12px 0 2px}")
                 .append(".seat{color:#cbd5e1;font-size:14px}")
                 .append(".tn{font-family:monospace;font-size:13px;color:#93c5fd;margin-top:6px}")
@@ -83,8 +84,13 @@ public class TicketRenderingService {
             sb.append("<div class=\"tkt\">")
                     .append("<img alt=\"QR for ticket ").append(esc(tn)).append("\" src=\"")
                     .append(esc(baseUrl)).append("/bookings/").append(booking.getId())
-                    .append("/tickets/").append(esc(tn)).append("/qr\">")
-                    .append("<div class=\"cat\">").append(esc(nullSafe(item.getCategoryName(), "Ticket"))).append("</div>");
+                    .append("/tickets/").append(esc(tn)).append("/qr\">");
+            // Who holds this ticket (V22): the named attendee, else the buyer.
+            String holder = item.holderName();
+            if (holder != null && !holder.isBlank()) {
+                sb.append("<div class=\"who\">Ticket for ").append(esc(holder)).append("</div>");
+            }
+            sb.append("<div class=\"cat\">").append(esc(nullSafe(item.getCategoryName(), "Ticket"))).append("</div>");
             if (item.getRowLabel() != null || item.getSeatNumber() != null) {
                 sb.append("<div class=\"seat\">Row ").append(esc(nullSafe(item.getRowLabel(), "-")))
                         .append(", Seat ").append(item.getSeatNumber() == null ? "-" : item.getSeatNumber())
@@ -122,8 +128,13 @@ public class TicketRenderingService {
                     .append("margin:0 0 12px;text-align:center\">")
                     .append("<img width=\"200\" height=\"200\" style=\"display:block;margin:0 auto\" alt=\"QR ")
                     .append(esc(tn)).append("\" src=\"").append(esc(base)).append("/bookings/")
-                    .append(booking.getId()).append("/tickets/").append(esc(tn)).append("/qr\">")
-                    .append("<div style=\"font-weight:bold;margin-top:8px\">")
+                    .append(booking.getId()).append("/tickets/").append(esc(tn)).append("/qr\">");
+            String holder = item.holderName();
+            if (holder != null && !holder.isBlank()) {
+                sb.append("<div style=\"color:#0b1f33;margin-top:8px\">Ticket for ")
+                        .append(esc(holder)).append("</div>");
+            }
+            sb.append("<div style=\"font-weight:bold;margin-top:8px\">")
                     .append(esc(nullSafe(item.getCategoryName(), "Ticket"))).append("</div>");
             if (item.getRowLabel() != null || item.getSeatNumber() != null) {
                 sb.append("<div style=\"color:#475569;font-size:14px\">Row ")

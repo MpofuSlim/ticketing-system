@@ -201,6 +201,7 @@ public class TicketScanService {
                     .bookingItemId(reloaded.getId())
                     .redeemedAt(reloaded.getRedeemedAt())
                     .redeemedByName(reloaded.getRedeemedByName())
+                    .holderName(reloaded.holderName())
                     .build();
             recordAttempt(ticketNumber, reloaded, ScanAttempt.Outcome.ALREADY_REDEEMED,
                     scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start);
@@ -215,6 +216,9 @@ public class TicketScanService {
                 .bookingItemId(item.getId())
                 .redeemedAt(now)
                 .redeemedByName(scannerDisplayName)
+                // Who the ticket was issued to (V22) — the gate can greet or
+                // ID-check the holder. Attendee if named, else the purchaser.
+                .holderName(item.holderName())
                 .build();
         recordAttempt(ticketNumber, item, ScanAttempt.Outcome.ALLOWED,
                 scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start);

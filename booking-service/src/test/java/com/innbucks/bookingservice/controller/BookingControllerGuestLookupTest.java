@@ -47,6 +47,7 @@ class BookingControllerGuestLookupTest {
 
         CreateBookingRequestDTO req = new CreateBookingRequestDTO();
         req.setEventId(UUID.randomUUID());
+        req.setCustomerName("Guest Buyer"); // V22: a guest must name themselves
         req.setPhoneNumber("+263770000001");
         CreateBookingRequestDTO.SeatItemRequest seat = new CreateBookingRequestDTO.SeatItemRequest();
         seat.setCategoryId(UUID.randomUUID());

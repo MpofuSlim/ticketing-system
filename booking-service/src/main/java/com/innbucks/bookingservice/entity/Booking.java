@@ -32,6 +32,14 @@ public class Booking {
     @Column
     private String userEmail;
 
+    // The PURCHASER's full name, captured at POST /bookings (body field, or
+    // the JWT's firstName/lastName for an authenticated customer). This is
+    // what turns the organizer's bookings view from a list of MSISDNs into a
+    // guest list. Nullable only for rows that pre-date V22 — the create path
+    // requires it. (V22)
+    @Column(name = "customer_name")
+    private String customerName;
+
     // Captured from the JWT's phoneNumber claim at booking time. Optional —
     // some JWTs (system users, older tokens) don't carry the claim, so the
     // booking is still valid without one. Indexed so `findByPhoneNumber*`

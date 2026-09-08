@@ -289,6 +289,61 @@ class TicketScanServiceTest {
         assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.ALLOWED);
     }
 
+    // -- V22: who the ticket was issued to -----------------------------------
+
+    @Test
+    void scan_allowed_reportsTheNamedAttendeeAsHolder() {
+        UUID organizerUuid = UUID.randomUUID();
+        UUID scannerUuid = UUID.randomUUID();
+        BookingItem item = confirmedItem(organizerUuid);
+        item.getBooking().setCustomerName("Alice Moyo");
+        item.setAttendeeName("Tendai Ncube");
+        authenticateAs("tariro@harare-arena.co.zw", scannerUuid, organizerUuid);
+        when(bookingItemRepository.findByTicketNumberWithBooking("20260619-48291X"))
+                .thenReturn(Optional.of(item));
+        when(bookingItemRepository.claimRedemption(any(), any(), any(), any())).thenReturn(1);
+
+        ScanTicketResponseDTO result = service.scan("20260619-48291X", "tariro@harare-arena.co.zw");
+
+        assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.ALLOWED);
+        assertThat(result.getHolderName()).isEqualTo("Tendai Ncube");
+    }
+
+    @Test
+    void scan_allowed_fallsBackToThePurchaser_whenNoAttendeeNamed() {
+        UUID organizerUuid = UUID.randomUUID();
+        UUID scannerUuid = UUID.randomUUID();
+        BookingItem item = confirmedItem(organizerUuid);
+        item.getBooking().setCustomerName("Alice Moyo");
+        authenticateAs("tariro@harare-arena.co.zw", scannerUuid, organizerUuid);
+        when(bookingItemRepository.findByTicketNumberWithBooking("20260619-48291X"))
+                .thenReturn(Optional.of(item));
+        when(bookingItemRepository.claimRedemption(any(), any(), any(), any())).thenReturn(1);
+
+        ScanTicketResponseDTO result = service.scan("20260619-48291X", "tariro@harare-arena.co.zw");
+
+        assertThat(result.getHolderName()).isEqualTo("Alice Moyo");
+    }
+
+    @Test
+    void scan_alreadyRedeemed_stillReportsTheHolder() {
+        UUID organizerUuid = UUID.randomUUID();
+        UUID scannerUuid = UUID.randomUUID();
+        BookingItem item = confirmedItem(organizerUuid);
+        item.setAttendeeName("Tendai Ncube");
+        item.setRedeemedAt(LocalDateTime.of(2026, 6, 19, 19, 42));
+        item.setRedeemedByName("Someone Else");
+        authenticateAs("tariro@harare-arena.co.zw", scannerUuid, organizerUuid);
+        when(bookingItemRepository.findByTicketNumberWithBooking("20260619-48291X"))
+                .thenReturn(Optional.of(item));
+        when(bookingItemRepository.claimRedemption(any(), any(), any(), any())).thenReturn(0);
+
+        ScanTicketResponseDTO result = service.scan("20260619-48291X", "tariro@harare-arena.co.zw");
+
+        assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.ALREADY_REDEEMED);
+        assertThat(result.getHolderName()).isEqualTo("Tendai Ncube");
+    }
+
     @Test
     void scan_assignmentServiceDown_failClosedDenies() {
         UUID organizerUuid = UUID.randomUUID();
