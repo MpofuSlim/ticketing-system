@@ -741,6 +741,24 @@ back). Non-negotiables:
 - **`transactionOperationStatus` is the ONLY outcome field** (COMPLETED /
   FAILED / everything-else-is-open). Never gate on HTTP status or
   `responseCode`.
+- **`EcocashCurrencies` is a hardcoded allow-list (`USD`, `ZWG`) and every
+  charge resolves through it BEFORE the hold, the ledger row and the wire.**
+  An unsupported `currencyCode` does not come back as a business rejection —
+  measured on preprod it returns EcoCash's edge WAF `text/html` "Request
+  Rejected" page, which the client correctly raises as transient (see the
+  rule above), so the row would sit `TOKEN_ISSUED` forever holding the order's
+  ONLY payment slot across all three rails. **The numeric ISO code is the
+  quieter trap**: the charge echoes `840` back verbatim while the *query*
+  normalises it to `USD`, and the query echo is what `echoMismatch` compares —
+  so a numeric currency parks 100% of COMPLETED payments IN_DOUBT with no
+  error at all. Hence also the `@PostConstruct` guard that logs an ERROR when
+  `innbucks.currency` is unsupported and the rail is configured. **Do not make
+  the set env-configurable** — that reintroduces exactly the footgun; adding a
+  currency EcoCash later supports is a one-line reviewed code change.
+  An order priced in an unsupported currency is a `422` (use another rail);
+  an unsupported *cell* currency is a `503` (deployment fault, affects
+  everyone). ZWG's query echo is still **unmeasured** — run one charge+query in
+  ZWG before this cell transacts it, or those rows park IN_DOUBT.
 - **A 2xx whose body is not a JSON object is INFRASTRUCTURE, not a status** —
   raise it as transient, never classify it. EcoCash sits behind Cloudflare and
   an F5 BIG-IP ASM, and the ASM serves its "Request Rejected / support ID"
