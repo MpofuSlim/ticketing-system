@@ -1077,6 +1077,148 @@ public class EventController {
                 .body(ApiResult.created("Event created successfully", created));
     }
 
+    @PutMapping(value = "/{id}/banner", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @Operation(
+            summary = "Replace the event banner image",
+            description = """
+                    Replaces an existing event's banner with a newly uploaded image — the
+                    write twin of `GET /events/{id}/banner`.
+
+                    Send `multipart/form-data` with a single `eventBanner` part. The image
+                    must be **JPG, PNG or WEBP** and **under 10 MB**; the payload's real
+                    format is verified by its magic bytes, so renaming a file or faking the
+                    `Content-Type` is rejected.
+
+                    `PUT /events/{id}` (JSON) does NOT carry the image — this is the only
+                    way to change a banner after creation. Use `DELETE /events/{id}/banner`
+                    to remove one without uploading a replacement.
+
+                    Authorization: **EVENT_ORGANIZER** may replace the banner only on their
+                    own event; **SUPER_ADMIN** on any. Returns the full updated event, whose
+                    `bannerUrl` is unchanged in shape — the URL is stable across replacements,
+                    so refresh any cached image (the bytes are served with a 1-hour cache).
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Banner replaced",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = EventResponseDTO.class),
+                            examples = @ExampleObject(name = "Banner replaced", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Event banner updated successfully",
+                                      "data": {
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "title": "Summer Concert (Updated)",
+                                        "venue": "Harare Gardens",
+                                        "country": "Zimbabwe", "category": "CONCERT",
+                                        "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+                                        "startDateTime": "2026-06-15T19:00:00Z", "endDateTime": "2026-06-15T22:00:00Z",
+                                        "totalCapacity": 600, "availableTickets": 520, "active": true
+                                      }
+                                    }
+                                    """))),
+            @ApiResponse(responseCode = "400", description = "No file sent, file too large, or not a JPG/PNG/WEBP image",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "No file", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "Please choose an image to upload.", "data": null }
+                                    """),
+                            @ExampleObject(name = "Too large", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "That image is too large. Please use one under 10 MB.", "data": null }
+                                    """),
+                            @ExampleObject(name = "Wrong type", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "Please upload a JPG, PNG, or WEBP image.", "data": null }
+                                    """),
+                            @ExampleObject(name = "Not really an image", value = """
+                                    { "code": "400 BAD_REQUEST", "message": "Please upload a valid image file (JPG, PNG, or WEBP).", "data": null }
+                                    """)
+                    })),
+            @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @ApiResponse(responseCode = "403", description = "Not the owning organizer",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "403 FORBIDDEN", "message": "You are not authorized to update this event", "data": null }
+                                    """))),
+            @ApiResponse(responseCode = "404", description = "Event not found",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "404 NOT_FOUND", "message": "Event not found", "data": null }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<EventResponseDTO>> replaceEventBanner(
+            @Parameter(description = "Event UUID") @PathVariable UUID id,
+            @RequestPart("eventBanner") MultipartFile eventBanner,
+            Authentication authentication
+    ) {
+        UUID tenantUserUuid = com.innbucks.eventservice.security.AuthenticatedCaller
+                .organizerUuid(authentication);
+        String role = getCurrentRole(authentication);
+        log.info("Replacing banner eventId={} tenantUserUuid={} size={}",
+                id, tenantUserUuid, eventBanner == null ? 0 : eventBanner.getSize());
+        EventResponseDTO updated = eventService.replaceEventBanner(tenantUserUuid, role, id, eventBanner);
+        return ResponseEntity.ok(ApiResult.ok("Event banner updated successfully", updated));
+    }
+
+    @DeleteMapping("/{id}/banner")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
+    @Operation(
+            summary = "Remove the event banner image",
+            description = """
+                    Clears the event's banner without uploading a replacement — the event
+                    then renders with the client's placeholder.
+
+                    **Idempotent**: an event that already has no banner returns `200`, not
+                    `404`, so a repeated tap is harmless. The returned event's `bannerUrl`
+                    is `null` afterwards.
+
+                    Authorization matches the replace endpoint: **EVENT_ORGANIZER** on their
+                    own event, **SUPER_ADMIN** on any.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Banner removed (or there was none)",
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = EventResponseDTO.class),
+                            examples = @ExampleObject(name = "Banner removed", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Event banner removed successfully",
+                                      "data": {
+                                        "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "title": "Summer Concert (Updated)",
+                                        "venue": "Harare Gardens",
+                                        "country": "Zimbabwe", "category": "CONCERT",
+                                        "bannerUrl": null,
+                                        "startDateTime": "2026-06-15T19:00:00Z", "endDateTime": "2026-06-15T22:00:00Z",
+                                        "totalCapacity": 600, "availableTickets": 520, "active": true
+                                      }
+                                    }
+                                    """))),
+            @ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
+            @ApiResponse(responseCode = "403", description = "Not the owning organizer",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "403 FORBIDDEN", "message": "You are not authorized to update this event", "data": null }
+                                    """))),
+            @ApiResponse(responseCode = "404", description = "Event not found",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "404 NOT_FOUND", "message": "Event not found", "data": null }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<EventResponseDTO>> deleteEventBanner(
+            @Parameter(description = "Event UUID") @PathVariable UUID id,
+            Authentication authentication
+    ) {
+        UUID tenantUserUuid = com.innbucks.eventservice.security.AuthenticatedCaller
+                .organizerUuid(authentication);
+        String role = getCurrentRole(authentication);
+        log.info("Clearing banner eventId={} tenantUserUuid={}", id, tenantUserUuid);
+        EventResponseDTO updated = eventService.deleteEventBanner(tenantUserUuid, role, id);
+        return ResponseEntity.ok(ApiResult.ok("Event banner removed successfully", updated));
+    }
+
     @GetMapping("/{id}/banner")
     @SecurityRequirements()
     @Operation(
