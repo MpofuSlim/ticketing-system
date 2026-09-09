@@ -14,7 +14,7 @@ import java.time.ZoneOffset;
  * additional default service bundle (e.g. "loyalty") on top of the bundles
  * picked at registration. SUPER_ADMIN reviews these and approves; on approval
  * the bundle is added to the requesting user's defaultServices set and the
- * matching role is granted.
+ * matching role is granted, or rejects it with a reason.
  */
 @Entity
 @Table(name = "service_requests")
@@ -36,8 +36,19 @@ public class ServiceRequest {
     @Column(nullable = false)
     private String service;
 
+    /** The REQUESTER's justification, captured at submission. Never overwritten
+     *  by a reviewer — their words go in {@link #decisionReason}. */
     @Column(nullable = false, length = 1000)
     private String reason;
+
+    /**
+     * The REVIEWER's stated reason for the decision (V36). Required on a
+     * reject — it is what the requester is told and what a colleague reads to
+     * see why a request was turned down; optional on an approve. Null on every
+     * pre-V36 row.
+     */
+    @Column(name = "decision_reason", length = 1000)
+    private String decisionReason;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
@@ -51,7 +62,7 @@ public class ServiceRequest {
     @Column(name = "reviewed_at")
     private LocalDateTime reviewedAt;
 
-    /** users.id of the SUPER_ADMIN who approved. Null while PENDING. */
+    /** users.id of the SUPER_ADMIN who decided this request. Null while PENDING. */
     @Column(name = "reviewed_by")
     private Long reviewedBy;
 
@@ -75,6 +86,13 @@ public class ServiceRequest {
 
     public enum Status {
         PENDING,
-        APPROVED
+        APPROVED,
+        /**
+         * The reviewer decided against the request (V36). Note the partial
+         * unique index in V4 is scoped {@code WHERE status = 'PENDING'}, so a
+         * rejected row does not stop the user asking again later — a rejection
+         * decides one request, it is not a standing ban on the bundle.
+         */
+        REJECTED
     }
 }
