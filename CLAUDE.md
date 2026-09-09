@@ -293,6 +293,45 @@ organizer's bookings view from a list of MSISDNs into a guest list.
   event-change/cancel notifications — those still go to the purchaser only.
   Extending them is a separate decision (it multiplies SMS cost per booking).
 
+## A MERCHANT_ADMIN's token carries a `merchantId` claim (and why it didn't)
+
+**`AuthService.resolveMerchantIdClaim` mints the loyalty `merchants.id` onto a
+MERCHANT_ADMIN's JWT**, resolved from loyalty-service by the admin's email —
+the binding InnRewards stamps at merchant creation (`merchants.admin_email`,
+its `V4`).
+
+- **Why it changed.** Merchant scope used to be resolved per request from the
+  body, so MERCHANT_ADMIN tokens deliberately carried no claim. That is fine
+  for an endpoint that takes a merchant in the body — but **marketplace-service
+  (`MpofuSlim/market-place`) scopes a seller EXCLUSIVELY from the claim** and
+  refuses without one (`403 merchant_scope_missing`,
+  `ListingService.requireMerchantId`). Merchant self-service listing was
+  therefore unreachable with a real fleet token; only the SUPER_ADMIN
+  on-behalf path worked. The claim is minted in **one** place — `buildResponse`,
+  which login, MFA completion and refresh all funnel through — rather than
+  teaching each consumer a second lookup.
+- **Exactly one merchant, or none — never a guess.** An admin may own several
+  (`ShopStaffService.resolveCallerMerchantIds` handles the set), but a claim is
+  singular and the consumer treats it as authoritative ownership. Minting one
+  of several would silently attribute listings — and therefore commission — to
+  an arbitrary merchant, surfacing at invoicing rather than at the call. So a
+  multi-merchant admin gets **no** claim and the same clean refusal as before,
+  plus a boot-visible WARN. Widening this needs an explicit merchant selector
+  on the consumer side; that is a design change, not a default.
+  `MerchantAdminMerchantIdClaimTest` pins both directions.
+- **It can never fail a login.** `LoyaltyServiceClient.merchantIdsForAdmin` is
+  best-effort by construction (swallows 4xx + network errors, returns an empty
+  list), and a null client — a plain unit test — skips the lookup. A loyalty
+  outage mints a token *without* the claim: the user signs in and only
+  merchant-scoped calls are refused until loyalty is back.
+- **Only MERCHANT_ADMIN pays for it.** Shop staff keep the value stamped on
+  their `User` row (no network call); every other role short-circuits before
+  the lookup, so no customer or organiser login gains a round-trip.
+- `Listing.merchantId` and `Listing.shopId` in marketplace-service are the
+  **loyalty** merchant/shop ids, copied from these claims. `GET /loyalty/merchants`
+  is the authoritative registry for them — **not** `GET /admin/users/merchants`,
+  which returns account `userUuid`s.
+
 ## Timestamps — store everything in UTC
 
 The user/booking/seat/event services map timestamps as `LocalDateTime`
