@@ -38,14 +38,19 @@ import java.util.List;
  *       {@code /api/messages/send} text message. One endpoint, one channel.</li>
  * </ul>
  *
- * <p><b>Plus, per ticket, the named ATTENDEE (V22).</b> When the purchaser
- * named who holds a ticket and gave that person a phone and/or email, THAT
- * ticket — and only that ticket — is also delivered to them directly: its QR
- * over WhatsApp and a one-ticket confirmation by email. The purchaser still
- * receives every ticket (they paid, and they may need to forward one), so an
- * attendee whose contact equals the purchaser's own is skipped rather than
- * double-sent. Each attendee send is its own best-effort unit: one guest's
- * bad number never costs another guest their ticket.
+ * <p><b>Each ticket's WhatsApp QR goes to its HOLDER's phone, exclusively.</b>
+ * A ticket whose attendee has their OWN phone (distinct from the purchaser's)
+ * is delivered to that attendee only — the purchaser does NOT receive that
+ * ticket's QR, just their own tickets'. A ticket with no attendee phone (none
+ * named, name-only, email-only, or the attendee IS the purchaser) stays on the
+ * purchaser's WhatsApp, so the gate credential always reaches someone. The
+ * purchaser's confirmation EMAIL remains the full receipt for the whole
+ * booking (they paid), and it says which guests were sent their ticket
+ * directly. An attendee with an email additionally gets a one-ticket
+ * confirmation email. Each attendee send is its own best-effort unit: one
+ * guest's bad number never costs another guest their ticket — and the
+ * purchaser can always recover ANY ticket's QR from the ticket wallet /
+ * hosted booking page, which still shows the whole booking.
  *
  * <p>Trade-off: WhatsApp is the only phone channel. There's no SMS fallback —
  * if WhatsApp delivery fails, the email is the only customer-visible artifact.
@@ -147,14 +152,21 @@ public class TicketDeliveryService {
         }
 
         // ---- WhatsApp QR e-tickets (only — no /send call) ----
+        // Route each QR to its holder: tickets whose attendee has their OWN
+        // phone go to that attendee (below); everything else is the
+        // purchaser's to receive. The purchaser deliberately does NOT get a
+        // copy of an attendee-routed QR — "A gets his ticket, B gets his".
+        List<BookingItem> purchaserItems = items.stream()
+                .filter(i -> !attendeeHasOwnPhone(booking, i))
+                .toList();
         boolean whatsappAttempted = false;
         int sent = 0;
         int total = 0;
         String phone = booking.getPhoneNumber();
-        if (phone != null && !phone.isBlank()) {
+        if (phone != null && !phone.isBlank() && !purchaserItems.isEmpty()) {
             whatsappAttempted = true;
-            total = items.size();
-            sent = sendQrETickets(booking, phone, items, eventTitle);
+            total = purchaserItems.size();
+            sent = sendQrETickets(booking, phone, purchaserItems, eventTitle);
         }
 
         // ---- Named attendees: their own ticket, to their own contact ----
@@ -235,10 +247,24 @@ public class TicketDeliveryService {
     }
 
     /**
+     * True when this ticket's QR is routed to the ATTENDEE's WhatsApp rather
+     * than the purchaser's: the attendee has a phone of their own, distinct
+     * from the purchaser's. Name-only and email-only attendees keep their QR
+     * on the purchaser's phone — the QR is the gate credential and must always
+     * reach a phone that exists.
+     */
+    private static boolean attendeeHasOwnPhone(Booking booking, BookingItem item) {
+        String attendeePhone = item.getAttendeePhone();
+        return attendeePhone != null && !attendeePhone.isBlank()
+                && !attendeePhone.equals(booking.getPhoneNumber());
+    }
+
+    /**
      * A ticket is delivered to its attendee only when there is an attendee
-     * contact AND it is not simply the purchaser's own — the purchaser already
-     * received every ticket, so re-sending to the same number/address would be
-     * a duplicate, not a delivery.
+     * contact AND it is not simply the purchaser's own — an attendee whose
+     * number/address IS the purchaser's already receives everything on the
+     * purchaser channels, so a second send would be a duplicate, not a
+     * delivery.
      */
     private static boolean deliverableToAttendee(Booking booking, BookingItem item) {
         if (!item.hasAttendeeContact()) {
@@ -390,15 +416,20 @@ public class TicketDeliveryService {
             }
             sb.append('\n');
         }
-        // Tell the buyer which guests were sent their own ticket, so they know
-        // who still needs a forward.
-        long directlyDelivered = items.stream().filter(i -> deliverableToAttendee(booking, i)).count();
-        if (directlyDelivered > 0) {
-            sb.append("Tickets for named attendees with their own contact details have also been sent to them directly.\n");
+        // Tell the buyer exactly where each QR went: attendee-routed tickets
+        // are NOT on the buyer's phone (by design), so without this line a
+        // buyer who can't find Tendai's QR assumes delivery failed.
+        long routedToAttendees = items.stream().filter(i -> attendeeHasOwnPhone(booking, i)).count();
+        long ownTickets = items.size() - routedToAttendees;
+        if (routedToAttendees > 0) {
+            sb.append("Tickets for attendees with their own phone number have been sent directly to their WhatsApp.\n");
         }
-        sb.append("\nYour scannable e-ticket")
-                .append(items.size() == 1 ? " has" : "s have")
-                .append(" been sent to your WhatsApp — present the QR at the gate.");
+        if (ownTickets > 0) {
+            sb.append("\nYour ").append(ownTickets == 1 ? "scannable e-ticket has" : "scannable e-tickets have")
+                    .append(" been sent to your WhatsApp — present the QR at the gate.");
+        } else {
+            sb.append("\nEvery ticket has been sent to its attendee's WhatsApp. You can view the whole booking online at any time.");
+        }
         return sb.toString();
     }
 

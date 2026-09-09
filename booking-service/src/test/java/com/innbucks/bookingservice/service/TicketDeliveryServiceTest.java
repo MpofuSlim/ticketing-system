@@ -182,7 +182,9 @@ class TicketDeliveryServiceTest {
     }
 
     @Test
-    void attendeeWithOwnPhone_receivesExactlyTheirTicket_purchaserStillGetsAll() {
+    void eachHolderGetsExactlyTheirOwnTicket_neverSomeoneElses() {
+        // The core routing rule: A gets A's QR, B gets B's — the purchaser
+        // does NOT receive a copy of a ticket routed to its attendee's phone.
         Fixture f = fixture();
         Booking booking = bookingWithOneTicket();
         booking.setCustomerName("Alice Moyo");
@@ -192,9 +194,9 @@ class TicketDeliveryServiceTest {
 
         TicketDeliveryService.Outcome outcome = f.service().deliver(booking);
 
-        // Purchaser: both tickets, to the purchaser's phone.
+        // Purchaser: ONLY their own ticket.
         verify(f.whatsApp()).sendEventQrCode(eq("+263782606983"), anyString(), contains("TN-ALICE"));
-        verify(f.whatsApp()).sendEventQrCode(eq("+263782606983"), anyString(), contains("TN-TENDAI"));
+        verify(f.whatsApp(), never()).sendEventQrCode(eq("+263782606983"), anyString(), contains("TN-TENDAI"));
         // Attendee: ONLY their ticket, to THEIR phone, in their name.
         ArgumentCaptor<String> eventName = ArgumentCaptor.forClass(String.class);
         verify(f.whatsApp()).sendEventQrCode(eq("+263772000000"), eventName.capture(), contains("TN-TENDAI"));
@@ -203,9 +205,36 @@ class TicketDeliveryServiceTest {
         assertTrue(eventName.getValue().contains("booked by Alice Moyo"), eventName.getValue());
         assertFalse(eventName.getValue().contains("\n"), "WhatsApp template variable must be single-line");
 
-        assertEquals(2, outcome.qrTicketsSent());
+        assertEquals(1, outcome.qrTicketsSent(), "purchaser-routed QRs only");
+        assertEquals(1, outcome.qrTicketsTotal());
         assertEquals(1, outcome.attendeeDeliveriesSent());
         assertEquals(1, outcome.attendeeDeliveriesTotal());
+    }
+
+    @Test
+    void everyTicketNamed_purchaserGetsNoQr_butStillTheFullReceiptEmail() {
+        Fixture f = fixture();
+        Booking booking = bookingWithOneTicket();
+        booking.setUserEmail("alice@example.com");
+        booking.setCustomerName("Alice Moyo");
+        booking.setItems(List.of(
+                ticketFor("TN-TENDAI", "Tendai Ncube", null, "+263772000000"),
+                ticketFor("TN-RUDO", "Rudo Sibanda", null, "+263773000000")));
+
+        TicketDeliveryService.Outcome outcome = f.service().deliver(booking);
+
+        // No QR to the purchaser's phone at all.
+        verify(f.whatsApp(), never()).sendEventQrCode(eq("+263782606983"), anyString(), anyString());
+        assertFalse(outcome.whatsappAttempted());
+        assertEquals(0, outcome.qrTicketsTotal());
+        // But the receipt email still covers the whole booking and says where
+        // the QRs went.
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(f.email()).sendEmail(eq("alice@example.com"), anyString(), body.capture(), anyString());
+        assertTrue(body.getValue().contains("TN-TENDAI"), body.getValue());
+        assertTrue(body.getValue().contains("TN-RUDO"), body.getValue());
+        assertTrue(body.getValue().contains("Every ticket has been sent to its attendee's WhatsApp"), body.getValue());
+        assertEquals(2, outcome.attendeeDeliveriesSent());
     }
 
     @Test
@@ -239,14 +268,17 @@ class TicketDeliveryServiceTest {
         assertTrue(body.getValue().contains("Hi Rudo Sibanda"), body.getValue());
         assertTrue(body.getValue().contains("Alice Moyo has booked a ticket for you"), body.getValue());
         assertTrue(body.getValue().contains("TN-RUDO"), body.getValue());
-        // No phone: no WhatsApp to them, and the email says so.
-        verify(f.whatsApp(), never()).sendEventQrCode(eq(""), anyString(), anyString());
         assertTrue(body.getValue().contains("Present your ticket number at the gate"), body.getValue());
         assertEquals(1, outcome.attendeeDeliveriesSent());
+        // Email-only attendee has no phone to receive the QR — the gate
+        // credential stays on the PURCHASER's WhatsApp, so it always exists
+        // somewhere scannable.
+        verify(f.whatsApp()).sendEventQrCode(eq("+263782606983"), anyString(), contains("TN-RUDO"));
+        assertEquals(1, outcome.qrTicketsTotal());
     }
 
     @Test
-    void oneAttendeesFailure_doesNotStopAnotherAttendee_orThePurchaser() {
+    void oneAttendeesFailure_doesNotStopAnotherAttendee() {
         Fixture f = fixture();
         Booking booking = bookingWithOneTicket();
         booking.setItems(List.of(
@@ -258,7 +290,11 @@ class TicketDeliveryServiceTest {
         TicketDeliveryService.Outcome outcome = f.service().deliver(booking);
 
         verify(f.whatsApp()).sendEventQrCode(eq("+263778888888"), anyString(), contains("TN-OK"));
-        assertEquals(2, outcome.qrTicketsSent(), "purchaser still got both");
+        // Both tickets routed to their attendees, so none went to the
+        // purchaser — a failed attendee send does NOT fall back to the buyer
+        // (they can recover the QR from the booking page / wallet).
+        verify(f.whatsApp(), never()).sendEventQrCode(eq("+263782606983"), anyString(), anyString());
+        assertEquals(0, outcome.qrTicketsTotal());
         assertEquals(1, outcome.attendeeDeliveriesSent());
         assertEquals(2, outcome.attendeeDeliveriesTotal());
     }
@@ -279,10 +315,13 @@ class TicketDeliveryServiceTest {
         verify(f.email()).sendEmail(eq("alice@example.com"), anyString(), emailBody.capture(), anyString());
         assertTrue(emailBody.getValue().startsWith("Hi Alice Moyo!"), emailBody.getValue());
         assertTrue(emailBody.getValue().contains("TN-2 (Tendai Ncube)"), emailBody.getValue());
-        assertTrue(emailBody.getValue().contains("also been sent to them directly"), emailBody.getValue());
+        assertTrue(emailBody.getValue().contains("sent directly to their WhatsApp"), emailBody.getValue());
 
+        // The purchaser's own QR send still carries the booking-level receipt
+        // summary, guests' ticket numbers included — the receipt is theirs
+        // even though Tendai's QR image is not.
         ArgumentCaptor<String> waName = ArgumentCaptor.forClass(String.class);
-        verify(f.whatsApp(), atLeastOnce()).sendEventQrCode(eq("+263782606983"), waName.capture(), anyString());
+        verify(f.whatsApp(), atLeastOnce()).sendEventQrCode(eq("+263782606983"), waName.capture(), contains("TN-1"));
         assertTrue(waName.getValue().contains("TN-2 (Tendai Ncube)"), waName.getValue());
     }
 

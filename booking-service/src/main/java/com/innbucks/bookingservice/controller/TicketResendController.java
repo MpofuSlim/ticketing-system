@@ -52,11 +52,12 @@ public class TicketResendController {
     @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN','PRODUCT_MANAGER')")
     @Operation(summary = "Resend a confirmed booking's e-tickets",
             description = """
-                    Re-delivers the booking's tickets over every channel the booking has an
-                    address for: the plain-text confirmation email (if `userEmail` is set) and
-                    one WhatsApp QR e-ticket per ticket (if `phoneNumber` is set). Exactly the
-                    same sends the customer got at confirmation — for when a customer reports
-                    the WhatsApp/email never arrived.
+                    Re-delivers the booking's tickets with the same per-holder routing as the
+                    confirmation sends: each ticket's WhatsApp QR goes to its holder's phone
+                    (the attendee's own number when one was given, else the purchaser's), plus
+                    the purchaser's full-booking receipt email (if `userEmail` is set) and a
+                    one-ticket email to each attendee with an address. For when a customer or
+                    guest reports the WhatsApp/email never arrived.
 
                     Only **CONFIRMED** bookings can be resent (a PENDING booking hasn't paid;
                     a CANCELLED one must not receive gate-scannable tickets).
