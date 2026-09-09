@@ -69,6 +69,14 @@ public class AuthService implements ApplicationEventPublisherAware {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private TokenVersionPublisher tokenVersionPublisher;
 
+    // Resolves a MERCHANT_ADMIN's loyalty merchantId at mint time (see
+    // resolveMerchantIdClaim). Field-injected (not a constructor arg) so the
+    // many AuthServiceTest construction sites don't widen — same rationale as
+    // the collaborators below; null in a plain unit test means no lookup and
+    // no claim, which is exactly the pre-feature behaviour those tests assert.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.innbucks.userservice.integration.LoyaltyServiceClient loyaltyServiceClient;
+
     // A09 security-abuse counters (feed prometheus/alerts.yaml). Field-injected
     // (not a constructor arg) so the many AuthServiceTest construction sites
     // don't widen; null in a plain unit test => sec(...) is a no-op.
@@ -925,6 +933,64 @@ public class AuthService implements ApplicationEventPublisherAware {
         return buildResponse(user, refreshToken);
     }
 
+    /**
+     * The {@code merchantId} claim for a MERCHANT_ADMIN, resolved from
+     * loyalty-service by their admin email — the binding loyalty stamps on
+     * every merchant at creation ({@code merchants.admin_email}).
+     *
+     * <p><b>Why this exists.</b> Merchant scope used to be resolved per request
+     * from the body, so MERCHANT_ADMIN tokens carried no claim at all. That is
+     * fine for endpoints that take a merchant in the body, but marketplace-service
+     * scopes a seller <em>exclusively</em> from the claim and refuses the request
+     * without one ({@code 403 merchant_scope_missing}) — so merchant self-service
+     * listing was unreachable with a real fleet token. Minting the claim here
+     * fixes that at the single place every token is issued (login, MFA completion
+     * and refresh all funnel through {@code buildResponse}), rather than teaching
+     * each consumer a second lookup.
+     *
+     * <p><b>Exactly one merchant, or none.</b> A merchant admin may own several
+     * ({@code ShopStaffService.resolveCallerMerchantIds} already handles the set),
+     * but a JWT claim is singular and the consumer treats it as authoritative
+     * ownership. Picking one of several would silently attribute listings — and
+     * therefore commission — to an arbitrary merchant, and the mistake would only
+     * surface at invoicing. So a multi-merchant admin gets NO claim and the same
+     * clean refusal they get today; widening this needs an explicit merchant
+     * selector on the consumer side, which is a deliberate design change, not a
+     * default. The WARN below is what makes such an account visible to an operator.
+     *
+     * <p><b>Never fails a login.</b> The lookup is best-effort by construction
+     * ({@code merchantIdsForAdmin} swallows 4xx and network errors and returns an
+     * empty list), and a null client — a plain unit test — simply skips it. An
+     * outage therefore mints a token without the claim: the customer signs in,
+     * and only merchant-scoped calls are refused until loyalty is back.
+     */
+    private java.util.UUID resolveMerchantIdClaim(User user) {
+        // Defensive: a row that already carries one wins without a network call.
+        if (user.getLoyaltyMerchantId() != null) {
+            return user.getLoyaltyMerchantId();
+        }
+        if (loyaltyServiceClient == null) {
+            return null;
+        }
+        String email = user.getEmail();
+        if (email == null || email.isBlank()) {
+            return null;
+        }
+        java.util.List<java.util.UUID> owned = loyaltyServiceClient.merchantIdsForAdmin(email);
+        if (owned == null || owned.isEmpty()) {
+            log.debug("No loyalty merchant resolved for MERCHANT_ADMIN — minting no merchantId claim");
+            return null;
+        }
+        if (owned.size() > 1) {
+            log.warn("MERCHANT_ADMIN owns {} merchants — minting NO merchantId claim rather than "
+                    + "guessing one. Merchant-scoped calls (e.g. marketplace listings) will be "
+                    + "refused for this account until an explicit merchant selector exists.",
+                    owned.size());
+            return null;
+        }
+        return owned.get(0);
+    }
+
     private AuthResponseDTO buildResponse(User user, String refreshToken) {
         String subject = user.getEmail() != null ? user.getEmail() : user.getPhoneNumber();
 
@@ -963,14 +1029,16 @@ public class AuthService implements ApplicationEventPublisherAware {
                 : Services.expandToMicroservices(bundles);
 
         // Shop staff carry both shopId and merchantId stamped on their User row by
-        // ShopStaffService at creation time — no lookup required. MERCHANT_ADMIN tokens
-        // intentionally do NOT carry a merchantId claim; endpoints that need a merchant
-        // scope read it from the request body (e.g. ShopRequest.merchantId).
+        // ShopStaffService at creation time — no lookup required. A MERCHANT_ADMIN
+        // has nothing stamped (they may run several merchants), so their claim is
+        // resolved from loyalty-service — see resolveMerchantIdClaim.
         java.util.UUID loyaltyMerchantId = null;
         java.util.UUID loyaltyShopId = null;
         if (user.hasRole(User.Role.SHOP_ADMIN) || user.hasRole(User.Role.SHOP_USER)) {
             loyaltyShopId = user.getLoyaltyShopId();
             loyaltyMerchantId = user.getLoyaltyMerchantId();
+        } else if (user.hasRole(User.Role.MERCHANT_ADMIN)) {
+            loyaltyMerchantId = resolveMerchantIdClaim(user);
         }
 
         String country = user.getCountry();
