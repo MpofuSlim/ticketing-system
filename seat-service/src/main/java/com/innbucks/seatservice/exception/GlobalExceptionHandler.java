@@ -89,6 +89,18 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * 503, not the RuntimeException catch-all's 500: the request is well-formed
+     * and the server is healthy — a dependency needed to authorize it could not
+     * be reached, and retrying unchanged is the correct client behaviour.
+     */
+    @ExceptionHandler(ServiceUnavailableException.class)
+    public ResponseEntity<ApiResult<Void>> handleServiceUnavailable(ServiceUnavailableException ex) {
+        log.warn("Service unavailable: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(ApiResult.error(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage()));
+    }
+
+    /**
      * Class-level {@code @Validated} + {@code @Min}/{@code @Max} on
      * {@code @RequestParam} fires this exception when a client sends, e.g.
      * {@code size=999999}. Without the handler it would fall to the

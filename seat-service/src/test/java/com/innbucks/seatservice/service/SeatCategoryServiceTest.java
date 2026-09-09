@@ -8,6 +8,8 @@ import com.innbucks.seatservice.dto.SectionSeatConfigDTO;
 import com.innbucks.seatservice.dto.UpdateCategoryRequestDTO;
 import com.innbucks.seatservice.entity.Seat;
 import com.innbucks.seatservice.entity.SeatCategory;
+import com.innbucks.seatservice.exception.ConflictException;
+import com.innbucks.seatservice.exception.ServiceUnavailableException;
 import com.innbucks.seatservice.repository.SeatCategoryRepository;
 import com.innbucks.seatservice.repository.SeatRepository;
 import org.junit.jupiter.api.Test;
@@ -463,16 +465,118 @@ class SeatCategoryServiceTest {
     @Test
     void deleteCategory_softDeletes() {
         SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
-        SeatCategoryService service = service(catRepo, mock(SeatRepository.class));
+        BookingServiceClient booking = mock(BookingServiceClient.class);
+        SeatCategoryService service = service(catRepo, mock(SeatRepository.class), booking);
 
         UUID id = UUID.randomUUID();
         SeatCategory category = SeatCategory.builder().id(id).name("VIP").deleted(false).build();
         when(catRepo.findById(id)).thenReturn(Optional.of(category));
+        // A category with no active bookings is absent from the counts map
+        // entirely — the guard must read a missing key as zero, not as unknown.
+        when(booking.fetchActiveCountsByCategories(List.of(id)))
+                .thenReturn(Optional.of(Map.of()));
 
         service.deleteCategory(id);
 
         assertTrue(category.isDeleted());
         verify(catRepo).save(category);
+    }
+
+    @Test
+    void deleteCategory_refusedWhenActiveBookingsExist() {
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        BookingServiceClient booking = mock(BookingServiceClient.class);
+        SeatCategoryService service = service(catRepo, mock(SeatRepository.class), booking);
+
+        UUID id = UUID.randomUUID();
+        SeatCategory category = SeatCategory.builder().id(id).name("VIP").deleted(false).build();
+        when(catRepo.findById(id)).thenReturn(Optional.of(category));
+        when(booking.fetchActiveCountsByCategories(List.of(id)))
+                .thenReturn(Optional.of(Map.of(id, 12L)));
+
+        ConflictException ex = assertThrows(ConflictException.class,
+                () -> service.deleteCategory(id));
+
+        // The message names the category and the count, so an organizer can see
+        // what is in the way rather than just being told "no".
+        assertTrue(ex.getMessage().contains("VIP"), "actual: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("12"), "actual: " + ex.getMessage());
+        // Nothing was mutated or persisted.
+        assertFalse(category.isDeleted());
+        verify(catRepo, never()).save(any());
+    }
+
+    @Test
+    void deleteCategory_refusedWhenBookingServiceCannotBeReached() {
+        // THE POINT OF THE GUARD. fetchActiveCountsByCategories returns an empty
+        // Optional on any failure because its OTHER caller renders public
+        // availability and must degrade rather than 500. Reusing that convention
+        // here would read "booking-service is down" as "no bookings" and wave the
+        // delete through at precisely the moment it cannot be checked.
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        BookingServiceClient booking = mock(BookingServiceClient.class);
+        SeatCategoryService service = service(catRepo, mock(SeatRepository.class), booking);
+
+        UUID id = UUID.randomUUID();
+        SeatCategory category = SeatCategory.builder().id(id).name("VIP").deleted(false).build();
+        when(catRepo.findById(id)).thenReturn(Optional.of(category));
+        when(booking.fetchActiveCountsByCategories(List.of(id))).thenReturn(Optional.empty());
+
+        assertThrows(ServiceUnavailableException.class, () -> service.deleteCategory(id));
+
+        assertFalse(category.isDeleted());
+        verify(catRepo, never()).save(any());
+    }
+
+    @Test
+    void deleteCategory_checksTheCategoryBeingDeleted_notSomeOtherOne() {
+        // A count for a DIFFERENT category must not satisfy the guard: the map is
+        // keyed by id, and reading "some category has bookings" as "this one does
+        // not" would be the same fail-open bug by another route.
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        BookingServiceClient booking = mock(BookingServiceClient.class);
+        SeatCategoryService service = service(catRepo, mock(SeatRepository.class), booking);
+
+        UUID id = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        SeatCategory category = SeatCategory.builder().id(id).name("VIP").deleted(false).build();
+        when(catRepo.findById(id)).thenReturn(Optional.of(category));
+        when(booking.fetchActiveCountsByCategories(List.of(id)))
+                .thenReturn(Optional.of(Map.of(other, 99L)));
+
+        service.deleteCategory(id);
+
+        assertTrue(category.isDeleted());
+        verify(booking).fetchActiveCountsByCategories(List.of(id));
+    }
+
+    @Test
+    void updateCategory_repriceStaysAllowedWithActiveBookings() {
+        // DELIBERATELY not guarded, and this test exists to stop someone
+        // "completing" the delete guard by extending it to updates. A booking
+        // freezes BookingItem.priceAtBooking at purchase and every later read —
+        // ticket, receipt, revenue report — uses that stored value, so a reprice
+        // cannot restate a sold ticket. Blocking it would mean one sale locks a
+        // category's price for the life of the event.
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        BookingServiceClient booking = mock(BookingServiceClient.class);
+        UUID eventId = UUID.randomUUID();
+        UUID id = UUID.randomUUID();
+
+        SeatCategory existing = category(id, eventId, 50, 50);
+        existing.setName("VIP");
+        when(catRepo.findById(id)).thenReturn(Optional.of(existing));
+        when(catRepo.existsByEventIdAndNameAndDeletedFalseAndIdNot(eventId, "VIP", id)).thenReturn(false);
+        when(seatRepo.findByCategoryIdIn(List.of(id))).thenReturn(List.of());
+        when(booking.fetchActiveCountsByCategories(List.of(id)))
+                .thenReturn(Optional.of(Map.of(id, 12L)));
+
+        service(catRepo, seatRepo, booking)
+                .updateCategory(id, updateRequest("VIP", "same category, new price", "150.00"));
+
+        assertEquals(new BigDecimal("150.00"), existing.getPrice());
+        verify(catRepo).save(existing);
     }
 
     @Test

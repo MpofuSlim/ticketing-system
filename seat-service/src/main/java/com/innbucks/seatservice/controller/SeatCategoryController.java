@@ -467,7 +467,14 @@ public class SeatCategoryController {
 
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
-    @Operation(summary = "Delete category", description = "Soft-deletes a seat category. Requires EVENT_ORGANIZER role.")
+    @Operation(summary = "Delete category",
+            description = "Soft-deletes a seat category. Requires EVENT_ORGANIZER role.\n\n"
+                    + "**Refused with 409 while the category still has active (PENDING or CONFIRMED) "
+                    + "bookings** — deleting it would strand every holder on a category the event no "
+                    + "longer lists. CANCELLED bookings do not count, so a category whose sales were "
+                    + "all refunded can be deleted.\n\n"
+                    + "Changing the category's **price** is NOT restricted this way: a booking freezes "
+                    + "`priceAtBooking` at purchase, so a reprice only sets what the next buyer pays.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
@@ -485,7 +492,36 @@ public class SeatCategoryController {
             ),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401", description = "Missing/invalid JWT"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Authenticated but not EVENT_ORGANIZER"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Category not found")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "Category not found"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "409",
+                    description = "Category still has active bookings",
+                    content = @Content(
+                            mediaType = "application/json",
+                            examples = @ExampleObject(name = "Has bookings", value = """
+                                    {
+                                      "code": "409 CONFLICT",
+                                      "message": "'VIP' has 12 active bookings and cannot be deleted. Cancel or refund them first.",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            ),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "503",
+                    description = "booking-service unreachable, so the booking count could not be checked. "
+                            + "The delete is refused rather than assumed safe; retry unchanged.",
+                    content = @Content(
+                            mediaType = "application/json",
+                            examples = @ExampleObject(name = "Cannot verify", value = """
+                                    {
+                                      "code": "503 SERVICE_UNAVAILABLE",
+                                      "message": "Cannot verify whether this category has bookings right now. Please try again shortly.",
+                                      "data": null
+                                    }
+                                    """)
+                    )
+            )
     })
     public ResponseEntity<ApiResult<Void>> deleteCategory(
             @PathVariable UUID id,

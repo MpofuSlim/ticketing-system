@@ -7,6 +7,7 @@ import com.innbucks.seatservice.entity.*;
 import com.innbucks.seatservice.exception.BadRequestException;
 import com.innbucks.seatservice.exception.ConflictException;
 import com.innbucks.seatservice.exception.NotFoundException;
+import com.innbucks.seatservice.exception.ServiceUnavailableException;
 import com.innbucks.seatservice.repository.*;
 import com.innbucks.seatservice.util.HtmlSanitizer;
 import lombok.RequiredArgsConstructor;
@@ -390,9 +391,62 @@ public class SeatCategoryService {
         if (!isAdmin) {
             requireEventOwnership(category.getEventId(), callerOrganizerUuid, requesterEmail, authHeader);
         }
+        requireNoActiveBookings(category);
         category.setDeleted(true);
         categoryRepository.save(category);
         log.info("Seat category soft-deleted categoryId={} eventId={}", categoryId, category.getEventId());
+    }
+
+    /**
+     * Refuses to delete a category that still has active bookings against it.
+     *
+     * <p><b>Why this had to exist.</b> The delete path checked event ownership
+     * and nothing else, so an organizer could soft-delete a category holding
+     * paid tickets. The rows survive — {@code booking_items} is not cascaded —
+     * but the category they name is gone, which strands every holder: the
+     * ticket references a category the event no longer lists.
+     *
+     * <p><b>"Active" means PENDING or CONFIRMED</b>, per booking-service's
+     * {@code /bookings/internal/categories/active-counts}. CANCELLED bookings
+     * are excluded, so a category whose every sale was refunded IS deletable —
+     * which is the case an organizer actually needs.
+     *
+     * <p><b>This is deliberately NOT applied to a reprice.</b> A booking freezes
+     * {@code BookingItem.priceAtBooking} at purchase time and every later read —
+     * the ticket, the receipt, the organizer's revenue report — uses that stored
+     * value, never the category's current price. So changing the price cannot
+     * restate or invalidate a sold ticket; it only sets what the NEXT buyer
+     * pays, which is ordinary early-bird/late-release pricing. Blocking it would
+     * mean one sale locks a category's price for the life of the event.
+     *
+     * <p><b>Fails CLOSED, and that is the whole point.</b>
+     * {@link BookingServiceClient#fetchActiveCountsByCategories} returns an
+     * empty Optional on any failure, because its other caller renders public
+     * availability and must degrade rather than 500. A guard that reused that
+     * convention would read "booking-service is down" as "no bookings" and wave
+     * the delete through at exactly the moment it cannot be checked. An
+     * unanswerable question is refused (503), not assumed safe.
+     */
+    private void requireNoActiveBookings(SeatCategory category) {
+        UUID categoryId = category.getId();
+        Map<UUID, Long> counts = bookingServiceClient
+                .fetchActiveCountsByCategories(List.of(categoryId))
+                .orElseThrow(() -> {
+                    log.warn("Category delete refused, booking-service unreachable categoryId={} eventId={}",
+                            categoryId, category.getEventId());
+                    return new ServiceUnavailableException(
+                            "Cannot verify whether this category has bookings right now. "
+                                    + "Please try again shortly.");
+                });
+        long active = counts.getOrDefault(categoryId, 0L);
+        if (active > 0) {
+            log.warn("Category delete refused, active bookings categoryId={} eventId={} activeBookings={}",
+                    categoryId, category.getEventId(), active);
+            throw new ConflictException(
+                    "'" + category.getName() + "' has " + active + " active booking"
+                            + (active == 1 ? "" : "s") + " and cannot be deleted. "
+                            + "Cancel or refund them first.");
+        }
     }
 
     /**
