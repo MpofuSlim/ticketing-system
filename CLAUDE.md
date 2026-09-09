@@ -409,6 +409,68 @@ spreadsheet it becomes a column of figures about nothing in particular. The five
   leading comment line breaks every parser that treats line 1 as the header, and
   the filename is what survives into someone's Downloads folder.
 
+## Notifications are a RESOURCE, not three list fetches (user-service V37)
+
+`notifications` + `GET /notifications`, `/unread-count`, `POST /{id}/read`,
+`/read-all`. Replaces a console badge fabricated by polling `/admin/users`,
+`/admin/service-requests` and `/events/inactive` every 60s per signed-in admin
+and counting rows — which knew only about the three collections someone thought
+to poll, had no read state, and **reached no non-admin at all**.
+
+- **Every endpoint is scoped to the CALLER by SHAPE, not by a check.** The
+  recipient is the JWT's `userUuid`; there is no path or query parameter naming
+  a user, so there is nothing to point at someone else. `markRead` scopes by
+  recipient **in the query**, so another user's notification is a 404
+  indistinguishable from a missing one — no existence oracle. A token with no
+  `userUuid` claim is a **400**, never an empty list, which would read as "you
+  have nothing" and hide a broken session.
+- **The type column is a VARCHAR and `NotificationType` is a constants holder,
+  deliberately NOT an enum.** Producers live in other services and repos: an
+  enum here means a marketplace deploy could emit a type user-service refuses to
+  store, losing the notification exactly when it mattered. Unknown types are
+  stored and served; an unrecognised severity falls back to INFO. **Never
+  tighten this into an enum.**
+- **The S2S ingress is the existing `POST /users/internal/{uuid}/notify`,
+  extended additively.** Everything past `message` is optional, so producers
+  already calling it — marketplace restock alerts, event-service approvals —
+  keep working untouched and start populating the bell immediately as
+  `GENERAL`/`INFO`. Filling `type`/`severity`/`subject`/`deepLink` makes a
+  notification actionable rather than merely visible.
+- **The in-app copy is recorded BEFORE the outbound dispatch**, synchronously.
+  The dispatch is `@Async` and best-effort by design, so ordering it second
+  means a dead SMS gateway costs the email, not the bell — and the bell is the
+  one channel that exists for an account with no email or phone on file.
+- **`deepLink` is server-supplied** so the console keeps no client-side
+  type→route map that would go stale silently. `subject` is what lets it
+  de-duplicate and refresh one screen instead of reloading everything.
+- **`unread-count` is ETagged, and the validator is `count-latestCreatedAt`.**
+  Neither half alone works: the count is unchanged when one arrives and another
+  is read; the timestamp is unchanged when the user reads something. Together
+  they move whenever the badge's meaning does. A matching `If-None-Match` is a
+  **304 with no body but WITH the ETag**, so a long run of 304s keeps the
+  client's validator fresh.
+- **`read-all` is one statement** (`@Modifying` + `read_at IS NULL`), not a
+  page-and-save loop — an admin back from leave can have thousands unread, and
+  the loop is unbounded work inside their request. The predicate also makes it
+  idempotent and preserves the original read time.
+- **Marking read is idempotent and keeps the FIRST read time.** "When did they
+  first see this" is the answer with any value.
+- **Producers wired today:** service request submitted (fan-out to active
+  `SUPER_ADMIN`s) and approved/rejected (**to the requester** — the §1.5 gap
+  that made people re-visit pages). The submission fan-out is best-effort in a
+  try/catch: the request is already saved, so a notification failure must never
+  surface as a failed submission. `REVIEWER_ROLES` names built-ins only — a
+  custom role holding `service-requests:approve` is not included, because a role
+  created at runtime cannot be named in a constant.
+- Everything else in the console's taxonomy has a name in `NotificationType`
+  and **no producer yet**; adding one is a single call to the ingress, not new
+  plumbing. The gateway route is `user-notifications-route`, pinned by
+  `GatewayRouteTableTest`.
+- **Not built: SSE.** `GET /notifications/stream` needs an emitter registry and
+  Redis pub/sub fan-out (the cell runs multiple replicas, so a write on replica
+  A must reach a connection held by replica B). The ETag makes polling cheap
+  enough that this is a clean follow-up rather than a prerequisite.
+
 ## Timestamps — store everything in UTC
 
 The user/booking/seat/event services map timestamps as `LocalDateTime`

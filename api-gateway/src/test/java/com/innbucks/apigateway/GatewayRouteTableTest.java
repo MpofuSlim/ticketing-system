@@ -44,7 +44,7 @@ class GatewayRouteTableTest {
     private static final List<String> EXPECTED_ROUTE_IDS = List.of(
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
             "auth-otp-route", "auth-mfa-route", "auth-password-reset-route", "user-auth-route",
-            "cells-lookup-route", "user-admin-route",
+            "cells-lookup-route", "user-admin-route", "user-notifications-route",
             "booking-event-organizer-reports-route", "user-event-organizer-route",
             "user-internal-deny", "user-self-route",
             "event-internal-deny", "event-availability-deny", "event-service-route",
@@ -69,6 +69,7 @@ class GatewayRouteTableTest {
     private static final Map<String, String> SERVICE_PREFIXES = Map.ofEntries(
             Map.entry("user-auth-route", "/auth/**"),
             Map.entry("user-admin-route", "/admin/**"),
+            Map.entry("user-notifications-route", "/notifications/**"),
             Map.entry("user-event-organizer-route", "/event-organizer/**"),
             Map.entry("booking-event-organizer-reports-route", "/event-organizer/reports/**"),
             Map.entry("user-self-route", "/users/**"),
@@ -85,7 +86,8 @@ class GatewayRouteTableTest {
     private static final List<String> RATE_LIMITED_ROUTES = List.of(
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
             "auth-otp-route", "auth-mfa-route", "auth-password-reset-route",
-            "user-admin-route", "user-event-organizer-route", "booking-event-organizer-reports-route",
+            "user-admin-route", "user-notifications-route",
+            "user-event-organizer-route", "booking-event-organizer-reports-route",
             "user-self-route", "event-service-route",
             "seat-service-seat-route", "seat-service-category-route",
             "booking-public-phone-route",

@@ -1,6 +1,7 @@
 package com.innbucks.userservice.controller;
 
 import com.innbucks.userservice.dto.ApiResult;
+import com.innbucks.userservice.notification.NotificationService;
 import com.innbucks.userservice.dto.InternalNotifyRequestDTO;
 import com.innbucks.userservice.dto.UserContactDTO;
 import com.innbucks.userservice.entity.User;
@@ -46,13 +47,16 @@ public class InternalUserLookupController {
     private final UserRepository userRepository;
     private final InternalTokenAuthorizer tokenAuthorizer;
     private final UserNotificationDispatcher notificationDispatcher;
+    private final NotificationService notificationService;
 
     public InternalUserLookupController(UserRepository userRepository,
                                         InternalTokenAuthorizer tokenAuthorizer,
-                                        UserNotificationDispatcher notificationDispatcher) {
+                                        UserNotificationDispatcher notificationDispatcher,
+                                        NotificationService notificationService) {
         this.userRepository = userRepository;
         this.tokenAuthorizer = tokenAuthorizer;
         this.notificationDispatcher = notificationDispatcher;
+        this.notificationService = notificationService;
     }
 
     @GetMapping("/{userUuid}/contact")
@@ -105,9 +109,22 @@ public class InternalUserLookupController {
         }
         return userRepository.findByUserUuid(userUuid)
                 .<ResponseEntity<?>>map(user -> {
+                    // Record the in-app copy FIRST, synchronously. The outbound
+                    // dispatch is @Async and best-effort by design (a dead SMS
+                    // gateway must not fail the caller), so ordering it second
+                    // means a channel outage costs the email, not the bell.
+                    notificationService.create(new NotificationService.NewNotification(
+                            userUuid,
+                            body.type(),
+                            body.subject(),
+                            body.message(),
+                            parseSeverity(body.severity()),
+                            body.actorId(), body.actorName(),
+                            body.subjectKind(), body.subjectId(),
+                            body.deepLink()));
                     notificationDispatcher.dispatch(
                             user.getEmail(), user.getPhoneNumber(), body.subject(), body.message());
-                    log.debug("Internal notify dispatched user_uuid={}", userUuid);
+                    log.debug("Internal notify recorded + dispatched user_uuid={}", userUuid);
                     return ResponseEntity.accepted()
                             .body(ApiResult.ok("Notification queued", null));
                 })
@@ -116,6 +133,24 @@ public class InternalUserLookupController {
                     return ResponseEntity.status(HttpStatus.NOT_FOUND)
                             .body(ApiResult.error(HttpStatus.NOT_FOUND, "User not found"));
                 });
+    }
+
+    /**
+     * An unrecognised severity becomes INFO rather than a 400. The producer is
+     * another service in another repo; refusing the whole notification over a
+     * cosmetic field would lose the message to save the styling.
+     */
+    private static com.innbucks.userservice.entity.Notification.Severity parseSeverity(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return com.innbucks.userservice.entity.Notification.Severity.INFO;
+        }
+        try {
+            return com.innbucks.userservice.entity.Notification.Severity
+                    .valueOf(raw.trim().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException ex) {
+            log.debug("Unknown notification severity '{}' — defaulting to INFO", raw);
+            return com.innbucks.userservice.entity.Notification.Severity.INFO;
+        }
     }
 
     private static UserContactDTO toContact(User user) {

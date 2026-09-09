@@ -1,5 +1,6 @@
 package com.innbucks.userservice.notification;
 
+import com.innbucks.userservice.entity.Notification;
 import com.innbucks.userservice.event.ServiceRequestDecided;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
@@ -28,9 +29,12 @@ import org.springframework.transaction.event.TransactionalEventListener;
 public class ServiceRequestDecisionListener {
 
     private final UserNotificationDispatcher dispatcher;
+    private final NotificationService notifications;
 
-    public ServiceRequestDecisionListener(UserNotificationDispatcher dispatcher) {
+    public ServiceRequestDecisionListener(UserNotificationDispatcher dispatcher,
+                                          NotificationService notifications) {
         this.dispatcher = dispatcher;
+        this.notifications = notifications;
     }
 
     @Async
@@ -40,6 +44,24 @@ public class ServiceRequestDecisionListener {
         String message = bodyFor(event);
         log.debug("Notifying requester of service-request decision requestId={} outcome={}",
                 event.requestId(), event.outcome());
+        // The in-app copy is what §1.5 actually asked for: the REQUESTER told,
+        // not just the admin queue. Recorded even when the account has no email
+        // or phone on file — the bell is the one channel that always exists.
+        if (event.userUuid() != null) {
+            boolean approved = event.outcome() == ServiceRequestDecided.Outcome.APPROVED;
+            notifications.create(new NotificationService.NewNotification(
+                    event.userUuid(),
+                    approved ? NotificationType.SERVICE_REQUEST_APPROVED
+                             : NotificationType.SERVICE_REQUEST_REJECTED,
+                    subject,
+                    message,
+                    approved ? Notification.Severity.SUCCESS : Notification.Severity.WARNING,
+                    null, null,
+                    "SERVICE_REQUEST", String.valueOf(event.requestId()),
+                    // The requester's own view of their requests, not the admin
+                    // queue they cannot open.
+                    "/account/service-requests?highlight=" + event.requestId()));
+        }
         dispatcher.dispatch(event.email(), event.phoneNumber(), subject, message);
     }
 

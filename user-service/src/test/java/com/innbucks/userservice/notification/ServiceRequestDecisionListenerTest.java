@@ -54,7 +54,7 @@ class ServiceRequestDecisionListenerTest {
         ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
         UserNotificationDispatcher dispatcher = mock(UserNotificationDispatcher.class);
 
-        new ServiceRequestDecisionListener(dispatcher)
+        new ServiceRequestDecisionListener(dispatcher, mock(NotificationService.class))
                 .onServiceRequestDecided(decided(ServiceRequestDecided.Outcome.REJECTED, WHY));
 
         verify(dispatcher).dispatch(any(), any(), subject.capture(), any());
@@ -74,7 +74,7 @@ class ServiceRequestDecisionListenerTest {
     void contactDetailsArePassedThroughUntouched() {
         UserNotificationDispatcher dispatcher = mock(UserNotificationDispatcher.class);
 
-        new ServiceRequestDecisionListener(dispatcher)
+        new ServiceRequestDecisionListener(dispatcher, mock(NotificationService.class))
                 .onServiceRequestDecided(decided(ServiceRequestDecided.Outcome.REJECTED, WHY));
 
         // Channel selection + fallback is the dispatcher's job, not the
@@ -83,13 +83,14 @@ class ServiceRequestDecisionListenerTest {
     }
 
     private static ServiceRequestDecided decided(ServiceRequestDecided.Outcome outcome, String reason) {
-        return new ServiceRequestDecided(14L, 42L, "alice@rudo.co.zw", "+263771234567",
+        return new ServiceRequestDecided(14L, 42L, java.util.UUID.randomUUID(),
+                "alice@rudo.co.zw", "+263771234567",
                 "marketplace", outcome, reason);
     }
 
     private static String deliver(ServiceRequestDecided event) {
         UserNotificationDispatcher dispatcher = mock(UserNotificationDispatcher.class);
-        new ServiceRequestDecisionListener(dispatcher).onServiceRequestDecided(event);
+        new ServiceRequestDecisionListener(dispatcher, mock(NotificationService.class)).onServiceRequestDecided(event);
         ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
         verify(dispatcher).dispatch(any(), any(), any(), body.capture());
         return body.getValue();
