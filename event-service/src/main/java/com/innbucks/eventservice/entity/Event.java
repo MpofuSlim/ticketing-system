@@ -60,8 +60,10 @@ public class Event {
     @Column(nullable = false)
     private String country;
 
+    // length must match the VARCHAR the migrations maintain (V12 widened
+    // 20 -> 30; the CHECK constraint chk_events_category pins the values).
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 20)
+    @Column(nullable = false, length = 30)
     private EventCategory category;
 
     @Embedded

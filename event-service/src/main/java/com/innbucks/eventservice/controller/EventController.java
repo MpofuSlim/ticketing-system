@@ -69,6 +69,46 @@ public class EventController {
     @Value("${innbucks.internal-api-token}")
     private String expectedInternalToken;
 
+    @GetMapping("/categories")
+    @SecurityRequirements()
+    @Operation(
+            summary = "List the event-category vocabulary",
+            description = """
+                    Every category an event can be filed under — the wire `code` (what
+                    `POST/PUT /events` and the `?category=` filters accept, and what event
+                    responses carry) plus the human `displayName` for dropdowns.
+
+                    **Render pickers from this endpoint, never a hardcoded list** — values are
+                    added over time and an unknown code on create/update/filter is a `400`.
+                    Returned in curated display order, grouped (music → arts → faith → social →
+                    business → expos → lifestyle → sports → OTHER) so a client can render
+                    section headers in the order received. Public; cache per app-session.
+                    """)
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "The full vocabulary (64 values), in display order",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Categories (truncated)", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Event categories retrieved successfully",
+                                      "data": [
+                                        { "code": "CONCERT", "displayName": "Concert" },
+                                        { "code": "GOSPEL_CONCERT", "displayName": "Gospel Concert" },
+                                        { "code": "MUSIC_FESTIVAL", "displayName": "Music Festival" },
+                                        { "code": "MUSIC_GALA", "displayName": "Musical Gala" },
+                                        { "code": "SUNGURA_SHOW", "displayName": "Sungura Show" },
+                                        { "code": "OTHER", "displayName": "Other" }
+                                      ]
+                                    }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<java.util.List<EventCategoryOptionDTO>>> listCategories() {
+        return ResponseEntity.ok(ApiResult.ok("Event categories retrieved successfully",
+                java.util.Arrays.stream(EventCategory.values())
+                        .map(EventCategoryOptionDTO::of)
+                        .toList()));
+    }
+
     @GetMapping
     @SecurityRequirements()
     @Operation(
@@ -424,7 +464,8 @@ public class EventController {
 
                     Filtering and sorting follow the same rules as `GET /events`, plus:
                     - **country** — exact match, case-insensitive (e.g. `Zimbabwe`).
-                    - **category** — one of BOOKS, COMEDY, FUN_RUN, HALF_MARATHON, MARATHON, CONCERT, SPORT.
+                    - **category** — one wire code from `GET /events/categories` (64 values;
+                      an unknown code is a 400 before the controller runs).
                     """
     )
     @ApiResponses({
