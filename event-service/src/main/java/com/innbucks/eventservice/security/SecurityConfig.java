@@ -48,6 +48,15 @@ public class SecurityConfig {
                         // shadowed by the broad GET /events/** permitAll below, but kept
                         // explicit so tightening that rule can't silently 401 S2S calls.
                         .requestMatchers(HttpMethod.GET, "/events/internal/*").permitAll()
+                        // Banner WRITE (replace / clear) is organizer-only. The
+                        // permitAll below is GET-scoped so PUT/DELETE already fall
+                        // through to anyRequest().authenticated(); stated explicitly
+                        // as a URL-level backstop for the @PreAuthorize, and so that
+                        // anyone widening the rule below to all methods can see this
+                        // pair must stay authenticated. GET /events/{id}/banner
+                        // remains public — it serves the poster on the listing page.
+                        .requestMatchers(HttpMethod.PUT, "/events/*/banner").authenticated()
+                        .requestMatchers(HttpMethod.DELETE, "/events/*/banner").authenticated()
                         .requestMatchers(HttpMethod.GET, "/events/**").permitAll()
                         // Internal: booking-service decrements availability on confirm.
                         .requestMatchers(HttpMethod.PATCH, "/events/*/availability/consume").permitAll()

@@ -605,6 +605,78 @@ public class EventService {
         return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
     }
 
+    /**
+     * Replace an existing event's banner image.
+     *
+     * <p>Exists because the banner was previously write-once: {@link #applyBanner}
+     * ran only on the create path, so an organizer who uploaded the wrong poster
+     * had no route back short of deleting the event — which would take its
+     * bookings and seat categories with it.
+     *
+     * <p>Deliberately its own endpoint rather than folding multipart into
+     * {@code PUT /events/{id}}: that call is JSON today and every existing client
+     * sends JSON, so widening it would be a breaking change. This is the write
+     * twin of {@code GET /events/{id}/banner}.
+     *
+     * <p>Validation is {@link #applyBanner}'s, unchanged — size cap, content-type
+     * allow-list and the magic-byte sniff that stops a script payload wearing an
+     * {@code image/*} header. A missing/empty file is refused here rather than
+     * silently no-op'ing (applyBanner's create-path behaviour), because on a
+     * replace the caller plainly meant to change something; use
+     * {@link #deleteEventBanner} to clear.
+     */
+    @Transactional
+    public EventResponseDTO replaceEventBanner(UUID tenantUserUuid, String role, UUID eventId, MultipartFile banner) {
+        log.info("Replacing event banner eventId={} tenantUserUuid={} role={}", eventId, tenantUserUuid, role);
+        if (banner == null || banner.isEmpty()) {
+            throw new BadRequestException("Please choose an image to upload.");
+        }
+        Event event = requireOwnedEvent(tenantUserUuid, role, eventId, "update");
+        applyBanner(event, banner);
+        Event saved = eventRepository.save(event);
+        log.info("Event banner replaced eventId={} tenantUserUuid={} contentType={} bytes={}",
+                eventId, tenantUserUuid, saved.getBannerContentType(), banner.getSize());
+        return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
+    }
+
+    /**
+     * Clear an event's banner. Idempotent: an event with no banner returns
+     * normally rather than 404-ing, so a double-tap in the dashboard is
+     * harmless. The response's {@code bannerUrl} becomes null (the mapper keys
+     * it off {@code bannerContentType}), which is the FE's signal to render the
+     * placeholder.
+     */
+    @Transactional
+    public EventResponseDTO deleteEventBanner(UUID tenantUserUuid, String role, UUID eventId) {
+        log.info("Clearing event banner eventId={} tenantUserUuid={} role={}", eventId, tenantUserUuid, role);
+        Event event = requireOwnedEvent(tenantUserUuid, role, eventId, "update");
+        event.setBannerImage(null);
+        event.setBannerContentType(null);
+        Event saved = eventRepository.save(event);
+        log.info("Event banner cleared eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
+        return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
+    }
+
+    /**
+     * Load a non-deleted event and enforce the same ownership rule the JSON
+     * update path uses: SUPER_ADMIN passes, an EVENT_ORGANIZER must own the
+     * event, and a pre-V6 row with no {@code tenantUserUuid} fails closed.
+     */
+    private Event requireOwnedEvent(UUID tenantUserUuid, String role, UUID eventId, String action) {
+        Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
+                .orElseThrow(() -> {
+                    log.warn("{} failed, event not found eventId={} tenantUserUuid={}", action, eventId, tenantUserUuid);
+                    return new NotFoundException("Event not found");
+                });
+        boolean isAdmin = "ROLE_SUPER_ADMIN".equals(role);
+        if (!isAdmin && !java.util.Objects.equals(event.getTenantUserUuid(), tenantUserUuid)) {
+            log.warn("Unauthorized {} attempt eventId={} tenantUserUuid={} ownerTenantUserUuid={}",
+                    action, eventId, tenantUserUuid, event.getTenantUserUuid());
+            throw new ForbiddenException("You are not authorized to update this event");
+        }
+        return event;
+    }
+
     @Transactional(readOnly = true)
     public BannerImage getEventBanner(UUID eventId) {
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)

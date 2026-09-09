@@ -17,6 +17,7 @@ import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
+import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -287,6 +288,205 @@ class EventControllerTest {
                         .requestAttr("jwtCountry", "Zimbabwe"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message", containsString("valid image file")));
+    }
+
+    // -- PUT/DELETE /events/{id}/banner ---------------------------------------
+    // The banner used to be write-once (applyBanner ran only on create), so an
+    // organizer who uploaded the wrong poster had to delete the event — taking
+    // its bookings and seat categories with it. These pin the replace path,
+    // its ownership rule, and that it reuses the create path's validation.
+
+    /** Minimal valid PNG (magic bytes + filler) for the banner tests. */
+    private static byte[] png(byte filler) {
+        byte[] bytes = new byte[64];
+        bytes[0] = (byte) 0x89; bytes[1] = 0x50; bytes[2] = 0x4E; bytes[3] = 0x47;
+        bytes[4] = 0x0D; bytes[5] = 0x0A; bytes[6] = 0x1A; bytes[7] = 0x0A;
+        java.util.Arrays.fill(bytes, 8, bytes.length, filler);
+        return bytes;
+    }
+
+    private Event saveBannerEvent(UUID owner, byte[] banner, String contentType) {
+        return eventRepository.save(Event.builder()
+                .tenantUserUuid(owner)
+                .title("Event With Banner")
+                .description("d")
+                .venue("Harare Gardens")
+                .country("Zimbabwe")
+                .category(EventCategory.CONCERT)
+                .startDateTime(LocalDateTime.of(2030, 1, 1, 10, 0))
+                .endDateTime(LocalDateTime.of(2030, 1, 1, 12, 0))
+                .totalCapacity(100)
+                .availableTickets(100)
+                .bannerImage(banner)
+                .bannerContentType(contentType)
+                .deleted(false)
+                .build());
+    }
+
+    /**
+     * A multipart PUT builder — the bare {@code multipart(url)} defaults to
+     * POST. Uses the {@code multipart(HttpMethod, ...)} overload rather than a
+     * {@code setMethod("PUT")} post-processor: the overload sets the method on
+     * the builder itself, so the request is a PUT before any other
+     * post-processor (CSRF, auth) inspects it.
+     */
+    private static org.springframework.test.web.servlet.request.MockMultipartHttpServletRequestBuilder
+            multipartPut(String url) {
+        return multipart(HttpMethod.PUT, url);
+    }
+
+    @Test
+    void replaceBanner_swapsTheStoredBytes_andKeepsTheSameBannerUrl() throws Exception {
+        byte[] original = png((byte) 0x01);
+        Event saved = saveBannerEvent(ORGANIZER_1, original, MediaType.IMAGE_PNG_VALUE);
+        byte[] replacement = png((byte) 0x02);
+
+        mockMvc.perform(multipartPut("/events/" + saved.getEventId() + "/banner")
+                        .file(new MockMultipartFile("eventBanner", "new.png",
+                                MediaType.IMAGE_PNG_VALUE, replacement))
+                        .with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER")))
+                .andExpect(status().isOk())
+                // The URL is stable across replacements — clients re-fetch, they
+                // don't get a new path.
+                .andExpect(jsonPath("$.data.bannerUrl",
+                        containsString("/events/" + saved.getEventId() + "/banner")));
+
+        mockMvc.perform(get("/events/" + saved.getEventId() + "/banner")
+                        .with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER")))
+                .andExpect(status().isOk())
+                .andExpect(content().bytes(replacement));
+    }
+
+    @Test
+    void replaceBanner_addsOneToAnEventThatHadNone() throws Exception {
+        Event saved = saveBannerEvent(ORGANIZER_1, null, null);
+
+        mockMvc.perform(multipartPut("/events/" + saved.getEventId() + "/banner")
+                        .file(new MockMultipartFile("eventBanner", "first.png",
+                                MediaType.IMAGE_PNG_VALUE, png((byte) 0x03)))
+                        .with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.bannerUrl", containsString("/banner")));
+    }
+
+    @Test
+    void replaceBanner_byANonOwningOrganizer_isForbidden_andLeavesTheImageIntact() throws Exception {
+        byte[] original = png((byte) 0x01);
+        Event saved = saveBannerEvent(ORGANIZER_1, original, MediaType.IMAGE_PNG_VALUE);
+
+        mockMvc.perform(multipartPut("/events/" + saved.getEventId() + "/banner")
+                        .file(new MockMultipartFile("eventBanner", "evil.png",
+                                MediaType.IMAGE_PNG_VALUE, png((byte) 0x09)))
+                        .with(jwtAuth("tenant-99", ORGANIZER_99, "EVENT_ORGANIZER")))
+                .andExpect(status().isForbidden());
+
+        Event reloaded = eventRepository.findById(saved.getEventId()).orElseThrow();
+        org.junit.jupiter.api.Assertions.assertArrayEquals(original, reloaded.getBannerImage(),
+                "a non-owner's rejected upload must not have touched the stored image");
+    }
+
+    @Test
+    void replaceBanner_bySuperAdmin_isAllowedOnAnyEvent() throws Exception {
+        Event saved = saveBannerEvent(ORGANIZER_1, png((byte) 0x01), MediaType.IMAGE_PNG_VALUE);
+
+        mockMvc.perform(multipartPut("/events/" + saved.getEventId() + "/banner")
+                        .file(new MockMultipartFile("eventBanner", "admin.png",
+                                MediaType.IMAGE_PNG_VALUE, png((byte) 0x04)))
+                        .with(jwtAuth("admin@innbucks.co.zw", null, "SUPER_ADMIN")))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void replaceBanner_reusesTheCreatePathValidation_soASmuggledPayloadIsRejected() throws Exception {
+        byte[] original = png((byte) 0x01);
+        Event saved = saveBannerEvent(ORGANIZER_1, original, MediaType.IMAGE_PNG_VALUE);
+        // GIF bytes under a lying image/png header — the magic-byte sniff must
+        // reject it here exactly as it does on create.
+        byte[] gifBytes = {0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x00, 0x00};
+
+        mockMvc.perform(multipartPut("/events/" + saved.getEventId() + "/banner")
+                        .file(new MockMultipartFile("eventBanner", "banner.png",
+                                MediaType.IMAGE_PNG_VALUE, gifBytes))
+                        .with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message", containsString("valid image file")));
+
+        Event reloaded = eventRepository.findById(saved.getEventId()).orElseThrow();
+        org.junit.jupiter.api.Assertions.assertArrayEquals(original, reloaded.getBannerImage(),
+                "a rejected upload must leave the previous banner in place");
+    }
+
+    @Test
+    void replaceBanner_withAnEmptyFile_is400_notASilentNoOp() throws Exception {
+        // applyBanner returns early on an empty file (right for create, where
+        // the banner is optional). On a REPLACE that would 200 while changing
+        // nothing, so the caller is told instead.
+        Event saved = saveBannerEvent(ORGANIZER_1, png((byte) 0x01), MediaType.IMAGE_PNG_VALUE);
+
+        mockMvc.perform(multipartPut("/events/" + saved.getEventId() + "/banner")
+                        .file(new MockMultipartFile("eventBanner", "empty.png",
+                                MediaType.IMAGE_PNG_VALUE, new byte[0]))
+                        .with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER")))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message", containsString("choose an image")));
+    }
+
+    @Test
+    void replaceBanner_onAMissingEvent_is404() throws Exception {
+        mockMvc.perform(multipartPut("/events/" + UUID.randomUUID() + "/banner")
+                        .file(new MockMultipartFile("eventBanner", "x.png",
+                                MediaType.IMAGE_PNG_VALUE, png((byte) 0x05)))
+                        .with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER")))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void replaceBanner_anonymously_isUnauthorized() throws Exception {
+        Event saved = saveBannerEvent(ORGANIZER_1, png((byte) 0x01), MediaType.IMAGE_PNG_VALUE);
+
+        mockMvc.perform(multipartPut("/events/" + saved.getEventId() + "/banner")
+                        .file(new MockMultipartFile("eventBanner", "x.png",
+                                MediaType.IMAGE_PNG_VALUE, png((byte) 0x06))))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void deleteBanner_clearsTheImage_andNullsBannerUrl() throws Exception {
+        Event saved = saveBannerEvent(ORGANIZER_1, png((byte) 0x01), MediaType.IMAGE_PNG_VALUE);
+
+        mockMvc.perform(delete("/events/" + saved.getEventId() + "/banner")
+                        .with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.bannerUrl").doesNotExist());
+
+        Event reloaded = eventRepository.findById(saved.getEventId()).orElseThrow();
+        org.junit.jupiter.api.Assertions.assertNull(reloaded.getBannerImage());
+        org.junit.jupiter.api.Assertions.assertNull(reloaded.getBannerContentType());
+    }
+
+    @Test
+    void deleteBanner_isIdempotent_soADoubleTapIsHarmless() throws Exception {
+        Event saved = saveBannerEvent(ORGANIZER_1, null, null);
+
+        mockMvc.perform(delete("/events/" + saved.getEventId() + "/banner")
+                        .with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER")))
+                .andExpect(status().isOk());
+        mockMvc.perform(delete("/events/" + saved.getEventId() + "/banner")
+                        .with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER")))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void deleteBanner_byANonOwningOrganizer_isForbidden() throws Exception {
+        byte[] original = png((byte) 0x01);
+        Event saved = saveBannerEvent(ORGANIZER_1, original, MediaType.IMAGE_PNG_VALUE);
+
+        mockMvc.perform(delete("/events/" + saved.getEventId() + "/banner")
+                        .with(jwtAuth("tenant-99", ORGANIZER_99, "EVENT_ORGANIZER")))
+                .andExpect(status().isForbidden());
+
+        Event reloaded = eventRepository.findById(saved.getEventId()).orElseThrow();
+        org.junit.jupiter.api.Assertions.assertArrayEquals(original, reloaded.getBannerImage());
     }
 
     @Test
