@@ -268,7 +268,10 @@ class TicketDeliveryServiceTest {
         assertTrue(body.getValue().contains("Hi Rudo Sibanda"), body.getValue());
         assertTrue(body.getValue().contains("Alice Moyo has booked a ticket for you"), body.getValue());
         assertTrue(body.getValue().contains("TN-RUDO"), body.getValue());
-        assertTrue(body.getValue().contains("Present your ticket number at the gate"), body.getValue());
+        // No phone of their own, and the buyer holds the QR — the email says
+        // exactly that instead of falsely promising a WhatsApp delivery.
+        assertTrue(body.getValue().contains("QR was sent to Alice Moyo's WhatsApp"), body.getValue());
+        assertTrue(body.getValue().contains("present your ticket number at the gate"), body.getValue());
         assertEquals(1, outcome.attendeeDeliveriesSent());
         // Email-only attendee has no phone to receive the QR — the gate
         // credential stays on the PURCHASER's WhatsApp, so it always exists
@@ -307,6 +310,30 @@ class TicketDeliveryServiceTest {
         verify(f.email()).sendEmail(eq("alice@example.com"), anyString(), body.capture(), anyString());
         assertTrue(body.getValue().contains("could not reach Bad Number's WhatsApp"), body.getValue());
         assertTrue(body.getValue().contains("please forward it"), body.getValue());
+    }
+
+    @Test
+    void failedAttendeeQr_theirEmailAdmitsIt_insteadOfClaimingWhatsAppDelivery() {
+        // The QR send runs before the email is built, so the email must report
+        // the outcome: a guest told "it's on your WhatsApp" when it isn't
+        // discovers the truth at the gate.
+        Fixture f = fixture();
+        Booking booking = bookingWithOneTicket();
+        booking.setCustomerName("Alice Moyo");
+        booking.setItems(List.of(
+                ticketFor("TN-BAD", "Bad Number", "bad@example.com", "+263779999999")));
+        doThrow(new NotificationDeliveryException("gateway said no"))
+                .when(f.whatsApp()).sendEventQrCode(eq("+263779999999"), anyString(), anyString());
+
+        f.service().deliver(booking);
+
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(f.email()).sendEmail(eq("bad@example.com"), anyString(), body.capture(), startsWith("ATT-"));
+        assertFalse(body.getValue().contains("has been sent to your WhatsApp"), body.getValue());
+        assertTrue(body.getValue().contains("could not deliver the QR e-ticket to your WhatsApp"), body.getValue());
+        assertTrue(body.getValue().contains("sent to Alice Moyo's"), body.getValue());
+        // And the fallback QR really did reach the buyer.
+        verify(f.whatsApp()).sendEventQrCode(eq("+263782606983"), anyString(), contains("TN-BAD"));
     }
 
     @Test

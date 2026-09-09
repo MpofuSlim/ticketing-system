@@ -160,7 +160,8 @@ public class TicketDeliveryService {
                                 booking.getId(), item.getTicketNumber());
                     }
                 }
-                boolean emailToAttendee = sendAttendeeEmail(booking, item, eventTitle);
+                boolean emailToAttendee = sendAttendeeEmail(booking, item, eventTitle,
+                        qrToAttendee, purchaserHasPhone);
                 if (qrToAttendee || emailToAttendee) {
                     attendeeSent++;
                 }
@@ -341,7 +342,8 @@ public class TicketDeliveryService {
      * changes the routing (fallback to the buyer) — the email does not.
      * Best-effort; true when it landed.
      */
-    private boolean sendAttendeeEmail(Booking booking, BookingItem item, String eventTitle) {
+    private boolean sendAttendeeEmail(Booking booking, BookingItem item, String eventTitle,
+                                      boolean qrDelivered, boolean purchaserHasPhone) {
         String attendeeEmail = item.getAttendeeEmail();
         if (attendeeEmail == null || attendeeEmail.isBlank()
                 || (booking.getUserEmail() != null && attendeeEmail.equalsIgnoreCase(booking.getUserEmail()))) {
@@ -350,7 +352,7 @@ public class TicketDeliveryService {
         try {
             email.sendEmail(attendeeEmail,
                     "Your InnBucks ticket - booking " + booking.getConfirmationNumber(),
-                    buildAttendeeConfirmationText(booking, item, eventTitle),
+                    buildAttendeeConfirmationText(booking, item, eventTitle, qrDelivered, purchaserHasPhone),
                     "ATT-" + booking.getConfirmationNumber() + "-"
                             + java.util.UUID.randomUUID().toString().substring(0, 6));
             log.info("Attendee email sent bookingId={} ticket={}", booking.getId(), item.getTicketNumber());
@@ -496,7 +498,19 @@ public class TicketDeliveryService {
      * reference, and — when the cell has a public base URL — the hosted
      * ticket page in case the WhatsApp QR doesn't arrive.
      */
-    private String buildAttendeeConfirmationText(Booking booking, BookingItem item, String eventTitle) {
+    /**
+     * The closing line reports the QR's ACTUAL fate, not intent — the QR send
+     * runs before this email is built, so lying is a choice we refuse: telling
+     * a guest "your e-ticket is on your WhatsApp" when that send just failed
+     * turns a recoverable hiccup into a gate-side surprise.
+     *
+     * @param qrDelivered       the attendee-phone QR send succeeded
+     * @param purchaserHasPhone whether an undelivered/unroutable QR ended up
+     *                          on the BUYER's WhatsApp (own-ticket routing or
+     *                          failure fallback) for forwarding
+     */
+    private String buildAttendeeConfirmationText(Booking booking, BookingItem item, String eventTitle,
+                                                 boolean qrDelivered, boolean purchaserHasPhone) {
         StringBuilder sb = new StringBuilder("Hi ").append(item.getAttendeeName().trim()).append("!\n\n");
         if (booking.getCustomerName() != null && !booking.getCustomerName().isBlank()) {
             sb.append(booking.getCustomerName().trim()).append(" has booked a ticket for you.\n\n");
@@ -510,8 +524,16 @@ public class TicketDeliveryService {
             sb.append("Ticket type: ").append(item.getCategoryName()).append('\n');
         }
         boolean hasPhone = item.getAttendeePhone() != null && !item.getAttendeePhone().isBlank();
-        if (hasPhone) {
+        String buyer = booking.getCustomerName() == null || booking.getCustomerName().isBlank()
+                ? "the person who booked" : booking.getCustomerName().trim();
+        if (qrDelivered) {
             sb.append("\nYour scannable e-ticket has been sent to your WhatsApp — present the QR at the gate.");
+        } else if (hasPhone && purchaserHasPhone) {
+            sb.append("\nWe could not deliver the QR e-ticket to your WhatsApp, so it was sent to ")
+              .append(buyer).append("'s — ask them to forward it, or present your ticket number at the gate.");
+        } else if (purchaserHasPhone) {
+            sb.append("\nYour ticket's QR was sent to ").append(buyer)
+              .append("'s WhatsApp — ask them for it, or present your ticket number at the gate.");
         } else {
             sb.append("\nPresent your ticket number at the gate.");
         }
