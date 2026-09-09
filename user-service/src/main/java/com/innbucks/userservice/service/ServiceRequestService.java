@@ -4,12 +4,17 @@ import com.innbucks.userservice.dto.CreateServiceRequestDTO;
 import com.innbucks.userservice.dto.ServiceRequestResponseDTO;
 import com.innbucks.userservice.entity.ServiceRequest;
 import com.innbucks.userservice.entity.User;
+import com.innbucks.userservice.event.ServiceRequestDecided;
+import com.innbucks.userservice.exception.NotFoundException;
 import com.innbucks.userservice.repository.ServiceRequestRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
+import org.springframework.http.HttpStatus;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -28,6 +33,7 @@ public class ServiceRequestService {
 
     private final ServiceRequestRepository serviceRequestRepository;
     private final UserRepository userRepository;
+    private final ApplicationEventPublisher events;
 
     /** Submit a request to be granted access to an additional default service bundle. */
     @Transactional
@@ -137,12 +143,15 @@ public class ServiceRequestService {
      */
     @Transactional
     public ServiceRequestResponseDTO approve(Long requestId, String reviewerEmail) {
+        // Typed, not a bare RuntimeException: the global handler collapses those
+        // to a 400 carrying "We couldn't process your request. Please try again.",
+        // so an admin acting on an already-decided row was invited to retry an
+        // operation that can never succeed. These reach the client intact.
         ServiceRequest req = serviceRequestRepository.findById(requestId)
-                .orElseThrow(() -> new RuntimeException("Service request not found: " + requestId));
+                .orElseThrow(() -> new NotFoundException("Service request not found: " + requestId));
 
         if (req.getStatus() != ServiceRequest.Status.PENDING) {
-            throw new RuntimeException("Service request " + requestId + " is not pending (status="
-                    + req.getStatus() + ").");
+            throw alreadyDecided(requestId, req.getStatus());
         }
 
         User user = userRepository.findById(req.getUserId())
@@ -165,7 +174,86 @@ public class ServiceRequestService {
 
         log.info("Service request approved id={} userId={} service={} reviewerId={}",
                 saved.getId(), user.getId(), req.getService(), reviewer.getId());
+        publishDecision(saved, user, ServiceRequestDecided.Outcome.APPROVED);
         return toResponse(saved, user);
+    }
+
+    /**
+     * Admin: reject a pending request, with a reason the requester is told.
+     *
+     * <p><b>Why this had to exist.</b> APPROVED was the only decision that could
+     * be recorded — {@code Status} had no REJECTED value and there was no
+     * endpoint — so an admin who decided against a request had no action
+     * available and it stayed PENDING forever. The queue could not drain, and
+     * the console was already rendering and filtering a REJECTED status the
+     * database could not store.
+     *
+     * <p>Grants nothing and touches the user's roles or bundles in no way: the
+     * only mutation is on the request row itself.
+     */
+    @Transactional
+    public ServiceRequestResponseDTO reject(Long requestId, String reviewerEmail, String decisionReason) {
+        if (decisionReason == null || decisionReason.isBlank()) {
+            // Belt-and-braces behind the DTO's @NotBlank: a blank reason tells
+            // the requester their request was refused and nothing else, which
+            // is what makes them re-submit the identical request.
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "A reason is required when rejecting a service request.");
+        }
+
+        ServiceRequest req = serviceRequestRepository.findById(requestId)
+                .orElseThrow(() -> new NotFoundException("Service request not found: " + requestId));
+
+        if (req.getStatus() != ServiceRequest.Status.PENDING) {
+            throw alreadyDecided(requestId, req.getStatus());
+        }
+
+        User reviewer = userRepository.findByEmail(reviewerEmail)
+                .orElseThrow(() -> new RuntimeException("Reviewer not found: " + reviewerEmail));
+
+        // The requesting account may have been deleted since they applied. That
+        // must not block the admin from clearing the row — unlike approve, there
+        // is nothing to grant them, so a missing user is simply a request that
+        // can be closed and a notification that goes nowhere.
+        User user = userRepository.findById(req.getUserId()).orElse(null);
+
+        req.setStatus(ServiceRequest.Status.REJECTED);
+        req.setDecisionReason(decisionReason.trim());
+        req.setReviewedAt(LocalDateTime.now(ZoneOffset.UTC));
+        req.setReviewedBy(reviewer.getId());
+        ServiceRequest saved = serviceRequestRepository.save(req);
+
+        log.info("Service request rejected id={} userId={} service={} reviewerId={}",
+                saved.getId(), req.getUserId(), req.getService(), reviewer.getId());
+        if (user != null) {
+            publishDecision(saved, user, ServiceRequestDecided.Outcome.REJECTED);
+        }
+        return toResponse(saved, user);
+    }
+
+    /**
+     * Fire-and-forget: {@code ServiceRequestDecisionListener} picks this up
+     * AFTER_COMMIT and tells the requester. Published rather than sent inline so
+     * a decision that rolls back never notifies anyone it happened, and so the
+     * admin's response is not held behind an outbound call.
+     */
+    private void publishDecision(ServiceRequest req, User user, ServiceRequestDecided.Outcome outcome) {
+        if (events == null) {
+            return; // plain unit test with no publisher wired
+        }
+        events.publishEvent(new ServiceRequestDecided(
+                req.getId(), user.getId(), user.getEmail(), user.getPhoneNumber(),
+                req.getService(), outcome, req.getDecisionReason()));
+    }
+
+    /**
+     * A request can be decided once. Carries the status it already holds so the
+     * admin can see a colleague got there first, rather than being told to
+     * "try again" on something that will never change.
+     */
+    private static ResponseStatusException alreadyDecided(Long requestId, ServiceRequest.Status status) {
+        return new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                "Service request " + requestId + " is not pending (status=" + status + ").");
     }
 
     private ServiceRequestResponseDTO toResponse(ServiceRequest req, User user) {

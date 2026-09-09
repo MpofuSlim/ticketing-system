@@ -332,6 +332,44 @@ its `V4`).
   is the authoritative registry for them — **not** `GET /admin/users/merchants`,
   which returns account `userUuid`s.
 
+## Service requests can be REJECTED (user-service V36)
+
+`PUT /admin/service-requests/{id}/reject` with a required `{ "reason": "..." }`.
+
+- **Why it had to exist.** `Status` was `PENDING, APPROVED` only and there was no
+  reject endpoint, so an admin who decided against a request had **no action
+  available** and it stayed PENDING forever — the queue could not drain. The
+  console was already rendering, filtering and counting a `REJECTED` status the
+  database could not store.
+- **`reason` (requester's) and `decision_reason` (reviewer's) are different
+  columns.** `service_requests.reason` is NOT NULL and holds the applicant's own
+  justification; writing the admin's words there would overwrite it. V36 adds
+  `decision_reason`, nullable — null on every pre-V36 row and on an approval
+  with no note. Required on a reject: a refusal that does not say why is what
+  makes people re-submit the identical request.
+- **No CHECK change was needed** — V4 declared `status` as a bare `VARCHAR(32)`.
+  And the pending-uniqueness index is scoped `WHERE status = 'PENDING'`, so a
+  rejected row does **not** block re-requesting the same bundle. A rejection
+  decides one request; it is not a standing ban.
+- **Reject grants nothing** — the only mutation is on the request row. Pinned by
+  `ServiceRequestRejectTest`.
+- **Same permission as approve** (`service-requests:approve`), deliberately: both
+  are the power to *decide*. A role that could approve but not reject could only
+  ever say yes, recreating the undrainable queue.
+- **Both outcomes now notify the requester** via `ServiceRequestDecided` +
+  `@TransactionalEventListener(AFTER_COMMIT)` → `UserNotificationDispatcher`.
+  Approval used to be silent — a merchant learned their request was granted by
+  noticing a new menu item. AFTER_COMMIT so a rolled-back decision never
+  announces itself; the approval copy tells them to sign in again, because the
+  grant rides in the JWT and is invisible until a fresh token is minted.
+- **Both decision paths throw TYPED exceptions** (`NotFoundException` → 404,
+  `ResponseStatusException` → 400 naming the status already held). A bare
+  `RuntimeException` is collapsed by `GlobalExceptionHandler` into a 400 reading
+  *"We couldn't process your request. Please try again."*, which invited an admin
+  to retry an operation that can never succeed and hid that a colleague had
+  already decided the row. `approve` was fixed alongside `reject` — its Swagger
+  had been documenting a 404 it did not actually return.
+
 ## Timestamps — store everything in UTC
 
 The user/booking/seat/event services map timestamps as `LocalDateTime`

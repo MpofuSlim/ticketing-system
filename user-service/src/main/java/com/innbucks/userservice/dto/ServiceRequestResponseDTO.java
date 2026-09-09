@@ -33,7 +33,7 @@ public class ServiceRequestResponseDTO {
     @Schema(example = "We are launching a rewards programme.")
     private String reason;
 
-    @Schema(example = "PENDING", allowableValues = {"PENDING", "APPROVED"})
+    @Schema(example = "PENDING", allowableValues = {"PENDING", "APPROVED", "REJECTED"})
     private String status;
 
     @Schema(example = "2026-05-07T10:30:00")
@@ -42,8 +42,14 @@ public class ServiceRequestResponseDTO {
     @Schema(example = "2026-05-08T09:15:00", nullable = true)
     private LocalDateTime reviewedAt;
 
-    @Schema(example = "1", nullable = true, description = "id of the SUPER_ADMIN who approved")
+    @Schema(example = "1", nullable = true, description = "id of the SUPER_ADMIN who decided the request")
     private Long reviewedBy;
+
+    @Schema(example = "Your account is not yet verified for marketplace selling.", nullable = true,
+            description = "The REVIEWER's reason for the decision — always present on a REJECTED "
+                        + "request, optional on an APPROVED one, null while PENDING. Distinct from "
+                        + "'reason', which is the requester's own justification.")
+    private String decisionReason;
 
     public static ServiceRequestResponseDTO from(ServiceRequest req,
                                                  String userEmail,
@@ -59,6 +65,7 @@ public class ServiceRequestResponseDTO {
                 .createdAt(req.getCreatedAt())
                 .reviewedAt(req.getReviewedAt())
                 .reviewedBy(req.getReviewedBy())
+                .decisionReason(req.getDecisionReason())
                 .build();
     }
 }
