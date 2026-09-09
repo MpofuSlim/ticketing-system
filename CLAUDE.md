@@ -418,6 +418,47 @@ another operator-facing surface only on the same reasoning; **never do it for an
 S2S payload**, where the consumer parses properly and a per-cell offset just
 invites double-conversion.
 
+## A booked seat category can't be deleted — but CAN be repriced
+
+`SeatCategoryService.deleteCategory` refuses (409) while the category still has
+**active** bookings; `updateCategory` is deliberately left unguarded. The two
+halves look like one rule and are not.
+
+- **Delete had no check at all.** It verified event ownership and nothing else,
+  so an organizer could soft-delete a category holding paid tickets. The
+  `booking_items` rows survive — nothing cascades — but the category they name is
+  gone, stranding every holder on a category the event no longer lists.
+- **"Active" is PENDING or CONFIRMED**, per booking-service's
+  `/bookings/internal/categories/active-counts`. CANCELLED is excluded, so a
+  category whose sales were all refunded IS deletable — the case an organizer
+  actually needs.
+- **Reprice is NOT blocked, and this is the deliberate half.** A booking freezes
+  `BookingItem.priceAtBooking` at purchase (`BookingService:311`), and every later
+  read — the ticket, the receipt, `OrganizerReportRepository`'s revenue sums —
+  uses that stored value, never the category's current price. So a reprice cannot
+  restate or invalidate a sold ticket; it only sets what the NEXT buyer pays,
+  which is ordinary early-bird/late-release pricing. Blocking it would mean one
+  sale locks a category's price for the life of the event. The console's own rule
+  list asked for both to be refused on the grounds that repricing "silently
+  invalidates paid tickets" — that premise is wrong, and
+  `updateCategory_repriceStaysAllowedWithActiveBookings` exists to stop someone
+  "completing" the guard by extending it to updates.
+- **The guard FAILS CLOSED, and that is its whole point.**
+  `BookingServiceClient.fetchActiveCountsByCategories` returns an empty `Optional`
+  on any failure because its *other* caller renders public availability and must
+  degrade rather than 500. A guard reusing that convention would read
+  "booking-service is down" as "no bookings" and wave the delete through at
+  exactly the moment it cannot be checked. An unanswerable question is refused
+  with **503** (`ServiceUnavailableException`, new — 503 says *the server could
+  not check*, where 409 says *the server checked and the state says no*), never
+  assumed safe. Pinned by
+  `deleteCategory_refusedWhenBookingServiceCannotBeReached`.
+- **Still not guarded (§4.1 of the console's list):** `EventService.approveEvent`
+  only flips `rejected = false`. It never calls seat-service and never compares
+  the sum of category allocations to `totalCapacity`, so nothing server-side
+  prevents an oversold event — the console's own block is the only guard. That is
+  a separate fix.
+
 ## Scan reports: `to` is widened server-side, and why
 
 `GET /scans/**` takes `from` + an **optional** `to`. A supplied `to` is rounded
