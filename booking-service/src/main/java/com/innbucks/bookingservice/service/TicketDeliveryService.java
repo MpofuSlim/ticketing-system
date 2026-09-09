@@ -12,6 +12,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -90,13 +91,19 @@ public class TicketDeliveryService {
 
     /**
      * Per-channel result of one delivery attempt, so a manual resend can show
-     * the operator exactly what went out. {@code emailAttempted}/{@code
-     * whatsappAttempted} are false when the booking simply has no address /
-     * phone for that channel (not a failure).
+     * the operator exactly what went out. {@code emailAttempted} is false when
+     * the booking has no address; {@code whatsappAttempted} is false when the
+     * booking has no phone OR no ticket ended up routed to the purchaser
+     * (every ticket went to its attendee) — neither is a failure.
      *
-     * <p>{@code attendeeDeliveriesTotal} counts tickets carrying an attendee
-     * contact distinct from the purchaser's; {@code attendeeDeliveriesSent}
-     * how many of those had at least one channel succeed.
+     * <p>{@code qrTicketsSent/Total} count PURCHASER-routed QR sends,
+     * including fallbacks (an attendee QR that failed and was re-routed to
+     * the buyer). {@code attendeeDeliveriesTotal} counts tickets carrying an
+     * attendee contact distinct from the purchaser's; {@code
+     * attendeeDeliveriesSent} how many of those had at least one channel
+     * succeed. The two buckets overlap on an email-only attendee: their QR is
+     * purchaser-routed (counted in qrTicketsTotal) while their email counts
+     * them in attendeeDeliveriesTotal.
      */
     public record Outcome(boolean emailAttempted, boolean emailSent,
                           boolean whatsappAttempted, int qrTicketsSent, int qrTicketsTotal,
@@ -124,11 +131,70 @@ public class TicketDeliveryService {
         // channel/attendee.
         String eventTitle = resolveEventTitle(booking);
         List<BookingItem> items = booking.getItems() == null ? List.of() : booking.getItems();
+        String phone = booking.getPhoneNumber();
+        boolean purchaserHasPhone = phone != null && !phone.isBlank();
 
+        // ---- 1. Attendee channels FIRST, so the purchaser's receipt (below)
+        // reports what actually happened, and a FAILED attendee QR can fall
+        // back to the buyer. Route each QR to its holder: a ticket whose
+        // attendee has their OWN phone goes to that attendee — the purchaser
+        // deliberately does NOT get a copy ("A gets his ticket, B gets his").
+        // The one exception is a KNOWN send failure: the QR is the gate
+        // credential and must never be lost, so it is re-routed to the buyer
+        // (who forwards it) instead of vanishing with a WARN nobody reads.
+        List<BookingItem> purchaserQueue = new ArrayList<>();   // buyer's own + fallbacks, request order
+        List<BookingItem> routedOk = new ArrayList<>();         // attendee QR landed
+        List<BookingItem> fallbacks = new ArrayList<>();        // attendee QR failed -> buyer
+        int attendeeTotal = 0;
+        int attendeeSent = 0;
+        for (BookingItem item : items) {
+            boolean routed = attendeeHasOwnPhone(booking, item);
+            boolean qrToAttendee = false;
+            if (deliverableToAttendee(booking, item)) {
+                attendeeTotal++;
+                if (routed) {
+                    qrToAttendee = sendQr(booking, item, item.getAttendeePhone(),
+                            buildAttendeeEventNameField(booking, item, eventTitle));
+                    if (qrToAttendee) {
+                        log.info("Attendee QR e-ticket sent bookingId={} ticket={}",
+                                booking.getId(), item.getTicketNumber());
+                    }
+                }
+                boolean emailToAttendee = sendAttendeeEmail(booking, item, eventTitle,
+                        qrToAttendee, purchaserHasPhone);
+                if (qrToAttendee || emailToAttendee) {
+                    attendeeSent++;
+                }
+            }
+            if (!routed) {
+                purchaserQueue.add(item);
+            } else if (qrToAttendee) {
+                routedOk.add(item);
+            } else if (purchaserHasPhone) {
+                fallbacks.add(item);
+                purchaserQueue.add(item);
+            } else {
+                // Attendee unreachable AND the buyer has no phone: the QR
+                // reached nobody. The hosted booking page / wallet still hold
+                // it; make the loss loud for the ops log.
+                log.warn("Attendee QR undeliverable and no purchaser phone to fall back to "
+                        + "bookingId={} ticket={}", booking.getId(), item.getTicketNumber());
+            }
+        }
+
+        // ---- 2. Purchaser WhatsApp QRs: their own tickets + fallbacks ----
+        boolean whatsappAttempted = false;
+        int sent = 0;
+        int total = 0;
+        if (purchaserHasPhone && !purchaserQueue.isEmpty()) {
+            whatsappAttempted = true;
+            total = purchaserQueue.size();
+            sent = sendQrETickets(booking, phone, purchaserQueue, eventTitle);
+        }
+
+        // ---- 3. Purchaser receipt email, composed from ACTUAL outcomes ----
         boolean emailAttempted = false;
         boolean emailSent = false;
-
-        // ---- Email (independent best-effort) ----
         String emailAddr = booking.getUserEmail();
         if (emailAddr != null && !emailAddr.isBlank()) {
             emailAttempted = true;
@@ -139,7 +205,7 @@ public class TicketDeliveryService {
                 // typographic punctuation in subjects with 400 "Invalid subject".
                 email.sendEmail(emailAddr,
                         "Your InnBucks tickets - booking " + booking.getConfirmationNumber(),
-                        buildConfirmationText(booking, eventTitle),
+                        buildConfirmationText(booking, eventTitle, routedOk, fallbacks, total),
                         "CONF-" + booking.getConfirmationNumber() + "-"
                                 + java.util.UUID.randomUUID().toString().substring(0, 6));
                 emailSent = true;
@@ -149,42 +215,29 @@ public class TicketDeliveryService {
                 log.warn("Booking-confirm email failed bookingId={} (booking still CONFIRMED): {}",
                         booking.getId(), ex.getMessage());
             }
-        }
-
-        // ---- WhatsApp QR e-tickets (only — no /send call) ----
-        // Route each QR to its holder: tickets whose attendee has their OWN
-        // phone go to that attendee (below); everything else is the
-        // purchaser's to receive. The purchaser deliberately does NOT get a
-        // copy of an attendee-routed QR — "A gets his ticket, B gets his".
-        List<BookingItem> purchaserItems = items.stream()
-                .filter(i -> !attendeeHasOwnPhone(booking, i))
-                .toList();
-        boolean whatsappAttempted = false;
-        int sent = 0;
-        int total = 0;
-        String phone = booking.getPhoneNumber();
-        if (phone != null && !phone.isBlank() && !purchaserItems.isEmpty()) {
-            whatsappAttempted = true;
-            total = purchaserItems.size();
-            sent = sendQrETickets(booking, phone, purchaserItems, eventTitle);
-        }
-
-        // ---- Named attendees: their own ticket, to their own contact ----
-        int attendeeTotal = 0;
-        int attendeeSent = 0;
-        for (BookingItem item : items) {
-            if (!deliverableToAttendee(booking, item)) {
-                continue;
-            }
-            attendeeTotal++;
-            if (deliverToAttendee(booking, item, eventTitle)) {
-                attendeeSent++;
+        } else if (purchaserHasPhone && total == 0 && !items.isEmpty()) {
+            // ---- 3b. SMS receipt — ONLY when the buyer would otherwise hear
+            // NOTHING: no email on file and no QR routed to their WhatsApp
+            // (every ticket went to its attendee). WhatsApp-first customers
+            // routinely book with no email; without this the person who PAID
+            // gets zero messages. One bounded SMS, only in this exact case.
+            try {
+                email.sendSms(phone,
+                        "Booking " + booking.getConfirmationNumber() + " confirmed for " + eventTitle
+                                + ". Your guests' tickets were sent to their WhatsApp numbers.",
+                        "CONF-" + booking.getConfirmationNumber().replaceAll("[^A-Za-z0-9-]", "")
+                                + "-" + java.util.UUID.randomUUID().toString().substring(0, 4) + "S");
+                log.info("Booking-confirm SMS receipt sent bookingId={} (no email, all QRs attendee-routed)",
+                        booking.getId());
+            } catch (RuntimeException ex) {
+                log.warn("Booking-confirm SMS receipt failed bookingId={}: {}",
+                        booking.getId(), ex.getMessage());
             }
         }
 
         Outcome outcome = new Outcome(emailAttempted, emailSent, whatsappAttempted, sent, total,
                 attendeeSent, attendeeTotal);
-        if (!outcome.anyChannelAttempted()) {
+        if (!emailAttempted && !purchaserHasPhone) {
             log.warn("Ticket delivery: no email or phone on booking {} — no delivery channel",
                     booking.getConfirmationNumber());
         }
@@ -283,37 +336,32 @@ public class TicketDeliveryService {
     }
 
     /**
-     * Deliver ONE ticket to the attendee named on it: QR over WhatsApp (if
-     * they have a phone) and a one-ticket confirmation email (if they have an
-     * address). Best-effort per channel; true when at least one landed.
+     * The email half of an attendee delivery: a one-ticket confirmation to the
+     * attendee's own address (skipped when it is the purchaser's). The QR half
+     * lives in {@link #deliver}'s routing loop, because a failed attendee QR
+     * changes the routing (fallback to the buyer) — the email does not.
+     * Best-effort; true when it landed.
      */
-    private boolean deliverToAttendee(Booking booking, BookingItem item, String eventTitle) {
-        boolean any = false;
-        String attendeePhone = item.getAttendeePhone();
-        if (attendeePhone != null && !attendeePhone.isBlank()
-                && !attendeePhone.equals(booking.getPhoneNumber())) {
-            if (sendQr(booking, item, attendeePhone, buildAttendeeEventNameField(booking, item, eventTitle))) {
-                any = true;
-                log.info("Attendee QR e-ticket sent bookingId={} ticket={}", booking.getId(), item.getTicketNumber());
-            }
-        }
+    private boolean sendAttendeeEmail(Booking booking, BookingItem item, String eventTitle,
+                                      boolean qrDelivered, boolean purchaserHasPhone) {
         String attendeeEmail = item.getAttendeeEmail();
-        if (attendeeEmail != null && !attendeeEmail.isBlank()
-                && (booking.getUserEmail() == null || !attendeeEmail.equalsIgnoreCase(booking.getUserEmail()))) {
-            try {
-                email.sendEmail(attendeeEmail,
-                        "Your InnBucks ticket - booking " + booking.getConfirmationNumber(),
-                        buildAttendeeConfirmationText(booking, item, eventTitle),
-                        "ATT-" + booking.getConfirmationNumber() + "-"
-                                + java.util.UUID.randomUUID().toString().substring(0, 6));
-                any = true;
-                log.info("Attendee email sent bookingId={} ticket={}", booking.getId(), item.getTicketNumber());
-            } catch (RuntimeException ex) {
-                log.warn("Attendee email failed bookingId={} ticket={} (other tickets unaffected): {}",
-                        booking.getId(), item.getTicketNumber(), ex.getMessage());
-            }
+        if (attendeeEmail == null || attendeeEmail.isBlank()
+                || (booking.getUserEmail() != null && attendeeEmail.equalsIgnoreCase(booking.getUserEmail()))) {
+            return false;
         }
-        return any;
+        try {
+            email.sendEmail(attendeeEmail,
+                    "Your InnBucks ticket - booking " + booking.getConfirmationNumber(),
+                    buildAttendeeConfirmationText(booking, item, eventTitle, qrDelivered, purchaserHasPhone),
+                    "ATT-" + booking.getConfirmationNumber() + "-"
+                            + java.util.UUID.randomUUID().toString().substring(0, 6));
+            log.info("Attendee email sent bookingId={} ticket={}", booking.getId(), item.getTicketNumber());
+            return true;
+        } catch (RuntimeException ex) {
+            log.warn("Attendee email failed bookingId={} ticket={} (other tickets unaffected): {}",
+                    booking.getId(), item.getTicketNumber(), ex.getMessage());
+            return false;
+        }
     }
 
     /**
@@ -386,7 +434,9 @@ public class TicketDeliveryService {
      * e-ticket(s) are delivered over WhatsApp, so this email is the textual
      * record and points the customer at that QR for gate entry.
      */
-    private String buildConfirmationText(Booking booking, String eventTitle) {
+    private String buildConfirmationText(Booking booking, String eventTitle,
+                                         List<BookingItem> routedOk, List<BookingItem> fallbacks,
+                                         int purchaserQrCount) {
         List<BookingItem> items = booking.getItems() == null ? List.of() : booking.getItems();
         StringBuilder sb = new StringBuilder("Hi");
         if (booking.getCustomerName() != null && !booking.getCustomerName().isBlank()) {
@@ -416,19 +466,28 @@ public class TicketDeliveryService {
             }
             sb.append('\n');
         }
-        // Tell the buyer exactly where each QR went: attendee-routed tickets
-        // are NOT on the buyer's phone (by design), so without this line a
-        // buyer who can't find Tendai's QR assumes delivery failed.
-        long routedToAttendees = items.stream().filter(i -> attendeeHasOwnPhone(booking, i)).count();
-        long ownTickets = items.size() - routedToAttendees;
-        if (routedToAttendees > 0) {
+        // Tell the buyer exactly where each QR ACTUALLY went — this runs
+        // AFTER the sends, so it reports outcomes, not intentions. Without
+        // these lines a buyer who can't find a guest's QR on their own phone
+        // reads the exclusive routing as a delivery failure.
+        if (!routedOk.isEmpty()) {
             sb.append("Tickets for attendees with their own phone number have been sent directly to their WhatsApp.\n");
         }
-        if (ownTickets > 0) {
-            sb.append("\nYour ").append(ownTickets == 1 ? "scannable e-ticket has" : "scannable e-tickets have")
+        for (BookingItem fb : fallbacks) {
+            sb.append("We could not reach ")
+              .append(fb.getAttendeeName() == null ? "an attendee" : fb.getAttendeeName().trim())
+              .append("'s WhatsApp, so their ticket (").append(fb.getTicketNumber())
+              .append(") was sent to yours — please forward it.\n");
+        }
+        if (purchaserQrCount > 0) {
+            sb.append("\nYour ").append(purchaserQrCount == 1 ? "scannable e-ticket has" : "scannable e-tickets have")
                     .append(" been sent to your WhatsApp — present the QR at the gate.");
         } else {
-            sb.append("\nEvery ticket has been sent to its attendee's WhatsApp. You can view the whole booking online at any time.");
+            sb.append("\nEvery ticket has been sent to its attendee's WhatsApp.");
+        }
+        if (publicBaseUrl != null && !publicBaseUrl.isBlank()) {
+            sb.append("\nView the whole booking online: ").append(publicBaseUrl)
+              .append("/bookings/").append(booking.getId()).append("/tickets");
         }
         return sb.toString();
     }
@@ -439,7 +498,19 @@ public class TicketDeliveryService {
      * reference, and — when the cell has a public base URL — the hosted
      * ticket page in case the WhatsApp QR doesn't arrive.
      */
-    private String buildAttendeeConfirmationText(Booking booking, BookingItem item, String eventTitle) {
+    /**
+     * The closing line reports the QR's ACTUAL fate, not intent — the QR send
+     * runs before this email is built, so lying is a choice we refuse: telling
+     * a guest "your e-ticket is on your WhatsApp" when that send just failed
+     * turns a recoverable hiccup into a gate-side surprise.
+     *
+     * @param qrDelivered       the attendee-phone QR send succeeded
+     * @param purchaserHasPhone whether an undelivered/unroutable QR ended up
+     *                          on the BUYER's WhatsApp (own-ticket routing or
+     *                          failure fallback) for forwarding
+     */
+    private String buildAttendeeConfirmationText(Booking booking, BookingItem item, String eventTitle,
+                                                 boolean qrDelivered, boolean purchaserHasPhone) {
         StringBuilder sb = new StringBuilder("Hi ").append(item.getAttendeeName().trim()).append("!\n\n");
         if (booking.getCustomerName() != null && !booking.getCustomerName().isBlank()) {
             sb.append(booking.getCustomerName().trim()).append(" has booked a ticket for you.\n\n");
@@ -453,8 +524,16 @@ public class TicketDeliveryService {
             sb.append("Ticket type: ").append(item.getCategoryName()).append('\n');
         }
         boolean hasPhone = item.getAttendeePhone() != null && !item.getAttendeePhone().isBlank();
-        if (hasPhone) {
+        String buyer = booking.getCustomerName() == null || booking.getCustomerName().isBlank()
+                ? "the person who booked" : booking.getCustomerName().trim();
+        if (qrDelivered) {
             sb.append("\nYour scannable e-ticket has been sent to your WhatsApp — present the QR at the gate.");
+        } else if (hasPhone && purchaserHasPhone) {
+            sb.append("\nWe could not deliver the QR e-ticket to your WhatsApp, so it was sent to ")
+              .append(buyer).append("'s — ask them to forward it, or present your ticket number at the gate.");
+        } else if (purchaserHasPhone) {
+            sb.append("\nYour ticket's QR was sent to ").append(buyer)
+              .append("'s WhatsApp — ask them for it, or present your ticket number at the gate.");
         } else {
             sb.append("\nPresent your ticket number at the gate.");
         }

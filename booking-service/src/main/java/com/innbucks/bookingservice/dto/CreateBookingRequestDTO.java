@@ -60,12 +60,14 @@ public class CreateBookingRequestDTO {
         private UUID categoryId;
 
         // Optional. Omit for the purchaser's own ticket. When present, this
-        // ticket is issued in the attendee's name and — if a phone/email is
-        // given — delivered to them directly as well as to the purchaser.
+        // ticket is issued in the attendee's name; with a phone, its QR is
+        // delivered to the ATTENDEE instead of the purchaser (falling back to
+        // the purchaser only if that send fails).
         @Schema(nullable = true,
                 description = "Optional attendee for THIS ticket. Omit for the purchaser's own ticket. When "
-                        + "present, the ticket is issued in the attendee's name and, if a phone and/or email is "
-                        + "given, also delivered to them directly (WhatsApp QR / email).")
+                        + "present, the ticket is issued in the attendee's name; with a `phoneNumber`, its "
+                        + "WhatsApp QR goes to the attendee INSTEAD of the purchaser (purchaser fallback only "
+                        + "if that send fails); an `email` additionally gets a one-ticket confirmation.")
         @Valid
         private AttendeeRequest attendee;
     }

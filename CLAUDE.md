@@ -272,14 +272,17 @@ organizer's bookings view from a list of MSISDNs into a guest list.
   does not get a copy ("A gets his ticket, B gets his"). Tickets with no
   attendee phone (none named, name-only, email-only, or the attendee IS the
   purchaser) stay on the purchaser's WhatsApp so the gate credential always
-  reaches a real phone. A failed attendee send does NOT fall back to the buyer
-  — they recover any QR from the hosted booking page / phone wallet, which
-  still show the whole booking. The purchaser's confirmation EMAIL stays the
-  full-booking receipt and names where each QR went; an attendee with an email
-  also gets a one-ticket email. Each attendee is its own best-effort unit;
-  `Outcome.qrTicketsTotal` now counts PURCHASER-routed tickets and
-  `attendeeDeliveriesSent/Total` the attendee-routed ones; the resend endpoint
-  re-runs the same routing.
+  reaches a real phone. **A synchronously-FAILED attendee QR send falls back to
+  the buyer** — the QR must never be lost, and the fallback is what makes the
+  resend endpoint recover a mistyped guest number (re-run → fails again → buyer
+  gets it to forward). Attendee sends run BEFORE the purchaser's receipt email,
+  which therefore reports actual outcomes (delivered directly / fell back), not
+  intentions. A buyer with no email whose tickets were ALL attendee-routed gets
+  one SMS receipt so the payer never hears nothing. The purchaser's email stays
+  the full-booking receipt; an attendee with an email also gets a one-ticket
+  email. `Outcome.qrTicketsTotal` counts PURCHASER-routed QRs (own + fallbacks)
+  and `attendeeDeliveriesSent/Total` the attendee-contactable tickets — the
+  buckets overlap for an email-only attendee (QR to buyer, email to attendee).
 - **`holderName`** (= attendee if named, else purchaser) is on `CategoryBookingDTO`
   and on the scan response (`ALLOWED` / `ALREADY_REDEEMED`) so the gate can greet
   or ID-check the holder; the ticket HTML/email print "Ticket for <holder>".

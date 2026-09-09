@@ -83,8 +83,10 @@ public class BookingController {
             "**Purchaser name (V22):** `customerName` is required for guest bookings; an authenticated customer may omit it and the " +
             "name on their profile (JWT firstName/lastName) is used. A value in the body always wins.\n\n" +
             "**Attendees (V22):** each `seats[i]` may carry an optional `attendee` — who will hold THAT ticket. Tickets are issued " +
-            "in request order, so `items[i]` is `seats[i]`. When an attendee has a `phoneNumber` and/or `email`, that one ticket " +
-            "is ALSO delivered to them directly on confirmation (WhatsApp QR / email) — the purchaser still receives every ticket. " +
+            "in request order, so `items[i]` is `seats[i]`. On confirmation, each ticket's WhatsApp QR goes to its HOLDER: an " +
+            "attendee with their own `phoneNumber` receives their ticket directly and the purchaser does NOT get a copy (if that " +
+            "send fails, the QR falls back to the purchaser to forward). Tickets without an attendee phone go to the purchaser; an " +
+            "attendee `email` additionally gets a one-ticket confirmation. The purchaser's email remains the full-booking receipt. " +
             "An attendee phone is validated exactly like the purchaser's (400 on a malformed number, stored E.164).")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(

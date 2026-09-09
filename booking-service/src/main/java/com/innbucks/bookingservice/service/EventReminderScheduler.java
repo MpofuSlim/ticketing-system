@@ -206,10 +206,14 @@ public class EventReminderScheduler {
         String phone = booking.getPhoneNumber();
         if (phone != null && !phone.isBlank()) {
             try {
+                // Copy is holder-neutral: since the per-holder routing (V22
+                // follow-up), a guest's QR may live on the guest's phone, not
+                // this (purchaser's) one — so never assert "YOUR e-ticket was
+                // sent to YOUR WhatsApp" here.
                 sms.sendSms(phone,
                         "Reminder: " + title + " is " + when + ". Booking "
                                 + booking.getConfirmationNumber()
-                                + ". Your e-ticket was sent on WhatsApp - see you there!",
+                                + ". Present the WhatsApp QR e-ticket at the gate - see you there!",
                         reference + "-S");
                 any = true;
             } catch (RuntimeException e) {
@@ -237,8 +241,9 @@ public class EventReminderScheduler {
         return "Hi!\n\n"
                 + "This is a reminder that " + title + " is " + when + ".\n\n"
                 + "Booking reference: " + booking.getConfirmationNumber() + "\n\n"
-                + "Your scannable e-ticket was sent to your WhatsApp when you booked - "
-                + "present the QR at the gate. Need it again? Ask the organizer to resend it.\n\n"
+                + "The scannable e-tickets were sent on WhatsApp when you booked - your own "
+                + "to you, and any named guest's directly to them. Present the QR at the "
+                + "gate. Need one again? Ask the organizer to resend it.\n\n"
                 + "See you there!";
     }
 
@@ -259,7 +264,7 @@ public class EventReminderScheduler {
     private static String reminderText(EventLookupDTO event, Booking booking, LocalDateTime start) {
         return "Reminder: " + titleOf(event) + " starts on "
                 + START_FMT.format(start)
-                + ". Your e-ticket(s) were sent when you booked (confirmation "
+                + ". The e-ticket(s) were sent on WhatsApp when you booked (confirmation "
                 + booking.getConfirmationNumber() + "). See you there!";
     }
 }
