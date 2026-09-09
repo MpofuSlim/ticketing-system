@@ -266,12 +266,20 @@ organizer's bookings view from a list of MSISDNs into a guest list.
   keeps the keys out of the payload entirely. The attendee NAME is on every
   view — it is printed on the ticket face and is what tells a buyer which QR to
   hand to whom. Don't add the contact to a public DTO.
-- **Delivery: the purchaser still receives every ticket; a named attendee with
-  their OWN contact additionally receives THEIR ticket** (`TicketDeliveryService`
-  — one QR to their phone, a one-ticket email to their address). A contact equal
-  to the purchaser's is skipped, not double-sent. Each attendee is its own
-  best-effort unit; `Outcome.attendeeDeliveriesSent/Total` report it and the
-  resend endpoint re-runs it.
+- **Delivery routes each ticket's WhatsApp QR to its HOLDER's phone,
+  exclusively** (`TicketDeliveryService.attendeeHasOwnPhone` decides): a ticket
+  whose attendee has their own phone goes to that attendee ONLY — the purchaser
+  does not get a copy ("A gets his ticket, B gets his"). Tickets with no
+  attendee phone (none named, name-only, email-only, or the attendee IS the
+  purchaser) stay on the purchaser's WhatsApp so the gate credential always
+  reaches a real phone. A failed attendee send does NOT fall back to the buyer
+  — they recover any QR from the hosted booking page / phone wallet, which
+  still show the whole booking. The purchaser's confirmation EMAIL stays the
+  full-booking receipt and names where each QR went; an attendee with an email
+  also gets a one-ticket email. Each attendee is its own best-effort unit;
+  `Outcome.qrTicketsTotal` now counts PURCHASER-routed tickets and
+  `attendeeDeliveriesSent/Total` the attendee-routed ones; the resend endpoint
+  re-runs the same routing.
 - **`holderName`** (= attendee if named, else purchaser) is on `CategoryBookingDTO`
   and on the scan response (`ALLOWED` / `ALREADY_REDEEMED`) so the gate can greet
   or ID-check the holder; the ticket HTML/email print "Ticket for <holder>".
