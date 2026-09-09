@@ -1,392 +1,479 @@
-# Foundry Console — Backend Requests: verified response
+# Foundry Console — Backend Response
 
-**In reply to:** "Foundry Console — Backend Requests", frontend, 9 September 2026
-**Verified against:** `MpofuSlim/ticketing-system` `master` @ `6cf387c`,
-`MpofuSlim/InnRewards` `master`, `MpofuSlim/market-place` `master` @ `e90381f`
-(merge of #9, `feature/marketplace-v2-trust-discovery`).
+**To:** frontend (Foundry admin console, `nyanyiwast/innbucks-ticketing`)
+**Re:** *Foundry Console — Backend Requests*, 9 September 2026
+**Date:** 9 September 2026
 
-Every claim below was checked against code, not recollection. Each item is
-tagged:
+Answers to every item, in your numbering. Each one was **checked against the
+code**, not answered from memory — where you marked ❓ we went and looked, and
+in four places you were right about a gap we had not confirmed.
 
-- **CONFIRMED** — the FE's claim is correct, the gap is real
-- **EXISTS** — it's already there; the FE is not calling it, or is calling the
-  wrong thing
-- **CORRECTION** — the FE's claim is wrong in a way that changes the ask
-- **NOT ENFORCED / ENFORCED** — for the §4 rules
+## Legend
 
-File references are `service/path:line` on the commits above.
-
----
-
-## Read this first — one thing bigger than anything asked
-
-> [!CAUTION]
-> **Merchant self-service listing is broken by a cross-repo contract break.**
->
-> `MpofuSlim/market-place` scopes a `MERCHANT_ADMIN` seller by the JWT's
-> `merchantId` claim and refuses to create a listing without it:
->
-> ```java
-> // market-place  catalog/ListingService.java:524-527
-> private static UUID requireMerchantId(AuthenticatedUser caller) {
->     String claim = caller.merchantId();
->     if (claim == null || claim.isBlank()) {
->         throw ApiException.forbidden("merchant_scope_missing", "Caller token carries no merchant scope");
-> ```
->
-> But user-service **deliberately does not mint that claim for `MERCHANT_ADMIN`**:
->
-> ```java
-> // ticketing-system  user-service/.../service/AuthService.java:965-973
-> // Shop staff carry both shopId and merchantId stamped on their User row by
-> // ShopStaffService at creation time — no lookup required. MERCHANT_ADMIN tokens
-> // intentionally do NOT carry a merchantId claim; endpoints that need a merchant
-> // scope read it from the request body (e.g. ShopRequest.merchantId).
-> java.util.UUID loyaltyMerchantId = null;
-> ...
-> if (user.hasRole(User.Role.SHOP_ADMIN) || user.hasRole(User.Role.SHOP_USER)) {
->     loyaltyMerchantId = user.getLoyaltyMerchantId();
-> }
-> ```
->
-> Consequence: **every `POST /marketplace/listings` by a `MERCHANT_ADMIN` is a
-> `403 merchant_scope_missing`.** The only path that works is `SUPER_ADMIN`
-> creating on a merchant's behalf with `merchantId` in the body. The
-> marketplace's own `CLAUDE.md` describes MERCHANT_ADMIN self-service as the
-> design; it has never been reachable through a real fleet token.
->
-> InnRewards already stores what's needed to fix this — `merchants.admin_email`
-> was added precisely "so AuthService can resolve a MERCHANT_ADMIN's
-> merchantId at login without manual binding" (`InnRewards/.../entity/Merchant.java:80-83`)
-> — but AuthService never grew that lookup. **The fix belongs in user-service:**
-> at login, for a `MERCHANT_ADMIN`, resolve the loyalty merchant by
-> `admin_email` (a small `GET /loyalty/internal/merchants/by-admin-email/{email}`
-> on InnRewards, three-files-must-agree) and mint it as `merchantId`. That also
-> unblocks the marketplace's already-built but disabled merchant new-order
-> notifier (see §1).
->
-> This is also the real answer to §3.2 — see there.
-
----
-
-## 1. Notifications
-
-**1.0 — CONFIRMED: no in-app notifications resource exists anywhere.**
-No `/notifications` mapping in any service. The three-endpoint polling the
-console does is genuinely the only way to derive a badge today.
-
-**1.0 — CORRECTION to point 4 ("nothing reaches a non-admin").** That is not
-true for events. Out-of-band delivery exists and fires:
-
-| trigger | what happens | where |
-|---|---|---|
-| Event approved (real state change only) | organiser notified, email-first, WhatsApp fallback | `event-service/.../EventService.java:1035-1050` → `OrganizerNotificationGateway` |
-| Event rejected | organiser notified, same channels | `EventService.java:1019-1023` |
-| Marketplace order PAID | buyer gets SMS, WhatsApp fallback | `market-place` `notify/OrderPaidNotificationListener` |
-| Restock | buyers who favourited get told | `market-place` V6 |
-
-The delivery primitive behind the first two is
-**`POST /users/internal/{userUuid}/notify`** (`user-service/.../InternalUserLookupController.java:84`)
-— body `{subject, message}`, user-service picks the channel. Any service can
-already reach a user out-of-band through it.
-
-What genuinely does not exist: an **inbox** (persisted rows), **read state**,
-an **unread count**, and a **push transport**. And one trigger is genuinely
-missing — see §2.4.
-
-**1.1 / 1.2 — Recommended shape.** Build the resource in **user-service** (it
-owns identity and channels), backed by a `notifications` table:
-
-```
-GET  /notifications?unreadOnly=&page=&size=
-GET  /notifications/unread-count          ← one small response, ETag on the count
-POST /notifications/{id}/read
-POST /notifications/read-all
-POST /users/internal/{uuid}/notifications ← internal, X-Internal-Token; producers call this
-```
-
-Producers (event-service approve/reject, user-service service-request
-decisions, marketplace report-actioned) write a row via the internal endpoint
-**and** keep calling the existing `/notify` for out-of-band delivery. The FE's
-proposed row shape (`type`, `title`, `body`, `severity`, `createdAt`, `readAt`,
-`actor`, `subject{kind,id}`, `deepLink`) is fine and we'll emit `deepLink`
-server-side as asked.
-
-**1.3 — Push.** Polling `unread-count` every 60s with `If-None-Match` is
-acceptable for now — that's one tiny 304 per admin per minute. SSE is a
-follow-on once the resource exists; don't block on it.
-
-**1.4 — Taxonomy.** The types that already have a producer hook and can be
-emitted the day the resource lands:
-
-| type | producer exists |
+| | |
 |---|---|
-| `EVENT_APPROVED`, `EVENT_REJECTED` | yes — event-service |
-| `SERVICE_REQUEST_APPROVED` | hook point exists, no send today (§2.4) |
-| `SERVICE_REQUEST_REJECTED` | needs §2.1 first |
-| `MARKETPLACE_ORDER_PAID` | yes — marketplace |
-| `MARKETPLACE_REPORT_ACTIONED` | hook point exists (`PATCH /marketplace/reports/{id}`), no send today |
-| `MARKETPLACE_MERCHANT_NEW_ORDER` | **built and unit-tested in marketplace, DISABLED** — needs the merchantId→admin-users lookup the "read this first" fix provides |
+| ✅ **Shipped** | built and merged — details below |
+| 🔵 **Already exists** | it's there today; you can delete the workaround |
+| ⚠️ **Gap confirmed** | you were right, the server does not do this — keep your check |
+| 🟡 **Partly** | some of it holds, the specific thing you asked about doesn't |
+| ⛔ **Needs a decision** | not an endpoint question yet |
 
-The rest of the FE's list (payout failed, voucher batch expiring, invoice
-overdue, role changed, MFA reset, account deactivated) has no producer today;
-each is a small change once the sink exists.
+## Summary
 
-**1.5 — Recipients.** Requester on approve/reject, admin queue on submit.
-Agreed, and it's the gap §2.4 closes.
+| # | Item | Status |
+|---|---|---|
+| 1 | Notifications resource | ⛔ not built — see §1 |
+| 2.1–2.4 | Service request reject + reason + attribution + notify | ✅ **shipped** |
+| 3.1 | Marketplace seller approval + badge | ✅ **shipped** |
+| 3.2 | Authoritative merchant id | ✅ **answered + fixed** |
+| 3.3 | Public catalogue | 🔵 **already public** |
+| 3.4 | Report outcome to reporter | ⛔ blocked on §1 |
+| 3.5 | Refunds / disputes | ⛔ policy first |
+| 3.6 | Image sizing | ⚠️ gap confirmed |
+| 3.7 | Commercial model | ⛔ nothing charged today |
+| 4.1 | Capacity vs allocations on approve | ⚠️ **gap confirmed — keep your guard** |
+| 4.2 | Reprice/delete a booked category | ⚠️ **gap confirmed — nothing guards it** |
+| 4.3 | Double admission | 🔵 server-enforced, atomically |
+| 4.4 | Fee floors | 🟡 zero refused; **the $0.25/1% floors are yours alone** |
+| 4.5 | CSV 1000-row cap | 🔵 enforced |
+| 4.6 | Banner validation | 🔵 enforced |
+| 5.1 | `/events/by-organizer` + product staff | ⚠️ SUPER_ADMIN only — keep the fallback |
+| 5.2 | `TENANT_ADMIN` / `PLATFORM_ADMIN` | ⚠️ real defect — **fixable without code** |
+| 5.4 | Payment code delivery | ⛔ deliberate today |
+| 5.5 | Report provenance | ⚠️ gap confirmed |
 
 ---
 
-## 2. Service request approval
+# 1. Notifications ⛔
 
-**2.1 — CONFIRMED: approve exists, reject does not.**
-`AdminServiceRequestController.java:79` is the only mutation
-(`PUT /admin/service-requests/{id}/approve`).
+**You are right, and nothing has been built yet.** There is no notifications
+resource, no unread count, no read state and no push transport. The bell is
+still three list fetches.
 
-**2.1 — CORRECTION, and it's worse than "no endpoint":** the status enum has
-**no `REJECTED` value at all**:
+What *did* land is narrower than §1 and worth separating from it: service-request
+decisions now push an **outbound** email/WhatsApp to the requester (§2.4). That
+closes the specific "the requester is never told" case for **one** event type. It
+is not a notifications resource — there is nothing to GET, nothing to mark read,
+no deep link.
 
-```java
-// user-service/.../entity/ServiceRequest.java:76-79
-public enum Status {
-    PENDING,
-    APPROVED
+This is the largest open item and it needs a decision on scope before it is
+built (schema, retention, fan-out, and whether SSE or polling+`ETag`). We are not
+going to guess at your taxonomy in §1.4 — the recipient rules in §1.5 in
+particular are policy, not plumbing.
+
+**Interim, so you can stop the worst of the polling:** nothing we can offer
+today removes the three fetches. If the 60s interval is hurting, reduce it — none
+of the three collections changes fast enough to need a minute.
+
+---
+
+# 2. Service request approval ✅ SHIPPED
+
+**`ticketing-system` PR #561, merged (`3a4a758`), migration `V36`.**
+
+A full integration guide is attached separately
+(`ServiceRequest-Rejection-Frontend-Integration.md`) — the essentials:
+
+### 2.1 Reject endpoint ✅
+
+```
+PUT /admin/service-requests/{id}/reject
+Content-Type: application/json
+
+{ "reason": "Business verification outstanding — please complete it and re-apply." }
+```
+
+`reason` is **required**, non-blank, max 1000 chars, and shown to the requester
+verbatim. Permission: `service-requests:approve` — deliberately the **same** as
+approve, because both are the power to decide. There is no separate reject
+permission to gate your UI on.
+
+### 2.2 Reason on the record ✅
+
+`decisionReason` on the response and on `GET /admin/service-requests`.
+
+> **`reason` and `decisionReason` are different people.** `reason` is the
+> **requester's** justification (`NOT NULL`); `decisionReason` is the
+> **reviewer's**. Writing the admin's words into `reason` would erase the
+> applicant's own case. Don't render them in the same field.
+
+### 2.3 Decision attribution 🔵 already existed
+
+You asked for `decidedBy` / `decidedAt`. They exist under different names —
+**`reviewedBy`** (the admin's user id) and **`reviewedAt`** — and were on the
+record before this change. Approvals were never anonymous; the field names just
+didn't match what you looked for.
+
+### 2.4 Notify the requester ✅ both outcomes
+
+Approval used to be **silent**. Both outcomes now notify, email-first with
+WhatsApp fallback, fired after the decision transaction commits (so a rolled-back
+decision never announces itself).
+
+The approval copy tells them to **sign in again** — the grant rides in the JWT
+and is invisible until a fresh token is minted. Please mirror that in the
+admin-side confirmation too, or you'll field *"it says approved but I still can't
+see it"*.
+
+### ⚠️ Two corrections to the EXISTING approve endpoint
+
+**You already call this one, so this is a behaviour change on you.** Both
+decision paths used to throw a bare `RuntimeException`, which the global handler
+collapses into a 400 reading *"We couldn't process your request. Please try
+again."* — inviting an admin to retry something that can never succeed.
+
+| Case | Before | Now |
+|---|---|---|
+| not found | 400, generic text | **404**, real message |
+| already decided | 400, generic text | **400 naming the status it holds** |
+
+If your approve handler special-cases that generic string, or assumes 400 is the
+only failure, update it. The "already decided" message names the status, so you
+can say *"a colleague already approved this"* and re-fetch the queue.
+
+### Nullable fields are OMITTED, not `null`
+
+The response DTO is `@JsonInclude(NON_NULL)`. `decisionReason`, `reviewedAt`,
+`reviewedBy`, `userEmail` and `userFullName` are **absent from the payload**
+when unset. Use optional chaining; don't assume the key exists.
+
+The last two matter because **reject tolerates a deleted requester** (approve
+does not — there'd be nobody to grant to). A legitimately closed row can carry no
+name at all.
+
+### A rejection is not a ban
+
+The pending-uniqueness index is scoped `WHERE status = 'PENDING'`, so a rejected
+row does **not** block re-requesting the same bundle. Don't render "permanently
+declined" or grey out the bundle.
+
+---
+
+# 3. Marketplace
+
+## 3.1 Seller approval and verification ✅ SHIPPED
+
+**`market-place` PR #27, migration `V8`.** Everything you asked for, with one
+deliberate difference from your proposed shape.
+
+```
+GET  /marketplace/admin/sellers?status=&page=&size=    queue, oldest first
+PUT  /marketplace/admin/sellers/{merchantId}/approve   { note?, displayName? }
+PUT  /marketplace/admin/sellers/{merchantId}/reject    { note }   ← required
+PUT  /marketplace/admin/sellers/{merchantId}/suspend   { note }   ← required
+PUT  /marketplace/admin/sellers/{merchantId}/reinstate { note? }
+```
+
+SUPER_ADMIN only, class-level. Keyed by **`merchantId`**, not a surrogate seller
+id — a merchant *is* the seller here, so "one trust record per merchant" is true
+by construction. Statuses: `PENDING | APPROVED | REJECTED | SUSPENDED`
+(**`reinstate`** is the fourth verb you didn't ask for, but suspension needs a way
+back).
+
+`displayName` is read on **approve only** — naming a seller is part of vouching
+for them.
+
+### The badge, on every listing payload
+
+```json
+"seller": {
+  "merchantId": "7e2a9c41-5b8f-4d36-a1c9-8f3b6d2e7a54",
+  "displayName": "Rudo Traders",
+  "verified": true,
+  "since": "2026-04-01T09:15:00Z"
 }
 ```
 
-The console is rendering, filtering and counting a state the database cannot
-store. Adding reject is a **migration** (extend the CHECK / enum) plus the
-endpoint, not just a controller method.
+- **`verified` is `APPROVED` only.** Never inferred from a merchant merely
+  existing — exactly the claim you said you couldn't fake, so we didn't either.
+- **`displayName` is nullable.** This service holds ids, not names, and there's
+  no merchant-name lookup in it. An admin sets it on approve. Render the listing
+  without a seller name rather than inventing one. (Resolving it automatically
+  from InnRewards is a clean follow-up.)
+- **`since`** is their first listing for pre-V8 merchants, so the queue order
+  reflects how long they've actually traded here.
+- Resolved with **one batched query per page**, so a page of listings costs the
+  same regardless of size.
 
-**2.2 — CORRECTION: `reason` already exists but means something else.**
-`ServiceRequest.reason` (`:39-40`, `NOT NULL`, 1000 chars) is the
-**requester's** justification, captured at submission. It is not a decision
-reason. We'll add a separate `decision_reason` column so the two are never
-conflated.
+### Two things to know before you build the screen
 
-**2.3 — EXISTS.** `reviewedAt` and `reviewedBy` are on the entity (`:52-56`)
-and returned by `GET /admin/service-requests`
-(`ServiceRequestResponseDTO.java:43-46, :60-61`). `reviewedBy` is the numeric
-reviewer `id`, not a name — say if you want it resolved.
+**Only `REJECTED` and `SUSPENDED` stop a seller publishing.** A `PENDING` seller
+can still trade, unbadged. Making PENDING a hard gate turns this into an
+approval-queued marketplace, which is a **product decision about onboarding
+friction** — say the word and it's a one-line change, but we weren't going to
+make it as a side effect of adding a trust record.
 
-**2.4 — CONFIRMED: approve does not notify the requester.**
-`ServiceRequestService.approve` (`:139-170`) logs and returns; the `email`
-it looks up at `:172` is only for the response DTO. Nothing is sent.
+**Every existing merchant was backfilled as `PENDING`, not `APPROVED`.** None was
+ever vetted, so marking them approved would have put a verified badge on the whole
+catalogue on day one — the platform asserting something it hasn't done. Your
+queue will therefore have a real backlog in it on first load. That backlog is the
+point; nobody is blocked by it.
 
-**Build (user-service):** `REJECTED` + migration; `PUT /{id}/reject {reason}`
-(required); `decisionReason` on the record; notify the requester on both
-outcomes via the existing `/notify` primitive now, and via §1 when it lands.
+**Suspend also takes the seller's live listings down**, in the same transaction.
+Reinstate deliberately does **not** re-publish them — the seller chooses what goes
+back on sale.
 
----
+## 3.2 One authoritative merchant identity ✅ ANSWERED — and it was broken
 
-## 3. Marketplace
+**`GET /loyalty/merchants` is authoritative for `marketplace.merchantId`.**
+`GET /admin/users/merchants` returns account `userUuid`s and is *not* the same
+id space. **Stop merging the two registries in your picker** — query loyalty only.
 
-Marketplace is a **separate repo** (`MpofuSlim/market-place`,
-`marketplace-service`), routed by the ticketing gateway
-(`api-gateway/.../application.yaml:418-421`: `/marketplace/**` →
-`lb://marketplace-service`; `/marketplace/internal/**` edge-denied at `:413-416`).
+Verifying this turned up something you didn't ask about but were blocked by:
 
-### 3.1 Seller approval / verification — CONFIRMED absent
+> **MERCHANT_ADMIN self-service listing has never worked in production.**
+> marketplace-service scopes a seller *exclusively* from the JWT's `merchantId`
+> claim and refuses without one (`403 merchant_scope_missing`) — but
+> MERCHANT_ADMIN tokens deliberately carried no such claim. Only the
+> SUPER_ADMIN on-behalf path worked.
 
-No approve / reject / suspend / verify endpoints. A seller is anyone holding
-`MERCHANT_ADMIN` (`market-place/.../catalog/ListingController.java:66`,
-class-level `hasAnyRole('MERCHANT_ADMIN','SUPER_ADMIN')`). There is no
-`verified` field on `ListingResponse` — the only trust signals on it today
-are `averageRating` / `reviewCount` (verified-purchase reviews,
-`ListingResponse.java:70-74`) and `GET /marketplace/catalog/merchants/{merchantId}/rating`.
+**Fixed in `ticketing-system` PR #560, merged.** A MERCHANT_ADMIN's JWT now
+carries `merchantId`, resolved from loyalty by the admin's email. No FE change
+needed — it appears on the next login.
 
-Your proposed shape is reasonable. Two notes: (a) it needs a seller record to
-hang status on, which the marketplace doesn't have — today "seller" is just a
-`merchantId` UUID on a listing; (b) it is blocked behind the "read this first"
-fix, because until MERCHANT_ADMIN tokens carry a merchantId there is no
-seller identity to approve.
+Two behaviours to expect:
 
-### 3.2 Authoritative merchant identity — ANSWERED
+- **An admin owning several merchants gets NO claim** and the same clean 403 as
+  before. A claim is singular and the consumer treats it as authoritative
+  ownership; minting one of several would attribute listings — and therefore
+  commission — to an arbitrary merchant, surfacing at invoicing rather than at the
+  call. Widening this needs an explicit merchant selector on your side; tell us if
+  you have multi-merchant admins in practice.
+- **It can never fail a login.** If loyalty is down the token mints *without* the
+  claim: the user signs in and only merchant-scoped calls are refused.
 
-**`marketplace.merchantId` is the InnRewards loyalty `merchants.id`. Full stop.**
+## 3.3 Catalogue browsing without authentication 🔵 ALREADY PUBLIC
 
-The evidence: the only value that is ever placed in the JWT `merchantId`
-claim is `User.loyaltyMerchantId` (`AuthService.java:970-973`), which is
-stamped by `ShopStaffService.java:478` from a **loyalty** shop's `merchantId`.
-The marketplace copies that claim onto `Listing.merchantId` at create time
-(`market-place/.../catalog/Listing.java:23-24`) and never reads a body value for
-merchants. `Listing.shopId` is likewise the loyalty shop id.
+You're calling them authenticated unnecessarily. Verified in
+`marketplace-service`'s `SecurityConfig`:
 
-So:
-
-- `GET /loyalty/merchants` → **authoritative**. Use it alone.
-- `GET /admin/users/merchants` → returns account `userUuid`s. **Not** the
-  marketplace's merchant id. Stop merging the two — that's how a listing gets
-  attributed to the wrong entity.
-
-**But** see "read this first": the claim is not minted for `MERCHANT_ADMIN`
-today, so the picker is moot for self-service until user-service resolves it.
-Commission can attach to `merchantId` once it does — the id is stable and
-already the loyalty billing entity.
-
-### 3.3 Catalogue browsing without authentication — EXISTS, it's public
-
-```java
-// market-place/.../security/SecurityConfig.java:34,38
-.requestMatchers(HttpMethod.GET, "/marketplace/catalog/**").permitAll()
-.requestMatchers(HttpMethod.GET, "/marketplace/categories").permitAll()
+```
+GET /marketplace/catalog/**   permitAll
+GET /marketplace/categories   permitAll
 ```
 
-`GET /marketplace/catalog`, `/catalog/{id}`, `/catalog/{id}/image`,
-`/catalog/{id}/images/{imageId}`, `/catalog/{id}/reviews`,
-`/catalog/merchants/{id}/rating` and `/marketplace/categories` need no token.
-**Move the screen out from behind the login.** Reporting a listing
-(`POST /catalog/{id}/report`) stays `isAuthenticated()`; listings, orders,
-favourites and reviews-write stay role-gated.
+Both are already anonymous (GET only — writes under `/catalog/**` stay
+authenticated), and it's pinned by an integration test. **Move the screen out
+from behind the login.** Do not send an `Authorization` header on those two.
 
-### 3.4 Report outcome for the reporter — CONFIRMED absent
+## 3.4 Report outcome for the reporter ⛔
 
-`PATCH /marketplace/reports/{id}` (`ReportController`, SUPER_ADMIN) records
-the outcome and sends nothing — no notification call in the report or
-moderation code. Agreed it's a §1 consumer (`MARKETPLACE_REPORT_ACTIONED` to
-the reporting buyer). The marketplace already has the fleet notification
-clients wired (see its `CLAUDE.md` "Notifications"), so the send is small once
-the type exists.
+Agreed, and agreed it's best solved by §1 rather than a bespoke endpoint. Held
+behind it.
 
-### 3.5 Refunds and disputes — CONFIRMED absent
+## 3.5 Refunds and disputes ⛔ POLICY FIRST
 
-```java
-// market-place/.../order/OrderStatus.java
-PENDING_PAYMENT, PAID, CANCELLED, EXPIRED
-```
+Confirmed: `PENDING_PAYMENT → PAID` has no path back, in marketplace or on the
+payment rails. Worth knowing why the payment side is hard, so the policy
+conversation is grounded:
 
-No `REFUNDED`, no dispute. `POST /marketplace/orders/{id}/cancel` exists for
-the customer (pre-payment). No path back from `PAID`. Nothing named refund or
-dispute anywhere in `src/main`. Agreed this is a policy decision first — and
-note the fleet position on the other rails: card-not-present refunds are
-supported by ZimSwitch but not modelled, and code-based InnBucks payments
-have **no** real-time reversal at all (ticketing `CLAUDE.md`). Whatever the
-marketplace policy is, it has to be honest about which rail the order was paid
-on.
+- **InnBucks 2D code:** real-time reversals are **not available** for code-based
+  transactions. Refunds there are an operator procedure by the provider's design.
+- **ZimSwitch card:** card-not-present refunds *are* supported by the platform
+  but are not modelled in our code yet.
+- **EcoCash:** refunds *are* supported upstream but likewise not modelled.
 
-### 3.6 Image sizing — CONFIRMED
+So "refund the buyer" is not one switch. Write your copy against an **operator
+procedure**, not a self-service action, until this is decided.
 
-`CatalogController` image endpoints (`:224`, `:253`) take no width/resize
-parameter; bytes are served as stored. A `?w=` with server-side downscale
-(or a stored thumbnail at upload) is a reasonable ask; images already go
-through a magic-byte check on upload, so the pipeline has a natural place for
-it.
+## 3.6 Image sizing ⚠️ GAP CONFIRMED
 
-### 3.7 Commercial model — CONFIRMED nothing charged
+There is no resizing, no `?w=`, no `thumbnailUrl`, nothing — images are stored
+and served at original resolution. You are right that a grid of full-size photos
+on metered data is expensive, and there is no server-side mitigation to point you
+at today.
 
-No commission or fee code in the marketplace. Payment confirmation is the
-S2S `PATCH /marketplace/internal/orders/{ref}/confirm-payment` with a
-paid-amount cross-check (the 100x guard). Blocked behind §3.2 as you said —
-and §3.2 is now blocked behind the "read this first" fix.
+## 3.7 Commercial model ⛔
+
+**Nothing is charged on a marketplace order today.** The billing machinery exists
+at platform level (loyalty invoicing bills merchants for *voucher* activity), but
+no marketplace order touches it. Treat orders as non-chargeable when designing the
+seller and admin screens; if that changes it will be a deliberate decision, and
+§3.2 is now unblocked either way.
 
 ---
 
-## 4. Rules only the frontend enforces
+# 4. Rules only the frontend enforces
 
-| # | Rule | Server | Evidence |
-|---|---|---|---|
-| **4.1** | Seat allocations must equal capacity before approve | **NOT ENFORCED** | `approveEvent` (`EventService.java:1035-1045`) only sets `rejected=false`. No seat-sum check anywhere in event-service — `seatCategoryGateway` is used once, for display (`:366`). |
-| **4.2** | Booked category must not be deleted / repriced | **NOT ENFORCED** | `deleteCategory` (`seat-service/.../SeatCategoryService.java:378-395`) soft-deletes with no booking check. `updateCategory` accepts any positive price; the booking counts it fetches (`:239-243`) feed only the availability figure in the response. |
-| **4.3** | Ticket cannot be admitted twice | **ENFORCED, race-safe** | `claimRedemption` is an atomic `UPDATE … WHERE redeemedAt IS NULL` (`booking-service/.../BookingItemRepository.java:135-142`); 0 rows → `ALREADY_REDEEMED`. Downgrade your check. |
-| **4.4** | Fee floors $0.25 / 1% | **NOT ENFORCED** | No floor anywhere in InnRewards. Server validates shape only — negative, mixed fixed/percent, zero percent, zero *issue* fee (`MerchantService.java:152-174`, `:291`). A $0.01 fixed fee is accepted today. |
-| **4.5** | CSV ≤ 1000 rows | **ENFORCED** | `MAX_BULK_ROWS = 1000` (`user-service/.../ShopStaffService.java:69`). Downgrade. |
-| **4.6** | Banner JPEG/PNG/WebP, ≤10 MB, magic bytes | **ENFORCED** | `applyBanner` (`EventService.java:722-750`). Applies to create and to the new `PUT /events/{id}/banner`. Downgrade. |
+Two of these are real. **Do not downgrade 4.1 or 4.2 from guards to fast-fails.**
 
-**Builds:**
+## 4.1 Capacity vs seat allocations ⚠️ GAP CONFIRMED — your #1 was right
 
-- **4.1 (event-service)** — on approve, and on any transition to on-sale, fetch
-  the event's categories from seat-service, `Σ totalSeats` vs
-  `event.totalCapacity`, `409` on mismatch with both numbers in the message.
-  Agreed this is first.
-- **4.2 (seat-service)** — refuse delete when active bookings > 0 (`409`).
-  Reprice with bookings is a **policy** question: block it, or allow it and
-  guarantee existing bookings keep the price they paid. Say which.
-- **4.4 (InnRewards)** — floors as `LoyaltyProperties` config
-  (`LOYALTY_FEE_MIN_FIXED`, `LOYALTY_FEE_MIN_PERCENT`), enforced in
-  `MerchantService` and `RuleAdminService.build` so onboarding and rule edits
-  can't diverge. Confirm $0.25 / 1% are the platform's numbers and not just
-  the console's.
+`EventService.approveEvent` **only flips `rejected = false`**. It does not call
+seat-service, does not sum category allocations, and does not compare them to
+`totalCapacity`. There is no cross-service check at any point in approval.
+
+**Your `EventDetail` block is the only thing preventing oversell.** Keep it, and
+keep treating it as the guard. Anyone calling the API directly — a script, a
+second client, a stale bundle of yours — can approve a mis-configured event today.
+
+This is the one we agree should be fixed first, for exactly the reason you gave.
+
+## 4.2 Reprice or delete a booked seat category ⚠️ GAP CONFIRMED
+
+Also real, and it's worse than "unguarded on your side":
+
+- `SeatCategoryService.deleteCategory` soft-deletes after an **ownership check
+  only**. No booking check.
+- `SeatCategoryService.updateCategory` sets the new price after validating
+  **positivity, name-uniqueness and ownership**. No booking check.
+
+So a category with paid tickets against it can be deleted or repriced right now,
+by its owning organizer, through the normal API.
+
+**This needs a policy decision before an endpoint change**, and it's yours to make:
+does repricing a booked category (a) get refused outright, (b) get allowed and
+leave existing bookings at their paid price, or (c) get allowed only while zero
+bookings exist? (b) is what the data already does — bookings store their own price
+— so the honest options are really "refuse" vs "allow and say so in the UI". Tell
+us which and we'll enforce it.
+
+## 4.3 A ticket cannot be admitted twice 🔵 SERVER-ENFORCED, ATOMICALLY
+
+Solid. `TicketScanService` claims the redemption with a **conditional `UPDATE`**
+that returns rows-affected: `1` means this scanner won, `0` means someone else
+already redeemed it. First scanner wins, decided in the database, so two
+simultaneous scans cannot both succeed. The loser gets `ALREADY_REDEEMED` with the
+original `redeemedAt` / `redeemedByName` so gate staff can see who admitted them
+and when.
+
+Downgrade your client check to a fast-fail with confidence.
+
+## 4.4 Issuing-fee floors 🟡 PARTLY — the floors are yours alone
+
+Careful, this one is half-true and the half that's missing is the half you asked
+about.
+
+**What the server enforces:** a fee may not be **zero**. Creating a merchant whose
+effective issue fee resolves to zero is refused (`MERCHANT_ZERO_ISSUE_FEE`), a
+zero issue fee on a rule is refused (`RULE_ZERO_ISSUE_FEE`), a `PERCENTAGE` fee of
+0 is refused (`FEE_PERCENT_ZERO`), negatives are refused (`FEE_NEGATIVE`), and the
+type/value combinations are validated.
+
+**What it does not enforce:** the **$0.25 fixed / 1% percentage floors**. Those
+exist only in your `utils/feeModes.js`. The server would happily accept `$0.01`
+fixed or `0.1%`.
+
+So your risk column is right for the floors specifically. **Keep that check as a
+guard.** If the floors are genuinely platform policy rather than a UI convention,
+say so and we'll add them server-side — that's a two-line change, we just aren't
+going to invent a platform price floor on our own initiative.
+
+(One deliberate exception worth knowing: a merchant *can* be onboarded unbilled
+via `waiveFees: true` **with a mandatory reason**, which records who decided it.
+That's what makes "free on purpose" distinguishable from "free by accident".)
+
+## 4.5 CSV bulk upload capped at 1000 rows 🔵 ENFORCED
+
+`ShopStaffService.MAX_BULK_ROWS = 1000`, server-side. Your fast-fail is fine to
+keep as a UX nicety.
+
+## 4.6 Banner validation 🔵 ENFORCED, INCLUDING MAGIC BYTES
+
+All three, in `EventService`:
+
+- **≤ 10 MB** (`MAX_BANNER_BYTES`)
+- **JPEG / PNG / WebP** content-type allow-list → *"Please upload a JPG, PNG, or WEBP image."*
+- **Magic-byte signature sniff** before storing → *"Please upload a valid image file (JPG, PNG, or WEBP)."*
+
+GIF is deliberately rejected. Downgrade to a fast-fail.
 
 ---
 
-## 5. Smaller things
+# 5. Smaller things
 
-**5.1 `/events/by-organizer` — CONFIRMED restricted.**
-`@PreAuthorize("hasRole('SUPER_ADMIN')")` (`EventController.java:334`).
-`PRODUCT_OFFICER` / `PRODUCT_MANAGER` get `403` and your fallback is correct
-behaviour today. Widening it is a one-line change — say if you want it.
+## 5.1 `/events/by-organizer` and product staff ⚠️ KEEP THE FALLBACK
 
-**5.2 `TENANT_ADMIN` / `PLATFORM_ADMIN` — EXISTS in loyalty, not seeded in
-user-service.** They are real authorities in InnRewards
-(`ExchangeRateController.java:138,202`, `RuleAdminService.java:33`,
-`ReportingService.java:273`) but are not among user-service's built-ins.
-Since V35 roles are **data**: `POST /admin/roles` can create `TENANT_ADMIN`
-today, it becomes `ROLE_TENANT_ADMIN` on the token, and loyalty's `hasRole`
-checks will honour it. So the FX override is reachable — nobody has created
-the role. We'll seed both in a migration so it's not a manual step per cell.
+`GET /events/by-organizer` is **`@PreAuthorize("hasRole('SUPER_ADMIN')")`**.
+`PRODUCT_OFFICER` and `PRODUCT_MANAGER` will get a 403. **Do not delete your
+fallback.**
 
-**5.3 `EVENT_ORGANISER` — resolved.** No S-spelling in code (one comment). The
-V35 `UserAdminService.setRoles` validation refuses names not in the `roles`
-table, so the S form cannot persist going forward. Pre-V35 rows: send the
-ids and we'll correct them; or run
-`SELECT user_id FROM user_roles WHERE role = 'EVENT_ORGANISER'` yourself.
+Broader point you'll want: those two roles currently **grant nothing anywhere**.
+No `@PreAuthorize` in the fleet names either of them, so a holder is authorized
+for exactly what a role-less account is. They exist as labels awaiting a decision
+about their remit. If your console implies they can do things, it's ahead of the
+backend — tell us what they should reach and we'll add them to the specific
+checks.
 
-**5.4 Payment code delivery — deliberate, documented.** Ticketing `CLAUDE.md`:
-"The code reaches the customer ONLY via the response … there is no
-out-of-band delivery … Trade-off accepted." Reopening it is a product call.
-If taken, the send is cheap — the SMS/WhatsApp clients and per-user `/notify`
-already exist.
+## 5.2 `TENANT_ADMIN` and `PLATFORM_ADMIN` ⚠️ REAL DEFECT — fixable without a deploy
 
-**5.5 Report provenance — agreed.** The scan reports now echo the
-`from`/`to` actually queried (merged today, #559). Extending `period` +
-`scope` to the other exports is a small, mechanical change per report.
+You found a genuine inconsistency. Confirmed both halves:
+
+- Neither name exists among user-service's built-in roles.
+- loyalty-service really does name them:
+  `@PreAuthorize("hasAnyRole('TENANT_ADMIN','PLATFORM_ADMIN','SUPER_ADMIN')")` on
+  `POST` and `DELETE /loyalty/exchange-rates/override`.
+
+**The endpoint is not unreachable** — `SUPER_ADMIN` is in that list, so the tenant
+FX override works today for a super admin. What doesn't work is *delegating* it to
+a tenant admin, which was the point of scoping it that way.
+
+**The fix needs no code.** Since user-service V35, **roles are data**: an operator
+can create a role named `TENANT_ADMIN` through `POST /admin/roles` and assign it
+via `PUT /admin/users/{id}/roles`. Loyalty checks `hasRole`, which matches on the
+role name carried in the token, so a created role will satisfy that check
+immediately.
+
+What it *can't* do is grant loyalty **permissions** — the role would need whatever
+permissions the rest of your tenant-admin screens require, and those are a fixed
+code-defined vocabulary. So: creating the role unblocks the FX override; deciding
+what else a tenant admin may do is a separate conversation.
+
+## 5.3 `EVENT_ORGANISER` vs `EVENT_ORGANIZER` 🔵
+
+The Z spelling is correct and is what the enum carries. **Yes please — send the
+affected account ids** if any exist with the S form; that's a data correction we'd
+rather make from your list than from a guess.
+
+Worth knowing: the S spelling would now *persist* rather than being rejected at
+the edge. Role names used to be bound to a Java enum, which 400'd an unknown name
+before the controller ran; they're validated against the roles table now instead.
+An unknown name is still refused — but the failure mode if one ever slipped
+through is a user who authenticates fine and is refused everywhere.
+
+## 5.4 Payment code delivery ⛔ DELIBERATE, but arguable
+
+The code reaching the customer **only** via the payment-request response is a
+deliberate trade-off, not an oversight: an out-of-band delivery adds a
+notification dependency to the checkout path, and an outage there hides itself.
+The accepted cost is exactly the one you describe — drop the response and the code
+is lost.
+
+Your point about paying on someone else's device is the strongest argument against
+it we've heard, because no amount of defensive UI on your side can recover that
+case. Worth re-opening; it's a decision, not a limitation.
+
+## 5.5 Report provenance on exports ⚠️ AGREED
+
+Reports don't state their period and scope, and once exported the numbers lose
+their context. Reasonable, self-contained, and we'd take it as a batch — send the
+list of report endpoints you export from and the `period` / `scope` shape you want
+stamped on them.
 
 ---
 
-## 6. Backlog by repository, in the order we'd do it
+# 6. Where that leaves your ordered list
 
-### `MpofuSlim/ticketing-system` — user-service
+| Your priority | Outcome |
+|---|---|
+| 1. Notifications + unread count | ⛔ **still open** — biggest remaining item, needs scope decisions (§1.4/§1.5 are policy) |
+| 2. Service request reject + reason | ✅ **shipped** (#561) |
+| 3. Confirm §4.1 oversell guard | ⚠️ **you were right — no server guard. Keep yours.** |
+| 4. Authoritative marketplace merchant id | ✅ **answered (loyalty) + the claim that made it usable is shipped** (#560) |
+| 5. Marketplace seller approval | ✅ **shipped** (#27) |
+| 6. Confirm the ❓ items in §4 | Done: 4.3/4.5/4.6 downgrade to fast-fails; **4.1 and 4.2 stay guards**; 4.4 keep the floors |
+| 7. Everything else | Answered above |
 
-1. **Mint `merchantId` for `MERCHANT_ADMIN` at login** (the "read this first"
-   fix). Resolve via InnRewards `admin_email`. Unblocks §3.1, §3.2, §3.7 and
-   the marketplace merchant-order notifier.
-2. Service requests: `REJECTED` + migration, `PUT /{id}/reject {reason}`,
-   `decisionReason`, notify requester on both outcomes (§2).
-3. Notifications resource + `unread-count` + internal producer endpoint (§1).
-4. Seed `TENANT_ADMIN` / `PLATFORM_ADMIN` (§5.2).
+## What we need back from you
 
-### `MpofuSlim/ticketing-system` — event-service / seat-service
+1. **§4.2** — refuse a reprice on a booked category, or allow it? (See the three options.)
+2. **§4.4** — are $0.25 / 1% platform policy? If yes we'll enforce them.
+3. **§3.1** — should `PENDING` sellers be blocked from publishing, or keep trading unbadged?
+4. **§1.4 / §1.5** — the event taxonomy and recipient rules, before notifications can be built.
+5. **§5.2** — confirm you want a `TENANT_ADMIN` role created, and what else it should reach.
+6. **§5.3** — the affected account ids, if any.
+7. **§5.5** — which report endpoints, and the `period`/`scope` shape.
 
-5. Seat-sum-equals-capacity guard on approve/on-sale (§4.1).
-6. Refuse delete of a booked category; reprice policy (§4.2).
-7. Widen `/events/by-organizer` to product staff if wanted (§5.1).
-8. Notification producers for approve/reject once §1 lands.
-
-### `MpofuSlim/InnRewards`
-
-9. `GET /loyalty/internal/merchants/by-admin-email/{email}` — the S2S lookup
-   for item 1 (three-files-must-agree: controller token check, SecurityConfig,
-   gateway `loyalty-internal-deny` already covers `/loyalty/internal/**`).
-10. Fee floors as config, enforced on merchant create and rule edit (§4.4).
-
-### `MpofuSlim/market-place`
-
-11. Nothing is *required* for §3.2 / §3.3 — the FE just needs to use the
-    right registry and drop the auth on catalog reads.
-12. Seller record + approve/reject/suspend + `verified` on `ListingResponse`
-    (§3.1) — after item 1.
-13. `MARKETPLACE_REPORT_ACTIONED` producer to the reporting buyer (§3.4) —
-    after §1.
-14. `?w=` / stored thumbnail on catalog images (§3.6).
-15. Enable the merchant new-paid-order notifier once item 1 gives it a
-    resolver.
-16. Refund/dispute model — after a policy decision (§3.5).
-
-### Frontend — can do now, no backend change
-
-- Use `GET /loyalty/merchants` alone for the merchant picker (§3.2).
-- Serve the catalogue unauthenticated (§3.3).
-- Downgrade 4.3, 4.5, 4.6 to fast-fails; keep 4.1, 4.2, 4.4 as guards until
-  the server has them.
-- Stop rendering a `REJECTED` filter for service requests until §2 ships —
-  the value cannot currently exist.
+Happy to go through any of it. Two of your ❓ items (§3.3, and the attribution
+half of §2.3) turned out to be things that already existed — so the instinct to
+ask rather than assume was the right one.
