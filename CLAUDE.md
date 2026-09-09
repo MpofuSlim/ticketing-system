@@ -492,11 +492,55 @@ halves look like one rule and are not.
   not check*, where 409 says *the server checked and the state says no*), never
   assumed safe. Pinned by
   `deleteCategory_refusedWhenBookingServiceCannotBeReached`.
-- **Still not guarded (§4.1 of the console's list):** `EventService.approveEvent`
-  only flips `rejected = false`. It never calls seat-service and never compares
-  the sum of category allocations to `totalCapacity`, so nothing server-side
-  prevents an oversold event — the console's own block is the only guard. That is
-  a separate fix.
+## The oversell guard is on ALLOCATION, not on approval
+
+**The sellable ceiling is `SUM(seat_categories.total_seats)`, not
+`events.total_capacity`.** booking-service claims capacity per category
+(`categoryInventoryRepository.tryClaim`, seeded from `category.totalSeats`) and
+its own comment says so: *"the per-category counter — not a seat row — is the
+oversell guard now."* `consumeEventAvailability` runs AFTERWARDS, swallows every
+failure and blocks nothing — `availableTickets` is a display mirror. So
+categories summing above `totalCapacity` genuinely sell more tickets than the
+venue holds, and the guard is enforced at both writes that can create that state:
+
+1. **seat-service `createCategory`** — 409 when
+   `sum(live categories) + new > event.totalCapacity`.
+2. **event-service `updateEvent`** — 409 when a new `totalCapacity` is below the
+   already-allocated sum. Without this the same bad state is reachable from the
+   other side: allocate 100 of 100, then edit the event down to 80.
+
+- **Do NOT "fix" this by guarding `approveEvent` instead** — that was the
+  console's literal request and it would be theatre. `Event.rejected` defaults to
+  **false** and `active` to **true**, so a new event is sellable from creation and
+  never passes through approval at all; booking-service's `EventLookupDTO` carries
+  no state field and never checks one. The dangerous event is the one nobody ever
+  rejected. Allocation is when the over-sale becomes possible, so allocation is
+  where it is refused.
+- **Under-allocation is allowed, deliberately.** Only exceeding capacity can
+  oversell; falling short just means not all capacity is on sale, which is every
+  intermediate state of building a seat map one category at a time. Requiring
+  equality would refuse each step.
+- **Both halves fail CLOSED, and both had to opt out of a fail-open convention.**
+  seat-service's `EventServiceClient.fetchEvent` and event-service's
+  `SeatCategoryGateway.fetchForEvent` both degrade on failure (empty Optional /
+  empty list) because their other callers render pages that must survive an
+  outage. A guard reusing either would read "the other service is down" as "no
+  capacity limit" / "nothing allocated". Hence `fetchAllocatedSeats` returns
+  `Optional<Long>` — **empty means "could not ask", `Optional.of(0L)` means
+  "asked, nothing allocated"** — and both guards raise `ServiceUnavailableException`
+  (**503**, new in each service) rather than assuming. 503 says the server could
+  not check and the client should retry unchanged; 409 says it checked and the
+  state says no.
+- **seat-service needed no new endpoint and event-service no new field.**
+  `totalCapacity` was already on the public `GET /events/{id}` — seat-service's
+  `EventLookupDTO` simply stopped discarding it (it is `Integer`, and a null reads
+  as *unknown* → refuse, never as zero). The allocation is summed from the section
+  seat counts the existing `GET /seat-categories` listing already returns; that
+  IS `totalSeats`. Deliberately **not** `availableSeats`, which is live remaining
+  stock rather than the allocation.
+- **Legacy events already over-allocated** can only have capacity edited UP to at
+  least the allocation — a partial correction still below it stays refused,
+  because it is still an oversold event. The other way out is deleting categories.
 
 ## Scan reports: `to` is widened server-side, and why
 

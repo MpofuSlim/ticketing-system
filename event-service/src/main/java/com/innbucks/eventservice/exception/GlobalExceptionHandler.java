@@ -100,6 +100,18 @@ public class GlobalExceptionHandler {
                 .body(ApiResult.error(HttpStatus.CONFLICT, ex.getMessage()));
     }
 
+    /**
+     * 503, not the RuntimeException catch-all's 500: the request is well-formed
+     * and the server is healthy — a dependency needed to validate it could not
+     * be reached, and retrying unchanged is the correct client behaviour.
+     */
+    @ExceptionHandler(ServiceUnavailableException.class)
+    public ResponseEntity<ApiResult<Void>> handleServiceUnavailable(ServiceUnavailableException ex) {
+        log.warn("Service unavailable: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .body(ApiResult.error(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage()));
+    }
+
     @ExceptionHandler(ForbiddenException.class)
     public ResponseEntity<ApiResult<Void>> handleForbidden(ForbiddenException ex) {
         log.warn("Forbidden: {}", ex.getMessage());

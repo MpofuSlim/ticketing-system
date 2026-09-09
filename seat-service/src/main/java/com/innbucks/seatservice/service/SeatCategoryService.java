@@ -93,6 +93,8 @@ public class SeatCategoryService {
         }
         int totalSeats = (int) totalSeatsLong;
 
+        requireCapacityHeadroom(request.getEventId(), totalSeats, authHeader);
+
         // Prevent duplicated sections in one request, e.g. "A" and "a"
         Set<String> seenSections = new HashSet<>();
         for (SectionSeatConfigDTO sectionConfig : request.getSections()) {
@@ -457,6 +459,81 @@ public class SeatCategoryService {
      * {@code tenantUserUuid} (event-service V7 / PR #259 dropped the legacy
      * email-as-tenantId column the prior check compared against).
      */
+    /**
+     * Refuses a category that would allocate more seats than the event declares.
+     *
+     * <p><b>Why this is the oversell guard, and why it lives HERE.</b> The
+     * sellable ceiling is the SUM of category {@code totalSeats}, not
+     * {@code event.totalCapacity}: booking-service claims capacity per category
+     * ({@code categoryInventoryRepository.tryClaim}, seeded from
+     * {@code category.totalSeats}) and its own comment says "the per-category
+     * counter — not a seat row — is the oversell guard now". The event's
+     * {@code availableTickets} is decremented AFTERWARDS by
+     * {@code consumeEventAvailability}, which swallows every failure and blocks
+     * nothing — a display mirror, not a gate. So categories summing above
+     * {@code totalCapacity} genuinely sell more tickets than the venue holds.
+     *
+     * <p><b>Why not at approval.</b> {@code Event.rejected} defaults to false
+     * and {@code active} to true, so a new event is sellable from creation and
+     * never passes through {@code approveEvent} at all; booking-service's
+     * {@code EventLookupDTO} carries no state field and never checks one.
+     * Guarding approval would leave the common case wide open — the dangerous
+     * event is the one nobody ever rejected. Allocation is the moment the
+     * over-sale becomes possible, so allocation is where it is refused.
+     *
+     * <p><b>Under-allocation is allowed on purpose.</b> Only exceeding capacity
+     * can oversell; falling short just means not all capacity is on sale, which
+     * is the normal state while an organizer adds categories one at a time.
+     * Requiring exact equality would refuse every intermediate step of building
+     * a seat map.
+     *
+     * <p><b>Fails CLOSED</b>, for the same reason the delete guard does: an
+     * unanswerable capacity is refused (503), never assumed infinite. This adds
+     * no new coupling for an organizer — {@code requireEventOwnership} already
+     * refuses them when the same lookup comes back empty — but it does newly
+     * apply to SUPER_ADMIN, who skips the ownership check. That is deliberate:
+     * an admin can oversell a venue exactly as easily as an organizer can.
+     */
+    private void requireCapacityHeadroom(UUID eventId, int newSeats, String authHeader) {
+        EventServiceClient client = eventClientProvider == null
+                ? null : eventClientProvider.getIfAvailable();
+        if (client == null) {
+            log.warn("Category creation refused, event-service client unavailable eventId={}", eventId);
+            throw new ServiceUnavailableException(
+                    "Cannot verify the event's capacity right now. Please try again shortly.");
+        }
+        Integer capacity = client.fetchEvent(eventId, authHeader)
+                .map(EventLookupDTO::getTotalCapacity)
+                .orElseThrow(() -> {
+                    log.warn("Category creation refused, event lookup empty eventId={}", eventId);
+                    return new ServiceUnavailableException(
+                            "Cannot verify the event's capacity right now. Please try again shortly.");
+                });
+        if (capacity == null) {
+            // A present event that reports no capacity is not "unlimited" — it is
+            // a payload we cannot reason about, so it is refused like an absent one.
+            log.warn("Category creation refused, event reports no totalCapacity eventId={}", eventId);
+            throw new ServiceUnavailableException(
+                    "Cannot verify the event's capacity right now. Please try again shortly.");
+        }
+        // Sum in long: each category is capped at MAX_TOTAL_SEATS_PER_CATEGORY,
+        // but enough categories could still overflow int in aggregate.
+        long allocated = categoryRepository.findByEventIdAndDeletedFalse(eventId).stream()
+                .mapToLong(c -> c.getTotalSeats() == null ? 0L : c.getTotalSeats())
+                .sum();
+        long proposed = allocated + newSeats;
+        if (proposed > capacity) {
+            log.warn("Category creation refused, would exceed event capacity eventId={} "
+                            + "allocated={} requested={} capacity={}",
+                    eventId, allocated, newSeats, capacity);
+            throw new ConflictException(
+                    "This event's seat categories already account for " + allocated
+                            + " of " + capacity + " seats. Adding " + newSeats
+                            + " more would exceed the event's capacity by " + (proposed - capacity)
+                            + ". Raise the event's capacity or reduce this category.");
+        }
+    }
+
     private void requireEventOwnership(UUID eventId, UUID callerOrganizerUuid,
                                        String requesterEmail, String authHeader) {
         if (callerOrganizerUuid == null) {

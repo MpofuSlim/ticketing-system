@@ -13,6 +13,7 @@ import com.innbucks.eventservice.exception.BadRequestException;
 import com.innbucks.eventservice.exception.ConflictException;
 import com.innbucks.eventservice.exception.ForbiddenException;
 import com.innbucks.eventservice.exception.NotFoundException;
+import com.innbucks.eventservice.exception.ServiceUnavailableException;
 import com.innbucks.eventservice.mapper.EventMapper;
 import com.innbucks.eventservice.repository.EventRepository;
 import com.innbucks.eventservice.util.HtmlSanitizer;
@@ -662,6 +663,51 @@ public class EventService {
      * update path uses: SUPER_ADMIN passes, an EVENT_ORGANIZER must own the
      * event, and a pre-V6 row with no {@code tenantUserUuid} fails closed.
      */
+    /**
+     * Refuses a capacity that is already smaller than the seats allocated to the
+     * event's seat categories.
+     *
+     * <p><b>The other half of the oversell guard.</b> seat-service refuses a
+     * category that would push the allocation above the event's capacity, but
+     * that leaves the same bad state reachable from this side: allocate 100 of
+     * 100, then edit the event down to 80. The sellable ceiling is the sum of
+     * category {@code totalSeats} — booking-service claims capacity per category
+     * and never consults {@code totalCapacity} — so lowering capacity under the
+     * allocation does not reduce what can be sold. It just makes the declared
+     * number a lie, and the venue oversold by the difference.
+     *
+     * <p><b>Only the direction that can oversell is refused.</b> Raising capacity
+     * is always fine, and a capacity that merely EXCEEDS the allocation is fine —
+     * that is the normal state of a seat map still being built.
+     *
+     * <p><b>Fails CLOSED.</b> {@code fetchAllocatedSeats} returns an empty
+     * Optional (not an empty list) when seat-service cannot be reached,
+     * precisely so this cannot confuse "could not ask" with "nothing allocated"
+     * and wave the cut through during an outage.
+     *
+     * <p><b>Legacy note:</b> an event already over-allocated before this guard
+     * existed can only have its capacity edited UP to at least the allocation —
+     * a partial correction that is still below it stays refused, because it is
+     * still an oversold event. The other way out is deleting categories.
+     */
+    private void requireCapacityCoversAllocation(UUID eventId, int newCapacity) {
+        long allocated = seatCategoryGateway.fetchAllocatedSeats(eventId)
+                .orElseThrow(() -> {
+                    log.warn("Capacity update refused, seat-service unreachable eventId={}", eventId);
+                    return new ServiceUnavailableException(
+                            "Cannot verify this event's allocated seats right now. "
+                                    + "Please try again shortly.");
+                });
+        if (newCapacity < allocated) {
+            log.warn("Capacity update refused, below allocation eventId={} requested={} allocated={}",
+                    eventId, newCapacity, allocated);
+            throw new ConflictException(
+                    "This event's seat categories already allocate " + allocated
+                            + " seats, so its capacity cannot be set to " + newCapacity
+                            + ". Reduce or remove seat categories first.");
+        }
+    }
+
     private Event requireOwnedEvent(UUID tenantUserUuid, String role, UUID eventId, String action) {
         Event event = eventRepository.findByEventIdAndDeletedFalse(eventId)
                 .orElseThrow(() -> {
@@ -836,6 +882,7 @@ public class EventService {
             throw new BadRequestException("The event end time must be after the start time.");
         }
         if (request.getTotalCapacity() != null) {
+            requireCapacityCoversAllocation(eventId, request.getTotalCapacity());
             int diff = request.getTotalCapacity() - event.getTotalCapacity();
             event.setTotalCapacity(request.getTotalCapacity());
             event.setAvailableTickets(event.getAvailableTickets() + diff);
