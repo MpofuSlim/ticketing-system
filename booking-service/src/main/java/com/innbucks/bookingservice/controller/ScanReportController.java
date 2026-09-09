@@ -1,6 +1,7 @@
 package com.innbucks.bookingservice.controller;
 
 import com.innbucks.bookingservice.client.EventServiceClient;
+import com.innbucks.bookingservice.config.MarketTimeZone;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.EventLookupDTO;
 import com.innbucks.bookingservice.dto.scan.EventScanStatsDTO;
@@ -22,6 +23,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.http.CacheControl;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -55,6 +57,25 @@ import java.util.UUID;
  *       fleet-wide (null organizer scope).</li>
  * </ul>
  *
+ * <p><b>Window semantics (read this before integrating).</b> Two things are
+ * done server-side so no client needs timezone logic of its own:
+ *
+ * <ul>
+ *   <li>{@code to} is OPTIONAL. Omit it for a live view and the window runs up
+ *       to the instant the request is handled.</li>
+ *   <li>A supplied {@code to} is rounded up to the end of its market-local day.
+ *       A screen that computes "now" once at mount and re-sends it forever
+ *       would otherwise pin the window to page-load time and never show a scan
+ *       made a minute later — the bug this behaviour exists to prevent. A
+ *       bound on a past day still ends on that day, so historical windows keep
+ *       their meaning.</li>
+ * </ul>
+ *
+ * <p><b>Timestamps go out at the market offset</b>
+ * ({@code 2026-09-09T08:10:22+02:00}), not with a {@code Z}. Same instant,
+ * explicit offset, but the wall clock a client prints verbatim is the one the
+ * operator was standing in. Responses are {@code Cache-Control: no-store}.
+ *
  * <p>Fraud-signals view (/scans/fraud) is deferred to a follow-up PR.
  */
 @RestController
@@ -62,7 +83,9 @@ import java.util.UUID;
 @RequiredArgsConstructor
 @Slf4j
 @Tag(name = "Ticket Scan Reports",
-     description = "Per-scanner and per-event scan-attempt reporting for the organizer dashboard.")
+     description = "Per-scanner and per-event scan-attempt reporting for the organizer dashboard. "
+                 + "`to` is optional (omit for 'up to now') and, when supplied, is widened to the end of "
+                 + "its market-local day. Timestamps are returned at the cell's market offset, not UTC.")
 @SecurityRequirement(name = "bearerAuth")
 public class ScanReportController {
 
@@ -72,7 +95,17 @@ public class ScanReportController {
     private static final int MAX_PAGE_SIZE = 100;
     private static final int DEFAULT_PAGE_SIZE = 20;
 
+    /** Scan reports are a live operational view and must never be served from
+     *  an intermediary's copy. These responses previously carried NO cache
+     *  header at all, which leaves Cloudflare, a corporate proxy or the
+     *  browser's own heuristic freshness free to invent one — so an operator
+     *  could be shown a cached report and reasonably conclude the gate had
+     *  stopped recording. Matches {@code BookingController}'s posture on the
+     *  other operator-facing reads. */
+    private static final CacheControl NO_STORE = CacheControl.noStore();
+
     private final ScanReportService scanReportService;
+    private final MarketTimeZone marketTimeZone;
     /** ObjectProvider so unit-tests that instantiate the controller via {@code new}
      *  don't have to wire a real EventServiceClient — the per-event endpoints
      *  explicitly check for an available client before delegating. */
@@ -90,7 +123,8 @@ public class ScanReportController {
     @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','TEAM_MEMBER')")
     @Operation(summary = "List my scan attempts",
             description = "Returns the calling user's own scan attempts in the [from, to] window, " +
-                          "newest first. Page size capped at " + MAX_PAGE_SIZE + ".")
+                          "newest first. Page size capped at " + MAX_PAGE_SIZE + ". `to` is optional — omit it for "
+                        + "'up to now'; a supplied value is widened to the end of its market-local day.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200", description = "Page of scan attempts",
@@ -103,7 +137,7 @@ public class ScanReportController {
                                         "content": [
                                           {
                                             "id": "9b1f3c2e-6a47-4f7c-9d2b-1d6f0a1e5b91",
-                                            "attemptedAt": "2026-06-19T19:42:11Z",
+                                            "attemptedAt": "2026-06-19T21:42:11+02:00",
                                             "outcome": "ALLOWED",
                                             "ticketNumber": "20260619-48291X",
                                             "bookingItemId": "f1c0d2e3-2345-6789-abcd-ef0123456789",
@@ -143,15 +177,15 @@ public class ScanReportController {
     public ResponseEntity<ApiResult<PageResponse<ScanAttemptDTO>>> myScans(
             Authentication authentication,
             @RequestParam Instant from,
-            @RequestParam Instant to,
+            @RequestParam(required = false) Instant to,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         UUID scannerUserUuid = requireScannerUserUuid(authentication);
-        validateRange(from, to);
+        to = resolveTo(from, to);
         validatePage(page, size);
         log.debug("GET /scans/me scanner={} from={} to={} page={} size={}",
                 scannerUserUuid, from, to, page, size);
-        return ResponseEntity.ok(ApiResult.ok("Scan attempts retrieved",
+        return ResponseEntity.ok().cacheControl(NO_STORE).body(ApiResult.ok("Scan attempts retrieved",
                 scanReportService.listMyScans(scannerUserUuid, from, to, page, size)));
     }
 
@@ -160,7 +194,8 @@ public class ScanReportController {
     @Operation(summary = "My scan-outcome stats",
             description = "Outcome breakdown (ALLOWED, ALREADY_REDEEMED, etc.) for the calling user " +
                           "over the [from, to] window. Every Outcome enum value is present in the response " +
-                          "(zero-filled for outcomes the scanner didn't see).")
+                          "(zero-filled for outcomes the scanner didn't see). `to` is optional — omit it " +
+                          "for 'up to now'; a supplied value is widened to the end of its market-local day.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
                     description = "Stats computed",
@@ -173,8 +208,8 @@ public class ScanReportController {
                                         "scannerUserUuid": "7e9a1c2b-4d5f-46a7-89b0-1c2d3e4f5a6b",
                                         "scannerEmail": "tariro@harare-arena.co.zw",
                                         "scannerDisplayName": "Tariro Chikomo",
-                                        "from": "2026-06-01T00:00:00Z",
-                                        "to": "2026-06-30T23:59:59Z",
+                                        "from": "2026-06-01T02:00:00+02:00",
+                                        "to": "2026-06-30T23:59:59.999999999+02:00",
                                         "total": 412,
                                         "byOutcome": {
                                           "ALLOWED": 380,
@@ -209,13 +244,13 @@ public class ScanReportController {
     public ResponseEntity<ApiResult<ScannerStatsDTO>> myStats(
             Authentication authentication,
             @RequestParam Instant from,
-            @RequestParam Instant to) {
+            @RequestParam(required = false) Instant to) {
         UUID scannerUserUuid = requireScannerUserUuid(authentication);
-        validateRange(from, to);
+        to = resolveTo(from, to);
         String email = authentication.getName();
         String displayName = resolveDisplayName(authentication);
         log.debug("GET /scans/me/stats scanner={} from={} to={}", scannerUserUuid, from, to);
-        return ResponseEntity.ok(ApiResult.ok("Scanner stats retrieved",
+        return ResponseEntity.ok().cacheControl(NO_STORE).body(ApiResult.ok("Scanner stats retrieved",
                 scanReportService.myStats(scannerUserUuid, email, displayName, from, to)));
     }
 
@@ -236,7 +271,7 @@ public class ScanReportController {
                                         "content": [
                                           {
                                             "id": "9b1f3c2e-6a47-4f7c-9d2b-1d6f0a1e5b91",
-                                            "attemptedAt": "2026-06-19T19:42:11Z",
+                                            "attemptedAt": "2026-06-19T21:42:11+02:00",
                                             "outcome": "ALLOWED",
                                             "ticketNumber": "20260619-48291X",
                                             "bookingItemId": "f1c0d2e3-2345-6789-abcd-ef0123456789",
@@ -277,21 +312,21 @@ public class ScanReportController {
             Authentication authentication,
             @PathVariable UUID eventId,
             @RequestParam Instant from,
-            @RequestParam Instant to,
+            @RequestParam(required = false) Instant to,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
         // SUPER_ADMIN sees every event's scans (no organizer claim on an
         // admin token, so the ownership check is bypassed, not just passed).
         boolean admin = isPlatformStaff(authentication);
         UUID organizerUuid = admin ? null : requireOrganizer(authentication);
-        validateRange(from, to);
+        to = resolveTo(from, to);
         validatePage(page, size);
         if (!admin) {
             requireEventOwnership(eventId, organizerUuid);
         }
         log.debug("GET /scans/events/{} organizer={} admin={} from={} to={} page={} size={}",
                 eventId, organizerUuid, admin, from, to, page, size);
-        return ResponseEntity.ok(ApiResult.ok("Event scan attempts retrieved",
+        return ResponseEntity.ok().cacheControl(NO_STORE).body(ApiResult.ok("Event scan attempts retrieved",
                 scanReportService.listEventScans(eventId, from, to, page, size)));
     }
 
@@ -310,8 +345,8 @@ public class ScanReportController {
                                       "message": "Event scan stats retrieved",
                                       "data": {
                                         "eventId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
-                                        "from": "2026-06-19T17:00:00Z",
-                                        "to": "2026-06-20T02:00:00Z",
+                                        "from": "2026-06-19T19:00:00+02:00",
+                                        "to": "2026-06-20T23:59:59.999999999+02:00",
                                         "total": 1827,
                                         "byOutcome": {
                                           "ALLOWED": 1742,
@@ -347,16 +382,16 @@ public class ScanReportController {
             Authentication authentication,
             @PathVariable UUID eventId,
             @RequestParam Instant from,
-            @RequestParam Instant to) {
+            @RequestParam(required = false) Instant to) {
         boolean admin = isPlatformStaff(authentication);
         UUID organizerUuid = admin ? null : requireOrganizer(authentication);
-        validateRange(from, to);
+        to = resolveTo(from, to);
         if (!admin) {
             requireEventOwnership(eventId, organizerUuid);
         }
         log.debug("GET /scans/events/{}/stats organizer={} admin={} from={} to={}",
                 eventId, organizerUuid, admin, from, to);
-        return ResponseEntity.ok(ApiResult.ok("Event scan stats retrieved",
+        return ResponseEntity.ok().cacheControl(NO_STORE).body(ApiResult.ok("Event scan stats retrieved",
                 scanReportService.eventStats(eventId, from, to)));
     }
 
@@ -374,8 +409,8 @@ public class ScanReportController {
                                       "code": "200 OK",
                                       "message": "Team scan stats retrieved",
                                       "data": {
-                                        "from": "2026-06-19T17:00:00Z",
-                                        "to": "2026-06-20T02:00:00Z",
+                                        "from": "2026-06-19T19:00:00+02:00",
+                                        "to": "2026-06-20T23:59:59.999999999+02:00",
                                         "members": [
                                           {
                                             "scannerUserUuid": "7e9a1c2b-4d5f-46a7-89b0-1c2d3e4f5a6b",
@@ -425,12 +460,12 @@ public class ScanReportController {
     public ResponseEntity<ApiResult<TeamStatsResponseDTO>> teamStats(
             Authentication authentication,
             @RequestParam Instant from,
-            @RequestParam Instant to) {
+            @RequestParam(required = false) Instant to) {
         // SUPER_ADMIN: null scope = every organizer's gate staff fleet-wide.
         UUID organizerUuid = isPlatformStaff(authentication) ? null : requireOrganizer(authentication);
-        validateRange(from, to);
+        to = resolveTo(from, to);
         log.debug("GET /scans/team-stats organizer={} from={} to={}", organizerUuid, from, to);
-        return ResponseEntity.ok(ApiResult.ok("Team scan stats retrieved",
+        return ResponseEntity.ok().cacheControl(NO_STORE).body(ApiResult.ok("Team scan stats retrieved",
                 scanReportService.teamStats(organizerUuid, from, to)));
     }
 
@@ -438,13 +473,50 @@ public class ScanReportController {
     // Validation + identity helpers — small enough to keep in-controller.
     // -----------------------------------------------------------------
 
-    private static void validateRange(Instant from, Instant to) {
-        if (from == null || to == null) {
-            throw new BadRequestException("'from' and 'to' are required.");
+    /**
+     * Validates the window and returns the upper bound this request will
+     * actually query, which is deliberately NOT always the one that was sent.
+     *
+     * <p><b>Why widen it.</b> The bound is applied with a closed
+     * {@code BETWEEN :from AND :to}, and a dashboard naturally computes "now"
+     * once — when its screen mounts — and then re-sends that same value on
+     * every refresh. The window is therefore pinned to the moment the operator
+     * opened the page, and a scan performed a minute later is
+     * {@code > to} and never appears no matter how many times they refresh.
+     * That reads as "the report is stale" when the row was committed correctly
+     * all along.
+     *
+     * <p>So a supplied {@code to} is rounded up to the end of its own
+     * <em>market-local</em> day. This is safe rather than a guess: a scan
+     * attempt is stamped {@code Instant.now()} as it happens and can never be
+     * recorded in the future, so extending the bound can only admit rows that
+     * have genuinely already occurred — never invented ones. And it is not a
+     * blanket "always use now": a bound on a past day still ends on that past
+     * day, so a deliberately historical window ("what happened on the 3rd")
+     * keeps its exact meaning.
+     *
+     * <p>Known edge: an operator whose screen has been open since before
+     * midnight sends a {@code to} on yesterday's local day, so scans after
+     * midnight fall outside it until the range is re-picked. Omitting
+     * {@code to} avoids that entirely — see below.
+     *
+     * <p><b>Omitting it.</b> {@code to} is optional; leaving it off means "up
+     * to this instant", evaluated per request, which is the correct thing for
+     * any live view and immune to both problems above.
+     */
+    private Instant resolveTo(Instant from, Instant to) {
+        if (from == null) {
+            throw new BadRequestException("'from' is required.");
         }
-        if (from.isAfter(to)) {
+        if (to != null && from.isAfter(to)) {
             throw new BadRequestException("'from' (" + from + ") must not be after 'to' (" + to + ").");
         }
+        Instant resolved = to == null ? Instant.now() : marketTimeZone.endOfLocalDay(to);
+        if (from.isAfter(resolved)) {
+            // Only reachable when 'to' was omitted and 'from' is in the future.
+            throw new BadRequestException("'from' (" + from + ") must not be in the future.");
+        }
+        return resolved;
     }
 
     private static void validatePage(int page, int size) {

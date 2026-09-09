@@ -5,11 +5,17 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
+import jakarta.persistence.PostLoad;
+import jakarta.persistence.PostPersist;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 import lombok.NoArgsConstructor;
+import lombok.ToString;
+import org.springframework.data.domain.Persistable;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -38,10 +44,49 @@ import java.util.UUID;
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class ScanAttempt {
+public class ScanAttempt implements Persistable<UUID> {
 
     @Id
     private UUID id;
+
+    /**
+     * Marks the row as not-yet-in-the-database so {@link #isNew()} can answer
+     * truthfully.
+     *
+     * <p><b>Why this is needed.</b> The id is assigned by us, never generated,
+     * so Spring Data's default {@code isNew()} — "is the id null?" — answers
+     * {@code false} for a brand-new row. {@code save()} then took the
+     * {@code merge()} branch, which issues a pointless SELECT on every single
+     * scan looking for a row that cannot exist, before scheduling the INSERT.
+     * Declaring {@link Persistable} puts new rows back on {@code persist()}.
+     *
+     * <p>Reset by the JPA callbacks below rather than hardcoded {@code true},
+     * so an instance that was loaded from the database is correctly treated as
+     * existing. {@code scan_attempts} is append-only today and nothing loads
+     * then re-saves a row, but a class that lies about its own state is a trap
+     * for whoever writes that code later.
+     */
+    @Transient
+    @Builder.Default
+    @EqualsAndHashCode.Exclude
+    @ToString.Exclude
+    private boolean isNew = true;
+
+    @Override
+    public UUID getId() {
+        return id;
+    }
+
+    @Override
+    public boolean isNew() {
+        return isNew;
+    }
+
+    @PostPersist
+    @PostLoad
+    void markNotNew() {
+        this.isNew = false;
+    }
 
     @Column(name = "attempted_at", nullable = false, columnDefinition = "TIMESTAMPTZ")
     private Instant attemptedAt;
