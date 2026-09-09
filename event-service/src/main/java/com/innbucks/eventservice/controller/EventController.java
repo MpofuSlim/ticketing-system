@@ -331,18 +331,29 @@ public class EventController {
     }
 
     @GetMapping("/by-organizer")
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
+    // Platform staff, not SUPER_ADMIN alone. AuthenticatedCaller.PLATFORM_STAFF_ROLES
+    // is this service's definition of "sees every organizer's events, not just their
+    // own", and both product roles are already in it — they can open an unpublished
+    // event (callerMayViewUnpublished) and list inactive ones. This endpoint being
+    // SUPER_ADMIN-only was inconsistent with that rule rather than a tighter
+    // decision, so the console's organiser filter 403'd for exactly the staff whose
+    // remit is reviewing events. Read-only, so PRODUCT_OFFICER is included; the
+    // write side (approve/publish) stays SUPER_ADMIN + PRODUCT_MANAGER.
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','PRODUCT_OFFICER','PRODUCT_MANAGER')")
     @Operation(
-            summary = "List a specific organizer's events (SUPER_ADMIN only)",
+            summary = "List a specific organizer's events (platform staff)",
             description = """
                     Returns a paginated list of **non-deleted** events owned by the
                     supplied `organizerUuid` (the organizer's stable cross-service id —
                     the same uuid carried in the `tenantUserUuid` field on every event),
                     including both `active=true` and `active=false` events.
 
-                    Restricted to **SUPER_ADMIN**. This is the platform-wide tool for
-                    inspecting *any* organizer's events by id — unlike `GET /events/my`,
-                    which is always scoped to the caller's own JWT.
+                    Open to **platform staff** — `SUPER_ADMIN`, `PRODUCT_OFFICER` and
+                    `PRODUCT_MANAGER` — which is the same set that may already view any
+                    organizer's unpublished and inactive events. This is the
+                    platform-wide tool for inspecting *any* organizer's events by id —
+                    unlike `GET /events/my`, which is always scoped to the caller's own
+                    JWT. An `EVENT_ORGANIZER` is still refused **403**.
 
                     Filters and sorting follow the same rules as `GET /events`:
                     - **from/to** are calendar dates (`yyyy-MM-dd`), mapped to

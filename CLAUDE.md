@@ -370,6 +370,45 @@ its `V4`).
   already decided the row. `approve` was fixed alongside `reject` — its Swagger
   had been documenting a 404 it did not actually return.
 
+## Platform staff means one role set — use it
+
+`AuthenticatedCaller.PLATFORM_STAFF_ROLES` (`SUPER_ADMIN`, `PRODUCT_OFFICER`,
+`PRODUCT_MANAGER`) is event-service's definition of *"sees every organizer's
+events, not just their own"*, and booking-service's report controller carries the
+same four-role list. A cross-organizer **read** should be gated on that set, not
+on `hasRole('SUPER_ADMIN')` — `/events/by-organizer` was the odd one out, which
+403'd the console's organiser filter for exactly the staff whose remit is
+reviewing events.
+
+**Writes are narrower and stay that way.** `callerMayPublishAnyEvent` is
+deliberately SUPER_ADMIN + PRODUCT_MANAGER only, because `PRODUCT_OFFICER` is
+read-only. Don't collapse the two sets: "may look at anyone's event" and "may
+act on anyone's event" are different questions.
+
+## Report responses carry their own provenance (`ApiResult.meta`)
+
+Every organizer report defaults its window when `from`/`to` are omitted, so the
+body describes a period the caller never named — and once exported to a
+spreadsheet it becomes a column of figures about nothing in particular. The five
+`/event-organizer/reports/**` endpoints therefore stamp a `ReportMetaDTO`
+(resolved `from`/`to`, `eventId`, `organizerUuid`, `platformWide`).
+
+- **The dates are the RESOLVED window**, taken from the same
+  `OrganizerReportService.resolveRange` the queries use (`resolvedMeta`
+  delegates to it). Re-deriving the defaults at the edge is how the printed
+  period and the rows drift apart; it also means an inverted range fails
+  identically whether or not the meta is read.
+- **`meta` lives on the shared `ApiResult` with field-level
+  `@JsonInclude(NON_NULL)`, overriding the class-level `ALWAYS`.** Without that
+  override every other endpoint in booking-service would start emitting
+  `"meta": null` — a response-shape change for clients with no reason to expect
+  one. Only endpoints that set it show the key.
+- **`platformWide` is explicit, not inferred from a null `organizerUuid`**,
+  because a null reads equally like "unknown".
+- **The CSV export puts the period in the FILENAME**, not a preamble row: a
+  leading comment line breaks every parser that treats line 1 as the header, and
+  the filename is what survives into someone's Downloads folder.
+
 ## Timestamps — store everything in UTC
 
 The user/booking/seat/event services map timestamps as `LocalDateTime`

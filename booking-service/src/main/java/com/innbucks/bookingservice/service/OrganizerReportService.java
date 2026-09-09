@@ -1,6 +1,7 @@
 package com.innbucks.bookingservice.service;
 
 import com.innbucks.bookingservice.dto.report.BucketSize;
+import com.innbucks.bookingservice.dto.report.ReportMetaDTO;
 import com.innbucks.bookingservice.dto.report.CategoryRevenueDTO;
 import com.innbucks.bookingservice.dto.report.EventRevenueDTO;
 import com.innbucks.bookingservice.dto.report.RevenueSummaryDTO;
@@ -215,6 +216,20 @@ public class OrganizerReportService {
                 .filter(n -> n != null && !n.isBlank())
                 .map(String::trim)
                 .collect(Collectors.joining("; "));
+    }
+
+    /**
+     * The window a report over {@code [from, to]} will actually cover, for
+     * stamping provenance on the response.
+     *
+     * <p>Routed through the same {@link #resolveRange} the queries use rather
+     * than re-deriving the defaults, so the period a client prints on an export
+     * cannot drift from the rows in it. It also means an invalid range is
+     * rejected identically whether or not the caller reads the meta.
+     */
+    public ReportMetaDTO resolvedMeta(UUID organizerUuid, UUID eventId, LocalDate from, LocalDate to) {
+        Range range = resolveRange(from, to);
+        return ReportMetaDTO.of(range.from(), range.to(), eventId, organizerUuid);
     }
 
     /** Validate + default the [from, to] window into a half-open instant range. */
