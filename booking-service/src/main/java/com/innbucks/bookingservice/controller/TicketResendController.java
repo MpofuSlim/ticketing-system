@@ -30,11 +30,13 @@ import java.util.UUID;
 /**
  * Manual e-ticket redelivery for the organizer/admin dashboard — the "customer
  * says the WhatsApp never arrived" button. Re-runs the exact same delivery the
- * confirmation listener performs ({@link TicketDeliveryService}): plain-text
- * email if the booking has one, one WhatsApp QR template send per ticket if it
- * has a phone. Idempotent from the platform's perspective (delivery only; no
- * booking state changes), so repeated clicks are safe — each one just sends
- * again.
+ * confirmation listener performs ({@link TicketDeliveryService}): each
+ * ticket's QR to its holder's phone (the attendee's own number when given,
+ * else the purchaser's — with purchaser fallback when an attendee send
+ * fails, which is what makes this button recover a mistyped guest number),
+ * plus the purchaser's receipt email and per-attendee one-ticket emails.
+ * Idempotent from the platform's perspective (delivery only; no booking
+ * state changes), so repeated clicks are safe — each one just sends again.
  */
 @RestController
 @RequestMapping("/bookings")
@@ -86,8 +88,8 @@ public class TicketResendController {
                                         "emailAttempted": true,
                                         "emailSent": true,
                                         "whatsappAttempted": true,
-                                        "qrTicketsSent": 2,
-                                        "qrTicketsTotal": 2,
+                                        "qrTicketsSent": 1,
+                                        "qrTicketsTotal": 1,
                                         "attendeeDeliveriesSent": 1,
                                         "attendeeDeliveriesTotal": 1
                                       }

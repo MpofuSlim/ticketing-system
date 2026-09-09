@@ -278,9 +278,14 @@ class TicketDeliveryServiceTest {
     }
 
     @Test
-    void oneAttendeesFailure_doesNotStopAnotherAttendee() {
+    void failedAttendeeQr_fallsBackToThePurchaser_soTheCredentialIsNeverLost() {
+        // A typo'd or WhatsApp-less guest number would otherwise lose the gate
+        // credential invisibly — and the resend button would re-fail the same
+        // way forever. On a KNOWN send failure the QR re-routes to the buyer,
+        // who forwards it. The other attendee is unaffected.
         Fixture f = fixture();
         Booking booking = bookingWithOneTicket();
+        booking.setUserEmail("alice@example.com");
         booking.setItems(List.of(
                 ticketFor("TN-BAD", "Bad Number", null, "+263779999999"),
                 ticketFor("TN-OK", "Good Number", null, "+263778888888")));
@@ -290,13 +295,73 @@ class TicketDeliveryServiceTest {
         TicketDeliveryService.Outcome outcome = f.service().deliver(booking);
 
         verify(f.whatsApp()).sendEventQrCode(eq("+263778888888"), anyString(), contains("TN-OK"));
-        // Both tickets routed to their attendees, so none went to the
-        // purchaser — a failed attendee send does NOT fall back to the buyer
-        // (they can recover the QR from the booking page / wallet).
-        verify(f.whatsApp(), never()).sendEventQrCode(eq("+263782606983"), anyString(), anyString());
-        assertEquals(0, outcome.qrTicketsTotal());
+        // The failed ticket fell back to the purchaser's phone.
+        verify(f.whatsApp()).sendEventQrCode(eq("+263782606983"), anyString(), contains("TN-BAD"));
+        verify(f.whatsApp(), never()).sendEventQrCode(eq("+263782606983"), anyString(), contains("TN-OK"));
+        assertEquals(1, outcome.qrTicketsSent());
+        assertEquals(1, outcome.qrTicketsTotal());
         assertEquals(1, outcome.attendeeDeliveriesSent());
         assertEquals(2, outcome.attendeeDeliveriesTotal());
+        // The receipt (sent AFTER the sends) reports the fallback honestly.
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(f.email()).sendEmail(eq("alice@example.com"), anyString(), body.capture(), anyString());
+        assertTrue(body.getValue().contains("could not reach Bad Number's WhatsApp"), body.getValue());
+        assertTrue(body.getValue().contains("please forward it"), body.getValue());
+    }
+
+    @Test
+    void failedAttendeeQr_withNoPurchaserPhone_hasNowhereToGo_andNothingThrows() {
+        Fixture f = fixture();
+        Booking booking = bookingWithOneTicket();
+        booking.setPhoneNumber(null);
+        booking.setUserEmail("alice@example.com");
+        booking.setItems(List.of(ticketFor("TN-BAD", "Bad Number", null, "+263779999999")));
+        doThrow(new NotificationDeliveryException("gateway said no"))
+                .when(f.whatsApp()).sendEventQrCode(anyString(), anyString(), anyString());
+
+        TicketDeliveryService.Outcome outcome = f.service().deliver(booking);
+
+        assertEquals(0, outcome.qrTicketsTotal());
+        assertEquals(0, outcome.attendeeDeliveriesSent());
+        assertTrue(outcome.emailSent(), "receipt email still goes out");
+    }
+
+    @Test
+    void phoneOnlyBuyer_withEveryTicketRouted_getsAnSmsReceipt_notSilence() {
+        // WhatsApp-first market: no email on the booking is normal. If every
+        // QR went to a guest, the person who PAID would otherwise receive
+        // zero messages.
+        Fixture f = fixture();
+        Booking booking = bookingWithOneTicket();
+        booking.setUserEmail(null);
+        booking.setCustomerName("Alice Moyo");
+        booking.setItems(List.of(ticketFor("TN-TENDAI", "Tendai Ncube", null, "+263772000000")));
+
+        f.service().deliver(booking);
+
+        ArgumentCaptor<String> sms = ArgumentCaptor.forClass(String.class);
+        verify(f.email()).sendSms(eq("+263782606983"), sms.capture(), anyString());
+        assertTrue(sms.getValue().contains(booking.getConfirmationNumber()), sms.getValue());
+        assertTrue(sms.getValue().contains("guests' tickets were sent"), sms.getValue());
+        verify(f.email(), never()).sendEmail(anyString(), anyString(), anyString(), anyString());
+    }
+
+    @Test
+    void smsReceipt_isNotSent_whenTheBuyerAlreadyHearsSomething() {
+        Fixture f = fixture();
+        // Case 1: buyer has an email — the receipt email covers it.
+        Booking withEmail = bookingWithOneTicket();
+        withEmail.setUserEmail("alice@example.com");
+        withEmail.setItems(List.of(ticketFor("TN-TENDAI", "Tendai Ncube", null, "+263772000000")));
+        f.service().deliver(withEmail);
+        verify(f.email(), never()).sendSms(anyString(), anyString(), anyString());
+
+        // Case 2: no email but the buyer received their own QR.
+        Fixture f2 = fixture();
+        Booking ownTicket = bookingWithOneTicket();
+        ownTicket.setUserEmail(null);
+        f2.service().deliver(ownTicket);
+        verify(f2.email(), never()).sendSms(anyString(), anyString(), anyString());
     }
 
     @Test
