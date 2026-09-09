@@ -2,6 +2,7 @@ package com.innbucks.bookingservice.controller;
 
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.report.BucketSize;
+import com.innbucks.bookingservice.dto.report.ReportMetaDTO;
 import com.innbucks.bookingservice.dto.report.CategoryRevenueDTO;
 import com.innbucks.bookingservice.dto.report.EventRevenueDTO;
 import com.innbucks.bookingservice.dto.report.RevenueSummaryDTO;
@@ -116,7 +117,8 @@ public class OrganizerReportController {
         log.debug("GET /event-organizer/reports/revenue organizer={} eventId={} from={} to={}",
                 organizerUuid, eventId, from, to);
         return ResponseEntity.ok(ApiResult.ok("Revenue summary retrieved",
-                reportService.revenueSummary(organizerUuid, eventId, from, to)));
+                reportService.revenueSummary(organizerUuid, eventId, from, to),
+                reportService.resolvedMeta(organizerUuid, eventId, from, to)));
     }
 
     @GetMapping("/by-event")
@@ -161,7 +163,8 @@ public class OrganizerReportController {
         UUID organizerUuid = resolveScope(authentication);
         log.debug("GET /event-organizer/reports/by-event organizer={} from={} to={}", organizerUuid, from, to);
         return ResponseEntity.ok(ApiResult.ok("Per-event revenue retrieved",
-                reportService.revenueByEvent(organizerUuid, from, to)));
+                reportService.revenueByEvent(organizerUuid, from, to),
+                reportService.resolvedMeta(organizerUuid, null, from, to)));
     }
 
     @GetMapping("/by-category")
@@ -199,7 +202,8 @@ public class OrganizerReportController {
         log.debug("GET /event-organizer/reports/by-category organizer={} eventId={} from={} to={}",
                 organizerUuid, eventId, from, to);
         return ResponseEntity.ok(ApiResult.ok("Per-category revenue retrieved",
-                reportService.revenueByCategory(organizerUuid, eventId, from, to)));
+                reportService.revenueByCategory(organizerUuid, eventId, from, to),
+                reportService.resolvedMeta(organizerUuid, eventId, from, to)));
     }
 
     @GetMapping("/time-series")
@@ -234,7 +238,8 @@ public class OrganizerReportController {
         log.debug("GET /event-organizer/reports/time-series organizer={} eventId={} bucket={} from={} to={}",
                 organizerUuid, eventId, bucket, from, to);
         return ResponseEntity.ok(ApiResult.ok("Sales time-series retrieved",
-                reportService.salesTimeSeries(organizerUuid, eventId, from, to, bucket)));
+                reportService.salesTimeSeries(organizerUuid, eventId, from, to, bucket),
+                reportService.resolvedMeta(organizerUuid, eventId, from, to)));
     }
 
     @GetMapping(value = "/bookings/export", produces = "text/csv")
@@ -266,9 +271,17 @@ public class OrganizerReportController {
         log.info("CSV export /event-organizer/reports/bookings/export organizer={} eventId={} from={} to={}",
                 organizerUuid, eventId, from, to);
         String csv = reportService.confirmedBookingsCsv(organizerUuid, eventId, from, to);
+        // Provenance for the export. A CSV has nowhere to put the JSON `meta`
+        // the other report endpoints now carry, and prepending a preamble row
+        // would break every naive parser that reads line 1 as the header — so
+        // the resolved period rides on the FILENAME instead, which is what
+        // actually survives into someone's Downloads folder. Same resolvedMeta
+        // as the JSON reports, so the dates cannot disagree with the rows.
+        ReportMetaDTO meta = reportService.resolvedMeta(organizerUuid, eventId, from, to);
+        String filename = "organizer-bookings_" + meta.from() + "_to_" + meta.to() + ".csv";
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType("text/csv"))
-                .header("Content-Disposition", "attachment; filename=\"organizer-bookings.csv\"")
+                .header("Content-Disposition", "attachment; filename=\"" + filename + "\"")
                 .body(csv);
     }
 

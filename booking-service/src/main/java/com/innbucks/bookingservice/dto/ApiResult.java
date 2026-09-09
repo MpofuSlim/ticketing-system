@@ -25,11 +25,37 @@ public class ApiResult<T> {
     @Schema(description = "Response payload; null when there's nothing to return (errors, 204, etc.).")
     private T data;
 
+    /**
+     * Optional provenance about the payload — currently the reporting endpoints'
+     * resolved period and scope.
+     *
+     * <p>Field-level {@code NON_NULL} deliberately overrides the class-level
+     * {@code ALWAYS}: without it, every existing endpoint in the service would
+     * start emitting {@code "meta": null}, which is a response-shape change for
+     * clients that had no reason to expect one. Only endpoints that set it show
+     * the key at all.
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    @Schema(description = "Provenance for the payload where the endpoint provides it "
+            + "(reports carry the period and scope they cover). Absent otherwise.",
+            nullable = true)
+    private Object meta;
+
     public static <T> ApiResult<T> of(HttpStatus status, String message, T data) {
         return ApiResult.<T>builder()
                 .code(status.value() + " " + status.name())
                 .message(message)
                 .data(data)
+                .build();
+    }
+
+    /** As {@link #ok(String, Object)} but stamped with the payload's provenance. */
+    public static <T> ApiResult<T> ok(String message, T data, Object meta) {
+        return ApiResult.<T>builder()
+                .code(HttpStatus.OK.value() + " " + HttpStatus.OK.name())
+                .message(message)
+                .data(data)
+                .meta(meta)
                 .build();
     }
 

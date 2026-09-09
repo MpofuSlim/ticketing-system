@@ -15,6 +15,7 @@ import org.mockito.ArgumentCaptor;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.UUID;
@@ -285,5 +286,66 @@ class OrganizerReportServiceTest {
         // [from 00:00, (to+1) 00:00) — 30 calendar days inclusive == 30 day-starts span.
         long days = ChronoUnit.DAYS.between(start.getValue(), end.getValue());
         assertThat(days).isEqualTo(30);
+    }
+
+    // ------------------------------------------------------------------
+    // Report provenance (§5.5): the resolved window + scope stamped on the
+    // response, so an exported spreadsheet keeps the context its numbers mean
+    // nothing without.
+    // ------------------------------------------------------------------
+
+    @Test
+    void resolvedMeta_reportsTheDefaultedWindow_notTheRequestedNulls() {
+        // The whole point: a caller who names no window gets a report over the
+        // last 30 days, and the meta has to say so. Echoing the request back
+        // would print "null to null" on a report that plainly covers a period.
+        var meta = service(mock(OrganizerReportRepository.class))
+                .resolvedMeta(ORG, null, null, null);
+
+        LocalDate today = LocalDate.now(ZoneOffset.UTC);
+        assertThat(meta.to()).isEqualTo(today);
+        assertThat(meta.from()).isEqualTo(today.minusDays(29));
+        // 30 days inclusive — the same span the queries run over.
+        assertThat(ChronoUnit.DAYS.between(meta.from(), meta.to())).isEqualTo(29);
+    }
+
+    @Test
+    void resolvedMeta_passesAnExplicitWindowThrough() {
+        var meta = service(mock(OrganizerReportRepository.class))
+                .resolvedMeta(ORG, EVENT_A, LocalDate.of(2026, 5, 1), LocalDate.of(2026, 5, 31));
+
+        assertThat(meta.from()).isEqualTo(LocalDate.of(2026, 5, 1));
+        assertThat(meta.to()).isEqualTo(LocalDate.of(2026, 5, 31));
+        assertThat(meta.eventId()).isEqualTo(EVENT_A);
+    }
+
+    @Test
+    void resolvedMeta_marksPlatformWideWhenThereIsNoOrganizerScope() {
+        // A null organizerUuid means platform staff reading across every
+        // organizer. platformWide states that explicitly rather than leaving a
+        // client to infer it from the null, which reads equally like "unknown".
+        var meta = service(mock(OrganizerReportRepository.class))
+                .resolvedMeta(null, null, null, null);
+
+        assertThat(meta.organizerUuid()).isNull();
+        assertThat(meta.platformWide()).isTrue();
+    }
+
+    @Test
+    void resolvedMeta_isNotPlatformWideForAnOrganizer() {
+        var meta = service(mock(OrganizerReportRepository.class))
+                .resolvedMeta(ORG, null, null, null);
+
+        assertThat(meta.organizerUuid()).isEqualTo(ORG);
+        assertThat(meta.platformWide()).isFalse();
+    }
+
+    @Test
+    void resolvedMeta_rejectsAnInvertedWindow_likeTheQueriesDo() {
+        // Shares resolveRange with the queries, so a bad range fails the same
+        // way whether or not the caller reads the meta.
+        assertThatThrownBy(() -> service(mock(OrganizerReportRepository.class))
+                .resolvedMeta(ORG, null, LocalDate.of(2026, 6, 1), LocalDate.of(2026, 5, 31)))
+                .isInstanceOf(BadRequestException.class);
     }
 }

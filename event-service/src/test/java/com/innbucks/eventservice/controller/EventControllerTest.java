@@ -846,6 +846,36 @@ class EventControllerTest {
     }
 
     @Test
+    @WithMockUser(username = "officer", roles = "PRODUCT_OFFICER")
+    void getEventsByOrganizer_asProductOfficer_isAllowed() throws Exception {
+        // PRODUCT_OFFICER is in AuthenticatedCaller.PLATFORM_STAFF_ROLES — the set
+        // this service defines as "sees every organizer's events". It can already
+        // open an unpublished event and list inactive ones, so refusing it here was
+        // an inconsistency, not a tighter decision. Read-only, so it is included.
+        mockMvc.perform(get("/events/by-organizer").param("organizerUuid", ORGANIZER_A.toString())
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @WithMockUser(username = "manager", roles = "PRODUCT_MANAGER")
+    void getEventsByOrganizer_asProductManager_isAllowed() throws Exception {
+        mockMvc.perform(get("/events/by-organizer").param("organizerUuid", ORGANIZER_A.toString())
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @WithMockUser(username = "customer", roles = "CUSTOMER")
+    void getEventsByOrganizer_asCustomer_isForbidden() throws Exception {
+        // Widening to platform staff must not widen to everyone authenticated:
+        // this endpoint exposes one organizer's whole event list by id.
+        mockMvc.perform(get("/events/by-organizer").param("organizerUuid", ORGANIZER_A.toString())
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
     void getEventsByOrganizer_unauthenticated_isDenied() throws Exception {
         mockMvc.perform(get("/events/by-organizer").param("organizerUuid", ORGANIZER_A.toString())
                         .accept(MediaType.APPLICATION_JSON))
