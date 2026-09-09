@@ -19,6 +19,8 @@ package com.innbucks.userservice.event;
 public record ServiceRequestDecided(
         Long requestId,
         Long userId,
+        /** Requester's stable user_uuid — how the in-app notification is addressed. */
+        java.util.UUID userUuid,
         /** Requester's email; may be null for an account with none on file. */
         String email,
         /** Requester's MSISDN — the WhatsApp fallback when email fails. */

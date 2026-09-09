@@ -4,6 +4,7 @@ import com.innbucks.userservice.dto.ApiResult;
 import com.innbucks.userservice.dto.UserContactDTO;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.notification.UserNotificationDispatcher;
+import com.innbucks.userservice.notification.NotificationService;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.service.AuditEventType;
 import com.innbucks.userservice.service.AuditService;
@@ -37,7 +38,7 @@ class InternalUserLookupControllerTest {
                                                     String expectedToken,
                                                     AuditService audit) {
         InternalTokenAuthorizer authorizer = new InternalTokenAuthorizer(expectedToken, audit);
-        return new InternalUserLookupController(repo, authorizer, mock(UserNotificationDispatcher.class));
+        return new InternalUserLookupController(repo, authorizer, mock(UserNotificationDispatcher.class), mock(NotificationService.class));
     }
 
     private static HttpServletRequest request() {

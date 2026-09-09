@@ -7,6 +7,8 @@ import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.event.ServiceRequestDecided;
 import com.innbucks.userservice.exception.NotFoundException;
 import com.innbucks.userservice.repository.ServiceRequestRepository;
+import com.innbucks.userservice.notification.NotificationService;
+import com.innbucks.userservice.notification.NotificationType;
 import com.innbucks.userservice.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -31,9 +33,25 @@ import java.util.stream.Collectors;
 @Slf4j
 public class ServiceRequestService {
 
+    /**
+     * Who is told a request is waiting. The built-ins that hold the decide
+     * power today; a custom role granted service-requests:approve is NOT here,
+     * because a role created at runtime cannot be named in a constant. Widening
+     * this to "everyone with the permission" means resolving permissions per
+     * user, which is a bigger change than the bell needs.
+     */
+    private static final java.util.List<String> REVIEWER_ROLES =
+            java.util.List.of(User.Role.SUPER_ADMIN.name());
+
     private final ServiceRequestRepository serviceRequestRepository;
     private final UserRepository userRepository;
     private final ApplicationEventPublisher events;
+
+    // Field-injected (required=false) so the plain-Mockito unit tests that
+    // construct this service with three collaborators keep compiling; null
+    // there simply skips the fan-out.
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.innbucks.userservice.notification.NotificationService notifications;
 
     /** Submit a request to be granted access to an additional default service bundle. */
     @Transactional
@@ -69,6 +87,7 @@ public class ServiceRequestService {
                 .build());
 
         log.info("Service request submitted id={} userId={} service={}", saved.getId(), user.getId(), service);
+        notifyReviewersOfSubmission(saved, user, service);
         return toResponse(saved, user);
     }
 
@@ -232,6 +251,54 @@ public class ServiceRequestService {
     }
 
     /**
+     * Tells the people who can decide it that a request is waiting.
+     *
+     * <p>This is the half of the queue the console used to discover by polling
+     * {@code /admin/service-requests} every 60 seconds and counting PENDING
+     * rows. The recipients are the accounts that can actually act — active
+     * holders of a role with the approve power — so a decided request stops
+     * being something an admin finds by looking.
+     *
+     * <p>Best-effort by construction: the request is already saved and
+     * committed-bound by the time this runs, so a notification failure must
+     * never surface as a failed submission. Everything is caught.
+     */
+    private void notifyReviewersOfSubmission(ServiceRequest saved, User requester, String service) {
+        if (notifications == null) {
+            return; // plain unit test with no notification service wired
+        }
+        try {
+            String who = displayName(requester);
+            String title = "New " + service + " access request";
+            String body = who + " asked for " + service + " access. Reason: " + saved.getReason();
+            for (User reviewer : userRepository.findByActiveAndAnyRole(true, REVIEWER_ROLES)) {
+                if (reviewer.getUserUuid() == null) {
+                    continue;
+                }
+                notifications.create(new NotificationService.NewNotification(
+                        reviewer.getUserUuid(),
+                        NotificationType.SERVICE_REQUEST_SUBMITTED,
+                        title, body,
+                        com.innbucks.userservice.entity.Notification.Severity.INFO,
+                        String.valueOf(requester.getId()), who,
+                        "SERVICE_REQUEST", String.valueOf(saved.getId()),
+                        "/system-users/service-requests?highlight=" + saved.getId()));
+            }
+        } catch (RuntimeException ex) {
+            // A submission that succeeded must not look like it failed because
+            // the bell could not be rung.
+            log.warn("Could not notify reviewers of service request id={} reason={}",
+                    saved.getId(), ex.toString());
+        }
+    }
+
+    private static String displayName(User user) {
+        String name = ((user.getFirstName() == null ? "" : user.getFirstName()) + " "
+                + (user.getLastName() == null ? "" : user.getLastName())).trim();
+        return name.isEmpty() ? user.getEmail() : name;
+    }
+
+    /**
      * Fire-and-forget: {@code ServiceRequestDecisionListener} picks this up
      * AFTER_COMMIT and tells the requester. Published rather than sent inline so
      * a decision that rolls back never notifies anyone it happened, and so the
@@ -242,7 +309,7 @@ public class ServiceRequestService {
             return; // plain unit test with no publisher wired
         }
         events.publishEvent(new ServiceRequestDecided(
-                req.getId(), user.getId(), user.getEmail(), user.getPhoneNumber(),
+                req.getId(), user.getId(), user.getUserUuid(), user.getEmail(), user.getPhoneNumber(),
                 req.getService(), outcome, req.getDecisionReason()));
     }
 

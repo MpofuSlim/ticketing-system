@@ -150,6 +150,22 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
+            # The console's notification bell. Same shape as user-admin-route:
+            # authenticated, JWT-keyed rate limiter. Without this the endpoints
+            # fall through to the static-resource handler and 404 through the
+            # edge, however correct the service is.
+            - id: user-notifications-route
+              uri: lb://user-service
+              predicates:
+                - Path=/notifications/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
+
             - id: booking-event-organizer-reports-route
               uri: lb://booking-service
               predicates:
