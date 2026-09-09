@@ -3,6 +3,7 @@ package com.innbucks.seatservice.service;
 import com.innbucks.seatservice.client.BookingServiceClient;
 import com.innbucks.seatservice.client.EventServiceClient;
 import com.innbucks.seatservice.dto.CreateCategoryRequestDTO;
+import com.innbucks.seatservice.dto.EventLookupDTO;
 import com.innbucks.seatservice.dto.CreateCategoryResponseDTO;
 import com.innbucks.seatservice.dto.SectionSeatConfigDTO;
 import com.innbucks.seatservice.dto.UpdateCategoryRequestDTO;
@@ -34,12 +35,40 @@ class SeatCategoryServiceTest {
     // ObjectProvider<EventServiceClient>). Most tests don't exercise the booking
     // client, so this helper supplies a default mock; the live-availability tests
     // pass their own stubbed client.
-    @SuppressWarnings("unchecked")
+    /**
+     * Capacity used by the default event client below. Deliberately enormous so
+     * the over-allocation guard never fires in tests that are about something
+     * else; the guard's own tests wire their own client with a real number.
+     */
+    private static final int UNLIMITED_CAPACITY = Integer.MAX_VALUE;
+
     private SeatCategoryService service(SeatCategoryRepository catRepo,
                                         SeatRepository seatRepo,
                                         BookingServiceClient bookingClient) {
-        return new SeatCategoryService(catRepo, seatRepo, bookingClient,
-                (ObjectProvider<EventServiceClient>) mock(ObjectProvider.class));
+        return service(catRepo, seatRepo, bookingClient, eventClientWithCapacity(UNLIMITED_CAPACITY));
+    }
+
+    @SuppressWarnings("unchecked")
+    private SeatCategoryService service(SeatCategoryRepository catRepo,
+                                        SeatRepository seatRepo,
+                                        BookingServiceClient bookingClient,
+                                        EventServiceClient eventClient) {
+        ObjectProvider<EventServiceClient> provider =
+                (ObjectProvider<EventServiceClient>) mock(ObjectProvider.class);
+        when(provider.getIfAvailable()).thenReturn(eventClient);
+        return new SeatCategoryService(catRepo, seatRepo, bookingClient, provider);
+    }
+
+    /**
+     * An event-service client that answers every lookup with the given capacity
+     * and no owner — enough for the capacity guard, which reads only
+     * totalCapacity. Ownership tests stub their own.
+     */
+    private EventServiceClient eventClientWithCapacity(Integer capacity) {
+        EventServiceClient client = mock(EventServiceClient.class);
+        lenient().when(client.fetchEvent(any(), any())).thenReturn(
+                Optional.of(EventLookupDTO.builder().totalCapacity(capacity).build()));
+        return client;
     }
 
     private SeatCategoryService service(SeatCategoryRepository catRepo, SeatRepository seatRepo) {
@@ -460,6 +489,125 @@ class SeatCategoryServiceTest {
                 .updateCategory(id, updateRequest("VIP", null, "0.00")));
         assertTrue(ex.getMessage().contains("Price must be greater than 0"), "actual: " + ex.getMessage());
         verify(catRepo, never()).save(any());
+    }
+
+    // ------------------------------------------------------------------
+    // Over-allocation guard: sum(category totalSeats) must not exceed the
+    // event's totalCapacity. This is THE oversell guard — booking-service
+    // claims capacity per category and never consults totalCapacity, so the
+    // sum of categories is the real sellable ceiling.
+    // ------------------------------------------------------------------
+
+    @Test
+    void createCategory_refusedWhenItWouldExceedEventCapacity() {
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        UUID eventId = UUID.randomUUID();
+
+        // Capacity 100, already 80 allocated, asking for 30 more.
+        when(catRepo.findByEventIdAndDeletedFalse(eventId))
+                .thenReturn(List.of(category(UUID.randomUUID(), eventId, 80, 80)));
+        SeatCategoryService service = service(catRepo, seatRepo,
+                mock(BookingServiceClient.class), eventClientWithCapacity(100));
+
+        ConflictException ex = assertThrows(ConflictException.class,
+                () -> service.createCategory(request(eventId, "VIP", List.of(section("A", 30)))));
+
+        // The message carries the arithmetic so an organizer can act on it.
+        assertTrue(ex.getMessage().contains("80"), "actual: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("100"), "actual: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("10"), "actual: " + ex.getMessage());
+        // Nothing persisted — neither the category nor its seats.
+        verify(catRepo, never()).save(any());
+        verify(seatRepo, never()).saveAll(any());
+    }
+
+    @Test
+    void createCategory_allowedWhenItExactlyFillsCapacity() {
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        UUID eventId = UUID.randomUUID();
+
+        when(catRepo.findByEventIdAndDeletedFalse(eventId))
+                .thenReturn(List.of(category(UUID.randomUUID(), eventId, 80, 80)));
+        SeatCategoryService service = service(catRepo, seatRepo,
+                mock(BookingServiceClient.class), eventClientWithCapacity(100));
+
+        // 80 + 20 == 100 exactly. The boundary is inclusive: filling the venue
+        // is the goal, not an error.
+        assertDoesNotThrow(() ->
+                service.createCategory(request(eventId, "GA", List.of(section("A", 20)))));
+        verify(catRepo).save(any());
+    }
+
+    @Test
+    void createCategory_allowedWhenAllocationFallsShortOfCapacity() {
+        // Under-allocation is deliberately fine: only exceeding capacity can
+        // oversell, and refusing a short allocation would block an organizer
+        // adding categories one at a time — every intermediate state is short.
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        UUID eventId = UUID.randomUUID();
+
+        when(catRepo.findByEventIdAndDeletedFalse(eventId)).thenReturn(List.of());
+        SeatCategoryService service = service(catRepo, seatRepo,
+                mock(BookingServiceClient.class), eventClientWithCapacity(1000));
+
+        assertDoesNotThrow(() ->
+                service.createCategory(request(eventId, "VIP", List.of(section("A", 10)))));
+        verify(catRepo).save(any());
+    }
+
+    @Test
+    void createCategory_refusedWhenEventServiceCannotBeReached() {
+        // Fails CLOSED: an unanswerable capacity is refused, never assumed
+        // infinite. Same discipline as the delete guard.
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        UUID eventId = UUID.randomUUID();
+
+        EventServiceClient down = mock(EventServiceClient.class);
+        when(down.fetchEvent(any(), any())).thenReturn(Optional.empty());
+        SeatCategoryService service = service(catRepo, seatRepo,
+                mock(BookingServiceClient.class), down);
+
+        assertThrows(ServiceUnavailableException.class,
+                () -> service.createCategory(request(eventId, "VIP", List.of(section("A", 1)))));
+        verify(catRepo, never()).save(any());
+    }
+
+    @Test
+    void createCategory_refusedWhenEventReportsNoCapacity() {
+        // A present event with a null totalCapacity is not "unlimited" — it is a
+        // payload we cannot reason about, so it is refused like an absent one.
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        UUID eventId = UUID.randomUUID();
+
+        SeatCategoryService service = service(catRepo, seatRepo,
+                mock(BookingServiceClient.class), eventClientWithCapacity(null));
+
+        assertThrows(ServiceUnavailableException.class,
+                () -> service.createCategory(request(eventId, "VIP", List.of(section("A", 1)))));
+        verify(catRepo, never()).save(any());
+    }
+
+    @Test
+    void createCategory_capacityGuardIgnoresDeletedCategories() {
+        // findByEventIdAndDeletedFalse is the query, so a soft-deleted category
+        // frees its allocation back. Pinned because using the wrong finder here
+        // would make capacity un-reclaimable after any delete.
+        SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
+        SeatRepository seatRepo = mock(SeatRepository.class);
+        UUID eventId = UUID.randomUUID();
+
+        when(catRepo.findByEventIdAndDeletedFalse(eventId)).thenReturn(List.of());
+        SeatCategoryService service = service(catRepo, seatRepo,
+                mock(BookingServiceClient.class), eventClientWithCapacity(50));
+
+        assertDoesNotThrow(() ->
+                service.createCategory(request(eventId, "VIP", List.of(section("A", 50)))));
+        verify(catRepo).findByEventIdAndDeletedFalse(eventId);
     }
 
     @Test
