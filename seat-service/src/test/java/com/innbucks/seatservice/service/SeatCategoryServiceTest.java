@@ -580,6 +580,13 @@ class SeatCategoryServiceTest {
     void createCategory_refusedWhenEventReportsNoCapacity() {
         // A present event with a null totalCapacity is not "unlimited" — it is a
         // payload we cannot reason about, so it is refused like an absent one.
+        //
+        // This case is distinct from the unreachable-service one above: the
+        // lookup SUCCEEDS here. Keeping them separate in the service (rather
+        // than folding both into one Optional.map(...).orElseThrow()) is what
+        // makes the two faults tellable apart in the logs — a lookup failure
+        // and a malformed payload need different operator responses even though
+        // the caller sees the same 503.
         SeatCategoryRepository catRepo = mock(SeatCategoryRepository.class);
         SeatRepository seatRepo = mock(SeatRepository.class);
         UUID eventId = UUID.randomUUID();

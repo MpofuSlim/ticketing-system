@@ -502,13 +502,20 @@ public class SeatCategoryService {
             throw new ServiceUnavailableException(
                     "Cannot verify the event's capacity right now. Please try again shortly.");
         }
-        Integer capacity = client.fetchEvent(eventId, authHeader)
-                .map(EventLookupDTO::getTotalCapacity)
+        // Deliberately NOT .map(EventLookupDTO::getTotalCapacity).orElseThrow():
+        // Optional.map collapses a null mapped value into an empty Optional, so
+        // that spelling would fold "event-service did not answer" and "the event
+        // reports no capacity" into one branch — the second log line would never
+        // fire, and the null check after it would be unreachable. They are the
+        // same refusal but not the same fault, and an operator reading the logs
+        // needs to tell a lookup failure from a malformed payload.
+        EventLookupDTO event = client.fetchEvent(eventId, authHeader)
                 .orElseThrow(() -> {
                     log.warn("Category creation refused, event lookup empty eventId={}", eventId);
                     return new ServiceUnavailableException(
                             "Cannot verify the event's capacity right now. Please try again shortly.");
                 });
+        Integer capacity = event.getTotalCapacity();
         if (capacity == null) {
             // A present event that reports no capacity is not "unlimited" — it is
             // a payload we cannot reason about, so it is refused like an absent one.
