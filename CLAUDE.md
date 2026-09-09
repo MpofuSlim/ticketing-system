@@ -327,6 +327,48 @@ The remaining long-term step (LocalDateTime → Instant + `timestamptz`
 columns) is now invisible on the wire — the `Z` already ships — so it can
 be done per-service without FE coordination whenever convenient.
 
+**Called-out exception — the scan-report surface (`/scans/**`) serves the
+MARKET OFFSET, not `Z`.** `2026-09-09T08:10:22+02:00` rather than
+`...T06:10:22Z`. Same instant, equally unambiguous ISO-8601, but the leading
+characters are the wall clock the operator was standing in, so a dashboard that
+prints the string verbatim is correct with no client-side conversion. This was
+a deliberate instruction ("everything done on the BE… no FE parsing") after the
+gate dashboard displayed raw UTC and every scan read two hours early. At-rest
+is untouched: `scan_attempts.attempted_at` is a `timestamptz` mapped as
+`Instant` and every query still runs in UTC — only the DTO edge changes, via
+`booking-service`'s own `MarketTimeZone.atMarket`. Extend the same treatment to
+another operator-facing surface only on the same reasoning; **never do it for an
+S2S payload**, where the consumer parses properly and a per-cell offset just
+invites double-conversion.
+
+## Scan reports: `to` is widened server-side, and why
+
+`GET /scans/**` takes `from` + an **optional** `to`. A supplied `to` is rounded
+up to the end of its **market-local** day (`MarketTimeZone.endOfLocalDay`);
+omitting it means "up to this instant", evaluated per request.
+
+- **The bug it fixes.** The bound is applied as a closed
+  `BETWEEN :from AND :to`, and a dashboard naturally computes "now" once when
+  its screen mounts, then re-sends that frozen value on every refresh. Every
+  scan performed after page-load is then `> to` and invisible no matter how
+  often the operator refreshes — which reads as "the report is stale" when the
+  row committed correctly all along. The write is synchronous and in the same
+  transaction as the redemption, and nothing caches the read; the window was
+  always the whole problem.
+- **Why widening is safe rather than a guess.** A scan attempt is stamped
+  `Instant.now()` as it happens and can never be recorded in the future, so
+  extending the bound can only admit rows that have genuinely already occurred.
+  And it is NOT "always clamp to now": a bound on a past day still ends on that
+  past day, so "what happened on the 3rd" keeps its exact meaning. Pinned by
+  `ScanReportWindowTest`.
+- **Known edge:** a screen open since before midnight sends a `to` on
+  yesterday's local day, so post-midnight scans fall outside it until the range
+  is re-picked. Omitting `to` avoids this entirely — prefer that for live views.
+- Responses are `Cache-Control: no-store`. They previously carried **no** cache
+  header at all, which leaves Cloudflare / a corporate proxy / the browser's
+  heuristic freshness free to invent one and produce the same complaint for a
+  completely different reason.
+
 ## Event times are MARKET-LOCAL on the wire in, UTC out
 
 `POST/PUT /events` interpret `startDateTime` / `endDateTime` as **the local

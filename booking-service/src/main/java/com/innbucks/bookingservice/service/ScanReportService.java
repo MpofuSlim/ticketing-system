@@ -8,6 +8,7 @@ import com.innbucks.bookingservice.dto.scan.ScannerStatsDTO;
 import com.innbucks.bookingservice.dto.scan.TeamMemberOutcomeCount;
 import com.innbucks.bookingservice.dto.scan.TeamMemberStatsDTO;
 import com.innbucks.bookingservice.dto.scan.TeamStatsResponseDTO;
+import com.innbucks.bookingservice.config.MarketTimeZone;
 import com.innbucks.bookingservice.entity.ScanAttempt;
 import com.innbucks.bookingservice.repository.ScanAttemptRepository;
 import lombok.RequiredArgsConstructor;
@@ -43,6 +44,15 @@ import java.util.stream.Collectors;
  *
  * <p>All methods are {@code readOnly = true} — this service never writes.
  * The audit write happens in {@link TicketScanService#scan}.
+ *
+ * <p><b>Every timestamp leaves here at the market offset</b> (see
+ * {@link MarketTimeZone#atMarket}). Rows are stored and queried as UTC
+ * {@link Instant}s throughout — only the rendering changes, at the very edge,
+ * so the operator dashboard needs no timezone arithmetic of its own. The
+ * {@code from}/{@code to} echoed on the stats DTOs are the bounds actually
+ * queried (i.e. after the controller widened {@code to}), not the raw request
+ * values — a report that reported a window it did not use would be worse than
+ * one that reported none.
  */
 @Service
 @Slf4j
@@ -50,6 +60,7 @@ import java.util.stream.Collectors;
 public class ScanReportService {
 
     private final ScanAttemptRepository repository;
+    private final MarketTimeZone marketTimeZone;
 
     @Transactional(readOnly = true)
     public PageResponse<ScanAttemptDTO> listMyScans(UUID scannerUserUuid,
@@ -59,7 +70,7 @@ public class ScanReportService {
                                                     int size) {
         Page<ScanAttempt> pg = repository.findByScannerUserUuidAndAttemptedAtBetween(
                 scannerUserUuid, from, to, pageable(page, size));
-        return PageResponse.from(pg.map(ScanReportService::toDto));
+        return PageResponse.from(pg.map(this::toDto));
     }
 
     @Transactional(readOnly = true)
@@ -70,7 +81,7 @@ public class ScanReportService {
                                                        int size) {
         Page<ScanAttempt> pg = repository.findByEventIdAndAttemptedAtBetween(
                 eventId, from, to, pageable(page, size));
-        return PageResponse.from(pg.map(ScanReportService::toDto));
+        return PageResponse.from(pg.map(this::toDto));
     }
 
     @Transactional(readOnly = true)
@@ -83,7 +94,7 @@ public class ScanReportService {
         Map<String, Long> byOutcome = zeroFilledOutcomes(rows);
         long total = byOutcome.values().stream().mapToLong(Long::longValue).sum();
         return new ScannerStatsDTO(scannerUserUuid, scannerEmail, scannerDisplayName,
-                from, to, total, byOutcome);
+                marketTimeZone.atMarket(from), marketTimeZone.atMarket(to), total, byOutcome);
     }
 
     @Transactional(readOnly = true)
@@ -91,7 +102,8 @@ public class ScanReportService {
         List<OutcomeCount> rows = repository.countOutcomesForEvent(eventId, from, to);
         Map<String, Long> byOutcome = zeroFilledOutcomes(rows);
         long total = byOutcome.values().stream().mapToLong(Long::longValue).sum();
-        return new EventScanStatsDTO(eventId, from, to, total, byOutcome);
+        return new EventScanStatsDTO(eventId, marketTimeZone.atMarket(from),
+                marketTimeZone.atMarket(to), total, byOutcome);
     }
 
     @Transactional(readOnly = true)
@@ -115,7 +127,8 @@ public class ScanReportService {
                 // Leaderboard: most active scanner first.
                 .sorted(Comparator.comparingLong(TeamMemberStatsDTO::total).reversed())
                 .collect(Collectors.toList());
-        return new TeamStatsResponseDTO(from, to, members);
+        return new TeamStatsResponseDTO(marketTimeZone.atMarket(from),
+                marketTimeZone.atMarket(to), members);
     }
 
     /**
@@ -135,10 +148,10 @@ public class ScanReportService {
         return out;
     }
 
-    private static ScanAttemptDTO toDto(ScanAttempt s) {
+    private ScanAttemptDTO toDto(ScanAttempt s) {
         return new ScanAttemptDTO(
                 s.getId(),
-                s.getAttemptedAt(),
+                marketTimeZone.atMarket(s.getAttemptedAt()),
                 s.getOutcome() == null ? null : s.getOutcome().name(),
                 s.getTicketNumber(),
                 s.getBookingItemId(),

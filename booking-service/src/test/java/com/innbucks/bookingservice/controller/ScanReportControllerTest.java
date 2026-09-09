@@ -1,6 +1,7 @@
 package com.innbucks.bookingservice.controller;
 
 import com.innbucks.bookingservice.client.EventServiceClient;
+import com.innbucks.bookingservice.config.MarketTimeZone;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.EventLookupDTO;
 import com.innbucks.bookingservice.dto.scan.EventScanStatsDTO;
@@ -21,6 +22,7 @@ import org.springframework.security.authentication.UsernamePasswordAuthenticatio
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 
 import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -79,11 +81,28 @@ class ScanReportControllerTest {
         return auth;
     }
 
+    /** The ZW cell's clock — every assertion below is written against it. */
+    private static final MarketTimeZone ZW = new MarketTimeZone("ZW");
+
+    /**
+     * The upper bound the controller ACTUALLY queries for a given requested
+     * {@code to}: rounded up to the end of its market-local day, so a client
+     * that froze "now" at page load still sees the rest of that day's scans.
+     */
+    private static Instant widened(Instant requestedTo) {
+        return ZW.endOfLocalDay(requestedTo);
+    }
+
+    /** The market-offset rendering the DTOs now carry on the wire. */
+    private static OffsetDateTime zw(Instant i) {
+        return ZW.atMarket(i);
+    }
+
     private static ScanReportController controller(ScanReportService svc, EventServiceClient client) {
         @SuppressWarnings("unchecked")
         ObjectProvider<EventServiceClient> provider = mock(ObjectProvider.class);
         when(provider.getIfAvailable()).thenReturn(client);
-        return new ScanReportController(svc, provider);
+        return new ScanReportController(svc, ZW, provider);
     }
 
     private static Map<String, Long> emptyOutcomes() {
@@ -109,7 +128,7 @@ class ScanReportControllerTest {
         Instant from = Instant.parse("2026-06-01T00:00:00Z");
         Instant to = Instant.parse("2026-06-30T23:59:59Z");
         PageResponse<ScanAttemptDTO> page = new PageResponse<>(List.of(), 0, 20, 0L, 0);
-        when(svc.listMyScans(eq(userUuid), eq(from), eq(to), anyInt(), anyInt())).thenReturn(page);
+        when(svc.listMyScans(eq(userUuid), eq(from), eq(widened(to)), anyInt(), anyInt())).thenReturn(page);
 
         ResponseEntity<ApiResult<PageResponse<ScanAttemptDTO>>> resp =
                 controller(svc, null).myScans(organizerAuth(UUID.randomUUID(), userUuid),
@@ -118,7 +137,7 @@ class ScanReportControllerTest {
         assertThat(resp.getStatusCode().is2xxSuccessful()).isTrue();
         assertThat(resp.getBody()).isNotNull();
         assertThat(resp.getBody().getData()).isSameAs(page);
-        verify(svc).listMyScans(eq(userUuid), eq(from), eq(to), eq(0), eq(20));
+        verify(svc).listMyScans(eq(userUuid), eq(from), eq(widened(to)), eq(0), eq(20));
     }
 
     @Test
@@ -137,7 +156,7 @@ class ScanReportControllerTest {
                         from, to, 0, 20);
 
         assertThat(resp.getStatusCode().is2xxSuccessful()).isTrue();
-        verify(svc).listMyScans(eq(userUuid), eq(from), eq(to), eq(0), eq(20));
+        verify(svc).listMyScans(eq(userUuid), eq(from), eq(widened(to)), eq(0), eq(20));
     }
 
     @Test
@@ -191,9 +210,9 @@ class ScanReportControllerTest {
         Instant from = Instant.parse("2026-06-01T00:00:00Z");
         Instant to = Instant.parse("2026-06-30T23:59:59Z");
         ScannerStatsDTO dto = new ScannerStatsDTO(userUuid, "tariro@harare-arena.co.zw",
-                "Tariro Chikomo", from, to, 0L, emptyOutcomes());
+                "Tariro Chikomo", zw(from), zw(to), 0L, emptyOutcomes());
         when(svc.myStats(eq(userUuid), eq("tariro@harare-arena.co.zw"),
-                eq("Tariro Chikomo"), eq(from), eq(to))).thenReturn(dto);
+                eq("Tariro Chikomo"), eq(from), eq(widened(to)))).thenReturn(dto);
 
         ResponseEntity<ApiResult<ScannerStatsDTO>> resp = controller(svc, null)
                 .myStats(teamMemberAuth(UUID.randomUUID(), userUuid), from, to);
@@ -219,7 +238,7 @@ class ScanReportControllerTest {
         Instant from = Instant.parse("2026-06-19T17:00:00Z");
         Instant to = Instant.parse("2026-06-20T02:00:00Z");
         PageResponse<ScanAttemptDTO> page = new PageResponse<>(List.of(), 0, 20, 0L, 0);
-        when(svc.listEventScans(eq(eventId), eq(from), eq(to), anyInt(), anyInt())).thenReturn(page);
+        when(svc.listEventScans(eq(eventId), eq(from), eq(widened(to)), anyInt(), anyInt())).thenReturn(page);
 
         ResponseEntity<ApiResult<PageResponse<ScanAttemptDTO>>> resp =
                 controller(svc, eventClient).eventScans(
@@ -227,7 +246,7 @@ class ScanReportControllerTest {
                         eventId, from, to, 0, 20);
 
         assertThat(resp.getStatusCode().is2xxSuccessful()).isTrue();
-        verify(svc).listEventScans(eq(eventId), eq(from), eq(to), eq(0), eq(20));
+        verify(svc).listEventScans(eq(eventId), eq(from), eq(widened(to)), eq(0), eq(20));
     }
 
     @Test
@@ -304,7 +323,7 @@ class ScanReportControllerTest {
         UUID topUserUuid = UUID.randomUUID();
         UUID midUserUuid = UUID.randomUUID();
         UUID lowUserUuid = UUID.randomUUID();
-        TeamStatsResponseDTO response = new TeamStatsResponseDTO(from, to, List.of(
+        TeamStatsResponseDTO response = new TeamStatsResponseDTO(zw(from), zw(to), List.of(
                 new TeamMemberStatsDTO(topUserUuid, "tariro@x.co", "Tariro Chikomo",
                         412L, emptyOutcomes()),
                 new TeamMemberStatsDTO(midUserUuid, "rufaro@x.co", "Rufaro Moyo",
@@ -312,7 +331,7 @@ class ScanReportControllerTest {
                 new TeamMemberStatsDTO(lowUserUuid, "rumbi@x.co", "Rumbi Sibanda",
                         53L, emptyOutcomes())
         ));
-        when(svc.teamStats(eq(organizerUuid), eq(from), eq(to))).thenReturn(response);
+        when(svc.teamStats(eq(organizerUuid), eq(from), eq(widened(to)))).thenReturn(response);
 
         ResponseEntity<ApiResult<TeamStatsResponseDTO>> resp = controller(svc, null)
                 .teamStats(organizerAuth(organizerUuid, UUID.randomUUID()), from, to);
@@ -337,14 +356,14 @@ class ScanReportControllerTest {
         Instant from = Instant.parse("2026-06-19T17:00:00Z");
         Instant to = Instant.parse("2026-06-20T02:00:00Z");
         PageResponse<ScanAttemptDTO> page = new PageResponse<>(List.of(), 0, 20, 0L, 0);
-        when(svc.listEventScans(eq(eventId), eq(from), eq(to), anyInt(), anyInt())).thenReturn(page);
+        when(svc.listEventScans(eq(eventId), eq(from), eq(widened(to)), anyInt(), anyInt())).thenReturn(page);
 
         ResponseEntity<ApiResult<PageResponse<ScanAttemptDTO>>> resp =
                 controller(svc, eventClient).eventScans(superAdminAuth(), eventId, from, to, 0, 20);
 
         assertThat(resp.getStatusCode().is2xxSuccessful()).isTrue();
         verify(eventClient, never()).getEventInternal(any(), any());
-        verify(svc).listEventScans(eq(eventId), eq(from), eq(to), eq(0), eq(20));
+        verify(svc).listEventScans(eq(eventId), eq(from), eq(widened(to)), eq(0), eq(20));
     }
 
     @Test
@@ -354,8 +373,8 @@ class ScanReportControllerTest {
         UUID eventId = UUID.randomUUID();
         Instant from = Instant.parse("2026-06-19T17:00:00Z");
         Instant to = Instant.parse("2026-06-20T02:00:00Z");
-        EventScanStatsDTO dto = new EventScanStatsDTO(eventId, from, to, 0L, emptyOutcomes());
-        when(svc.eventStats(eq(eventId), eq(from), eq(to))).thenReturn(dto);
+        EventScanStatsDTO dto = new EventScanStatsDTO(eventId, zw(from), zw(to), 0L, emptyOutcomes());
+        when(svc.eventStats(eq(eventId), eq(from), eq(widened(to)))).thenReturn(dto);
 
         ResponseEntity<ApiResult<EventScanStatsDTO>> resp =
                 controller(svc, eventClient).eventStats(superAdminAuth(), eventId, from, to);
@@ -371,14 +390,14 @@ class ScanReportControllerTest {
         ScanReportService svc = mock(ScanReportService.class);
         Instant from = Instant.parse("2026-06-19T17:00:00Z");
         Instant to = Instant.parse("2026-06-20T02:00:00Z");
-        TeamStatsResponseDTO response = new TeamStatsResponseDTO(from, to, List.of());
-        when(svc.teamStats(eq(null), eq(from), eq(to))).thenReturn(response);
+        TeamStatsResponseDTO response = new TeamStatsResponseDTO(zw(from), zw(to), List.of());
+        when(svc.teamStats(eq(null), eq(from), eq(widened(to)))).thenReturn(response);
 
         ResponseEntity<ApiResult<TeamStatsResponseDTO>> resp = controller(svc, null)
                 .teamStats(superAdminAuth(), from, to);
 
         assertThat(resp.getStatusCode().is2xxSuccessful()).isTrue();
-        verify(svc).teamStats(eq(null), eq(from), eq(to));
+        verify(svc).teamStats(eq(null), eq(from), eq(widened(to)));
     }
 
     @Test
@@ -402,6 +421,6 @@ class ScanReportControllerTest {
     // public shape fail the controller test, not just a hypothetical FE.
     @SuppressWarnings("unused")
     private static EventScanStatsDTO zeroStats(UUID eventId, Instant from, Instant to) {
-        return new EventScanStatsDTO(eventId, from, to, 0L, emptyOutcomes());
+        return new EventScanStatsDTO(eventId, zw(from), zw(to), 0L, emptyOutcomes());
     }
 }

@@ -50,9 +50,21 @@ import java.util.UUID;
  * <p><b>Audit invariant:</b> every scan attempt, regardless of outcome,
  * writes exactly one {@code scan_attempts} row. The audit insert shares
  * the same {@code @Transactional} boundary as the {@code claimRedemption}
- * UPDATE so a crash mid-write rolls both back. An audit-write hiccup is
- * logged + counted but never throws — the customer is at the gate and a
- * successful redeem must reach them even if observability is degraded.
+ * UPDATE so a crash mid-write rolls both back — and, being in that same
+ * committed transaction, the row is queryable by the reporting endpoints the
+ * moment the scan response is returned. There is no asynchronous hand-off and
+ * no propagation delay to wait out.
+ *
+ * <p><b>What the audit try/catch does and does not buy.</b> It catches what
+ * fails while BUILDING the row (a missing request context, an MDC lookup) and
+ * whatever the persistence call itself throws. It does NOT make an audit write
+ * unable to fail the scan: JPA defers the INSERT to flush-at-commit, which
+ * happens after this method has returned, so a constraint violation surfaces
+ * at commit and rolls the redemption back with it. Genuinely isolating the two
+ * would mean giving the audit write its own {@code REQUIRES_NEW} transaction,
+ * which is a real trade — the row would then survive a rolled-back redemption
+ * and claim an ALLOWED that never happened. That call has not been made; do
+ * not read the catch block as though it had.
  */
 @Service
 @Slf4j
@@ -233,10 +245,13 @@ public class TicketScanService {
      * rolls back together with the {@code claimRedemption} update on a crash.
      *
      * <p>Wrapped in try/catch and intentionally swallowing: the customer is
-     * at the gate and a successful redeem must not be rolled back because the
-     * audit-write tripped. A failure here is logged at WARN and counted via
+     * at the gate. A failure here is logged at WARN and counted via
      * {@code tickets.scan.audit_write{outcome=fail}} so it shows up on the
-     * service's metrics dashboard even though the scan succeeded.
+     * service's metrics dashboard.
+     *
+     * <p>Note the limit of that protection: only failures raised BEFORE the
+     * transaction flushes are caught here. See the class javadoc — the INSERT
+     * itself lands at commit, outside this frame.
      */
     private void recordAttempt(String ticketNumber,
                                BookingItem item,

@@ -2,7 +2,7 @@ package com.innbucks.bookingservice.dto.scan;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 
-import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.UUID;
 
 /**
@@ -18,9 +18,13 @@ public record ScanAttemptDTO(
         @Schema(example = "9b1f3c2e-6a47-4f7c-9d2b-1d6f0a1e5b91",
                 description = "Audit row id (scan_attempts.id).")
         UUID id,
-        @Schema(example = "2026-06-19T19:42:11Z",
-                description = "When the scan happened, UTC.")
-        Instant attemptedAt,
+        @Schema(example = "2026-06-19T21:42:11+02:00",
+                description = "When the scan happened, rendered at the cell's market offset "
+                            + "(Africa/Harare for a ZW cell). Same instant a UTC value would "
+                            + "carry — the offset is explicit — but the wall clock shown is the "
+                            + "one the scanner was standing in, so it needs no client-side "
+                            + "conversion to read correctly.")
+        OffsetDateTime attemptedAt,
         @Schema(example = "ALLOWED",
                 description = "Outcome of the scan. One of ALLOWED, ALREADY_REDEEMED, WRONG_ORGANIZER, " +
                               "NOT_ASSIGNED_TO_EVENT, TICKET_NOT_FOUND, BOOKING_NOT_CONFIRMED.")

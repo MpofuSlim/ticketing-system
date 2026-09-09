@@ -2,7 +2,7 @@ package com.innbucks.bookingservice.dto.scan;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 
-import java.time.Instant;
+import java.time.OffsetDateTime;
 import java.util.Map;
 import java.util.UUID;
 
@@ -24,8 +24,8 @@ public record ScannerStatsDTO(
         String scannerEmail,
         @Schema(example = "Tariro Chikomo", nullable = true)
         String scannerDisplayName,
-        @Schema(example = "2026-06-01T00:00:00Z") Instant from,
-        @Schema(example = "2026-06-30T23:59:59Z") Instant to,
+        @Schema(example = "2026-06-01T02:00:00+02:00") OffsetDateTime from,
+        @Schema(example = "2026-06-30T23:59:59.999999999+02:00") OffsetDateTime to,
         @Schema(example = "412", description = "Total scan attempts across all outcomes.") long total,
         @Schema(description = "Count per Outcome enum value (zero-filled for missing keys).",
                 example = "{\"ALLOWED\":380,\"ALREADY_REDEEMED\":24,\"WRONG_ORGANIZER\":2," +
