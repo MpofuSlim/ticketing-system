@@ -928,7 +928,15 @@ public class AuthService implements ApplicationEventPublisherAware {
         }
     }
 
-    private AuthResponseDTO issueToken(User user, String deviceId) {
+    /**
+     * Mints a full session (access token + a fresh refresh family) for a user
+     * that some OTHER path has already authenticated. Public for
+     * {@link FederatedLoginService}, which proves the customer via a
+     * middleware-signed assertion and must then hand out exactly the token a
+     * password login would — same claims, same refresh semantics, same
+     * revocation — rather than a second token shape.
+     */
+    public AuthResponseDTO issueToken(User user, String deviceId) {
         String refreshToken = refreshTokenService.issueNewFamily(user, deviceId);
         return buildResponse(user, refreshToken);
     }
