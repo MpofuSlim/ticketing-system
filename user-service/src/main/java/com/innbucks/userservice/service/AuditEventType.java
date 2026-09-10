@@ -54,6 +54,20 @@ public enum AuditEventType {
     AUTH_PASSWORD_CHANGED,
     /** Rate-limit threshold exceeded on /auth/login or /auth/refresh. */
     AUTH_RATE_LIMITED,
+    /**
+     * Successful /auth/exchange — a middleware-signed assertion was traded
+     * for a CUSTOMER session. Metadata {@code newAccount} says whether the
+     * customer row was created on this call.
+     */
+    AUTH_FEDERATED_LOGIN_SUCCESS,
+    /**
+     * /auth/exchange refused. The {@code failure_reason} narrows it:
+     * {@code bad_assertion} (signature/claims), {@code replay} (jti already
+     * spent), {@code not_a_customer} (the phone belongs to a staff account),
+     * {@code account_inactive}, {@code unnormalisable_phone}. The client
+     * always sees the same opaque 401.
+     */
+    AUTH_FEDERATED_LOGIN_REJECTED,
 
     /**
      * SUPER_ADMIN approved a system user's first activation — combines the

@@ -370,6 +370,64 @@ its `V4`).
   already decided the row. `approve` was fixed alongside `reject` — its Swagger
   had been documenting a 404 it did not actually return.
 
+## Super-app customers federate from the InnBucks middleware (`POST /auth/exchange`)
+
+**Two audiences, two identity providers, one token shape.** Merchants and admins
+log in HERE with a password through the admin portal — unchanged. The super app's
+CUSTOMERS log in at the **InnBucks middleware** (`POST /auth/client-service/user/login`),
+whose `accessToken` this fleet can neither verify (no key) nor introspect (no
+endpoint — measured for InnRewards V42, do not re-try). So the middleware signs a
+**short-lived RS256 assertion** (`iss`/`aud` as provisioned, `sub` = phone, `jti`,
+`iat`, `exp − iat ≤ 300s`) after each login, and the app trades it at
+`POST /auth/exchange` for a normal CUSTOMER access + refresh token. Everything
+gated on `hasRole('CUSTOMER')` — marketplace orders above all — then works with
+no further change and cannot tell how the customer proved themselves.
+
+- **The assertion contract is loyalty's, verbatim.** `FederationAssertionVerifier`
+  is `RegistrationAssertionVerifier` carried across so the middleware signs ONE
+  shape for the whole fleet; keep them in lock-step. The **audience differs on
+  purpose** (`innbucks-foundry` vs `innbucks-loyalty`): a registration proof must
+  never double as a login, and the verifier requires both `iss` and `aud`.
+- **Only ever a CUSTOMER.** `FederatedLoginService` refuses a phone that belongs to
+  a non-CUSTOMER account (`not_a_customer`), so a middleware login can never turn
+  into a merchant or admin session whatever the assertion says. A staff member
+  who also shops must use a different number; that is the safe default, not a
+  gap to close.
+- **One use per assertion.** The `jti` is SETNX'd in Redis for the assertion's
+  remaining lifetime + 60s grace BEFORE any account work. If Redis cannot answer
+  the login is refused with a retryable **503** — a session that could not be
+  replay-checked is not issued. Redis is boot-required on every cell, so this is
+  an outage signal, not a routine path.
+- **It mints a LOGIN token, not a new token shape.** `AuthService.issueToken`
+  (public for this) is the same mint every password login and refresh goes
+  through: same claims, same refresh family, same tokenVersion revocation. Do
+  not add a scoped or roles-empty variant here — the roles-empty token is
+  loyalty's, deliberately inert fleet-wide.
+- **First sign-in creates the customer, shaped exactly like
+  `OtpService.materializeOrRefreshLocalAccount`** (CUSTOMER, active, approved,
+  placeholder name, tier-1 profile with `phoneVerified` stamped) with one
+  difference: **no chosen password**. `users.password` is NOT NULL, so an
+  unusable random Argon2 hash is stored; nobody ever knows the plaintext. The
+  OTP-gated forgot-password flow can set one later. A lost create race
+  (`DataIntegrityViolationException` on the phone unique index) re-reads the
+  winner's row rather than failing the customer.
+- **The assertion is a phone proof** and is treated like an OTP verify: it stamps
+  `phoneVerified`/`phoneVerifiedAt` and calls `loyaltyServiceClient.promoteUserByPhone`
+  (best-effort), so loyalty projections activate on first sign-in without an SMS.
+- **Every refusal is one opaque `401 "Assertion rejected"`**; which check failed
+  goes to the audit log as `AUTH_FEDERATED_LOGIN_REJECTED` with a `failure_reason`.
+  Off by default = **404**; enabled with a blank key = **503** plus a
+  HALF-PROVISIONED boot ERROR (`FederationProvisioningCheck`). Env:
+  `AUTH_FEDERATION_ENABLED` / `_PUBLIC_KEY` / `_PREVIOUS_PUBLIC_KEY` / `_ISSUER` /
+  `_AUDIENCE` / `_MAX_TTL_SECONDS` in `deploy/cells/cell.<iso>.env` (committed OFF,
+  enabled per host in the gitignored local file).
+- **Gateway: `auth-exchange-route`** — POST-only, exact path, IP-keyed fail-safe
+  limiter (`AUTH_EXCHANGE_RATE_LIMIT_*`, 5/20), ordered before the limiter-free
+  `/auth/**` catch-all; pinned in `GatewayRouteTableTest`.
+- **What still needs the middleware team:** sign the assertion at login and hand
+  over the public key. Until then the endpoint stays off and the super app has no
+  path to any `CUSTOMER`-gated endpoint — that is the documented state, not a bug.
+
 ## Platform staff means one role set — use it
 
 `AuthenticatedCaller.PLATFORM_STAFF_ROLES` (`SUPER_ADMIN`, `PRODUCT_OFFICER`,
