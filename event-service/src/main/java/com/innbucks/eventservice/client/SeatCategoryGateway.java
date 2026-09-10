@@ -56,7 +56,43 @@ public class SeatCategoryGateway {
         );
     }
 
-    private List<EventSeatCategoryResponseDTO> doFetch(UUID eventId) {
+    /**
+     * Total seats allocated across the event's live categories, or empty when
+     * seat-service could not be asked.
+     *
+     * <p><b>This deliberately does NOT reuse {@link #fetchForEvent}'s fallback.</b>
+     * That one degrades to an empty list so an event still renders without its
+     * seat detail — right for a read. Here the answer gates a WRITE, and an
+     * empty list is indistinguishable from "no categories", so the same fallback
+     * would report zero seats allocated during a seat-service outage and wave
+     * through exactly the capacity cut this exists to refuse. Empty Optional
+     * means "could not ask" and the caller must refuse; {@code Optional.of(0L)}
+     * means "asked, genuinely nothing allocated".
+     *
+     * <p>Summed from section seat counts because that IS the category's
+     * {@code totalSeats} (seat-service derives one from the other at creation),
+     * and the existing listing endpoint already carries it — no new endpoint,
+     * no seat-service change. Deliberately not {@code availableSeats}, which is
+     * live remaining stock, not the allocation.
+     */
+    public java.util.Optional<Long> fetchAllocatedSeats(UUID eventId) {
+        return circuitBreaker.run(
+                () -> java.util.Optional.of(
+                        fetchRaw(eventId).stream()
+                                .flatMap(c -> c.getSections() == null
+                                        ? java.util.stream.Stream.<SeatCategorySectionDTO>empty()
+                                        : c.getSections().stream())
+                                .mapToLong(s -> s.getSeatCount() == null ? 0L : s.getSeatCount())
+                                .sum()),
+                throwable -> {
+                    log.warn("seatCategories breaker fallback on allocation lookup eventId={}",
+                            eventId, throwable);
+                    return java.util.Optional.empty();
+                }
+        );
+    }
+
+    private List<SeatCategoryServiceResponseDTO> fetchRaw(UUID eventId) {
         String url = UriComponentsBuilder
                 .fromUriString(seatServiceBaseUrl)
                 .path("/seat-categories")
@@ -74,7 +110,12 @@ public class SeatCategoryGateway {
         ApiResult<List<SeatCategoryServiceResponseDTO>> envelope = response.getBody();
         List<SeatCategoryServiceResponseDTO> categories =
                 envelope == null ? null : envelope.getData();
-        if (categories == null || categories.isEmpty()) {
+        return categories == null ? Collections.emptyList() : categories;
+    }
+
+    private List<EventSeatCategoryResponseDTO> doFetch(UUID eventId) {
+        List<SeatCategoryServiceResponseDTO> categories = fetchRaw(eventId);
+        if (categories.isEmpty()) {
             return Collections.emptyList();
         }
 

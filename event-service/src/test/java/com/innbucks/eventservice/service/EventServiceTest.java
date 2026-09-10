@@ -5,6 +5,8 @@ import com.innbucks.eventservice.client.BookingNotificationGateway;
 import com.innbucks.eventservice.client.OrganizerGateway;
 import com.innbucks.eventservice.client.OrganizerNotificationGateway;
 import com.innbucks.eventservice.client.SeatCategoryGateway;
+import com.innbucks.eventservice.exception.ConflictException;
+import com.innbucks.eventservice.exception.ServiceUnavailableException;
 import com.innbucks.eventservice.dto.CreateEventRequestDTO;
 import com.innbucks.eventservice.dto.EventResponseDTO;
 import com.innbucks.eventservice.dto.UpdateEventRequestDTO;
@@ -96,6 +98,9 @@ class EventServiceTest {
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
         when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
         when(mapper.toDTO(any(Event.class))).thenReturn(null);
+        // Any capacity edit now consults the seat allocation. Nothing allocated
+        // here — this test is about the availableTickets arithmetic.
+        when(gateway.fetchAllocatedSeats(eventId)).thenReturn(Optional.of(0L));
 
         UpdateEventRequestDTO req = new UpdateEventRequestDTO();
         req.setTotalCapacity(120);
@@ -431,6 +436,102 @@ class EventServiceTest {
         assertSame(dto, result);
         assertNotNull(result.getSeatCategories());
         assertTrue(result.getSeatCategories().isEmpty());
+    }
+
+    // ------------------------------------------------------------------
+    // Capacity-vs-allocation guard: the other half of the oversell fix.
+    // seat-service refuses a category that would push the allocation above
+    // the event's capacity; this side refuses lowering capacity beneath an
+    // allocation that already exists.
+    // ------------------------------------------------------------------
+
+    private EventService serviceWithGateway(EventRepository repo, SeatCategoryGateway gateway) {
+        return new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"),
+                mock(EventMapper.class), gateway, mock(BookingGateway.class),
+                mock(OrganizerGateway.class), mock(BookingNotificationGateway.class),
+                mock(OrganizerNotificationGateway.class));
+    }
+
+    @Test
+    void updateEvent_refusesCapacityBelowAllocatedSeats() {
+        EventRepository repo = mock(EventRepository.class);
+        SeatCategoryGateway gateway = mock(SeatCategoryGateway.class);
+        EventService service = serviceWithGateway(repo, gateway);
+
+        UUID eventId = UUID.randomUUID();
+        when(repo.findByEventIdAndDeletedFalse(eventId))
+                .thenReturn(Optional.of(baseEvent(eventId, TENANT_1)));
+        when(gateway.fetchAllocatedSeats(eventId)).thenReturn(Optional.of(100L));
+
+        UpdateEventRequestDTO req = new UpdateEventRequestDTO();
+        req.setTotalCapacity(80); // 80 < 100 allocated
+
+        ConflictException ex = assertThrows(ConflictException.class,
+                () -> service.updateEvent(TENANT_1, eventId, req));
+        assertTrue(ex.getMessage().contains("100"), "actual: " + ex.getMessage());
+        assertTrue(ex.getMessage().contains("80"), "actual: " + ex.getMessage());
+        verify(repo, never()).save(any());
+    }
+
+    @Test
+    void updateEvent_allowsCapacityEqualToAllocatedSeats() {
+        EventRepository repo = mock(EventRepository.class);
+        SeatCategoryGateway gateway = mock(SeatCategoryGateway.class);
+        EventService service = serviceWithGateway(repo, gateway);
+
+        UUID eventId = UUID.randomUUID();
+        when(repo.findByEventIdAndDeletedFalse(eventId))
+                .thenReturn(Optional.of(baseEvent(eventId, TENANT_1)));
+        when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(gateway.fetchAllocatedSeats(eventId)).thenReturn(Optional.of(100L));
+
+        UpdateEventRequestDTO req = new UpdateEventRequestDTO();
+        req.setTotalCapacity(100); // exactly covers the allocation
+
+        assertDoesNotThrow(() -> service.updateEvent(TENANT_1, eventId, req));
+        verify(repo).save(any(Event.class));
+    }
+
+    @Test
+    void updateEvent_refusesCapacityChangeWhenSeatServiceCannotBeReached() {
+        // Fails CLOSED. fetchAllocatedSeats returns an empty Optional (not an
+        // empty list) precisely so an outage cannot be read as "nothing
+        // allocated" and wave the cut through.
+        EventRepository repo = mock(EventRepository.class);
+        SeatCategoryGateway gateway = mock(SeatCategoryGateway.class);
+        EventService service = serviceWithGateway(repo, gateway);
+
+        UUID eventId = UUID.randomUUID();
+        when(repo.findByEventIdAndDeletedFalse(eventId))
+                .thenReturn(Optional.of(baseEvent(eventId, TENANT_1)));
+        when(gateway.fetchAllocatedSeats(eventId)).thenReturn(Optional.empty());
+
+        UpdateEventRequestDTO req = new UpdateEventRequestDTO();
+        req.setTotalCapacity(80);
+
+        assertThrows(ServiceUnavailableException.class,
+                () -> service.updateEvent(TENANT_1, eventId, req));
+        verify(repo, never()).save(any());
+    }
+
+    @Test
+    void updateEvent_withoutCapacityChange_doesNotConsultSeatService() {
+        // The guard is scoped to capacity edits. A title-only update must not
+        // acquire a hard dependency on seat-service being up.
+        EventRepository repo = mock(EventRepository.class);
+        SeatCategoryGateway gateway = mock(SeatCategoryGateway.class);
+        EventService service = serviceWithGateway(repo, gateway);
+
+        UUID eventId = UUID.randomUUID();
+        when(repo.findByEventIdAndDeletedFalse(eventId))
+                .thenReturn(Optional.of(baseEvent(eventId, TENANT_1)));
+        when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        UpdateEventRequestDTO req = new UpdateEventRequestDTO();
+        req.setTitle("Renamed");
+
+        assertDoesNotThrow(() -> service.updateEvent(TENANT_1, eventId, req));
+        verify(gateway, never()).fetchAllocatedSeats(any());
     }
 
     private static Event baseEvent(UUID eventId, UUID tenantUserUuid) {
