@@ -5,6 +5,18 @@ on:
     branches: [master]
     tags:
       - "v*"
+    # A docs-only push rebuilds, rescans and republishes all seven service
+    # images for byte-identical application code. Skip those. A push that
+    # touches markdown AND anything else still builds — the filter only skips
+    # when EVERY changed path matches.
+    #
+    # Caveat, deliberately accepted: GitHub applies path filters to the `tags`
+    # half of this trigger too, and `on.push` cannot carry two different
+    # filters. So tagging a commit whose diff is markdown-only could skip its
+    # release build. Re-run it from the Actions tab (`workflow_dispatch` below)
+    # if that ever happens — it is far rarer than a docs merge.
+    paths-ignore:
+      - "**.md"
   pull_request:
     paths:
       - "**/Dockerfile"
