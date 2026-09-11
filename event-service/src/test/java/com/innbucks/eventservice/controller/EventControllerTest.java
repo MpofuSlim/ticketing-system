@@ -29,6 +29,7 @@ import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.springframework.web.context.WebApplicationContext;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -545,8 +546,13 @@ class EventControllerTest {
         req.setVenue("Bulawayo");
         req.setCategory(category);
         req.setLocation(LocationDTO.builder().latitude(-17.8252).longitude(31.0335).build());
-        req.setStartDateTime(LocalDateTime.now().plusDays(10));
-        req.setEndDateTime(LocalDateTime.now().plusDays(10).plusHours(3));
+        // ZoneOffset.UTC here is only a machine-independent "now" — it is NOT a
+        // claim that request bodies are UTC. A submitted time is the MARKET-LOCAL
+        // wall clock the organizer typed, and MarketTimeZone.toUtc converts it on
+        // the way in. The fixture just needs to be comfortably in the future and
+        // identical on every developer's machine.
+        req.setStartDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(10));
+        req.setEndDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(10).plusHours(3));
         req.setTotalCapacity(50);
         return req;
     }
@@ -555,38 +561,38 @@ class EventControllerTest {
     void getEventsByCountry_onlyReturnsActiveUpcomingEvents_numberedFromOne() throws Exception {
         eventRepository.save(eventBuilder()
                 .title("Third")
-                .startDateTime(LocalDateTime.now().plusDays(30))
-                .endDateTime(LocalDateTime.now().plusDays(30).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(30))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(30).plusHours(2))
                 .build());
         eventRepository.save(eventBuilder()
                 .title("First")
-                .startDateTime(LocalDateTime.now().plusDays(10))
-                .endDateTime(LocalDateTime.now().plusDays(10).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(10))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(10).plusHours(2))
                 .build());
         eventRepository.save(eventBuilder()
                 .title("Second")
-                .startDateTime(LocalDateTime.now().plusDays(20))
-                .endDateTime(LocalDateTime.now().plusDays(20).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(20))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(20).plusHours(2))
                 .build());
 
         eventRepository.save(eventBuilder()
                 .title("Past")
-                .startDateTime(LocalDateTime.now().minusDays(1))
-                .endDateTime(LocalDateTime.now().minusDays(1).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).minusDays(1))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).minusDays(1).plusHours(2))
                 .build());
 
         eventRepository.save(eventBuilder()
                 .title("Inactive")
-                .startDateTime(LocalDateTime.now().plusDays(15))
-                .endDateTime(LocalDateTime.now().plusDays(15).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(15))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(15).plusHours(2))
                 .active(false)
                 .build());
 
         eventRepository.save(eventBuilder()
                 .title("Other country")
                 .country("Zambia")
-                .startDateTime(LocalDateTime.now().plusDays(5))
-                .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(5))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(5).plusHours(2))
                 .build());
 
         // Lowercase param exercises the case-insensitive country match.
@@ -608,18 +614,18 @@ class EventControllerTest {
     void getActiveEvents_filtersByCountryAndCategory() throws Exception {
         eventRepository.save(eventBuilder().title("ZW Concert")
                 .country("Zimbabwe").category(EventCategory.CONCERT)
-                .startDateTime(LocalDateTime.now().plusDays(3))
-                .endDateTime(LocalDateTime.now().plusDays(3).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(3))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(3).plusHours(2))
                 .build());
         eventRepository.save(eventBuilder().title("ZW Marathon")
                 .country("Zimbabwe").category(EventCategory.MARATHON)
-                .startDateTime(LocalDateTime.now().plusDays(4))
-                .endDateTime(LocalDateTime.now().plusDays(4).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(4))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(4).plusHours(2))
                 .build());
         eventRepository.save(eventBuilder().title("ZM Concert")
                 .country("Zambia").category(EventCategory.CONCERT)
-                .startDateTime(LocalDateTime.now().plusDays(5))
-                .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(5))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(5).plusHours(2))
                 .build());
 
         // Country filter only (case-insensitive) → the two Zimbabwe events.
@@ -667,8 +673,8 @@ class EventControllerTest {
     void consumeAvailability_withoutInternalToken_returns401_andDoesNotMutate() throws Exception {
         Event saved = eventRepository.save(eventBuilder()
                 .title("Concert")
-                .startDateTime(LocalDateTime.now().plusDays(7))
-                .endDateTime(LocalDateTime.now().plusDays(7).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7).plusHours(2))
                 .totalCapacity(100)
                 .availableTickets(100)
                 .build());
@@ -686,8 +692,8 @@ class EventControllerTest {
     void consumeAvailability_withWrongInternalToken_returns401_andDoesNotMutate() throws Exception {
         Event saved = eventRepository.save(eventBuilder()
                 .title("Concert")
-                .startDateTime(LocalDateTime.now().plusDays(7))
-                .endDateTime(LocalDateTime.now().plusDays(7).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7).plusHours(2))
                 .totalCapacity(100)
                 .availableTickets(100)
                 .build());
@@ -705,8 +711,8 @@ class EventControllerTest {
     void consumeAvailability_withValidInternalToken_returns200_andDecrements() throws Exception {
         Event saved = eventRepository.save(eventBuilder()
                 .title("Concert")
-                .startDateTime(LocalDateTime.now().plusDays(7))
-                .endDateTime(LocalDateTime.now().plusDays(7).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7).plusHours(2))
                 .totalCapacity(100)
                 .availableTickets(100)
                 .build());
@@ -734,8 +740,8 @@ class EventControllerTest {
     void getEventInternal_withoutInternalToken_returns401() throws Exception {
         Event saved = eventRepository.save(eventBuilder()
                 .title("Concert")
-                .startDateTime(LocalDateTime.now().plusDays(7))
-                .endDateTime(LocalDateTime.now().plusDays(7).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7).plusHours(2))
                 .build());
 
         mockMvc.perform(get("/events/internal/{id}", saved.getEventId()))
@@ -746,8 +752,8 @@ class EventControllerTest {
     void getEventInternal_withWrongInternalToken_returns401() throws Exception {
         Event saved = eventRepository.save(eventBuilder()
                 .title("Concert")
-                .startDateTime(LocalDateTime.now().plusDays(7))
-                .endDateTime(LocalDateTime.now().plusDays(7).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7).plusHours(2))
                 .build());
 
         mockMvc.perform(get("/events/internal/{id}", saved.getEventId())
@@ -762,8 +768,8 @@ class EventControllerTest {
         Event saved = eventRepository.save(eventBuilder()
                 .title("Draft Concert")
                 .active(false)
-                .startDateTime(LocalDateTime.now().plusDays(7))
-                .endDateTime(LocalDateTime.now().plusDays(7).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7).plusHours(2))
                 .build());
 
         mockMvc.perform(get("/events/internal/{id}", saved.getEventId())
@@ -781,8 +787,8 @@ class EventControllerTest {
         // field stripped, so a service needing it MUST use the internal path.
         Event saved = eventRepository.save(eventBuilder()
                 .title("Concert")
-                .startDateTime(LocalDateTime.now().plusDays(7))
-                .endDateTime(LocalDateTime.now().plusDays(7).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7).plusHours(2))
                 .build());
 
         mockMvc.perform(get("/events/{id}", saved.getEventId()))
@@ -799,14 +805,14 @@ class EventControllerTest {
     @WithMockUser(username = "admin@innbucks.co.zw", roles = "SUPER_ADMIN")
     void getEventsByOrganizer_asSuperAdmin_returnsOnlyThatOrganizersEvents() throws Exception {
         eventRepository.save(eventBuilder().tenantUserUuid(ORGANIZER_A).title("A Concert")
-                .startDateTime(LocalDateTime.now().plusDays(5))
-                .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2)).build());
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(5))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(5).plusHours(2)).build());
         eventRepository.save(eventBuilder().tenantUserUuid(ORGANIZER_A).title("A Marathon")
-                .startDateTime(LocalDateTime.now().plusDays(6))
-                .endDateTime(LocalDateTime.now().plusDays(6).plusHours(2)).build());
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(6))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(6).plusHours(2)).build());
         eventRepository.save(eventBuilder().tenantUserUuid(ORGANIZER_B).title("B Concert")
-                .startDateTime(LocalDateTime.now().plusDays(7))
-                .endDateTime(LocalDateTime.now().plusDays(7).plusHours(2)).build());
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7).plusHours(2)).build());
 
         mockMvc.perform(get("/events/by-organizer").param("organizerUuid", ORGANIZER_A.toString())
                         .accept(MediaType.APPLICATION_JSON))
@@ -820,8 +826,8 @@ class EventControllerTest {
     @WithMockUser(username = "admin@innbucks.co.zw", roles = "SUPER_ADMIN")
     void getEventsByOrganizer_unknownOrganizer_returnsEmptyPage() throws Exception {
         eventRepository.save(eventBuilder().tenantUserUuid(ORGANIZER_A).title("A Concert")
-                .startDateTime(LocalDateTime.now().plusDays(5))
-                .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2)).build());
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(5))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(5).plusHours(2)).build());
 
         mockMvc.perform(get("/events/by-organizer").param("organizerUuid", UUID.randomUUID().toString())
                         .accept(MediaType.APPLICATION_JSON))
@@ -890,8 +896,8 @@ class EventControllerTest {
     void releaseAvailability_withoutInternalToken_returns401_andDoesNotMutate() throws Exception {
         Event saved = eventRepository.save(eventBuilder()
                 .title("Concert")
-                .startDateTime(LocalDateTime.now().plusDays(7))
-                .endDateTime(LocalDateTime.now().plusDays(7).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7).plusHours(2))
                 .totalCapacity(100)
                 .availableTickets(90)
                 .build());
@@ -910,8 +916,8 @@ class EventControllerTest {
         // total=100, available=90 (10 tickets currently held by a confirmed booking).
         Event saved = eventRepository.save(eventBuilder()
                 .title("Concert")
-                .startDateTime(LocalDateTime.now().plusDays(7))
-                .endDateTime(LocalDateTime.now().plusDays(7).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7).plusHours(2))
                 .totalCapacity(100)
                 .availableTickets(90)
                 .build());
@@ -933,8 +939,8 @@ class EventControllerTest {
         // push it higher — the SQL clamp rejects, the service throws, no mutation.
         Event saved = eventRepository.save(eventBuilder()
                 .title("Concert")
-                .startDateTime(LocalDateTime.now().plusDays(7))
-                .endDateTime(LocalDateTime.now().plusDays(7).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(7).plusHours(2))
                 .totalCapacity(100)
                 .availableTickets(100)
                 .build());
@@ -986,8 +992,8 @@ class EventControllerTest {
 
     @Test
     void getAllEvents_asTeamMember_returnsOnlyAssignedEvents() throws Exception {
-        Event assigned = saveTeamEvent("Assigned Concert", true, LocalDateTime.now().plusDays(5));
-        Event other = saveTeamEvent("Unassigned Concert", true, LocalDateTime.now().plusDays(6));
+        Event assigned = saveTeamEvent("Assigned Concert", true, LocalDateTime.now(ZoneOffset.UTC).plusDays(5));
+        Event other = saveTeamEvent("Unassigned Concert", true, LocalDateTime.now(ZoneOffset.UTC).plusDays(6));
 
         // Organizer assigned ONLY the first event to this team member.
         Mockito.when(userUuidLookupGateway.assignedEventIdsFor(TEAM_MEMBER_UUID))
@@ -1006,8 +1012,8 @@ class EventControllerTest {
     @Test
     void getAllEvents_asTeamMember_withNoAssignments_returnsEmptyPage() throws Exception {
         // Two events exist, but the member is assigned to none → deny-by-default.
-        saveTeamEvent("Concert A", true, LocalDateTime.now().plusDays(5));
-        saveTeamEvent("Concert B", true, LocalDateTime.now().plusDays(6));
+        saveTeamEvent("Concert A", true, LocalDateTime.now(ZoneOffset.UTC).plusDays(5));
+        saveTeamEvent("Concert B", true, LocalDateTime.now(ZoneOffset.UTC).plusDays(6));
         Mockito.when(userUuidLookupGateway.assignedEventIdsFor(TEAM_MEMBER_UUID))
                 .thenReturn(List.of());
 
@@ -1020,8 +1026,8 @@ class EventControllerTest {
 
     @Test
     void getActiveEvents_asTeamMember_returnsOnlyAssignedActiveEvents() throws Exception {
-        Event assigned = saveTeamEvent("Assigned Active", true, LocalDateTime.now().plusDays(5));
-        Event other = saveTeamEvent("Unassigned Active", true, LocalDateTime.now().plusDays(6));
+        Event assigned = saveTeamEvent("Assigned Active", true, LocalDateTime.now(ZoneOffset.UTC).plusDays(5));
+        Event other = saveTeamEvent("Unassigned Active", true, LocalDateTime.now(ZoneOffset.UTC).plusDays(6));
 
         Mockito.when(userUuidLookupGateway.assignedEventIdsFor(TEAM_MEMBER_UUID))
                 .thenReturn(List.of(assigned.getEventId()));
@@ -1038,7 +1044,7 @@ class EventControllerTest {
 
     @Test
     void getActiveEvents_asTeamMember_withNoAssignments_returnsEmptyPage() throws Exception {
-        saveTeamEvent("Active A", true, LocalDateTime.now().plusDays(5));
+        saveTeamEvent("Active A", true, LocalDateTime.now(ZoneOffset.UTC).plusDays(5));
         Mockito.when(userUuidLookupGateway.assignedEventIdsFor(TEAM_MEMBER_UUID))
                 .thenReturn(List.of());
 
@@ -1051,10 +1057,10 @@ class EventControllerTest {
 
     @Test
     void getInactiveEvents_asTeamMember_returnsOnlyAssignedInactiveEvents() throws Exception {
-        Event assignedInactive = saveTeamEvent("Assigned Inactive", false, LocalDateTime.now().plusDays(5));
-        Event otherInactive = saveTeamEvent("Unassigned Inactive", false, LocalDateTime.now().plusDays(6));
+        Event assignedInactive = saveTeamEvent("Assigned Inactive", false, LocalDateTime.now(ZoneOffset.UTC).plusDays(5));
+        Event otherInactive = saveTeamEvent("Unassigned Inactive", false, LocalDateTime.now(ZoneOffset.UTC).plusDays(6));
         // An assigned but ACTIVE event must NOT appear in the inactive listing.
-        Event assignedActive = saveTeamEvent("Assigned Active", true, LocalDateTime.now().plusDays(7));
+        Event assignedActive = saveTeamEvent("Assigned Active", true, LocalDateTime.now(ZoneOffset.UTC).plusDays(7));
 
         Mockito.when(userUuidLookupGateway.assignedEventIdsFor(TEAM_MEMBER_UUID))
                 .thenReturn(List.of(assignedInactive.getEventId(), assignedActive.getEventId()));
@@ -1071,7 +1077,7 @@ class EventControllerTest {
 
     @Test
     void getInactiveEvents_asTeamMember_withNoAssignments_returnsEmptyPage() throws Exception {
-        saveTeamEvent("Inactive A", false, LocalDateTime.now().plusDays(5));
+        saveTeamEvent("Inactive A", false, LocalDateTime.now(ZoneOffset.UTC).plusDays(5));
         Mockito.when(userUuidLookupGateway.assignedEventIdsFor(TEAM_MEMBER_UUID))
                 .thenReturn(List.of());
 
@@ -1087,7 +1093,7 @@ class EventControllerTest {
         // user-service down → the gateway returns an empty list (fail CLOSED).
         // The team member must see NO events, never fall through to the public
         // catalog (which would leak every organizer's events).
-        saveTeamEvent("Concert A", true, LocalDateTime.now().plusDays(5));
+        saveTeamEvent("Concert A", true, LocalDateTime.now(ZoneOffset.UTC).plusDays(5));
         Mockito.when(userUuidLookupGateway.assignedEventIdsFor(TEAM_MEMBER_UUID))
                 .thenReturn(List.of());
 
