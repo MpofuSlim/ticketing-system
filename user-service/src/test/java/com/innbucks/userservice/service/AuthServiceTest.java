@@ -1101,6 +1101,23 @@ class AuthServiceTest {
      * plus an explicit {@link DeviceTrustService} so the trusted-device skip can
      * be exercised. Mirrors how the production context field-injects these.
      */
+    /**
+     * A real {@link com.innbucks.userservice.security.MfaPolicy} wired with a
+     * resolver that grants nothing — the permission set V35 seeds every
+     * built-in gate role with. The policy consults it only for the
+     * gate-operator exemption (an account whose role set is exactly
+     * TEAM_MEMBER); none of the cases below are that shape, but stubbing an
+     * empty set rather than leaving the mock unstubbed means one that later is
+     * gets the truthful "unprivileged" answer instead of an NPE.
+     */
+    private static com.innbucks.userservice.security.MfaPolicy realMfaPolicy() {
+        com.innbucks.userservice.security.PermissionResolver resolver =
+                org.mockito.Mockito.mock(com.innbucks.userservice.security.PermissionResolver.class);
+        org.mockito.Mockito.when(resolver.resolve(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(java.util.Set.of());
+        return new com.innbucks.userservice.security.MfaPolicy(resolver);
+    }
+
     private static void wireMfa(AuthService svc, com.innbucks.userservice.security.MfaPolicy policy,
                                 com.innbucks.userservice.security.MfaTokenService tokenService,
                                 MfaService mfaService, DeviceTrustService deviceTrustService) {
@@ -1126,7 +1143,7 @@ class AuthServiceTest {
                 any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean())).thenReturn("tok");
 
         com.innbucks.userservice.security.MfaPolicy policy =
-                new com.innbucks.userservice.security.MfaPolicy(); // real: system user on WEB → challenge
+                realMfaPolicy(); // real: system user on WEB → challenge
         com.innbucks.userservice.security.MfaTokenService tokenService =
                 mock(com.innbucks.userservice.security.MfaTokenService.class);
         DeviceTrustService trust = mock(DeviceTrustService.class);
@@ -1164,7 +1181,7 @@ class AuthServiceTest {
         when(encoder.matches("pw", "hashed")).thenReturn(true);
 
         com.innbucks.userservice.security.MfaPolicy policy =
-                new com.innbucks.userservice.security.MfaPolicy();
+                realMfaPolicy();
         com.innbucks.userservice.security.MfaTokenService tokenService =
                 mock(com.innbucks.userservice.security.MfaTokenService.class);
         when(tokenService.issue(eq(55L),
@@ -1203,7 +1220,7 @@ class AuthServiceTest {
         when(encoder.matches("pw", "hashed")).thenReturn(true);
 
         com.innbucks.userservice.security.MfaPolicy policy =
-                new com.innbucks.userservice.security.MfaPolicy();
+                realMfaPolicy();
         com.innbucks.userservice.security.MfaTokenService tokenService =
                 mock(com.innbucks.userservice.security.MfaTokenService.class);
         when(tokenService.issue(eq(55L), any())).thenReturn("mfa-step1");
@@ -1254,7 +1271,7 @@ class AuthServiceTest {
         AuthService svc = withLockoutConfig(new AuthService(userRepo, mock(TenantProfileRepository.class),
                 customerRepo, encoder, jwt, mock(TokenRevocationService.class),
                 refreshTokenService, mock(RefreshTokenRepository.class), mock(AuditService.class)));
-        wireMfa(svc, new com.innbucks.userservice.security.MfaPolicy(), tokenService, mfaService, trust);
+        wireMfa(svc, realMfaPolicy(), tokenService, mfaService, trust);
 
         AuthResponseDTO resp = svc.completeLoginWithMfa("step1", "472938", "my-dev", true, AuditContext.none());
 
@@ -1292,7 +1309,7 @@ class AuthServiceTest {
                 mock(CustomerProfileRepository.class), mock(PasswordEncoder.class), jwt,
                 mock(TokenRevocationService.class), refreshTokenService,
                 mock(RefreshTokenRepository.class), mock(AuditService.class)));
-        wireMfa(svc, new com.innbucks.userservice.security.MfaPolicy(), tokenService, mfaService,
+        wireMfa(svc, realMfaPolicy(), tokenService, mfaService,
                 mock(DeviceTrustService.class));
 
         // Wrong codes below threshold: 400-mapped MfaException, NOT a lockout.
@@ -1342,7 +1359,7 @@ class AuthServiceTest {
                 mock(CustomerProfileRepository.class), mock(PasswordEncoder.class), jwt,
                 mock(TokenRevocationService.class), refreshTokenService,
                 mock(RefreshTokenRepository.class), mock(AuditService.class)));
-        wireMfa(svc, new com.innbucks.userservice.security.MfaPolicy(), tokenService, mfaService,
+        wireMfa(svc, realMfaPolicy(), tokenService, mfaService,
                 mock(DeviceTrustService.class));
 
         AuthResponseDTO resp = svc.completeLoginWithMfa("step1", "472938", null, false, AuditContext.none());
@@ -1375,7 +1392,7 @@ class AuthServiceTest {
         AuthService svc = withLockoutConfig(new AuthService(userRepo, mock(TenantProfileRepository.class),
                 customerRepo, encoder, jwt, mock(TokenRevocationService.class),
                 refreshTokenService, mock(RefreshTokenRepository.class), mock(AuditService.class)));
-        wireMfa(svc, new com.innbucks.userservice.security.MfaPolicy(), tokenService, mfaService, trust);
+        wireMfa(svc, realMfaPolicy(), tokenService, mfaService, trust);
 
         AuthResponseDTO resp = svc.completeLoginWithMfa("step1", "472938", "my-dev", false, AuditContext.none());
 
@@ -1410,7 +1427,7 @@ class AuthServiceTest {
         AuthService svc = withLockoutConfig(new AuthService(userRepo, mock(TenantProfileRepository.class),
                 customerRepo, encoder, jwt, mock(TokenRevocationService.class),
                 refreshTokenService, mock(RefreshTokenRepository.class), mock(AuditService.class)));
-        wireMfa(svc, new com.innbucks.userservice.security.MfaPolicy(), tokenService, mfaService, trust);
+        wireMfa(svc, realMfaPolicy(), tokenService, mfaService, trust);
 
         // rememberDevice=true but deviceId blank → can't scope trust, so none minted.
         AuthResponseDTO resp = svc.completeLoginWithMfa("step1", "472938", "  ", true, AuditContext.none());

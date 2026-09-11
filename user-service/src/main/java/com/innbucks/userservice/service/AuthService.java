@@ -609,6 +609,24 @@ public class AuthService implements ApplicationEventPublisherAware {
                     .build();
         }
 
+        // Gate-operator exemption took effect: this is a pure TEAM_MEMBER
+        // (scanner account) on a channel where 2FA WOULD otherwise apply, and
+        // they haven't opted in. Recorded explicitly — without it a factorless
+        // staff session is indistinguishable in the audit trail from a customer
+        // login, which is the one thing that makes the exemption unreviewable.
+        // Mirrors the mfaSkippedViaTrustedDevice marker above.
+        if (mfaPolicy != null
+                && mfaPolicy.applicable(channel)
+                && mfaPolicy.gateOperatorExempt(user)) {
+            log.info("MFA not required for gate operator userId={}", user.getId());
+            auditService.recordSuccess(
+                    AuditEventType.AUTH_LOGIN_SUCCESS,
+                    String.valueOf(user.getId()), AuditService.ACTOR_TYPE_USER,
+                    String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
+                    java.util.Map.of("mfaSkippedViaGateOperatorRole", true),
+                    auditContext);
+        }
+
         return issueToken(user, deviceId);
     }
 
