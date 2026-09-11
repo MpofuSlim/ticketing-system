@@ -3,7 +3,14 @@
 What changes for the scanner app now that gate staff are no longer forced through a 2FA
 challenge. Covers `POST /auth/login` only — no new endpoints, no request-shape changes.
 
-Anchored to `user-service`'s `MfaPolicy`, `AuthService.login` and `AuthResponseDTO` as merged.
+Anchored to `user-service`'s `MfaPolicy`, `AuthService.login`, `AuthController` and
+`AuthResponseDTO` as merged.
+
+> **Corrections in this revision** (thanks to the FE team for catching the first):
+> the MFA step-2 path is **`POST /auth/login/mfa`**, not `/auth/mfa/login` as the first draft
+> said — that path does not exist and returns 404. The step-2 body also carries an optional
+> `rememberDevice`, and `POST /auth/login` accepts an `X-Device-Trust-Token` header, both of
+> which the first draft omitted.
 
 ---
 
@@ -39,6 +46,7 @@ Unchanged. Headers:
 | `Content-Type: application/json` | yes | |
 | `X-Auth-Channel` | no | `WEB` (default), `MOBILE`, `USSD`, `WHATSAPP`. The scanner app should send `MOBILE`. |
 | `X-Device-Id` | recommended | Device binding; also what the trusted-device flow keys on. |
+| `X-Device-Trust-Token` | optional | A previously issued trusted-device token. Presented with a matching `X-Device-Id`, it skips the MFA challenge for a user who would otherwise be challenged. |
 
 ```json
 {
@@ -85,7 +93,24 @@ Unchanged. Headers:
 }
 ```
 
-Then `POST /auth/mfa/login` with `{ "mfaToken": "...", "code": "123456" }` as today.
+Then complete step 2 as today:
+
+`POST /auth/login/mfa`
+
+```json
+{
+  "mfaToken": "eyJhbGciOiJIUzI1NiJ9...",
+  "code": "123456",
+  "rememberDevice": false
+}
+```
+
+Note the path is `/auth/login/mfa` — **not** `/auth/mfa/login`. The enrolment and disable
+endpoints are `/auth/mfa/enroll/start`, `/auth/mfa/enroll/complete` and `/auth/mfa/disable`, so
+the segment order differs between "complete a login" and "manage MFA". Easy to transpose.
+
+`rememberDevice` is optional (defaults false). Set it with an `X-Device-Id` header to mint a
+trusted-device token, which lets that device skip the challenge next time.
 
 ---
 
@@ -181,6 +206,45 @@ No new error code is introduced by this change.
 - [ ] **Single active session still applies.** Each login bumps `tokenVersion` and revokes prior
       refresh families, so two scanners sharing one account will evict each other. Give each
       gate staffer their own account.
+
+---
+
+## 6. Getting a test account that actually exercises this
+
+The exemption applies to an account whose role set is **exactly** `{TEAM_MEMBER}` **and** which
+holds no permissions. An account that returns `mfaRequired: true` is therefore not testing this
+path — it is either an organizer account, a multi-role account, or a team member who enrolled in
+TOTP voluntarily.
+
+You cannot tell which from the `mfaToken`: it deliberately carries only `kind` / `purpose` /
+`sub` / `exp`, with no roles claim. That is intentional — an interim token that leaked would
+otherwise describe the account it belongs to.
+
+**To create a real gate-staff account**, call as a user holding the `EVENT_ORGANIZER` role (the
+service checks the built-in role, so a custom role with `team-members:write` is refused):
+
+`POST /event-organizer/team-members`
+
+```json
+{
+  "firstName": "Tariro",
+  "lastName": "Chikomo",
+  "email": "gate1@your-org.co.zw",
+  "phoneNumber": "0771234567"
+}
+```
+
+`middleName` is optional. The email must be unclaimed and the phone number must be valid for the
+cell's country (it is canonicalised to E.164). The response is `201` with the new account; the
+**temporary password is not in the response** — it is delivered out of band to the new member by
+email, then SMS, then WhatsApp.
+
+That account will have role set exactly `{TEAM_MEMBER}`, no permissions, and `mfaEnabled: false`,
+so its first login returns a token pair immediately with `mustChangePassword: true`.
+
+**To check an existing account instead**, decode its *access* token after a completed login — the
+access token carries `roles` and `perms`, unlike the interim `mfaToken`. Roles of exactly
+`["TEAM_MEMBER"]` with an empty `perms` is the shape that qualifies.
 
 ---
 
