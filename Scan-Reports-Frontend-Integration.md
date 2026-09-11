@@ -77,10 +77,10 @@ midnight fall outside it until the range is re-picked.
 **Before:** `"attemptedAt": "2026-09-09T06:10:22Z"`
 **Now:** `"attemptedAt": "2026-09-09T08:10:22+02:00"`
 
-Same instant. The offset is explicit, so it is still unambiguous ISO-8601 and
-`new Date(s)` parses it correctly — but the **wall clock in the leading
-characters is the one the scanner was standing in**. A scan made at 08:10 in
-Harare now reads `08:10`, printed verbatim.
+Same instant, and still unambiguous ISO-8601 — but the **wall clock in the
+leading characters is the one the scanner was standing in**. A scan made at
+08:10 in Harare now reads `08:10`, printed verbatim. Print it; don't parse it.
+The backend has already done the conversion.
 
 This applies to `attemptedAt` on every scan row and to `from`/`to` on every
 stats response.
@@ -223,10 +223,14 @@ const { data } = await res.json();
 ```js
 // Printed verbatim, this is already the operator's local time:
 row.attemptedAt.slice(11, 19);        // "08:10:22"
-
-// Or parse it — the offset is explicit, so this is also correct:
-new Date(row.attemptedAt).toLocaleString();
+row.attemptedAt.slice(0, 10);         // "2026-09-09"
 ```
+
+Don't round-trip it through `new Date(...)`. It parses fine, but
+`toLocaleString()` then re-renders in the **browser's** zone, not the market's —
+so an operator on a laptop set to UTC (or scanning while travelling) sees
+`06:10` again, which is the exact bug this surface was changed to fix. The
+string we send is already the answer.
 
 ### Historical range
 
@@ -259,8 +263,9 @@ curl -H "Authorization: Bearer $TOKEN" \
       now be wrong. Strip that — the offset is already there.
 - [ ] **Don't hardcode `+02:00`.** It's the cell's market offset; KE is `+03:00`,
       NG `+01:00`.
-- [ ] **Don't convert these timestamps yourself.** They're already local. Applying
-      a second conversion double-shifts them.
+- [ ] **Don't convert or parse these timestamps yourself.** They're already the
+      market's wall clock. A second conversion — including `new Date(s)` plus
+      `toLocaleString()`, which uses the *browser's* zone — re-breaks them.
 - [ ] `byOutcome` is always fully populated — no need to guard for missing keys.
 - [ ] `size` is capped at **100**; a larger value is a `400`, not a silent clamp.
 - [ ] `NOT_ASSIGNED_TO_EVENT` and `BOOKING_NOT_CONFIRMED` are the enum names
