@@ -6,6 +6,12 @@ carrying **9 Flyway migrations** that run against the live database, **one new s
 
 This is not the restart-one-deployment routine used for a single merge. Work through it in order.
 
+> **Executed against production on 2026-09-11, successfully.** All 9 migrations applied
+> `success = t` against live data, no rollback was needed, and no step had to be retried. The
+> sections below were corrected afterwards to match what actually worked — most importantly §4,
+> whose original `IMAGE_TAG` instruction does nothing on k8s. Where a section says what happened on
+> the day, that is observed, not predicted.
+
 ---
 
 ## 0. Why this needs its own procedure
@@ -18,7 +24,7 @@ This is not the restart-one-deployment routine used for a single merge. Work thr
 | New service | `marketplace-service` |
 | New database required | `marketplace_service` — **not present on prod** |
 | Removed API | Oradian transfer / withdraw / transactions |
-| Config keys missing from ConfigMap | 48 |
+| Config keys missing from ConfigMap | 48 — **all defaulted in code; none were added** (§5) |
 
 Flyway runs on pod startup with no dry run and no prompt. The moment a new image starts, its
 migrations execute.
@@ -41,6 +47,9 @@ CREATE UNIQUE INDEX uq_payment_active_order
 If any two historical non-terminal payments share a `booking_id`, the new unique index fails, the
 migration aborts, and payment-service will not start. **Step 2 checks for this before you commit
 to anything.**
+
+On 2026-09-11 the §2 pre-flight returned `(0 rows)` on prod and V12 then applied cleanly. That is
+the only genuinely irreversible step in this runbook, and it is worth the two minutes to check.
 
 ---
 
@@ -115,34 +124,60 @@ kubectl -n ticketing exec "$PGPOD" -- psql -U postgres -c "\l" | grep marketplac
 
 ---
 
-## 4. Pin the image tag
+## 4. Pin the image tag — NOT via `IMAGE_TAG`
 
-Do **not** run an upgrade this size on `latest`. If anything misbehaves you need to know exactly
-what is running, and `latest` moves under you on every restart.
+> **Corrected after the 2026-09-11 production run.** An earlier draft of this section told you to
+> set `IMAGE_TAG` in the ConfigMap. **That does nothing on k8s.** `IMAGE_TAG` is referenced nowhere
+> in `deploy/k8s/` — it is consumed by the compose path only — and every manifest hardcodes
+> `image: ghcr.io/mpofuslim/<svc>:latest`. Setting it pins nothing, and worse, it looks like it
+> worked.
 
-Pick the SHA you intend to ship — the master commit you tested:
+Two facts decide how pinning actually works here:
+
+1. **`kubectl apply` resets images to `:latest`**, because that is what the manifests say. So
+   pinning must happen **after** §6, never before it.
+2. **`kubectl set image` both pins and triggers the rollout.** It therefore *replaces* the
+   `rollout restart` in §7 rather than being an extra step before it.
+
+**The tag is `sha-` followed by the FULL 40-character commit SHA.** `release.yml` tags images with
+`type=sha,format=long`; the abbreviated form does not exist in GHCR and fails `ImagePullBackOff`.
+Derive it rather than typing it:
 
 ```bash
-SHA=sha-d74a643d      # or whichever commit you validated
-
-kubectl -n ticketing get configmap cell-zw -o json \
-  | jq --arg t "$SHA" '.data.IMAGE_TAG = $t' \
-  | kubectl apply -f -
-
-kubectl -n ticketing get configmap cell-zw -o jsonpath='{.data.IMAGE_TAG}{"\n"}'
+cd ~/ticketing-system
+TAG=sha-$(git rev-parse HEAD)
+echo "$TAG"          # sha-d74a643dd9a8bf2718cd831b367c09caf766050c
 ```
 
-> The manifests hardcode `:latest` in the `image:` field, so also confirm whether `IMAGE_TAG` is
-> actually consumed by the k8s path on this cell — it is used by the compose path. If the
-> deployments pin `:latest` directly, set the image explicitly instead:
-> `kubectl -n ticketing set image deployment/<svc> '*=ghcr.io/mpofuslim/<svc>:sha-d74a643d'`
+Confirm that commit's **Release** workflow run is green first — the images exist only once it has
+pushed them. Note that a red Release run does not by itself mean the image is missing: the
+build-provenance attestation step fails permanently on this user-owned private repo *after* the
+image has been scanned and pushed. Check whether the push step itself succeeded.
+
+**So: run nothing in this section.** Carry `$TAG` forward; §7 is where it is applied. `$TAG` is a
+shell variable, so re-export it in any new SSH session — a lost `$TAG` silently produces an
+invalid image reference.
 
 ---
 
 ## 5. Add the config keys
 
-48 keys are missing. Most are inert — the payment rails and federation **fail safe when blank**, so
-leave them blank until you have real credentials. Add the ones that change behaviour.
+48 keys are missing. Checking all 48 against every service's `application.yaml` shows each one is
+either **not referenced at all** (compose-only, or owned by a service outside this repo) or
+referenced **only** as `${VAR:default}`. **Neither shape can fail a boot**, so a missing key here
+costs you the default's behaviour, never a crashloop. The payment rails and federation additionally
+fail safe when blank — a clean 503, not an odd error.
+
+Re-run that check for your own diff rather than trusting this list:
+
+```bash
+grep -rhoE '\$\{ZIMSWITCH_ENTITY_ID(:[^}]*)?\}' --include=application.yaml .
+```
+
+A hit with no `:` means that key has no default and its absence WILL fail the boot.
+
+**This section is therefore optional.** The 2026-09-11 production upgrade skipped it entirely and
+nothing misbehaved. Add keys only where you want to change behaviour away from the default.
 
 ```bash
 cd ~/ticketing-system
@@ -174,7 +209,11 @@ all `ECOCASH_*`, `AUTH_FEDERATION_PUBLIC_KEY`, all `LOYALTY_PARTNER_REGISTRATION
 ## 6. Apply the manifests
 
 Manifests changed — `04-services.yaml` (+62, adds marketplace-service), `03-user-service.yaml`
-(−7). This must happen before the rollouts.
+(−7). This must happen **before** the rollouts, and before the pinning in §7 — apply overwrites the
+image field with `:latest`.
+
+Applying also creates marketplace-service, which then starts on its own. You do not roll it later;
+see §7.5.
 
 ```bash
 cd ~/ticketing-system && git log --oneline -1      # confirm d74a643d
@@ -189,11 +228,24 @@ kubectl -n ticketing get deploy
 **Order matters.** Each step ends with a health check; do not start the next until the current one
 is green. If any service fails, go to §9 before continuing.
 
-### 7.1 discovery-server
+Each step below uses `kubectl set image` with `$TAG` from §4, which pins and rolls in one action.
+Re-export `TAG` if you have opened a new shell since §4.
+
+### 7.1 discovery-server — usually skip
+
+Roll this **only if discovery-server's own source changed**. For the 13add2eb → d74a643d upgrade
+only its Dockerfile base image and pom dependencies moved, so it was deliberately left alone:
+restarting the registry churns every service's registration for no functional gain.
 
 ```bash
-kubectl -n ticketing rollout restart deployment/discovery-server deployment/discovery-server-2
+# check first — if this shows only Dockerfile/pom, skip the section
+git diff --stat <previous-sha> HEAD -- discovery-server/
+
+# only if there are real source changes:
+kubectl -n ticketing set image deployment/discovery-server "*=ghcr.io/mpofuslim/discovery-server:$TAG"
 kubectl -n ticketing rollout status deployment/discovery-server --timeout=5m
+kubectl -n ticketing set image deployment/discovery-server-2 "*=ghcr.io/mpofuslim/discovery-server:$TAG"
+kubectl -n ticketing rollout status deployment/discovery-server-2 --timeout=5m
 ```
 
 ### 7.2 user-service — runs V35, V36, V37
@@ -201,7 +253,7 @@ kubectl -n ticketing rollout status deployment/discovery-server --timeout=5m
 V35 is the roles-and-permissions migration; V37 adds notifications.
 
 ```bash
-kubectl -n ticketing rollout restart deployment/user-service
+kubectl -n ticketing set image deployment/user-service "*=ghcr.io/mpofuslim/user-service:$TAG"
 kubectl -n ticketing rollout status deployment/user-service --timeout=10m
 
 # confirm the migrations actually applied and succeeded
@@ -221,24 +273,27 @@ Every row must show `success = t`. A single `f` means Flyway halted — stop and
 ### 7.3 payment-service — the risky one (V12, V13, V14)
 
 ```bash
-kubectl -n ticketing rollout restart deployment/payment-service
+kubectl -n ticketing set image deployment/payment-service "*=ghcr.io/mpofuslim/payment-service:$TAG"
 kubectl -n ticketing rollout status deployment/payment-service --timeout=10m
 
 kubectl -n ticketing exec "$PGPOD" -- psql -U postgres -d payment_service \
   -c "SELECT version, description, success FROM flyway_schema_history ORDER BY installed_rank DESC LIMIT 4;"
 
-# V12 backfilled every row — no NULLs should remain
+# V12 backfilled every row, then set NOT NULL — belt and braces
 kubectl -n ticketing exec "$PGPOD" -- psql -U postgres -d payment_service \
   -c "SELECT count(*) AS null_order_refs FROM payment WHERE order_ref IS NULL;"
 ```
 
-`null_order_refs` must be `0`.
+`null_order_refs` must be `0`. (V12 ends with `ALTER COLUMN order_ref SET NOT NULL`, so a
+`success = t` row already proves the backfill covered every row — this check cannot fail
+independently. Keep it as a cheap confirmation, not as the real gate.)
 
 ### 7.4 the remaining services
 
 ```bash
+# event-service BEFORE seat-service: seat's oversell guard reads totalCapacity from it
 for svc in event-service seat-service booking-service; do
-  kubectl -n ticketing rollout restart deployment/$svc
+  kubectl -n ticketing set image deployment/$svc "*=ghcr.io/mpofuslim/$svc:$TAG"
   kubectl -n ticketing rollout status deployment/$svc --timeout=10m
 done
 
@@ -248,22 +303,29 @@ kubectl -n ticketing exec "$PGPOD" -- psql -U postgres -d event_service \
   -c "SELECT version, success FROM flyway_schema_history ORDER BY installed_rank DESC LIMIT 2;"
 ```
 
-### 7.5 marketplace-service — new, and the most likely to fail
+### 7.5 marketplace-service — new; started by §6, not rolled here
+
+**Do not `set image` this one.** It is built from a different repository
+(`MpofuSlim/market-place`), so `$TAG` is not its commit and that tag does not exist for it. §6's
+apply created the deployment and it starts on `:latest` by itself — this step is a check, not an
+action.
 
 ```bash
 kubectl -n ticketing rollout status deployment/marketplace-service --timeout=10m
 kubectl -n ticketing logs -l app=marketplace-service --tail=50
 ```
 
-If it crashloops, the usual cause is the database from §3 missing, or its config keys absent.
+A healthy first boot logs `Secrets guard passed`, registers with Eureka, and ends with
+`Started MarketplaceServiceApplication`. If it crashloops, the usual cause is the database from §3
+missing; `ImagePullBackOff` instead means no image has ever been published from its own repo.
 
 ### 7.6 api-gateway — last
 
 Restart the edge only once everything behind it is healthy.
 
 ```bash
-kubectl -n ticketing rollout restart deployment/api-gateway
-kubectl -n ticketing rollout status deployment/api-gateway --timeout=5m
+kubectl -n ticketing set image deployment/api-gateway "*=ghcr.io/mpofuslim/api-gateway:$TAG"
+kubectl -n ticketing rollout status deployment/api-gateway --timeout=10m
 ```
 
 ---
@@ -275,6 +337,25 @@ kubectl -n ticketing get pods            # every pod Running, RESTARTS 0
 kubectl -n ticketing get deploy          # every deployment fully available
 ```
 
+Confirm every service is on the tag you intended:
+
+```bash
+kubectl -n ticketing get deploy \
+  -o custom-columns='NAME:.metadata.name,IMAGE:.spec.template.spec.containers[0].image'
+```
+
+**You do not need the public edge hostname to test routing.** The api-gateway Service is a NodePort
+on **30080**, so curl it straight from the box. The gateway's own routes are un-prefixed — the
+`/foundry` public prefix is stripped by nginx at the edge, and `PUBLIC_API_PREFIX` only feeds the
+Swagger doc URLs — so use bare paths:
+
+```bash
+# a route that exists ONLY in the new config: 401 proves the new route table is live, 404 means old
+curl -s -o /dev/null -w "notifications:%{http_code}\n" http://localhost:30080/notifications
+# control: worked before and after
+curl -s -o /dev/null -w "events:%{http_code}\n"        http://localhost:30080/events
+```
+
 Through the public edge:
 
 - An unauthenticated call to a secured endpoint returns **401**, not 404 (new image present, routed).
@@ -284,7 +365,32 @@ Through the public edge:
 - A pure `TEAM_MEMBER` logs in with a password only, no TOTP prompt.
 
 **Known-off by design after this upgrade:** card (ZimSwitch) and EcoCash payments return 503 until
-credentials are provisioned; the Oradian transfer/withdraw/transactions endpoints are gone for good.
+credentials are provisioned; `/auth/exchange` returns 404 until federation is provisioned; the
+Oradian transfer/withdraw/transactions endpoints are gone for good.
+
+### 8.1 Return to `:latest` once you are satisfied
+
+The SHA pins are for the upgrade window. Leaving them means the manifests (`:latest`) and the live
+deployments disagree, so the next routine `kubectl apply -f deploy/k8s/` silently reverts every
+service. Once prod is behaving, put it back in step with the standard deploy routine in `CLAUDE.md`:
+
+```bash
+for s in user-service payment-service event-service seat-service booking-service api-gateway; do
+  kubectl -n ticketing set image deployment/$s "*=ghcr.io/mpofuslim/$s:latest"
+done
+```
+
+`:latest` and your `$TAG` are the same image as long as nothing has merged since, so this is a
+restart rather than a version change — but it **is** six rolling updates at once on a single node,
+each briefly running old and new pods together. Watch for memory pressure, and re-run the §8 checks
+afterwards:
+
+```bash
+for s in user-service payment-service event-service seat-service booking-service api-gateway; do
+  kubectl -n ticketing rollout status deployment/$s --timeout=10m
+done
+kubectl -n ticketing get pods
+```
 
 ---
 
@@ -295,11 +401,15 @@ leaving the new schema in place is usually survivable (the old code ignores new 
 guaranteed — V12's `DROP INDEX uq_payment_active_booking` removes a constraint the old
 payment-service relies on.
 
-**Images only** (schema stays migrated):
+**Images only** (schema stays migrated). The rollback tag needs the **full 40-character SHA** for
+the same reason as §4 — an abbreviated tag does not exist in GHCR and will leave you staring at
+`ImagePullBackOff` during an incident. Derive it instead of typing it:
 
 ```bash
-kubectl -n ticketing set image deployment/<svc> '*=ghcr.io/mpofuslim/<svc>:sha-13add2eb'
-kubectl -n ticketing rollout status deployment/<svc>
+cd ~/ticketing-system
+OLD=sha-$(git rev-parse 13add2eb)     # sha-13add2eb4a532eb7174c6fb4af91b23b5804dd09
+kubectl -n ticketing set image deployment/<svc> "*=ghcr.io/mpofuslim/<svc>:$OLD"
+kubectl -n ticketing rollout status deployment/<svc> --timeout=10m
 ```
 
 **Full revert** (schema included) — only from §1's backup, and it discards everything written since:
@@ -322,3 +432,8 @@ into something you have already watched succeed.
 Restore §1's dump into a scratch Postgres, point a local stack at it, and start user-service and
 payment-service. If their migrations apply cleanly there, the production run is far more
 predictable.
+
+> **This was skipped on 2026-09-11 and the upgrade still succeeded.** That is not evidence the
+> rehearsal is unnecessary — it is evidence that the §2 pre-flight caught the one question that
+> mattered for *this* diff. A future upgrade whose risky migration is not a single checkable
+> uniqueness constraint will not have that shortcut available. Keep this section.
