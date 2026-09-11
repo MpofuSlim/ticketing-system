@@ -9,6 +9,7 @@ import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.event.CredentialDeliveryRequested;
 import com.innbucks.userservice.integration.LoyaltyServiceClient;
 import com.innbucks.userservice.repository.UserRepository;
+import com.innbucks.userservice.util.BootstrapAdminEmail;
 import com.innbucks.userservice.util.HtmlSanitizer;
 import com.innbucks.userservice.util.MsisdnValidator;
 import com.innbucks.userservice.util.TemporaryPasswordGenerator;
@@ -73,6 +74,10 @@ public class ShopStaffService {
      *  from the staff member's MSISDN. Set via INNBUCKS_COUNTRY env var. */
     @Value("${innbucks.country:ZW}")
     private String deploymentCountry = "ZW";
+
+    /** The platform admin address this service must never create an account at. */
+    @Value(BootstrapAdminEmail.PROPERTY)
+    private String bootstrapAdminEmail = BootstrapAdminEmail.DEFAULT_ADDRESS;
 
     @Transactional
     public UserResponseDTO createShopAdmin(CreateShopAdminDTO req) {
@@ -441,6 +446,15 @@ public class ShopStaffService {
     private User buildStaff(String firstName, String middleName, String lastName,
                             String email, String phone,
                             User.Role role, UUID merchantId, UUID shopId, String tempPassword) {
+        // Shop staff are never minted at the platform admin's address — see the
+        // matching guard in TeamMemberService. A row left here is one a rotated
+        // BOOTSTRAP_ADMIN_EMAIL (or a deleted admin row) could hand SUPER_ADMIN
+        // to, with the temporary password already in a merchant admin's hands.
+        // Same message as the duplicate case so the address isn't confirmed.
+        if (BootstrapAdminEmail.matches(bootstrapAdminEmail, email)) {
+            log.warn("Refused shop-staff creation at the bootstrap admin address role={}", role);
+            throw badRequest("Email already registered");
+        }
         if (userRepository.existsByEmail(email)) {
             throw badRequest("Email already registered");
         }
