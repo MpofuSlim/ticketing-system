@@ -579,6 +579,87 @@ class TeamMemberServiceTest {
     // is covered by the cases above.
     // -------------------------------------------------------------------------
 
+    // ---- SUPER_ADMIN creating on an organizer's behalf ----------------------
+    //
+    // Creation used to 403 for a SUPER_ADMIN while listing and managing did
+    // not, because a team member must be stamped with an owning organizer and
+    // an admin has no organizer identity. They can now create, but must name
+    // the organizer — and the stamp has to be the ORGANIZER's uuid, never the
+    // admin's, because booking-service compares that claim to the event's
+    // tenant_user_uuid at scan time.
+
+    @Test
+    void create_asSuperAdmin_withoutOrganizerUuid_isRefused() {
+        User admin = superAdmin();
+        authenticateAsSuperAdmin(admin);
+        when(userRepository.findByEmail(admin.getEmail())).thenReturn(Optional.of(admin));
+
+        assertThatThrownBy(() -> service.createTeamMember(createDto()))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("organizerUuid is required");
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void create_asSuperAdmin_stampsTheNamedOrganizer_notTheAdmin() {
+        User admin = superAdmin();
+        UUID organizerUuid = UUID.randomUUID();
+        User target = organizer(organizerUuid);
+        authenticateAsSuperAdmin(admin);
+        when(userRepository.findByEmail(admin.getEmail())).thenReturn(Optional.of(admin));
+        when(userRepository.findByUserUuid(organizerUuid)).thenReturn(Optional.of(target));
+        when(userRepository.existsByEmail(any())).thenReturn(false);
+        when(userRepository.existsByPhoneNumberAndHomeCountry(any(), any())).thenReturn(false);
+        when(passwordEncoder.encode(any())).thenReturn("HASHED");
+        ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
+        when(userRepository.save(saved.capture())).thenAnswer(inv -> saved.getValue());
+
+        CreateTeamMemberDTO dto = createDto();
+        dto.setOrganizerUuid(organizerUuid);
+        service.createTeamMember(dto);
+
+        assertThat(saved.getValue().getCreatedByOrganizerUuid())
+                .as("the member must belong to the organizer, not the admin who created them")
+                .isEqualTo(organizerUuid);
+        assertThat(saved.getValue().getCreatedByOrganizerUuid()).isNotEqualTo(admin.getUserUuid());
+    }
+
+    @Test
+    void create_asSuperAdmin_namingANonOrganizer_isRefused() {
+        // A typo must not mint a member stamped with a uuid that matches no
+        // event — that account would look fine and be unable to scan anything.
+        User admin = superAdmin();
+        UUID notAnOrganizer = UUID.randomUUID();
+        authenticateAsSuperAdmin(admin);
+        when(userRepository.findByEmail(admin.getEmail())).thenReturn(Optional.of(admin));
+        when(userRepository.findByUserUuid(notAnOrganizer))
+                .thenReturn(Optional.of(teamMember(notAnOrganizer, UUID.randomUUID())));
+
+        CreateTeamMemberDTO dto = createDto();
+        dto.setOrganizerUuid(notAnOrganizer);
+
+        assertThatThrownBy(() -> service.createTeamMember(dto))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("is not an EVENT_ORGANIZER");
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void create_asOrganizer_namingSomebodyElse_isRefused() {
+        // Refused rather than ignored: silently creating it under the caller's
+        // own name is the more surprising outcome.
+        User caller = organizer(UUID.randomUUID());
+        authenticateAs(caller);
+
+        CreateTeamMemberDTO dto = createDto();
+        dto.setOrganizerUuid(UUID.randomUUID());
+
+        assertThatThrownBy(() -> service.createTeamMember(dto))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("must be your own");
+        verify(userRepository, never()).save(any());
+    }
+
     private User superAdmin() {
         return User.builder()
                 .id(7L)

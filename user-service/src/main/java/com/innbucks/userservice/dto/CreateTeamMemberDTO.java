@@ -8,11 +8,12 @@ import lombok.Data;
 
 @Data
 @Schema(name = "CreateTeamMember",
-        description = "Payload for an EVENT_ORGANIZER to onboard a TEAM_MEMBER (gate-staff / scanner " +
-                      "operator). The new team member is scoped to the calling organizer automatically — " +
-                      "there is no organizerUuid field because the relation is derived from the caller's " +
-                      "JWT. The new user is created with a randomly-generated one-time temporary password, " +
-                      "delivered to them over email/SMS — they must rotate it via POST " +
+        description = "Payload to onboard a TEAM_MEMBER (gate-staff / scanner operator). An " +
+                      "EVENT_ORGANIZER creates one for themselves and omits organizerUuid — the relation " +
+                      "is derived from their JWT. A SUPER_ADMIN acting on an organizer's behalf MUST " +
+                      "supply organizerUuid, because a team member has to belong to some organizer and " +
+                      "an admin is not one. The new user is created with a randomly-generated one-time " +
+                      "temporary password, delivered over email/SMS — they must rotate it via POST " +
                       "/auth/change-password on first login.")
 public class CreateTeamMemberDTO {
 
@@ -38,4 +39,11 @@ public class CreateTeamMemberDTO {
     @NotBlank(message = "phoneNumber is required")
     @Schema(example = "+263773456789")
     private String phoneNumber;
+
+    @Schema(description = "Which EVENT_ORGANIZER the new team member belongs to. Omit as an "
+                          + "EVENT_ORGANIZER — you are the owner, and a value that is not your own "
+                          + "uuid is refused. REQUIRED for a SUPER_ADMIN, who has no organizer "
+                          + "identity of their own to stamp.",
+            example = "3f1c5a6e-2b44-4c0e-9a77-1d2e3f4a5b6c")
+    private java.util.UUID organizerUuid;
 }

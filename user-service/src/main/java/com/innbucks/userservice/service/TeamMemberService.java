@@ -78,8 +78,8 @@ public class TeamMemberService {
 
     @Transactional
     public UserResponseDTO createTeamMember(CreateTeamMemberDTO req) {
-        User caller = requireOrganizerCaller();
-        UUID organizerUuid = caller.getUserUuid();
+        UUID organizerUuid = resolveOwningOrganizer(req.getOrganizerUuid());
+        User caller = currentUser();
 
         // The platform admin's address is never an organizer's to hand out. A
         // row parked here becomes a SUPER_ADMIN candidate the next time
@@ -409,6 +409,67 @@ public class TeamMemberService {
         // getName() returns "" (never null) on AbstractAuthenticationToken when
         // the principal is unset, so no inner null guard is needed.
         return isCallerSuperAdmin() ? "admin:" + auth.getName() : auth.getName();
+    }
+
+    /**
+     * Which organizer the new team member belongs to.
+     *
+     * <p>Every team member is stamped with a
+     * {@link User#getCreatedByOrganizerUuid()}, and that value is not
+     * bookkeeping: it rides in their JWT as the {@code organizerUuid} claim and
+     * booking-service compares it to the event's {@code tenant_user_uuid} at
+     * scan time. A member stamped with the wrong uuid matches no event and can
+     * never scan anything — a silently broken account rather than a visible
+     * error. So this has to resolve to a real organizer or refuse.
+     *
+     * <p>An EVENT_ORGANIZER owns what they create, so the stamp is their own
+     * uuid and {@code requestedOrganizerUuid} must be null or equal to it —
+     * supplying somebody else's is refused rather than ignored, because
+     * silently creating the member under your own name is the more surprising
+     * outcome.
+     *
+     * <p>A SUPER_ADMIN has no organizer identity, which is precisely why
+     * creation used to be closed to them while listing and managing were not.
+     * They may create on an organizer's behalf, but must name which one; the
+     * target is validated to be an existing account holding the built-in
+     * EVENT_ORGANIZER role, so a typo cannot mint an unscannable member.
+     */
+    private UUID resolveOwningOrganizer(UUID requestedOrganizerUuid) {
+        User caller = currentUser();
+        if (caller.hasRole(User.Role.EVENT_ORGANIZER)) {
+            if (requestedOrganizerUuid != null
+                    && !requestedOrganizerUuid.equals(caller.getUserUuid())) {
+                throw badRequest("organizerUuid must be your own, or omitted — an organizer can "
+                        + "only create team members for themselves.");
+            }
+            return caller.getUserUuid();
+        }
+        if (isCallerSuperAdmin()) {
+            if (requestedOrganizerUuid == null) {
+                throw badRequest("organizerUuid is required when creating a team member as a "
+                        + "SUPER_ADMIN — a team member must belong to an event organizer, and an "
+                        + "admin account is not one.");
+            }
+            User organizer = userRepository.findByUserUuid(requestedOrganizerUuid)
+                    .orElseThrow(() -> badRequest("No such event organizer: " + requestedOrganizerUuid));
+            if (!organizer.hasRole(User.Role.EVENT_ORGANIZER)) {
+                throw badRequest("User " + requestedOrganizerUuid + " is not an EVENT_ORGANIZER, so a "
+                        + "team member cannot be created under them.");
+            }
+            return organizer.getUserUuid();
+        }
+        throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                "Only EVENT_ORGANIZER may manage team members");
+    }
+
+    /** The authenticated caller's User row. */
+    private User currentUser() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || auth.getName() == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication required");
+        }
+        return userRepository.findByEmail(auth.getName())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Caller not found"));
     }
 
     private User requireOrganizerCaller() {
