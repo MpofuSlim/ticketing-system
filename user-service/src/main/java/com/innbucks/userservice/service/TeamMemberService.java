@@ -109,6 +109,20 @@ public class TeamMemberService {
                 // login's pending-approval check never treats a team member as a
                 // pending registration.
                 .approved(true)
+                // The organizer receives this account's temporary password and
+                // relays it to the staffer, so it is a shared secret from the
+                // moment it is minted. Forcing a rotation on first use is what
+                // keeps it a bootstrap credential rather than the account's
+                // standing one — and it matters more for this role than most,
+                // because a gate operator faces no 2FA challenge (see
+                // MfaPolicy's gate-operator exemption), making the temporary
+                // password otherwise the ONLY thing guarding the account.
+                //
+                // JwtFilter blocks every non-/auth/** path while the claim is
+                // present, so the scanner cannot redeem a ticket until the
+                // password is changed; AuthService bumps token_version on a
+                // successful change, invalidating the claim-carrying JWT.
+                .mustChangePassword(true)
                 .createdByOrganizerUuid(organizerUuid)
                 .build();
         userRepository.save(member);

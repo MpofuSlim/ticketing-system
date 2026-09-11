@@ -147,6 +147,33 @@ class TeamMemberServiceTest {
     }
 
     @Test
+    void create_forcesAPasswordChangeOnFirstUse() {
+        // The organizer relays the temporary password, so it is a shared secret
+        // from the moment it is minted. This matters more for TEAM_MEMBER than
+        // for other staff: the gate-operator exemption in MfaPolicy means they
+        // face no 2FA challenge, so without this flag the relayed temporary
+        // password would be the account's only standing credential. JwtFilter
+        // blocks every non-/auth/** path while the claim is present, so a
+        // scanner cannot redeem a ticket until it is rotated.
+        User organizer = organizer(UUID.randomUUID());
+        authenticateAs(organizer);
+        when(userRepository.existsByEmail("tariro@harare-arena.co.zw")).thenReturn(false);
+        when(userRepository.existsByPhoneNumberAndHomeCountry("+263773456789", "ZW")).thenReturn(false);
+        when(passwordEncoder.encode(any())).thenReturn("HASHED");
+
+        ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
+        when(userRepository.save(saved.capture())).thenAnswer(inv -> {
+            User u = saved.getValue();
+            u.setId(99L);
+            return u;
+        });
+
+        service.createTeamMember(createDto());
+
+        assertThat(saved.getValue().isMustChangePassword()).isTrue();
+    }
+
+    @Test
     void create_rejectsDuplicateEmail() {
         authenticateAs(organizer(UUID.randomUUID()));
         when(userRepository.existsByEmail("tariro@harare-arena.co.zw")).thenReturn(true);
