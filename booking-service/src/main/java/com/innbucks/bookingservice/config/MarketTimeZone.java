@@ -5,9 +5,11 @@ import org.springframework.stereotype.Component;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.Locale;
 import java.util.Map;
 
@@ -87,6 +89,26 @@ public class MarketTimeZone {
      */
     public OffsetDateTime atMarket(Instant instant) {
         return instant == null ? null : instant.atZone(zone).toOffsetDateTime();
+    }
+
+    /**
+     * Render a stored UTC wall-clock at the market offset for the wire.
+     *
+     * <p>Our {@code LocalDateTime} columns carry no zone but MEAN UTC (see
+     * CLAUDE.md), so this reads the value as UTC and re-expresses the same
+     * instant in the market's clock: {@code 06:10:22} stored becomes
+     * {@code 08:10:22+02:00} for a ZW cell. The instant is unchanged — only the
+     * digits a person reads. Null passes through so callers can hand over
+     * optional fields unguarded.
+     *
+     * <p>Named apart from {@link #atMarket(Instant)} rather than overloading
+     * it: an {@code Instant} states its own zone and a {@code LocalDateTime}
+     * does not, so the {@code FromUtc} half is the precondition the caller has
+     * to satisfy. Overloading also made {@code atMarket(null)} ambiguous.
+     */
+    public OffsetDateTime atMarketFromUtc(LocalDateTime utcWallClock) {
+        return utcWallClock == null ? null
+                : utcWallClock.atOffset(ZoneOffset.UTC).atZoneSameInstant(zone).toOffsetDateTime();
     }
 
     /**
