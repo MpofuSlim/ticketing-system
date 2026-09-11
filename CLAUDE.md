@@ -557,34 +557,53 @@ column; a test that passes its own `now` into the method under test (e.g.
 `TicketWindow.classify(start, end, now)`) is self-consistent and needs no
 change. Check a timestamp fix under both `TZ=UTC` and `TZ=Africa/Harare`.
 
-3. **Wire format** — every `LocalDateTime` the four services serialize
-   carries the explicit `Z` designator (`2026-07-27T07:19:00Z`), via each
-   service's `UtcJsonTimeConfig` Jackson module. Browsers/FEs parse it as
-   the UTC instant it is and render local time correctly (this fixed the
-   "times show 2h behind in Harare" bug). Inbound stays permissive —
-   `Z`-suffixed, `±HH:mm` offsets (normalized to UTC) and legacy zoneless
-   strings all parse — so S2S calls and in-flight FE code survive rolling
-   deploys. Contract pinned per service by `UtcJsonTimeConfigTest`. FE code
-   parsing dates should still guard (`s.endsWith('Z') ? s : s + 'Z'`) rather
-   than blindly appending.
+3. **Wire format — the BE renders, the FE parses nothing.** The client
+   prints the string we send, verbatim. No client-side timezone arithmetic,
+   no re-interpreting our value through `new Date(...)`, no appending a `Z`
+   to patch one up. If a timestamp reads wrong on a screen, the fix belongs
+   at our DTO edge — never in the client.
+
+   - **User-facing surfaces serve the MARKET OFFSET**, e.g.
+     `2026-09-09T08:10:22+02:00`, rendered from the stored UTC instant by the
+     service's own `MarketTimeZone.atMarket`. Same instant as `...T06:10:22Z`
+     and equally unambiguous ISO-8601, but the leading characters are the wall
+     clock the reader is actually standing in, so a screen that prints them
+     verbatim is correct with no conversion. A ZW cell shows Harare time
+     because the BE resolved Harare — not because the reader's device
+     happened to be in Harare.
+   - **S2S payloads stay `Z`.** The consumer is another service that parses
+     properly, and a per-cell offset there just invites double-conversion.
+     Market offset is for human-facing surfaces only.
+   - **Inbound stays permissive** — `Z`-suffixed, `±HH:mm` offsets
+     (normalized to UTC) and legacy zoneless strings all parse — so S2S calls
+     and in-flight clients survive rolling deploys. Clients send the wall clock
+     the user typed and do no zone arithmetic of their own; event-service's
+     `MarketTimeZone.toUtc` converts it. Contract pinned per service by
+     `UtcJsonTimeConfigTest`.
+   - **At rest is untouched.** Only the DTO edge renders at an offset. Columns,
+     queries and every comparison stay UTC — see the storage rule above.
+
+   **Coverage today, so nobody assumes more than is built.** `/scans/**` is
+   the surface that renders at the market offset (via `booking-service`'s
+   `MarketTimeZone.atMarket`); event-service converts organizer-typed local
+   time inbound. Everything else still serializes plain `Z` through
+   `UtcJsonTimeConfig`, which a browser renders in the *viewer's* zone —
+   indistinguishable in-market, wrong for anyone viewing from outside it, and
+   still technically the client doing the work. Widening a surface is a
+   DTO-edge change on the same reasoning; do it when the surface is
+   human-facing, and never for S2S.
 
 The remaining long-term step (LocalDateTime → Instant + `timestamptz`
 columns) is now invisible on the wire — the `Z` already ships — so it can
 be done per-service without FE coordination whenever convenient.
 
-**Called-out exception — the scan-report surface (`/scans/**`) serves the
-MARKET OFFSET, not `Z`.** `2026-09-09T08:10:22+02:00` rather than
-`...T06:10:22Z`. Same instant, equally unambiguous ISO-8601, but the leading
-characters are the wall clock the operator was standing in, so a dashboard that
-prints the string verbatim is correct with no client-side conversion. This was
-a deliberate instruction ("everything done on the BE… no FE parsing") after the
-gate dashboard displayed raw UTC and every scan read two hours early. At-rest
-is untouched: `scan_attempts.attempted_at` is a `timestamptz` mapped as
-`Instant` and every query still runs in UTC — only the DTO edge changes, via
-`booking-service`'s own `MarketTimeZone.atMarket`. Extend the same treatment to
-another operator-facing surface only on the same reasoning; **never do it for an
-S2S payload**, where the consumer parses properly and a per-cell offset just
-invites double-conversion.
+**Where the rule came from.** The gate dashboard displayed raw UTC and every
+scan read two hours early. The instruction was explicit — *"everything done on
+the BE… no FE parsing"* — so `/scans/**` moved to the market offset and
+`scan_attempts.attempted_at` stayed exactly as it was: a `timestamptz` mapped as
+`Instant`, every query still in UTC, only the DTO edge changed. Read that as the
+worked example of the rule in §3 above, not as a one-off carve-out for one
+endpoint: rendering belongs on the BE everywhere a human reads the value.
 
 ## A booked seat category can't be deleted — but CAN be repriced
 
