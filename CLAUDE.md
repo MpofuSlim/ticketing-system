@@ -736,7 +736,36 @@ UTC via `MarketTimeZone` before anything reads them; responses stay UTC with the
 New work goes on a **`feature/<short-kebab-description>`** branch cut from the
 latest `master`, where the suffix names the feature being added (e.g.
 `feature/api-gateway-route-tests`). One feature per branch; push with
-`git push -u origin <branch>` and open a **draft** PR.
+`git push -u origin <branch>` and open the PR **ready for review, not a
+draft**.
+
+> [!IMPORTANT]
+> **Don't open draft PRs here, and reach for the REST API rather than `gh pr *`.**
+> A draft PR cannot be merged, and taking a PR out of draft is a **GraphQL-only**
+> operation — there is no REST field for it. GraphQL on this account gets refused
+> with `graphql_rate_limit` often enough to matter, and misleadingly: `gh api
+> rate_limit` can report `graphql: 5000/5000` while mutations are still being
+> refused, because it is a secondary limit rather than the hourly quota. That
+> combination stranded PR #570 fully green but unmergeable, and it had to be
+> merged by hand.
+>
+> `gh pr create`, `gh pr ready`, `gh pr merge` and `gh pr list` all go through
+> GraphQL and fail the same way. The REST equivalents do not:
+>
+> ```sh
+> # create (accepts "draft": false in the JSON body)
+> gh api repos/MpofuSlim/ticketing-system/pulls --method POST --input pr.json
+> # edit the body
+> gh api repos/MpofuSlim/ticketing-system/pulls/<n> --method PATCH --input body.json
+> # poll CI for a commit
+> gh api repos/MpofuSlim/ticketing-system/commits/<sha>/check-runs \
+>   --jq '.check_runs[] | "\(.name): \(.status) \(.conclusion)"'
+> # merge (this repo uses merge commits — see the (#NNN) two-parent history)
+> gh api repos/MpofuSlim/ticketing-system/pulls/<n>/merge --method PUT --input merge.json
+> ```
+>
+> Un-drafting is the one step with no REST equivalent, which is the whole reason
+> not to open drafts in the first place.
 
 Schema changes go in `src/main/resources/db/migration/V<N>__*.sql`
 (PostgreSQL + Flyway, `ddl-auto: validate` on every data service). The
