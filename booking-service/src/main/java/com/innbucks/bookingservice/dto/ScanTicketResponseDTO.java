@@ -64,12 +64,34 @@ public class ScanTicketResponseDTO {
                           + "can greet the holder / check an ID; null for bookings that pre-date names.")
     private String holderName;
 
+    /**
+     * The event's first market-local day. Populated ONLY on
+     * {@link Status#WRONG_EVENT_DAY}, so gate staff can tell someone "come back
+     * on the 14th" rather than an unactionable "wrong day"; omitted from every
+     * other outcome by the class-level NON_NULL.
+     *
+     * <p>No disclosure concern: reaching this refusal means the caller already
+     * passed both WRONG_ORGANIZER and NOT_ASSIGNED_TO_EVENT, so they are
+     * authorised for this event and its schedule is not news to them.
+     *
+     * <p>A LocalDate, not an instant — the answer is a calendar day in the
+     * market's own clock, and rendering it as a timestamp would invite the
+     * client to re-zone it and land on the wrong day.
+     */
+    private java.time.LocalDate eventDate;
+
     public enum Status {
         ALLOWED,
         ALREADY_REDEEMED,
         TICKET_NOT_FOUND,
         BOOKING_NOT_CONFIRMED,
         WRONG_ORGANIZER,
-        NOT_ASSIGNED_TO_EVENT
+        NOT_ASSIGNED_TO_EVENT,
+        /**
+         * The ticket is genuine and this scanner is authorised for it, but today
+         * is not one of the event's market-local days. The ticket is NOT
+         * redeemed — it stays valid for its own day.
+         */
+        WRONG_EVENT_DAY
     }
 }

@@ -14,6 +14,9 @@ import com.innbucks.bookingservice.security.AuthenticatedCaller;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.MDC;
+import com.innbucks.bookingservice.client.EventServiceClient;
+import com.innbucks.bookingservice.config.MarketTimeZone;
+import com.innbucks.bookingservice.dto.EventLookupDTO;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -28,9 +31,12 @@ import org.springframework.web.server.ResponseStatusException;
 import jakarta.servlet.http.HttpServletRequest;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.Map;
 
 /**
  * Single-shot ticket redemption for the scanner-app flow used by an
@@ -79,17 +85,50 @@ public class TicketScanService {
      *  available. */
     private final ObjectProvider<MeterRegistry> meterRegistryProvider;
     private final String deploymentCountry;
+    /** ObjectProvider for the same reason as the meter registry: the existing
+     *  unit tests build this service with `new`, and the event-day rule must
+     *  not force every one of them to widen. A null provider means the check
+     *  cannot run — see {@link #eventDayVerdict}, which treats that as
+     *  UNVERIFIABLE and therefore obeys the fail-open flag rather than
+     *  silently allowing. */
+    private final ObjectProvider<EventServiceClient> eventServiceClientProvider;
+    private final ObjectProvider<MarketTimeZone> marketTimeZoneProvider;
+
+    /**
+     * Resolved event windows, keyed by event id, held for 60s.
+     *
+     * <p>A gate queue scans the same event over and over, and without this
+     * every scan would add a cross-service round trip to a path that made none
+     * for organizers by design (tenantUserUuid was mirrored onto bookings
+     * precisely to avoid one). 60s collapses a queue to roughly one lookup per
+     * event per minute while bounding staleness after an organizer edits a
+     * date to a minute.
+     *
+     * <p>Successes only. A failed lookup is never cached: caching it would turn
+     * one blip into a guaranteed 60s of refusals, which is the opposite of what
+     * the cache is for.
+     */
+    private final Map<UUID, CachedWindow> eventWindowCache = new ConcurrentHashMap<>();
+
+    private record CachedWindow(LocalDateTime startUtc, LocalDateTime endUtc, long cachedAtMillis) {
+    }
+
+    private static final long EVENT_WINDOW_TTL_MILLIS = 60_000L;
 
     public TicketScanService(BookingItemRepository bookingItemRepository,
                              UserServiceClient userServiceClient,
                              ScanAttemptRepository scanAttemptRepository,
                              ObjectProvider<MeterRegistry> meterRegistryProvider,
-                             @Value("${innbucks.country:ZW}") String deploymentCountry) {
+                             @Value("${innbucks.country:ZW}") String deploymentCountry,
+                             ObjectProvider<EventServiceClient> eventServiceClientProvider,
+                             ObjectProvider<MarketTimeZone> marketTimeZoneProvider) {
         this.bookingItemRepository = bookingItemRepository;
         this.userServiceClient = userServiceClient;
         this.scanAttemptRepository = scanAttemptRepository;
         this.meterRegistryProvider = meterRegistryProvider;
         this.deploymentCountry = deploymentCountry;
+        this.eventServiceClientProvider = eventServiceClientProvider;
+        this.marketTimeZoneProvider = marketTimeZoneProvider;
     }
 
     /** Shared S2S secret for the user-service assignment-check call. */
@@ -116,6 +155,38 @@ public class TicketScanService {
      */
     @Value("${innbucks.scan.assignment-check.fail-open:false}")
     private boolean assignmentCheckFailOpen;
+
+    /**
+     * Kill switch for the event-day rule. true (default) = a ticket only
+     * redeems on one of its event's market-local days.
+     *
+     * <p>Set false to disable the rule entirely — the break-glass lever when
+     * event-service is degraded for longer than a gate can wait and the
+     * fail-closed behaviour below is stopping a live event. Prefer this to
+     * flipping fail-open: turning the rule off is an honest, loggable
+     * statement that the check is not running, whereas fail-open leaves a rule
+     * that silently evaporates exactly when it is least verifiable.
+     */
+    @Value("${innbucks.scan.event-day-check.enabled:true}")
+    private boolean eventDayCheckEnabled;
+
+    /**
+     * What to do when the event's dates cannot be established — event-service
+     * unreachable, circuit open, or a payload with no start.
+     *
+     * <p><b>Fail CLOSED by default</b> (false): refuse with a retryable 503 and
+     * do NOT redeem. The asymmetry decides it — a refused scan is recoverable
+     * by retrying seconds later, whereas an allowed wrong-day scan sets
+     * {@code redeemed_at} and {@code BookingItemRepository} has no inverse, so
+     * the mistake is permanent and burns a ticket that was valid for its own
+     * day. Same posture as the seat-allocation and category-delete guards: an
+     * unanswerable question is refused, never assumed safe.
+     *
+     * <p>true = break-glass: treat an unverifiable window as on-day and let the
+     * scan proceed. Time-boxed operator decision only.
+     */
+    @Value("${innbucks.scan.event-day-check.fail-open:false}")
+    private boolean eventDayCheckFailOpen;
 
     @Transactional
     public ScanTicketResponseDTO scan(String ticketNumber, String scannerDisplayName) {
@@ -193,6 +264,44 @@ public class TicketScanService {
             recordAttempt(ticketNumber, item, ScanAttempt.Outcome.NOT_ASSIGNED_TO_EVENT,
                     scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start);
             return result;
+        }
+
+        // Event-day rule. A ticket redeems only on the market-local calendar
+        // days its event actually spans. Placed HERE deliberately:
+        //
+        //  - AFTER both authorization gates, so a scanner who does not own the
+        //    event cannot probe it for a schedule; and
+        //  - BEFORE the claim below, because claimRedemption is the
+        //    irreversible `UPDATE ... WHERE redeemed_at IS NULL` and the
+        //    repository has no inverse. Refusing after it would permanently
+        //    burn a ticket that is perfectly valid tomorrow.
+        if (eventDayCheckEnabled) {
+            EventDayRule.Verdict verdict = eventDayVerdict(booking.getEventId());
+            if (verdict == EventDayRule.Verdict.UNVERIFIABLE && !eventDayCheckFailOpen) {
+                // Not a verdict about the ticket — the server could not decide.
+                // 503 rather than a 200-carried refusal so the scanner app
+                // retries instead of turning a valid customer away, and so the
+                // ticket is not audited as WRONG_EVENT_DAY when we do not know
+                // that it is.
+                log.warn("Ticket scan unverifiable, event window unavailable ticketNumber={} eventId={} by={}",
+                        ticketNumber, booking.getEventId(), scannerEmail);
+                throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
+                        "Could not confirm the event's date. Please try again.");
+            }
+            if (verdict == EventDayRule.Verdict.OFF_DAY) {
+                LocalDate eventDay = eventFirstLocalDay(booking.getEventId());
+                log.info("Ticket scan rejected, not the event's day ticketNumber={} eventId={} eventDay={} by={}",
+                        ticketNumber, booking.getEventId(), eventDay, scannerEmail);
+                ScanTicketResponseDTO result = ScanTicketResponseDTO.builder()
+                        .status(ScanTicketResponseDTO.Status.WRONG_EVENT_DAY)
+                        .ticketNumber(ticketNumber)
+                        .bookingItemId(item.getId())
+                        .eventDate(eventDay)
+                        .build();
+                recordAttempt(ticketNumber, item, ScanAttempt.Outcome.WRONG_EVENT_DAY,
+                        scannerOrganizerUuid, scannerUserUuid, scannerEmail, scannerDisplayName, start);
+                return result;
+            }
         }
 
         // Atomic claim. UPDATE returns 1 = first scanner wins; 0 = somebody
@@ -363,5 +472,78 @@ public class TicketScanService {
         log.warn("Assignment check unavailable, applying failOpen={} ticketNumber={} scanner={} eventId={}",
                 assignmentCheckFailOpen, ticketNumber, scannerEmail, eventId);
         return assignmentCheckFailOpen;
+    }
+
+    /**
+     * Today's verdict for this event, reading the window through a 60s cache.
+     *
+     * <p>Never throws: any failure to resolve the window — no client bean, a
+     * null body from the Feign fallback, a thrown exception — collapses to
+     * UNVERIFIABLE, and the CALLER decides what that means. Keeping the policy
+     * at the call site rather than here is the same shape
+     * {@code assignmentAllowsScan} uses, so the fail-open flag is the single
+     * place either rule's outage behaviour is decided.
+     */
+    private EventDayRule.Verdict eventDayVerdict(UUID eventId) {
+        MarketTimeZone market = marketTimeZoneProvider == null
+                ? null : marketTimeZoneProvider.getIfAvailable();
+        if (eventId == null || market == null) {
+            return EventDayRule.Verdict.UNVERIFIABLE;
+        }
+        CachedWindow window = eventWindow(eventId);
+        if (window == null) {
+            return EventDayRule.Verdict.UNVERIFIABLE;
+        }
+        return EventDayRule.classify(window.startUtc(), window.endUtc(), Instant.now(), market);
+    }
+
+    /** The event's first market-local day, for the refusal payload. Null when unknown. */
+    private LocalDate eventFirstLocalDay(UUID eventId) {
+        MarketTimeZone market = marketTimeZoneProvider == null
+                ? null : marketTimeZoneProvider.getIfAvailable();
+        CachedWindow window = eventId == null ? null : eventWindow(eventId);
+        if (market == null || window == null) {
+            return null;
+        }
+        return EventDayRule.firstLocalDay(window.startUtc(), market);
+    }
+
+    /**
+     * The event's stored UTC start/end, cached for {@link #EVENT_WINDOW_TTL_MILLIS}.
+     * Null means "could not resolve" — never cached, so one blip does not
+     * become a minute of refusals.
+     */
+    private CachedWindow eventWindow(UUID eventId) {
+        CachedWindow cached = eventWindowCache.get(eventId);
+        if (cached != null && System.currentTimeMillis() - cached.cachedAtMillis() < EVENT_WINDOW_TTL_MILLIS) {
+            return cached;
+        }
+        EventServiceClient client = eventServiceClientProvider == null
+                ? null : eventServiceClientProvider.getIfAvailable();
+        if (client == null) {
+            return null;
+        }
+        try {
+            // The INTERNAL lookup: the public GET /events/{id} strips fields
+            // for anonymous callers and a server-side Feign call is anonymous.
+            // It also still answers for unpublished events, so a ticket for an
+            // event pulled from sale is judged on its dates rather than
+            // becoming unverifiable.
+            ApiResult<EventLookupDTO> response = client.getEventInternal(eventId, internalToken);
+            EventLookupDTO event = response == null ? null : response.getData();
+            if (event == null || event.getStartDateTime() == null) {
+                return null;
+            }
+            CachedWindow fresh = new CachedWindow(
+                    event.getStartDateTime(), event.getEndDateTime(), System.currentTimeMillis());
+            eventWindowCache.put(eventId, fresh);
+            return fresh;
+        } catch (Exception ex) {
+            // Includes the open-circuit case. Deliberately swallowed to
+            // UNVERIFIABLE rather than propagated, so the caller's fail-open
+            // flag is what decides, not an exception type.
+            log.warn("Event window lookup failed eventId={} error={}", eventId, ex.toString());
+            return null;
+        }
     }
 }

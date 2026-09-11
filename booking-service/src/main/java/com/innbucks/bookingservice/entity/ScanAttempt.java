@@ -151,6 +151,7 @@ public class ScanAttempt implements Persistable<UUID> {
         WRONG_ORGANIZER,
         NOT_ASSIGNED_TO_EVENT,
         TICKET_NOT_FOUND,
-        BOOKING_NOT_CONFIRMED
+        BOOKING_NOT_CONFIRMED,
+        WRONG_EVENT_DAY
     }
 }

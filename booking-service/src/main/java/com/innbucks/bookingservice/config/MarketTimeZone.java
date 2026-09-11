@@ -4,6 +4,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
@@ -104,7 +105,32 @@ public class MarketTimeZone {
      * historical window keeps its meaning.
      */
     public Instant endOfLocalDay(Instant instant) {
-        return instant == null ? null
-                : instant.atZone(zone).toLocalDate().atTime(LocalTime.MAX).atZone(zone).toInstant();
+        LocalDate day = localDay(instant);
+        return day == null ? null : day.atTime(LocalTime.MAX).atZone(zone).toInstant();
+    }
+
+    /**
+     * The market-local calendar day that contains {@code instant}. Null passes
+     * through, like the other converters here.
+     *
+     * <p>This is the single definition of "which day was it, locally", shared
+     * by {@link #endOfLocalDay} (which widens a report's upper bound) and by
+     * the scan-day rule in {@code TicketScanService} (which decides whether a
+     * ticket may be redeemed today). Two expressions of the same idea would
+     * eventually disagree by an offset, and the disagreement would show up as
+     * customers refused at a gate.
+     *
+     * <p><b>The instant must be a true instant.</b> An event's
+     * {@code startDateTime} arrives as a zone-less {@code LocalDateTime} that
+     * merely holds UTC, so callers must stamp it — {@code
+     * startDateTime.toInstant(ZoneOffset.UTC)} — before passing it here.
+     * Calling {@code toLocalDate()} on the raw value skips the market
+     * conversion entirely and silently answers in UTC: a 23:00-local event in
+     * a +2 market is stored 21:00Z the same day, but a 00:30-local scan is
+     * 22:30Z on the PREVIOUS day, which a UTC reading would wrongly call the
+     * event's day.
+     */
+    public LocalDate localDay(Instant instant) {
+        return instant == null ? null : instant.atZone(zone).toLocalDate();
     }
 }

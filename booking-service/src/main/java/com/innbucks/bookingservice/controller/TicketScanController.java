@@ -58,9 +58,19 @@ public class TicketScanController {
                           "knows who first scanned it). WRONG_ORGANIZER when the scanner doesn't work " +
                           "for the event's organizer. TICKET_NOT_FOUND on a bogus QR. " +
                           "BOOKING_NOT_CONFIRMED when the ticket exists but the booking is PENDING / " +
-                          "CANCELLED (i.e. not actually paid for). Always returns 200 — the {@code " +
-                          "status} field carries the verdict so the scanner-app's UX branch is " +
-                          "deterministic regardless of HTTP layer behaviour. " +
+                          "CANCELLED (i.e. not actually paid for). WRONG_EVENT_DAY when the ticket is " +
+                          "genuine and the scanner is authorised, but today is not one of the event's " +
+                          "market-local days — the ticket is NOT redeemed and stays valid for its own " +
+                          "day, and the response carries `eventDate` so staff can say which day that " +
+                          "is. " +
+                          "**200 carries verdicts about the ticket; 503 means the server could not " +
+                          "decide.** The scan result always arrives as 200 with the {@code status} " +
+                          "field, so the scanner-app's verdict branch stays deterministic. The one " +
+                          "exception is 503: if the event's dates cannot be confirmed (event-service " +
+                          "unreachable), the scan is refused WITHOUT redeeming and the client should " +
+                          "show a retry rather than turning the customer away — an outage is not a " +
+                          "verdict about the ticket. Operators can disable the day rule entirely with " +
+                          "`innbucks.scan.event-day-check.enabled=false`. " +
                           "Requires **EVENT_ORGANIZER** or **TEAM_MEMBER** role."
     )
     @ApiResponses({
@@ -127,6 +137,18 @@ public class TicketScanController {
                                                 "bookingItemId": "f1c0d2e3-2345-6789-abcd-ef0123456789"
                                               }
                                             }
+                                            """),
+                                    @ExampleObject(name = "WRONG_EVENT_DAY", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Scan result",
+                                              "data": {
+                                                "status": "WRONG_EVENT_DAY",
+                                                "ticketNumber": "20260619-48291X",
+                                                "bookingItemId": "f1c0d2e3-2345-6789-abcd-ef0123456789",
+                                                "eventDate": "2026-06-19"
+                                              }
+                                            }
                                             """)
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -146,6 +168,21 @@ public class TicketScanController {
                                     {
                                       "code": "403 FORBIDDEN",
                                       "message": "Forbidden - insufficient role",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "503",
+                    description = "The event's dates could not be confirmed, so the scan was refused "
+                                  + "WITHOUT redeeming the ticket. Retryable — show an amber 'try "
+                                  + "again', not a rejection: the ticket may well be valid. This is "
+                                  + "the deliberate exception to the always-200 rule, because an "
+                                  + "outage is not a verdict about the ticket.",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "503 SERVICE_UNAVAILABLE",
+                                      "message": "Could not confirm the event's date. Please try again.",
                                       "data": null
                                     }
                                     """)))
