@@ -756,9 +756,12 @@ class BookingServiceTest {
         RequestFixture fx = request(new BigDecimal("10.00"));
         BookingService service = newService(bookingRepo, itemRepo, stubClient(fx));
 
-        java.time.LocalDateTime before = java.time.LocalDateTime.now();
+        // Fence posts must read the same clock the service stamps with
+        // (LocalDateTime.now(ZoneOffset.UTC)) — a bare now() here would sit
+        // hours off the returned expiresAt on any non-UTC dev machine.
+        java.time.LocalDateTime before = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC);
         BookingResponseDTO resp = service.createBooking("u@example.com", null, fx.request);
-        java.time.LocalDateTime after = java.time.LocalDateTime.now();
+        java.time.LocalDateTime after = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC);
 
         // Default holdTtlMinutes is 5 → expiresAt is roughly 5 min from now.
         assertNotNull(resp.getExpiresAt());
@@ -781,7 +784,7 @@ class BookingServiceTest {
         UUID id = UUID.randomUUID();
         Booking booking = Booking.builder().id(id).userEmail("u@example.com")
                 .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN)
-                .expiresAt(java.time.LocalDateTime.now().plusMinutes(3))
+                .expiresAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).plusMinutes(3))
                 .build();
         when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
 
@@ -801,7 +804,7 @@ class BookingServiceTest {
         UUID id = UUID.randomUUID();
         Booking booking = Booking.builder().id(id).userEmail("u@example.com")
                 .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN)
-                .expiresAt(java.time.LocalDateTime.now().minusSeconds(1)) // already past
+                .expiresAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusSeconds(1)) // already past on the UTC clock confirmBooking reads
                 .build();
         when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
 
@@ -916,7 +919,7 @@ class BookingServiceTest {
         UUID id = UUID.randomUUID();
         Booking booking = Booking.builder().id(id).userEmail("u@example.com")
                 .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN)
-                .expiresAt(java.time.LocalDateTime.now().plusMinutes(3))
+                .expiresAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).plusMinutes(3))
                 .build();
         when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
 
