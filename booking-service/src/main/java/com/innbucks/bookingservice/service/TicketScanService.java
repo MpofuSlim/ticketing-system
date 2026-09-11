@@ -251,9 +251,18 @@ public class TicketScanService {
         }
 
         // Per-event restriction. Organizers are never restricted (they own
-        // every event); only TEAM_MEMBERs can be narrowed to assigned events.
-        // user-service is the assignment system of record and encodes the
-        // "no assignments = organizer-wide" rule in the allowed flag.
+        // every event); only TEAM_MEMBERs are scoped to assigned events.
+        // user-service is the assignment system of record and encodes the rule
+        // in the allowed flag — and that rule is DENY-BY-DEFAULT: a team member
+        // with no assignments may scan NOTHING, not their organizer's whole
+        // portfolio. (V21 shipped the opposite so the feature could be additive;
+        // 19ec675f "deny-by-default team-member event access" reversed it.)
+        //
+        // Note the scannerUserUuid != null conjunct below: a TEAM_MEMBER on a
+        // legacy token with no userUuid claim skips this check entirely and is
+        // treated as organizer-wide. That is a real gap, not an intended
+        // exception — it predates this comment and is called out here so it is
+        // not mistaken for the deny-by-default rule above.
         if (!isOrganizer(auth) && scannerUserUuid != null
                 && !assignmentAllowsScan(scannerUserUuid, booking.getEventId(), ticketNumber, scannerEmail)) {
             ScanTicketResponseDTO result = ScanTicketResponseDTO.builder()

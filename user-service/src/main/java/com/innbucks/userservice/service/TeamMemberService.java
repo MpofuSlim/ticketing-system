@@ -267,9 +267,10 @@ public class TeamMemberService {
     }
 
     /**
-     * Assigns the team member to an event (idempotent). The first assignment
-     * for a member flips them from organizer-wide scanning to "assigned events
-     * only" — see {@link #canScanEvent}. Returns the member's full current
+     * Assigns the team member to an event (idempotent). Access is
+     * deny-by-default, so this is what GRANTS scan access rather than what
+     * narrows it: until a member has at least one assignment they can scan
+     * nothing — see {@link #canScanEvent}. Returns the member's full current
      * assignment set so the caller can refresh its view in one round trip.
      */
     @Transactional
@@ -293,7 +294,10 @@ public class TeamMemberService {
 
     /**
      * Removes an event assignment (idempotent). If this was the member's last
-     * assignment they revert to organizer-wide scanning (no rows = wide open).
+     * assignment they are left with NO scan access at all — deny-by-default,
+     * not a reversion to organizer-wide. Worth surfacing in any UI that offers
+     * an unassign control: removing the last one looks identical to removing
+     * one of several and has a completely different effect.
      */
     @Transactional
     public List<UUID> unassignEvent(UUID teamMemberUuid, UUID eventId) {

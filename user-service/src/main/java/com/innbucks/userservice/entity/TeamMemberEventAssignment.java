@@ -11,9 +11,17 @@ import java.time.ZoneOffset;
 import java.util.UUID;
 
 /**
- * One (team member, event) assignment. Presence of any row for a team member
- * switches them from organizer-wide scanning to "only the assigned events".
- * See V21 migration for the no-rows-means-organizer-wide product rule.
+ * One (team member, event) assignment. A team member may scan exactly the
+ * events they have a row for — access is DENY-BY-DEFAULT, so a member with no
+ * rows can scan nothing at all.
+ *
+ * <p>Note the V21 migration's comment describes the ORIGINAL rule, where no
+ * rows meant organizer-wide access so the feature could ship additively. That
+ * was superseded by {@code 19ec675f} "deny-by-default team-member event
+ * access". V21 is an applied migration and is deliberately left as the
+ * historical record it is — editing it would change its Flyway checksum and
+ * fail validation on every deployed cell — so read it as "what was true in
+ * V21", not as the current rule.
  */
 @Entity
 @Table(name = "team_member_event_assignment",
