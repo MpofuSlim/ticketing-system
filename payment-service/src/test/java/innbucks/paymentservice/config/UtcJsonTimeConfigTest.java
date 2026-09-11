@@ -1,4 +1,4 @@
-package com.innbucks.bookingservice.config;
+package innbucks.paymentservice.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
@@ -119,7 +119,7 @@ class UtcJsonTimeConfigTest {
 
     @Test
     void userFacingRequest_rendersAtTheMarketOffset() {
-        bindRequest("/bookings/abc", null);
+        bindRequest("/payments/abc", null);
         // 07:19:03 UTC is 09:19:03 in Harare — same instant, readable digits.
         assertThat(mapper3.writeValueAsString(LocalDateTime.of(2026, 7, 27, 7, 19, 3)))
                 .isEqualTo("\"2026-07-27T09:19:03+02:00\"");
@@ -127,7 +127,7 @@ class UtcJsonTimeConfigTest {
 
     @Test
     void internalPath_staysOnZ() {
-        bindRequest("/bookings/internal/abc", null);
+        bindRequest("/payments/internal/abc", null);
         assertThat(mapper3.writeValueAsString(LocalDateTime.of(2026, 7, 27, 7, 19, 3)))
                 .isEqualTo("\"2026-07-27T07:19:03Z\"");
     }
@@ -136,7 +136,7 @@ class UtcJsonTimeConfigTest {
     void s2sHeader_staysOnZ_evenOnAPublicPath() {
         // The hole the path convention alone leaves: a sibling service calling
         // a public endpoint. The caller stamps the header; we honour it.
-        bindRequest("/bookings/abc", "1");
+        bindRequest("/payments/abc", "1");
         assertThat(mapper3.writeValueAsString(LocalDateTime.of(2026, 7, 27, 7, 19, 3)))
                 .isEqualTo("\"2026-07-27T07:19:03Z\"");
     }
@@ -154,7 +154,7 @@ class UtcJsonTimeConfigTest {
         // Feign request bodies and jjwt go through the Jackson 2 mapper. It must
         // stay UTC regardless of the request we happen to be inside, or an
         // outbound S2S call would carry a per-cell offset.
-        bindRequest("/bookings/abc", null);
+        bindRequest("/payments/abc", null);
         assertThat(mapper.writeValueAsString(LocalDateTime.of(2026, 7, 27, 7, 19, 3)))
                 .isEqualTo("\"2026-07-27T07:19:03Z\"");
     }

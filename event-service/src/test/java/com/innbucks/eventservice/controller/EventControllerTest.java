@@ -159,9 +159,12 @@ class EventControllerTest {
                 .andExpect(jsonPath("$.data.content[0].eventId", is(saved.getEventId().toString())))
                 .andExpect(jsonPath("$.data.content[0].country", is("Zimbabwe")))
                 .andExpect(jsonPath("$.data.content[0].category", is("CONCERT")))
-                // UtcJsonTimeConfig: wire timestamps carry the explicit UTC designator.
-                .andExpect(jsonPath("$.data.content[0].startDateTime", is("2030-04-18T10:30:00Z")))
-                .andExpect(jsonPath("$.data.content[0].endDateTime", is("2030-04-18T12:30:00Z")));
+                // UtcJsonTimeConfig: a user-facing response renders at the
+                // MARKET offset, so the stored 10:30 UTC reads as 12:30+02:00
+                // for this ZW cell. Same instant, printed the way a Harare
+                // reader sees the clock on the wall.
+                .andExpect(jsonPath("$.data.content[0].startDateTime", is("2030-04-18T12:30:00+02:00")))
+                .andExpect(jsonPath("$.data.content[0].endDateTime", is("2030-04-18T14:30:00+02:00")));
     }
 
     @Test
@@ -515,13 +518,14 @@ class EventControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.title", is("Updated Title")))
                 .andExpect(jsonPath("$.data.venue", is("New Venue")))
-                // Submitted times are the MARKET-LOCAL wall-clock (see
-                // MarketTimeZone): 19:00 means 7pm in Harare, so it lands as
-                // 17:00 UTC and comes back as 17:00Z. The request body's "Z"
-                // suffix is not honoured as an instant — the contract is
-                // "send what the organizer typed", and this cell is UTC+2.
-                .andExpect(jsonPath("$.data.startDateTime", is("2031-06-15T17:00:00Z")))
-                .andExpect(jsonPath("$.data.endDateTime", is("2031-06-15T20:00:00Z")));
+                // The round trip is now symmetric. Submitted times are the
+                // MARKET-LOCAL wall-clock (see MarketTimeZone): 19:00 means 7pm
+                // in Harare, so it lands as 17:00 UTC — and renders back at the
+                // market offset as the 19:00 the organizer actually typed.
+                // Before market rendering this came back as 17:00Z, which was
+                // correct-but-unreadable and invited the client to convert.
+                .andExpect(jsonPath("$.data.startDateTime", is("2031-06-15T19:00:00+02:00")))
+                .andExpect(jsonPath("$.data.endDateTime", is("2031-06-15T22:00:00+02:00")));
 
         Event reloaded = eventRepository.findById(saved.getEventId()).orElseThrow();
         org.junit.jupiter.api.Assertions.assertEquals("Updated Title", reloaded.getTitle());

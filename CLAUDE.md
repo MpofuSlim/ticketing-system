@@ -583,15 +583,36 @@ change. Check a timestamp fix under both `TZ=UTC` and `TZ=Africa/Harare`.
    - **At rest is untouched.** Only the DTO edge renders at an offset. Columns,
      queries and every comparison stay UTC — see the storage rule above.
 
-   **Coverage today, so nobody assumes more than is built.** `/scans/**` is
-   the surface that renders at the market offset (via `booking-service`'s
-   `MarketTimeZone.atMarket`); event-service converts organizer-typed local
-   time inbound. Everything else still serializes plain `Z` through
-   `UtcJsonTimeConfig`, which a browser renders in the *viewer's* zone —
-   indistinguishable in-market, wrong for anyone viewing from outside it, and
-   still technically the client doing the work. Widening a surface is a
-   DTO-edge change on the same reasoning; do it when the surface is
-   human-facing, and never for S2S.
+   **How the split is decided — per request, not per type.** The two surfaces
+   share DTO classes: `BookingResponseDTO` is returned by `GET /bookings/{id}`
+   *and* `GET /bookings/internal/{id}`, so the audience cannot live on the
+   type. `WireAudience.isServiceToService()` reads it off the request and the
+   Jackson 3 serializer in `UtcJsonTimeConfig` branches on it. Two markers,
+   because neither alone is enough:
+
+   - the `/internal/` path segment, covering endpoints built for S2S; and
+   - the `X-Innbucks-S2S` header, stamped on every outbound Feign call by
+     `S2sMarkerFeignInterceptor`. This is what closes the hole the path
+     convention leaves — booking-service fetches `GET /events/{id}`, a public
+     path, and that response carries `startDateTime`.
+
+   With no request in scope at all — a domain event, a scheduled job — the
+   answer is S2S, so nothing off the response path ever shifts. **Only the
+   Jackson 3 module renders at an offset.** The Jackson 2 module (Feign request
+   bodies, jjwt) stays on `Z`, so an outbound S2S call can't carry a per-cell
+   offset. All four pinned by `UtcJsonTimeConfigTest`.
+
+   Scan reports reach the same result by a different route: their DTOs are
+   typed `OffsetDateTime` and converted explicitly in `ScanReportService`,
+   because they start as `Instant` rather than a UTC `LocalDateTime`.
+
+   **Not covered: payment-service.** It has no `UtcJsonTimeConfig` at all, so
+   its user-facing `/payments` and `/payments/ecocash` responses still serialize
+   `LocalDateTime` with Jackson's default — zoneless, no designator — including
+   `promptExpiresAt`, `paymentCodeExpiresAt` and `checkoutExpiresAt`, which a
+   customer reads while waiting to pay. It is market-pinned already
+   (`innbucks.country`, `CountryMdcConfig`), so widening it is the same three
+   files as the others; it is called out here rather than left to be discovered.
 
 The remaining long-term step (LocalDateTime → Instant + `timestamptz`
 columns) is now invisible on the wire — the `Z` already ships — so it can
