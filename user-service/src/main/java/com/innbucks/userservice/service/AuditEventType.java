@@ -172,5 +172,17 @@ public enum AuditEventType {
     /** A TEAM_MEMBER was disabled (tokens revoked, can no longer log in). */
     TEAM_MEMBER_DISABLED,
     /** The first-run bootstrap SUPER_ADMIN was seeded from the env credential. */
-    BOOTSTRAP_ADMIN_CREATED
+    BOOTSTRAP_ADMIN_CREATED,
+    /**
+     * A pre-existing account already held BOOTSTRAP_ADMIN_EMAIL and was NOT the
+     * platform admin, so the seeder refused to adopt it. The row was left
+     * untouched; failure_reason names what disqualified it.
+     */
+    BOOTSTRAP_ADMIN_SEED_REFUSED,
+    /**
+     * A pre-existing, unprivileged row at BOOTSTRAP_ADMIN_EMAIL was adopted as
+     * the platform SUPER_ADMIN (the legacy-admin migration path). A privilege
+     * grant to an account the seeder did not create, so it is audited.
+     */
+    BOOTSTRAP_ADMIN_ADOPTED
 }

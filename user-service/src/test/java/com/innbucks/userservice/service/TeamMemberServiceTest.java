@@ -70,6 +70,8 @@ class TeamMemberServiceTest {
     @BeforeEach
     void setUp() {
         ReflectionTestUtils.setField(service, "deploymentCountry", "ZW");
+        ReflectionTestUtils.setField(service, "bootstrapAdminEmail",
+                com.innbucks.userservice.util.BootstrapAdminEmail.DEFAULT_ADDRESS);
     }
 
     @AfterEach
@@ -179,6 +181,39 @@ class TeamMemberServiceTest {
         when(userRepository.existsByEmail("tariro@harare-arena.co.zw")).thenReturn(true);
 
         assertThatThrownBy(() -> service.createTeamMember(createDto()))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Email already registered");
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void create_refusesTheBootstrapAdminAddress() {
+        // An organizer must never be able to park a row at the platform admin's
+        // address. Left open, a rotated BOOTSTRAP_ADMIN_EMAIL (or a deleted
+        // admin row) would let DataInitializer adopt that row as SUPER_ADMIN —
+        // with the temporary password this call hands to the organizer.
+        // Refused before the existsByEmail lookup, so it holds on a cell where
+        // no admin row currently occupies the address.
+        authenticateAs(organizer(UUID.randomUUID()));
+        CreateTeamMemberDTO dto = createDto();
+        dto.setEmail(com.innbucks.userservice.util.BootstrapAdminEmail.DEFAULT_ADDRESS);
+
+        assertThatThrownBy(() -> service.createTeamMember(dto))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Email already registered");
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void create_refusesACaseVariantOfTheBootstrapAdminAddress() {
+        // uk_users_email is case-sensitive, so an exact-match guard would be
+        // bypassed by re-spelling the address — and the resulting row is one
+        // BOOTSTRAP_ADMIN_EMAIL re-spelling away from being adopted.
+        authenticateAs(organizer(UUID.randomUUID()));
+        CreateTeamMemberDTO dto = createDto();
+        dto.setEmail("Admin@InnBucks.CO.ZW");
+
+        assertThatThrownBy(() -> service.createTeamMember(dto))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("Email already registered");
         verify(userRepository, never()).save(any());

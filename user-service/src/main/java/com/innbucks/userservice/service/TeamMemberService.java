@@ -10,6 +10,7 @@ import com.innbucks.userservice.repository.TeamMemberEventAssignmentRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.security.AuthenticatedCaller;
 import com.innbucks.userservice.security.TokenVersionPublisher;
+import com.innbucks.userservice.util.BootstrapAdminEmail;
 import com.innbucks.userservice.util.HtmlSanitizer;
 import com.innbucks.userservice.util.MsisdnValidator;
 import com.innbucks.userservice.util.TemporaryPasswordGenerator;
@@ -71,11 +72,27 @@ public class TeamMemberService {
     @Value("${innbucks.country:ZW}")
     private String deploymentCountry = "ZW";
 
+    /** The platform admin address this service must never create an account at. */
+    @Value(BootstrapAdminEmail.PROPERTY)
+    private String bootstrapAdminEmail = BootstrapAdminEmail.DEFAULT_ADDRESS;
+
     @Transactional
     public UserResponseDTO createTeamMember(CreateTeamMemberDTO req) {
         User caller = requireOrganizerCaller();
         UUID organizerUuid = caller.getUserUuid();
 
+        // The platform admin's address is never an organizer's to hand out. A
+        // row parked here becomes a SUPER_ADMIN candidate the next time
+        // DataInitializer boots against an admin-less cell (a rotated
+        // BOOTSTRAP_ADMIN_EMAIL, or a deleted admin row), and its temporary
+        // password went to the organizer who created it. The seeder now refuses
+        // to adopt such a row; this stops one being planted in the first place.
+        // Deliberately the same message as the duplicate case below — a
+        // distinct one would confirm the configured address to the caller.
+        if (BootstrapAdminEmail.matches(bootstrapAdminEmail, req.getEmail())) {
+            log.warn("Refused TEAM_MEMBER creation at the bootstrap admin address by={}", caller.getEmail());
+            throw badRequest("Email already registered");
+        }
         if (userRepository.existsByEmail(req.getEmail())) {
             throw badRequest("Email already registered");
         }
