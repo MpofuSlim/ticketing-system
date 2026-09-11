@@ -16,7 +16,7 @@ import java.util.Set;
  *   USSD or WHATSAPP             →  not applicable  (no second-factor surface)
  *   WEB or MOBILE, system user   →  required        (forced enrolment on first login)
  *   WEB or MOBILE, CUSTOMER      →  opt-in          (mfaEnabled honoured if set)
- *   WEB or MOBILE, TEAM_MEMBER   →  opt-in          (gate-operator exemption, below)
+ *   WEB or MOBILE, TEAM_MEMBER   →  never           (gate-operator exemption, below)
  * </pre>
  *
  * <p>System users = every Role except CUSTOMER, minus the gate-operator
@@ -29,9 +29,19 @@ import java.util.Set;
  * <p>A TEAM_MEMBER is event gate staff: they stand at a turnstile scanning
  * tickets, often on a shared handset passed between shifts, and a TOTP prompt
  * per sign-in is the wrong ergonomics for that job. So an account whose role
- * set is <em>exactly</em> {@code {TEAM_MEMBER}} takes the same opt-in path a
- * CUSTOMER takes: never forced to enrol, and challenged only if the holder
- * switched MFA on themselves.
+ * set is <em>exactly</em> {@code {TEAM_MEMBER}} is never challenged at all —
+ * not forced to enrol, and not challenged even if it already holds a TOTP
+ * secret.
+ *
+ * <p>That last clause is load-bearing rather than incidental. TEAM_MEMBER used
+ * to be a system user, so every team member was force-enrolled on first login
+ * and still carries {@code mfaEnabled=true}. A version of this exemption that
+ * honoured that flag would apply only to accounts created after it shipped and
+ * would keep challenging every existing gate staffer indefinitely — observed
+ * on staging, where a genuine single-role TEAM_MEMBER kept getting
+ * {@code mfaRequired} because they had enrolled under the old rule. Clearing
+ * the flag per account through the admin MFA reset works, but an exemption
+ * that needs a manual data fix for each holder is not much of an exemption.
  *
  * <p><strong>The exemption is keyed on exact set equality, NOT on "holds
  * TEAM_MEMBER", and that distinction is the whole safety of it.</strong>
@@ -120,10 +130,32 @@ public class MfaPolicy {
      * True iff the login site should challenge the user for a TOTP/backup
      * code: either the policy requires it for this role on this channel, OR
      * the user opted in by enabling MFA themselves. False on USSD/WhatsApp
-     * regardless.
+     * regardless, and false for a gate operator whatever their enrolment
+     * state — see below.
      */
     public boolean shouldChallenge(User user, AuthChannel channel) {
         if (!applicable(channel)) {
+            return false;
+        }
+        // Gate operators are never challenged, INCLUDING one who already holds
+        // a TOTP secret. This short-circuits before the mfaEnabled check below
+        // rather than falling through it.
+        //
+        // Why it has to work this way: before the exemption existed, TEAM_MEMBER
+        // was a system user, so every team member was FORCE-ENROLLED on first
+        // login and carries mfaEnabled=true to this day. Honouring that flag
+        // would mean the exemption only ever applied to accounts created after
+        // it shipped, and every existing gate staffer kept being challenged
+        // forever — which is exactly what was observed on staging. An operator
+        // could clear each one by hand via the admin MFA reset, but a carve-out
+        // that needs a manual data fix per account is not a carve-out.
+        //
+        // The trade this makes, deliberately: a team member who enrolled
+        // VOLUNTARILY also stops being challenged, and nothing tells them their
+        // second factor is no longer consulted. Their secret is retained rather
+        // than cleared, so it starts being honoured again the moment they hold
+        // any other role — see the note on required().
+        if (gateOperatorExempt(user)) {
             return false;
         }
         return isSystemUser(user) || user.isMfaEnabled();

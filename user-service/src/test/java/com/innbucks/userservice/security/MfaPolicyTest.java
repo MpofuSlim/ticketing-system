@@ -130,12 +130,26 @@ class MfaPolicyTest {
     }
 
     @Test
-    void shouldChallenge_trueForPureTeamMember_whoOptedIn() {
-        // Exempt from FORCED 2FA, not forbidden from having it. A team member
-        // who switched MFA on themselves is still challenged — same opt-in
-        // semantics a CUSTOMER gets. The exemption must not strip protection
-        // from someone who deliberately enrolled.
-        assertThat(policy.shouldChallenge(user(true, User.Role.TEAM_MEMBER), AuthChannel.WEB)).isTrue();
+    void shouldChallenge_falseForPureTeamMember_evenWhenAlreadyEnrolled() {
+        // The enrolment state is ignored entirely for gate staff, and that is
+        // the point rather than an oversight. TEAM_MEMBER used to be a system
+        // user, so every team member was force-enrolled on first login and
+        // still carries mfaEnabled=true. Honouring the flag would mean the
+        // exemption applied only to accounts created after it shipped, leaving
+        // every existing gate staffer challenged forever — observed on staging,
+        // where a genuine single-role TEAM_MEMBER kept getting mfaRequired
+        // because they had enrolled under the old rule.
+        assertThat(policy.shouldChallenge(user(true, User.Role.TEAM_MEMBER), AuthChannel.WEB)).isFalse();
+        assertThat(policy.shouldChallenge(user(true, User.Role.TEAM_MEMBER), AuthChannel.MOBILE)).isFalse();
+    }
+
+    @Test
+    void enrolledTeamMemberWhoGainsASecondRole_isChallengedAgain() {
+        // The secret is ignored, not cleared, so protection comes back the
+        // moment the account stops being pure gate staff. Pins that the
+        // widened bypass did not also widen who it applies to.
+        User u = user(true, User.Role.TEAM_MEMBER, User.Role.EVENT_ORGANIZER);
+        assertThat(policy.shouldChallenge(u, AuthChannel.WEB)).isTrue();
     }
 
     @Test
