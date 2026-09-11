@@ -548,6 +548,15 @@ with the `Instant`/`timestamptz` services), we pin UTC two ways:
 A bare call on a non-UTC JVM silently stores local time into a
 zone-less column — the bug surfaces hours-off, days later.
 
+This applies to **test code too**. CI runners are UTC, so a bare `now()`
+in a test agrees with the UTC-stamping code under test and stays green
+there — it only breaks locally, and every market we serve is UTC+1 to
+UTC+3, so "only locally" means every developer. Qualify a test's `now()`
+wherever the code under test reads a UTC clock or the fixture fills a UTC
+column; a test that passes its own `now` into the method under test (e.g.
+`TicketWindow.classify(start, end, now)`) is self-consistent and needs no
+change. Check a timestamp fix under both `TZ=UTC` and `TZ=Africa/Harare`.
+
 3. **Wire format** — every `LocalDateTime` the four services serialize
    carries the explicit `Z` designator (`2026-07-27T07:19:00Z`), via each
    service's `UtcJsonTimeConfig` Jackson module. Browsers/FEs parse it as
