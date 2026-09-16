@@ -407,7 +407,7 @@ services:
       ZIMSWITCH_BASE_URL: ${ZIMSWITCH_BASE_URL:-https://eu-test.oppwa.com}
       ZIMSWITCH_ENTITY_ID: ${ZIMSWITCH_ENTITY_ID:-}
       ZIMSWITCH_ACCESS_TOKEN: ${ZIMSWITCH_ACCESS_TOKEN:-}
-      ZIMSWITCH_BRANDS: ${ZIMSWITCH_BRANDS:-VISA MASTER}
+      ZIMSWITCH_BRANDS: ${ZIMSWITCH_BRANDS:-PRIVATE_LABEL}
       ZIMSWITCH_TEST_MODE: ${ZIMSWITCH_TEST_MODE:-}
       # Absolute http(s) URL of the FE's card-result page. Blank (or relative)
       # = the rail refuses to START a checkout (503) rather than minting one

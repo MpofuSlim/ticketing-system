@@ -216,13 +216,18 @@ innbucks-api:
 # both are secrets — env-only, never committed. UAT host is eu-test.oppwa.com
 # with testMode=EXTERNAL; production gets its own host + credentials from
 # ZimSwitch and leaves test-mode blank (the parameter is then omitted).
-# brands = the data-brands value for the FE widget form; TICKETIZE's
-# "Private label" brand code goes here once ZimSwitch confirms it.
+# brands = the data-brands value for the FE widget form. ZimSwitch confirmed
+# on 2026-09-11 that this channel accepts ZimSwitch-enabled local cards only,
+# payment brand PRIVATE_LABEL — Visa and Mastercard are NOT supported on it,
+# so the old VISA MASTER placeholder would render a form nobody can pay with.
+# The widget has not yet been rendered with PRIVATE_LABEL against any entity;
+# if it comes up empty, re-confirm the exact data-brands spelling with
+# ZimSwitch. That is a config change — no code and no FE deploy.
 zimswitch:
   base-url: ${ZIMSWITCH_BASE_URL:https://eu-test.oppwa.com}
   entity-id: ${ZIMSWITCH_ENTITY_ID:}
   access-token: ${ZIMSWITCH_ACCESS_TOKEN:}
-  brands: ${ZIMSWITCH_BRANDS:VISA MASTER}
+  brands: ${ZIMSWITCH_BRANDS:PRIVATE_LABEL}
   test-mode: ${ZIMSWITCH_TEST_MODE:}
   shopper-result-url: ${ZIMSWITCH_SHOPPER_RESULT_URL:}
   request-integrity: ${ZIMSWITCH_REQUEST_INTEGRITY:true}

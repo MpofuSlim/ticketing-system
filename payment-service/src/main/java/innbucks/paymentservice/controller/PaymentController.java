@@ -266,7 +266,7 @@ public class PaymentController {
                                                 "checkoutId": "8a82944a4cc25ebf014cc2c782423202",
                                                 "checkoutScriptUrl": "https://eu-test.oppwa.com/v1/paymentWidgets.js?checkoutId=8a82944a4cc25ebf014cc2c782423202",
                                                 "checkoutIntegrity": "sha384-3phAZzHTYFuLtHT2AzM5PIYjPLGtqcBQXAq7fbQw0QHIhJEQZUJEG52uV6uWBSQE",
-                                                "checkoutBrands": "VISA MASTER",
+                                                "checkoutBrands": "PRIVATE_LABEL",
                                                 "shopperResultUrl": "https://tickets.example.co.zw/checkout/card-result",
                                                 "checkoutExpiresAt": "2026-06-11T16:16:00"
                                               }
