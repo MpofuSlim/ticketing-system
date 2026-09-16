@@ -38,13 +38,18 @@ public class ZimswitchProperties {
 
     /**
      * The {@code data-brands} value the FE puts on the widget form. TICKETIZE
-     * is set up in "Private label" payment mode: ZimSwitch confirmed on 2026-09-11 that this channel accepts ZimSwitch-enabled local cards only, payment brand PRIVATE_LABEL; Visa and Mastercard are NOT supported on it.
+     * is set up in "Private label" payment mode: ZimSwitch confirmed on
+     * 2026-09-11 that this channel accepts ZimSwitch-enabled local cards only,
+     * payment brand PRIVATE_LABEL; Visa and Mastercard are NOT supported on it.
      *
      * <p>So {@code VISA MASTER} is not merely unverified here, it is wrong —
-     * it would render a card form for brands the channel declines. It stays
+     * it would render a card form for brands the channel declines. Confirmed
+     * empirically on 2026-09-16: it was set on the staging test entity and does
+     * not work, so it is NOT a fallback on any host. It stays
      * configurable because the exact token has still never been rendered
      * against a live entity; if the widget comes up empty, the spelling is
-     * corrected in config with no code change and no FE deploy.
+     * corrected in config with no code change and no FE deploy — to another
+     * private-label spelling from ZimSwitch, never back to a card brand.
      *
      * <p>Note this field initialiser is NOT what production runs on:
      * {@code application.yaml} binds {@code brands: ${ZIMSWITCH_BRANDS:...}}
