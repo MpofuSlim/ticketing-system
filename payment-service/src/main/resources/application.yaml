@@ -220,6 +220,8 @@ innbucks-api:
 # on 2026-09-11 that this channel accepts ZimSwitch-enabled local cards only,
 # payment brand PRIVATE_LABEL — Visa and Mastercard are NOT supported on it,
 # so the old VISA MASTER placeholder would render a form nobody can pay with.
+# Confirmed on 2026-09-16: VISA MASTER was set on the staging test entity and
+# does not work, so it is NOT a fallback — PRIVATE_LABEL on every host.
 # The widget has not yet been rendered with PRIVATE_LABEL against any entity;
 # if it comes up empty, re-confirm the exact data-brands spelling with
 # ZimSwitch. That is a config change — no code and no FE deploy.
