@@ -292,7 +292,7 @@ class ZimswitchCardPaymentServiceTest {
         when(client.canStartCheckout()).thenReturn(true);
         when(client.widgetScriptUrl(p.getCheckoutId())).thenReturn("https://gw.example/widgets?checkoutId=x");
         properties.setShopperResultUrl("https://tickets.example.co.zw/checkout/card-result");
-        properties.setBrands("VISA MASTER");
+        properties.setBrands("PRIVATE_LABEL");
 
         var out = service.replayOpenCheckout(p);
 
@@ -301,7 +301,7 @@ class ZimswitchCardPaymentServiceTest {
         // checkout here would be a double-charge surface.
         assertThat(out.checkoutId()).isEqualTo(p.getCheckoutId());
         assertThat(out.shopperResultUrl()).isEqualTo("https://tickets.example.co.zw/checkout/card-result");
-        assertThat(out.brands()).isEqualTo("VISA MASTER");
+        assertThat(out.brands()).isEqualTo("PRIVATE_LABEL");
         verify(client, never()).prepareCheckout(anyString(), anyLong(), anyString());
     }
 
