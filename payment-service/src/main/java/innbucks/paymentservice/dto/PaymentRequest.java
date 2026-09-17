@@ -10,7 +10,8 @@ import java.util.UUID;
 @Schema(name = "PaymentRequest",
         description = "Initiates payment for a pending order. Identify the order EXACTLY one way: "
                 + "`bookingId` (ticket bookings — the historical contract, implies orderType BOOKING) "
-                + "OR `orderType` + `orderRef` (e.g. MARKETPLACE + the MKT-... order reference). "
+                + "OR `orderType` + `orderRef` (MARKETPLACE + the MKT-... order reference, or "
+                + "LOYALTY_VOUCHER + the VCH-... voucher purchase-order reference). "
                 + "Amount and currency are always read server-side from the order record — the client "
                 + "cannot override either.")
 public class PaymentRequest {
@@ -27,7 +28,9 @@ public class PaymentRequest {
 
     @Schema(example = "MKT-4F9A1C22B7D3",
             description = "The product-side order reference — the marketplace order ref for MARKETPLACE, "
-                    + "or a booking UUID for BOOKING. Required together with orderType.")
+                    + "the VCH-... purchase-order ref for LOYALTY_VOUCHER (from "
+                    + "POST /loyalty/vouchers/purchase), or a booking UUID for BOOKING. Required "
+                    + "together with orderType.")
     private String orderRef;
 
     @Schema(example = "ZIMSWITCH_CARD",
