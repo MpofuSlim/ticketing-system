@@ -72,7 +72,7 @@
              4.2.15.Final fixes all four. The netty-bom imported below pins every
              netty-* artifact to ${netty.version}, so this single property bump
              cascades cleanly to every service. -->
-        <netty.version>4.2.17.Final</netty.version>
+        <netty.version>4.2.18.Final</netty.version>
         <!-- httpcore5 5.4.2 arrives transitively through httpclient5 5.6.1 (the
              Apache HttpClient backing Spring's RestClient/RestTemplate) and so
              lands in EVERY service image — all seven failed the Release Trivy
