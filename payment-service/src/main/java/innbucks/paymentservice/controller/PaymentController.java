@@ -48,8 +48,9 @@ import java.util.UUID;
  *   <li>{@code POST /payments} — checkout payment, the FE's public entry.
  *       <b>Collects real money</b> via the InnBucks 2D-code rail (Merchant
  *       API) for ANY product behind an {@code OrderGateway}: ticket bookings
- *       (the historical {@code bookingId} contract, unchanged) and
- *       marketplace orders (additive {@code orderType} + {@code orderRef}).
+ *       (the historical {@code bookingId} contract, unchanged), marketplace
+ *       orders and loyalty voucher purchase orders (additive
+ *       {@code orderType} + {@code orderRef}).
  *       An InnBucks PAYMENT code is issued for the order's total and the
  *       payer is the phone captured at order creation; the customer approves
  *       it in their own InnBucks app/USSD and the reconciler's poller
@@ -96,7 +97,10 @@ public class PaymentController {
             summary = "Pay for an order — InnBucks 2D-code (default), ZimSwitch card, or EcoCash",
             description = "Public endpoint (no login required — guest checkout). Identify the order EXACTLY " +
                     "one way: `bookingId` (ticket bookings — the historical contract, unchanged) OR " +
-                    "`orderType` + `orderRef` (additive; e.g. `MARKETPLACE` + the `MKT-...` order reference). " +
+                    "`orderType` + `orderRef` (additive; `MARKETPLACE` + the `MKT-...` order reference, or " +
+                    "`LOYALTY_VOUCHER` + the `VCH-...` reference from POST /loyalty/vouchers/purchase — a " +
+                    "gift voucher paid for before it exists; loyalty issues it, and sends its WhatsApp " +
+                    "messages, the moment this payment confirms). " +
                     "\n\n**Rail selection (additive):** omit `paymentRail` (or send `INNBUCKS_CODE`) for the " +
                     "historical InnBucks code/QR flow described below. Send `paymentRail=ECOCASH` to charge " +
                     "the order's phone number via EcoCash: a wallet PIN prompt is pushed to the customer's " +

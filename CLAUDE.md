@@ -1133,7 +1133,20 @@ sections below).** The earlier "exclusively InnBucks" wording predates the
 other rails; what remains
 non-negotiable is that the earlier server-side wallet debit
 (`/bank/api/payment`) was removed at the InnBucks team's direction — do not
-reintroduce it. The InnBucks canonical spec is
+reintroduce it.
+
+All three rails collect for ANY product behind an `OrderGateway`
+(`orderType` + `orderRef`): `BOOKING` (the historical `bookingId` contract),
+`MARKETPLACE` (`MKT-...` refs) and **`LOYALTY_VOUCHER`** (`VCH-...` refs —
+InnRewards V47 voucher purchase orders, where a gift voucher is PAID FOR
+before it exists and loyalty issues it, and sends its WhatsApp messages, the
+moment the payment confirms). `LoyaltyVoucherOrderGateway` +
+`LoyaltyVoucherOrderClient` speak loyalty's internal
+`/loyalty/internal/voucher-orders/**` surface — loyalty serves DECIMAL major
+units and PLAIN-MAP bodies (no ApiResult envelope; a bad internal token is a
+bodyless 401), so the gateway owns the cents conversion and the client's
+parsing deliberately differs from `MarketplaceOrderClient`'s. Cash voucher
+payments never touch payment-service (staff confirm them in loyalty). The InnBucks canonical spec is
 `docs/api/InnBucks_Merchant_Api_Doc_v1.0.9.pdf`, distilled (greppable) at
 `docs/api/innbucks-merchant-api.md`.
 
