@@ -928,7 +928,13 @@ public class AuthController {
                     transfer/redeem endpoints, which bind every action to the caller's own phone, instead of
                     the unauthenticated `/loyalty/public/**` surface where any caller can name any number.
 
-                    There is no refresh: when it expires, verify a fresh OTP.
+                    **Do not let this token expire into a second SMS.** Trade it ONCE, immediately, at
+                    `POST /loyalty/session/exchange` for a rotating refresh chain (loyalty-service V43); the
+                    app then renews silently with `POST /loyalty/session/refresh` and never needs another OTP
+                    while it keeps refreshing. Registration is a permanent PHONE-level fact, so the OTP is
+                    one SMS per customer for life — but only if the client opens a chain. A client that
+                    ignores `/exchange` and re-verifies on expiry pays an SMS every 12 hours, which is the
+                    cost this whole flow exists to avoid.
                     """)
             @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(

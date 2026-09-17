@@ -65,10 +65,16 @@ public class LoyaltySessionTokenIssuer {
      * lifetime IS its revocation story.
      *
      * <p>Deliberately NOT {@code jwt.expiration} (15 minutes). That value is
-     * tuned for a session backed by a refresh token, and there is no refresh
-     * path here: refreshing re-reads the user from the database, and these
-     * customers have no user row. Reusing it would mean a fresh SMS every 15
-     * minutes.
+     * tuned for a session backed by THIS service's refresh token, and that path
+     * is unavailable here: refreshing re-reads the user from the database, and
+     * these customers have no user row. Reusing it would mean a fresh SMS every
+     * 15 minutes.
+     *
+     * <p>Renewal is loyalty-service's job, not ours (V43): the client trades
+     * this token once at {@code POST /loyalty/session/exchange} for a rotating
+     * refresh chain and renews there. So 12 hours is the ceiling on how long a
+     * client that never opens a chain can go — not the customer's re-SMS
+     * interval.
      */
     @Value("${loyalty.otp-session.ttl-seconds:43200}")
     private long ttlSeconds = 43200;
