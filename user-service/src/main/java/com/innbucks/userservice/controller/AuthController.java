@@ -392,14 +392,23 @@ public class AuthController {
     @Operation(summary = "Disable MFA on the caller's account",
             description = """
                     Authenticated. Requires a fresh TOTP/backup code so a stolen access token alone can't
-                    turn MFA off. System users cannot disable MFA via this endpoint — their policy requires
-                    it; an admin must use `/admin/users/{id}/mfa/reset` instead.
+                    turn MFA off.
+
+                    Staff roles whose policy *requires* 2FA cannot disable it here — an admin must use
+                    `/admin/users/{id}/mfa/reset` instead. `CUSTOMER` and `TEAM_MEMBER` are exempt from
+                    forced enrolment, so they may turn an enrolled factor off themselves. (V38 already
+                    cleared the factors force-enrolled under the earlier policy for accounts holding
+                    only exempt roles; this route remains for a team member still carrying a factor —
+                    e.g. enrolled while holding a staff role that was later removed.) Reaching here
+                    requires passing the MFA challenge at login; one who has lost the authenticator
+                    and backup codes cannot sign in at all and needs the admin reset instead.
                     """)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "MFA disabled"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Wrong code"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
-                    description = "Caller's role requires MFA — only an admin can reset")
+                    description = "Caller holds a role that requires MFA — only an admin can reset. "
+                            + "Not returned for CUSTOMER or TEAM_MEMBER, for whom 2FA is opt-in.")
     })
     public ResponseEntity<ApiResult<Void>> disableMfa(HttpServletRequest httpRequest,
                                                       @Valid @RequestBody MfaDisableRequestDTO request) {
@@ -414,7 +423,10 @@ public class AuthController {
                 ? userRepository.findByEmail(subject)
                 : userRepository.findByPhoneNumber(subject))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "User not found"));
-        // System users can't self-disable; their policy requires MFA.
+        // A role whose policy REQUIRES MFA can't self-disable. CUSTOMER and
+        // TEAM_MEMBER are opt-in, so they fall through and may turn it off —
+        // which is how a team member force-enrolled under the earlier policy
+        // (when every non-customer role was required) gets back out.
         if (mfaPolicy.required(caller, com.innbucks.userservice.security.AuthChannel.WEB)) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body(ApiResult.error(HttpStatus.FORBIDDEN,

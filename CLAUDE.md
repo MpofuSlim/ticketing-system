@@ -238,6 +238,38 @@ Other load-bearing details:
   tamper-evident audit chain, because "who could do what, when" is no longer
   answerable from the code once roles are data.
 
+## TEAM_MEMBER is exempt from forced 2FA (user-service)
+
+`MfaPolicy.MFA_EXEMPT_ROLES = {CUSTOMER, TEAM_MEMBER}` — gate staff scanning
+tickets on a borrowed phone are not compelled to carry an authenticator. Four
+load-bearing details:
+
+- **The set is an allow-list and the predicate direction is the security
+  argument**: "holds ANY role NOT in the set ⇒ MFA mandatory". So a
+  TEAM_MEMBER who is *also* an organizer/admin is still forced (acquiring a
+  gate role can never drop your own 2FA), and a V35 runtime-created custom
+  role — never in the closed set — fails CLOSED to mandatory. Never flip the
+  predicate to "holds any exempt role".
+- **Two "not CUSTOMER" predicates now deliberately disagree.** `MfaPolicy`
+  exempts TEAM_MEMBER; `AdminUserController`'s `findAllExcludingRole(CUSTOMER)`
+  staff listing still includes them. Gate staff are staff — they just aren't
+  forced to enrol.
+- **The refresh guard exists because of this exemption.**
+  `UserAdminService.setRoles` bumps `tokenVersion` (kills access tokens) but
+  does NOT revoke refresh rows, and `/auth/refresh` re-reads the LIVE user —
+  so without the guard, a team member widened to a privileged role could mint
+  privileged tokens forever, having never passed a second factor.
+  `AuthService.refresh` refuses that shape: 403 `mfa_enrollment_required`,
+  audit `AUTH_REFRESH_MFA_REQUIRED`, family NOT revoked (not theft — the FE
+  routes to a full login, which lands on forced enrolment).
+- **There is NO self-service opt-IN enrol path** (enrolment `mfaToken`s are
+  minted only in the forced-enrolment login branch). That absence is what made
+  V38 provably safe: on an account whose every role is exempt,
+  `mfa_enabled = TRUE` could only mean force-enrolled under the old policy, so
+  V38 cleared those factors (secret, backup codes, device trust) at deploy.
+  If an opt-in path is ever added, that proof breaks — never re-run a V38-style
+  sweep after that.
+
 ## Bookings carry WHO is coming (booking-service V22)
 
 `bookings.customer_name` is the purchaser's full name; `booking_items.attendee_*`
