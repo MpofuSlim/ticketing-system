@@ -124,6 +124,15 @@ innbucks:
   scan:
     assignment-check:
       fail-open: ${SCAN_ASSIGNMENT_CHECK_FAIL_OPEN:false}
+    # A ticket redeems only on the market-local calendar days its event spans.
+    # enabled=false is the break-glass lever: it turns the rule off entirely,
+    # which is honest and loggable, and is preferred to fail-open.
+    # fail-open=true keeps the rule but treats an unresolvable window as
+    # on-day — it re-opens the gap exactly when the window is least verifiable,
+    # so it is a time-boxed operator decision, never the steady state.
+    event-day-check:
+      enabled: ${SCAN_EVENT_DAY_CHECK_ENABLED:true}
+      fail-open: ${SCAN_EVENT_DAY_CHECK_FAIL_OPEN:false}
 
 whatsapp:
   base-url: ${WHATSAPP_GATEWAY_URL:http://localhost:8089}

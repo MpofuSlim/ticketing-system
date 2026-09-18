@@ -72,7 +72,7 @@
              4.2.15.Final fixes all four. The netty-bom imported below pins every
              netty-* artifact to ${netty.version}, so this single property bump
              cascades cleanly to every service. -->
-        <netty.version>4.2.17.Final</netty.version>
+        <netty.version>4.2.18.Final</netty.version>
         <!-- httpcore5 5.4.2 arrives transitively through httpclient5 5.6.1 (the
              Apache HttpClient backing Spring's RestClient/RestTemplate) and so
              lands in EVERY service image — all seven failed the Release Trivy
@@ -85,7 +85,7 @@
              upgrade once the transitive version reaches 5.4.3. -->
         <httpcore5.version>5.4.3</httpcore5.version>
         <spring.cloud.version>2025.1.3</spring.cloud.version>
-        <springdoc.version>3.1.0</springdoc.version>
+        <springdoc.version>3.1.1</springdoc.version>
         <testcontainers.version>1.21.3</testcontainers.version>
         <!-- jjwt centralized here so all five JWT-using services stay aligned.
              0.12.x cleans up Java 17/21 compatibility, tightens algorithm
@@ -102,7 +102,7 @@
              OTel tracer so issues deep-link to Tempo/Jaeger traces, and the
              logback appender auto-promotes ERROR-level log events to Sentry
              with the active MDC (traceId/spanId/correlationId) attached. -->
-        <sentry.version>8.55.0</sentry.version>
+        <sentry.version>8.56.0</sentry.version>
         <!-- Jsoup: allowlist HTML sanitization for user-supplied free text
              (OWASP A03 / stored-XSS defense). Standalone jar, no transitive
              deps, JDK 21 compatible. Used on write paths in event/loyalty/user
@@ -128,7 +128,7 @@
             <dependency>
                 <groupId>org.bouncycastle</groupId>
                 <artifactId>bcprov-jdk18on</artifactId>
-                <version>1.85.2</version>
+                <version>1.86</version>
             </dependency>
             <!-- commons-fileupload 1.5 (transitive via Spring's multipart support)
                  has CVE-2025-48976 (HIGH): DoS via multipart form-data part-count

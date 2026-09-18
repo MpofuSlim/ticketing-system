@@ -95,6 +95,26 @@ mfa:
   # an MFA login skips the step-1 challenge for this many days on the same device.
   trusted-device-days: ${MFA_TRUSTED_DEVICE_DAYS:30}
 
+# Federated customer login (POST /auth/exchange). The super app's customers
+# authenticate at the InnBucks MIDDLEWARE, not here; it signs a short-lived
+# assertion ("this phone just authenticated with me") that the app trades at
+# this endpoint for a normal fleet CUSTOMER access + refresh token. Only the
+# middleware's PUBLIC key lives here — there is no credential worth stealing.
+# Same assertion contract loyalty's partner registration verifies, with its own
+# audience so a registration proof can never double as a login.
+# Off by default (404). Enabled with no key = 503 on every call + a
+# HALF-PROVISIONED boot ERROR (FederationProvisioningCheck).
+auth:
+  federation:
+    enabled: ${AUTH_FEDERATION_ENABLED:false}
+    public-key: ${AUTH_FEDERATION_PUBLIC_KEY:}
+    previous-public-key: ${AUTH_FEDERATION_PREVIOUS_PUBLIC_KEY:}
+    issuer: ${AUTH_FEDERATION_ISSUER:innbucks-middleware}
+    audience: ${AUTH_FEDERATION_AUDIENCE:innbucks-foundry}
+    # Ceiling on an assertion's own lifetime (exp - iat): a captured one is
+    # worth at most this long, and only once (jti replay guard).
+    max-ttl-seconds: ${AUTH_FEDERATION_MAX_TTL_SECONDS:300}
+
 loyalty-service:
   base-url: http://loyalty-service
   connect-timeout-ms: ${LOYALTY_SERVICE_CONNECT_TIMEOUT_MS:2000}

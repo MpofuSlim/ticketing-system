@@ -14,7 +14,20 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class MfaPolicyTest {
 
-    private final MfaPolicy policy = new MfaPolicy();
+    // The gate-operator exemption asks whether the account resolves to any
+    // permission, so the policy needs a resolver. Stubbed to "grants nothing",
+    // which is what V35 seeds TEAM_MEMBER with; the one test that cares
+    // overrides it.
+    private final PermissionResolver permissionResolver =
+            org.mockito.Mockito.mock(PermissionResolver.class);
+
+    private final MfaPolicy policy = new MfaPolicy(permissionResolver);
+
+    @org.junit.jupiter.api.BeforeEach
+    void rolesGrantNothingByDefault() {
+        org.mockito.Mockito.when(permissionResolver.resolve(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(java.util.Set.of());
+    }
 
     private static User user(boolean mfaEnabled, User.Role... roles) {
         return User.builder()
@@ -36,91 +49,27 @@ class MfaPolicyTest {
 
     // ---- required: system users on web/mobile ------------------------------
 
-    /**
-     * The two roles MfaPolicy exempts from FORCED 2FA. Kept as the test's own
-     * literal rather than reaching into the policy's private set, so that
-     * widening the exemption in production code fails here and has to be
-     * argued for, instead of the test silently agreeing with itself.
-     */
-    private static final EnumSet<User.Role> EXEMPT =
-            EnumSet.of(User.Role.CUSTOMER, User.Role.TEAM_MEMBER);
-
     @Test
     void required_trueForEverySystemRoleOnWebAndMobile() {
-        // Derived from the enum rather than a hand-listed set: MfaPolicy forces
-        // 2FA on every role that isn't explicitly exempt, so a role added later
-        // must be covered here automatically and defaults to REQUIRED. A
-        // hardcoded list silently stops testing new roles the day they're added.
+        // Derived from the enum rather than a hand-listed set: MfaPolicy defines
+        // a system user as "holds any role that isn't CUSTOMER", so every role
+        // added later — PRODUCT_OFFICER and PRODUCT_MANAGER included — must be
+        // covered here automatically. A hardcoded list silently stops testing
+        // new roles the day they're added.
+        //
+        // TEAM_MEMBER is excluded because it is the ONE deliberate carve-out:
+        // gate staff alone on an account take the CUSTOMER opt-in path (see
+        // MfaPolicy's class javadoc, and the gate-operator block below, which
+        // pins that carve-out from both directions). Excluding it here rather
+        // than dropping the enum-derived loop keeps the "new roles are tested
+        // the day they land" property intact for every role but this one.
         for (User.Role role : java.util.Arrays.stream(User.Role.values())
-                .filter(r -> !EXEMPT.contains(r)).toList()) {
+                .filter(r -> r != User.Role.CUSTOMER)
+                .filter(r -> r != User.Role.TEAM_MEMBER).toList()) {
             User u = user(false, role);
             assertThat(policy.required(u, AuthChannel.WEB)).as("WEB required for %s", role).isTrue();
             assertThat(policy.required(u, AuthChannel.MOBILE)).as("MOBILE required for %s", role).isTrue();
         }
-    }
-
-    // ---- TEAM_MEMBER: exempt from being FORCED, still free to opt in --------
-
-    @Test
-    void required_falseForTeamMembers_theyAreGateStaffNotAdmins() {
-        assertThat(policy.required(user(false, User.Role.TEAM_MEMBER), AuthChannel.WEB)).isFalse();
-        assertThat(policy.required(user(false, User.Role.TEAM_MEMBER), AuthChannel.MOBILE)).isFalse();
-        // Even already-enrolled: required() is the "must" gate. This is what
-        // lets AuthController's disable guard release a team member who was
-        // force-enrolled under the previous policy.
-        assertThat(policy.required(user(true, User.Role.TEAM_MEMBER), AuthChannel.WEB)).isFalse();
-    }
-
-    @Test
-    void shouldChallenge_teamMember_onlyWhenTheyOptedIn() {
-        // Not forced...
-        assertThat(policy.shouldChallenge(user(false, User.Role.TEAM_MEMBER), AuthChannel.WEB)).isFalse();
-        assertThat(policy.shouldChallenge(user(false, User.Role.TEAM_MEMBER), AuthChannel.MOBILE)).isFalse();
-        // ...but a factor they deliberately switched on is never ignored.
-        assertThat(policy.shouldChallenge(user(true, User.Role.TEAM_MEMBER), AuthChannel.WEB)).isTrue();
-    }
-
-    @Test
-    void teamMemberWhoIsAlsoACustomer_isStillExempt() {
-        // Both roles are exempt, so the user is exempt — the organizer's
-        // gate staff who also buys tickets on the same account.
-        assertThat(policy.required(user(false, User.Role.TEAM_MEMBER, User.Role.CUSTOMER),
-                AuthChannel.WEB)).isFalse();
-    }
-
-    // ---- the escalation case the exemption must NOT open -------------------
-
-    @Test
-    void required_trueWhenTeamMemberIsHeldAlongsideAnyPrivilegedRole() {
-        // The predicate asks "holds any NON-exempt role", not "holds any exempt
-        // role". Reversed, acquiring TEAM_MEMBER would be a way to drop your own
-        // 2FA — so every privileged pairing is pinned here, not just one.
-        for (User.Role privileged : java.util.Arrays.stream(User.Role.values())
-                .filter(r -> !EXEMPT.contains(r)).toList()) {
-            User u = user(false, User.Role.TEAM_MEMBER, privileged);
-            assertThat(policy.required(u, AuthChannel.WEB))
-                    .as("TEAM_MEMBER + %s must still require MFA", privileged).isTrue();
-            assertThat(policy.shouldChallenge(u, AuthChannel.WEB))
-                    .as("TEAM_MEMBER + %s must still be challenged", privileged).isTrue();
-        }
-    }
-
-    @Test
-    void required_trueForAnOperatorCreatedCustomRole() {
-        // Roles are DATA since V35 — an operator can create one at runtime, and
-        // it will never be in the exempt set. It must therefore default to
-        // REQUIRED, or "create a role" becomes a way to opt out of MFA.
-        User custom = User.builder().id(1L)
-                .roles(new java.util.LinkedHashSet<>(java.util.List.of("GATE_SUPERVISOR")))
-                .mfaEnabled(false).build();
-        assertThat(policy.required(custom, AuthChannel.WEB)).isTrue();
-
-        // And the same custom role alongside TEAM_MEMBER is still required.
-        User mixed = User.builder().id(2L)
-                .roles(new java.util.LinkedHashSet<>(
-                        java.util.List.of(User.Role.TEAM_MEMBER.name(), "GATE_SUPERVISOR")))
-                .mfaEnabled(false).build();
-        assertThat(policy.required(mixed, AuthChannel.WEB)).isTrue();
     }
 
     @Test
@@ -156,6 +105,151 @@ class MfaPolicyTest {
     void shouldChallenge_falseOnUssdAndWhatsapp_regardless() {
         assertThat(policy.shouldChallenge(user(true, User.Role.SUPER_ADMIN), AuthChannel.USSD)).isFalse();
         assertThat(policy.shouldChallenge(user(true, User.Role.CUSTOMER), AuthChannel.WHATSAPP)).isFalse();
+    }
+
+    // ---- the gate-operator exemption ---------------------------------------
+    //
+    // A pure TEAM_MEMBER (event gate staff scanning tickets) is not forced
+    // through 2FA. The cases below pin the carve-out AND its blast radius: the
+    // exemption must apply to exactly one role set and nothing else, because
+    // MfaPolicy reads "system user = holds any non-CUSTOMER role" and a
+    // containment-keyed exemption would invert that into a fleet-wide opt-out.
+
+    @Test
+    void required_falseForPureTeamMember_soTheyAreNeverForcedToEnrol() {
+        User u = user(false, User.Role.TEAM_MEMBER);
+        assertThat(policy.required(u, AuthChannel.WEB)).isFalse();
+        assertThat(policy.required(u, AuthChannel.MOBILE)).isFalse();
+    }
+
+    @Test
+    void shouldChallenge_falseForPureTeamMember_whenNotEnrolled() {
+        // The point of the feature: scanner signs in with a password only.
+        assertThat(policy.shouldChallenge(user(false, User.Role.TEAM_MEMBER), AuthChannel.WEB)).isFalse();
+        assertThat(policy.shouldChallenge(user(false, User.Role.TEAM_MEMBER), AuthChannel.MOBILE)).isFalse();
+    }
+
+    @Test
+    void shouldChallenge_falseForPureTeamMember_evenWhenAlreadyEnrolled() {
+        // The enrolment state is ignored entirely for gate staff, and that is
+        // the point rather than an oversight. TEAM_MEMBER used to be a system
+        // user, so every team member was force-enrolled on first login and
+        // still carries mfaEnabled=true. Honouring the flag would mean the
+        // exemption applied only to accounts created after it shipped, leaving
+        // every existing gate staffer challenged forever — observed on staging,
+        // where a genuine single-role TEAM_MEMBER kept getting mfaRequired
+        // because they had enrolled under the old rule.
+        assertThat(policy.shouldChallenge(user(true, User.Role.TEAM_MEMBER), AuthChannel.WEB)).isFalse();
+        assertThat(policy.shouldChallenge(user(true, User.Role.TEAM_MEMBER), AuthChannel.MOBILE)).isFalse();
+    }
+
+    @Test
+    void enrolledTeamMemberWhoGainsASecondRole_isChallengedAgain() {
+        // The secret is ignored, not cleared, so protection comes back the
+        // moment the account stops being pure gate staff. Pins that the
+        // widened bypass did not also widen who it applies to.
+        User u = user(true, User.Role.TEAM_MEMBER, User.Role.EVENT_ORGANIZER);
+        assertThat(policy.shouldChallenge(u, AuthChannel.WEB)).isTrue();
+    }
+
+    @Test
+    void teamMemberHoldingAnySecondBuiltInRole_isStillFullyChallenged() {
+        // THE escalation guard. {TEAM_MEMBER, X} must behave as staff for every
+        // other built-in X — enum-derived so a role added later is covered the
+        // day it lands. Two real paths reach such a set without compromising
+        // anything: ServiceRequestService.approve adds a bundle role in place
+        // (and POST /users/me/service-requests has no @PreAuthorize), and
+        // DataInitializer MERGES SUPER_ADMIN onto whatever roles already sit on
+        // the bootstrap-admin email. If this test ever goes green-by-weakening,
+        // a scanner credential has become an MFA-free privileged session.
+        for (User.Role second : java.util.Arrays.stream(User.Role.values())
+                .filter(r -> r != User.Role.TEAM_MEMBER).toList()) {
+            User u = user(false, User.Role.TEAM_MEMBER, second);
+            assertThat(policy.gateOperatorExempt(u))
+                    .as("exempt must be false for {TEAM_MEMBER, %s}", second).isFalse();
+            assertThat(policy.shouldChallenge(u, AuthChannel.WEB))
+                    .as("WEB challenge for {TEAM_MEMBER, %s}", second).isTrue();
+            assertThat(policy.shouldChallenge(u, AuthChannel.MOBILE))
+                    .as("MOBILE challenge for {TEAM_MEMBER, %s}", second).isTrue();
+        }
+    }
+
+    @Test
+    void teamMemberPlusCustomer_isStillChallenged() {
+        // Called out separately from the loop above because it is the one pair
+        // where BOTH halves are individually non-staff, so a reader might
+        // expect it to stay exempt. It does not: the exemption is exact set
+        // equality, and anything we did not explicitly exempt fails closed.
+        User u = user(false, User.Role.TEAM_MEMBER, User.Role.CUSTOMER);
+        assertThat(policy.gateOperatorExempt(u)).isFalse();
+        assertThat(policy.shouldChallenge(u, AuthChannel.WEB)).isTrue();
+    }
+
+    @Test
+    void teamMemberPlusOperatorCreatedRole_isStillChallenged() {
+        // Roles are free-text rows since V35, so a set can hold a name that is
+        // not in the enum at all. Built via the raw setter because
+        // User.roleNames() only takes enum constants.
+        User u = User.builder()
+                .id(1L)
+                .roles(java.util.Set.of(User.Role.TEAM_MEMBER.name(), "GATE_SUPERVISOR"))
+                .mfaEnabled(false)
+                .build();
+        assertThat(policy.gateOperatorExempt(u)).isFalse();
+        assertThat(policy.required(u, AuthChannel.WEB)).isTrue();
+        assertThat(policy.shouldChallenge(u, AuthChannel.WEB)).isTrue();
+    }
+
+    @Test
+    void gateOperatorExempt_trueOnlyForExactlyTeamMember() {
+        assertThat(policy.gateOperatorExempt(user(false, User.Role.TEAM_MEMBER))).isTrue();
+        assertThat(policy.gateOperatorExempt(user(false, User.Role.CUSTOMER))).isFalse();
+        assertThat(policy.gateOperatorExempt(user(false, User.Role.SUPER_ADMIN))).isFalse();
+        // Roleless and null-roles accounts are not gate operators either.
+        assertThat(policy.gateOperatorExempt(User.builder().id(1L).roles(java.util.Set.of()).build()))
+                .isFalse();
+        assertThat(policy.gateOperatorExempt(User.builder().id(1L).build())).isFalse();
+    }
+
+    @Test
+    void pureTeamMemberHoldingAnyPermission_losesTheExemption() {
+        // THE second escalation guard, and the one the role set cannot express.
+        // PUT /admin/roles/{name}/permissions is deliberately allowed on
+        // built-in roles, so an operator with roles:write can grant TEAM_MEMBER
+        // a real permission. The role set is still exactly {TEAM_MEMBER}, so
+        // set equality alone would keep exempting an account that now has
+        // authority. Privilege, not the name, is what must gate the exemption.
+        org.mockito.Mockito.when(permissionResolver.resolve(org.mockito.ArgumentMatchers.any()))
+                .thenReturn(java.util.Set.of(PermissionCatalog.USERS_ROLES_WRITE));
+
+        User u = user(false, User.Role.TEAM_MEMBER);
+        assertThat(policy.gateOperatorExempt(u)).isFalse();
+        assertThat(policy.required(u, AuthChannel.WEB)).isTrue();
+        assertThat(policy.shouldChallenge(u, AuthChannel.WEB)).isTrue();
+    }
+
+    @Test
+    void permissionsAreOnlyResolvedForCandidateGateOperators() {
+        // The resolve() is a DB read, so it must not land on every login. Only
+        // an account that already passed the single-role test should reach it.
+        policy.shouldChallenge(user(false, User.Role.SUPER_ADMIN), AuthChannel.WEB);
+        policy.shouldChallenge(user(false, User.Role.CUSTOMER), AuthChannel.WEB);
+        policy.shouldChallenge(user(false, User.Role.TEAM_MEMBER, User.Role.CUSTOMER), AuthChannel.WEB);
+        org.mockito.Mockito.verify(permissionResolver, org.mockito.Mockito.never())
+                .resolve(org.mockito.ArgumentMatchers.any());
+
+        policy.shouldChallenge(user(false, User.Role.TEAM_MEMBER), AuthChannel.WEB);
+        org.mockito.Mockito.verify(permissionResolver, org.mockito.Mockito.times(1))
+                .resolve(org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void gateOperatorExemption_doesNotReachUssdOrWhatsapp() {
+        // applicable() already short-circuits both channels; asserted so the
+        // exemption can't be read as introducing a new channel behaviour.
+        User u = user(true, User.Role.TEAM_MEMBER);
+        assertThat(policy.shouldChallenge(u, AuthChannel.USSD)).isFalse();
+        assertThat(policy.shouldChallenge(u, AuthChannel.WHATSAPP)).isFalse();
     }
 
     // ---- header parsing -----------------------------------------------------

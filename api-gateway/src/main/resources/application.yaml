@@ -80,6 +80,33 @@ spring:
                     # Fail-SAFE: OTP sends real SMS — keep throttling if Redis is down.
                     rate-limiter: "#{@resilientRedisRateLimiter}"
 
+            # Federated customer login: the super app's customers sign in at the
+            # InnBucks middleware, which signs a short-lived assertion that
+            # POST /auth/exchange trades for a normal CUSTOMER access + refresh
+            # token. Unauthenticated by nature (the credential is the assertion
+            # in the body), so it must not ride the limiter-free /auth/**
+            # catch-all: the signature makes forgery infeasible, but the replay
+            # guard and the find-or-create write behind the endpoint deserve a
+            # per-IP cap, keyed by the hardcoded-IP preAuthIpKeyResolver for the
+            # same reason as OTP above. A real app calls this once per login per
+            # device; 5/s with burst 20 is generous. POST-only and the exact
+            # path. MUST precede the /auth/** catch-all below.
+            - id: auth-exchange-route
+              uri: lb://user-service
+              predicates:
+                - Path=/auth/exchange
+                - Method=POST
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${AUTH_EXCHANGE_RATE_LIMIT_REPLENISH_PER_SECOND:5}
+                    redis-rate-limiter.burstCapacity: ${AUTH_EXCHANGE_RATE_LIMIT_BURST_CAPACITY:20}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@preAuthIpKeyResolver}"
+                    # Fail-SAFE: a Redis outage must not lift the only per-IP cap
+                    # on an unauthenticated endpoint that mints sessions.
+                    rate-limiter: "#{@resilientRedisRateLimiter}"
+
             # 2FA endpoints: rate-limit per-IP to bound TOTP/backup-code brute
             # force. Keyed by the hardcoded-IP preAuthIpKeyResolver — the default
             # gatewayKeyResolver keys on the raw unvalidated bearer, which a

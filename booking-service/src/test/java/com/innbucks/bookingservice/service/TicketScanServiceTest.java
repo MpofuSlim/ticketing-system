@@ -1,11 +1,20 @@
 package com.innbucks.bookingservice.service;
 
 import com.innbucks.bookingservice.client.UserServiceClient;
+import com.innbucks.bookingservice.client.EventServiceClient;
+import com.innbucks.bookingservice.config.MarketTimeZone;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.http.HttpStatus;
+import java.time.ZoneOffset;
+import java.time.ZoneId;
+import com.innbucks.bookingservice.dto.EventLookupDTO;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.ScanAccessDTO;
 import com.innbucks.bookingservice.dto.ScanTicketResponseDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.entity.BookingItem;
+import com.innbucks.bookingservice.entity.ScanAttempt;
+import org.mockito.ArgumentCaptor;
 import com.innbucks.bookingservice.repository.BookingItemRepository;
 import com.innbucks.bookingservice.repository.ScanAttemptRepository;
 import com.innbucks.bookingservice.security.JwtAuthDetails;
@@ -28,6 +37,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
@@ -57,6 +67,9 @@ class TicketScanServiceTest {
     @Mock private UserServiceClient userServiceClient;
     @Mock private ScanAttemptRepository scanAttemptRepository;
     @Mock private ObjectProvider<MeterRegistry> meterRegistryProvider;
+    @Mock private ObjectProvider<EventServiceClient> eventServiceClientProvider;
+    @Mock private ObjectProvider<MarketTimeZone> marketTimeZoneProvider;
+    @Mock private EventServiceClient eventServiceClient;
 
     private TicketScanService service;
 
@@ -65,11 +78,20 @@ class TicketScanServiceTest {
         // Constructor injection so the new audit / meter dependencies land on
         // real fields rather than null-via-@InjectMocks fallback.
         service = new TicketScanService(bookingItemRepository, userServiceClient,
-                scanAttemptRepository, meterRegistryProvider, "ZW");
+                scanAttemptRepository, meterRegistryProvider, "ZW",
+                eventServiceClientProvider, marketTimeZoneProvider);
         ReflectionTestUtils.setField(service, "internalToken", "test-internal-token");
         // Baseline mirrors the production default: fail CLOSED. The two
         // assignment-service-down cases set this field explicitly per-test.
         ReflectionTestUtils.setField(service, "assignmentCheckFailOpen", false);
+        // The event-day rule is OFF for the inherited cases. @Value defaults are
+        // a Spring concern, so a `new`-built service gets Java's boolean false
+        // here anyway — setting it explicitly says that is intended rather than
+        // incidental, and keeps these cases about the behaviour they were
+        // written for. EventDayRuleTest covers the window arithmetic; the
+        // block below covers the guard's wiring with the flag switched on.
+        ReflectionTestUtils.setField(service, "eventDayCheckEnabled", false);
+        ReflectionTestUtils.setField(service, "eventDayCheckFailOpen", false);
         // Default: assignment check says "allowed" so the inherited cases that
         // authenticate as a bare team member still reach their intended status.
         // lenient() because the early-return cases (not-found, etc.) never call it.
@@ -350,6 +372,14 @@ class TicketScanServiceTest {
         UUID scannerUuid = UUID.randomUUID();
         BookingItem item = confirmedItem(organizerUuid);
         ReflectionTestUtils.setField(service, "assignmentCheckFailOpen", false);
+        // The event-day rule is OFF for the inherited cases. @Value defaults are
+        // a Spring concern, so a `new`-built service gets Java's boolean false
+        // here anyway — setting it explicitly says that is intended rather than
+        // incidental, and keeps these cases about the behaviour they were
+        // written for. EventDayRuleTest covers the window arithmetic; the
+        // block below covers the guard's wiring with the flag switched on.
+        ReflectionTestUtils.setField(service, "eventDayCheckEnabled", false);
+        ReflectionTestUtils.setField(service, "eventDayCheckFailOpen", false);
         authenticateAs("tariro@harare-arena.co.zw", scannerUuid, organizerUuid);
         when(bookingItemRepository.findByTicketNumberWithBooking("20260619-48291X"))
                 .thenReturn(Optional.of(item));
@@ -359,5 +389,165 @@ class TicketScanServiceTest {
 
         assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.NOT_ASSIGNED_TO_EVENT);
         verify(bookingItemRepository, never()).claimRedemption(any(), any(), any(), any());
+    }
+
+    // ---- the event-day rule -------------------------------------------------
+    //
+    // EventDayRuleTest owns the window arithmetic (timezones, multi-day,
+    // past-midnight). These cases own the GUARD's wiring: that it sits after
+    // authorization and before the irreversible claim, that a refusal never
+    // redeems, and that an unresolvable window obeys the fail-open flag.
+
+    /** Turn the rule on and point it at an event with the given stored-UTC window. */
+    private void enableEventDayRule(LocalDateTime startUtc, LocalDateTime endUtc) {
+        ReflectionTestUtils.setField(service, "eventDayCheckEnabled", true);
+        lenient().when(marketTimeZoneProvider.getIfAvailable()).thenReturn(new MarketTimeZone("ZW"));
+        lenient().when(eventServiceClientProvider.getIfAvailable()).thenReturn(eventServiceClient);
+        EventLookupDTO event = EventLookupDTO.builder()
+                .startDateTime(startUtc)
+                .endDateTime(endUtc)
+                .build();
+        lenient().when(eventServiceClient.getEventInternal(any(), any()))
+                .thenReturn(ApiResult.ok("ok", event));
+    }
+
+    /** Rule on, but the window cannot be resolved (outage / open circuit). */
+    private void enableEventDayRuleWithUnreachableEventService() {
+        ReflectionTestUtils.setField(service, "eventDayCheckEnabled", true);
+        lenient().when(marketTimeZoneProvider.getIfAvailable()).thenReturn(new MarketTimeZone("ZW"));
+        lenient().when(eventServiceClientProvider.getIfAvailable()).thenReturn(eventServiceClient);
+        lenient().when(eventServiceClient.getEventInternal(any(), any()))
+                .thenThrow(new IllegalStateException("event-service unreachable"));
+    }
+
+    @Test
+    void scan_onTheEventsDay_stillRedeems() {
+        UUID organizerUuid = UUID.randomUUID();
+        UUID scannerUuid = UUID.randomUUID();
+        BookingItem item = confirmedItem(organizerUuid);
+        authenticateAs("tariro@harare-arena.co.zw", scannerUuid, organizerUuid);
+        // Window = today in the market, whatever today is when this runs.
+        LocalDateTime todayUtc = LocalDateTime.now(ZoneOffset.UTC);
+        enableEventDayRule(todayUtc, todayUtc);
+        when(bookingItemRepository.findByTicketNumberWithBooking("20260619-48291X"))
+                .thenReturn(Optional.of(item));
+        when(bookingItemRepository.claimRedemption(any(), any(), any(), any())).thenReturn(1);
+
+        ScanTicketResponseDTO result = service.scan("20260619-48291X", "tariro@harare-arena.co.zw");
+
+        assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.ALLOWED);
+    }
+
+    @Test
+    void scan_onAnotherDay_isRefusedAndTheTicketIsNotRedeemed() {
+        // THE point of the feature. The claim must never run — claimRedemption
+        // has no inverse, so redeeming here would burn a ticket that is valid
+        // on its own day.
+        UUID organizerUuid = UUID.randomUUID();
+        UUID scannerUuid = UUID.randomUUID();
+        BookingItem item = confirmedItem(organizerUuid);
+        authenticateAs("tariro@harare-arena.co.zw", scannerUuid, organizerUuid);
+        LocalDateTime lastWeek = LocalDateTime.now(ZoneOffset.UTC).minusDays(7);
+        enableEventDayRule(lastWeek, lastWeek);
+        when(bookingItemRepository.findByTicketNumberWithBooking("20260619-48291X"))
+                .thenReturn(Optional.of(item));
+
+        ScanTicketResponseDTO result = service.scan("20260619-48291X", "tariro@harare-arena.co.zw");
+
+        assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.WRONG_EVENT_DAY);
+        assertThat(result.getEventDate())
+                .as("gate staff need the day the ticket IS for")
+                .isEqualTo(lastWeek.toInstant(ZoneOffset.UTC).atZone(ZoneId.of("Africa/Harare")).toLocalDate());
+        verify(bookingItemRepository, never()).claimRedemption(any(), any(), any(), any());
+    }
+
+    @Test
+    void scan_offDay_isAudited() {
+        UUID organizerUuid = UUID.randomUUID();
+        BookingItem item = confirmedItem(organizerUuid);
+        authenticateAs("tariro@harare-arena.co.zw", UUID.randomUUID(), organizerUuid);
+        LocalDateTime lastWeek = LocalDateTime.now(ZoneOffset.UTC).minusDays(7);
+        enableEventDayRule(lastWeek, lastWeek);
+        when(bookingItemRepository.findByTicketNumberWithBooking("20260619-48291X"))
+                .thenReturn(Optional.of(item));
+
+        service.scan("20260619-48291X", "tariro@harare-arena.co.zw");
+
+        ArgumentCaptor<ScanAttempt> captor = ArgumentCaptor.forClass(ScanAttempt.class);
+        verify(scanAttemptRepository).save(captor.capture());
+        assertThat(captor.getValue().getOutcome()).isEqualTo(ScanAttempt.Outcome.WRONG_EVENT_DAY);
+    }
+
+    @Test
+    void scan_whenTheWindowIsUnresolvable_failsClosedWith503_andDoesNotRedeem() {
+        // Fail CLOSED is the default. A 503 says "could not decide, retry" —
+        // categorically not a verdict about the ticket, so the ticket is
+        // neither redeemed nor audited as wrong-day.
+        UUID organizerUuid = UUID.randomUUID();
+        BookingItem item = confirmedItem(organizerUuid);
+        authenticateAs("tariro@harare-arena.co.zw", UUID.randomUUID(), organizerUuid);
+        enableEventDayRuleWithUnreachableEventService();
+        when(bookingItemRepository.findByTicketNumberWithBooking("20260619-48291X"))
+                .thenReturn(Optional.of(item));
+
+        assertThatThrownBy(() -> service.scan("20260619-48291X", "tariro@harare-arena.co.zw"))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE));
+        verify(bookingItemRepository, never()).claimRedemption(any(), any(), any(), any());
+    }
+
+    @Test
+    void scan_whenTheWindowIsUnresolvable_andFailOpenIsSet_letsTheScanThrough() {
+        // The break-glass lever. Deliberately re-opens the gap, so it is pinned
+        // rather than left as an untested branch.
+        UUID organizerUuid = UUID.randomUUID();
+        UUID scannerUuid = UUID.randomUUID();
+        BookingItem item = confirmedItem(organizerUuid);
+        authenticateAs("tariro@harare-arena.co.zw", scannerUuid, organizerUuid);
+        enableEventDayRuleWithUnreachableEventService();
+        ReflectionTestUtils.setField(service, "eventDayCheckFailOpen", true);
+        when(bookingItemRepository.findByTicketNumberWithBooking("20260619-48291X"))
+                .thenReturn(Optional.of(item));
+        when(bookingItemRepository.claimRedemption(any(), any(), any(), any())).thenReturn(1);
+
+        ScanTicketResponseDTO result = service.scan("20260619-48291X", "tariro@harare-arena.co.zw");
+
+        assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.ALLOWED);
+    }
+
+    @Test
+    void scan_wrongOrganizer_isRefusedBeforeTheEventIsEverLookedUp() {
+        // Ordering guard: the day rule sits AFTER authorization, so a scanner
+        // who does not own the event cannot use it to probe the schedule.
+        BookingItem item = confirmedItem(UUID.randomUUID());
+        authenticateAs("intruder@elsewhere.co.zw", UUID.randomUUID(), UUID.randomUUID());
+        LocalDateTime lastWeek = LocalDateTime.now(ZoneOffset.UTC).minusDays(7);
+        enableEventDayRule(lastWeek, lastWeek);
+        when(bookingItemRepository.findByTicketNumberWithBooking("20260619-48291X"))
+                .thenReturn(Optional.of(item));
+
+        ScanTicketResponseDTO result = service.scan("20260619-48291X", "intruder@elsewhere.co.zw");
+
+        assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.WRONG_ORGANIZER);
+        verify(eventServiceClient, never()).getEventInternal(any(), any());
+    }
+
+    @Test
+    void scan_whenTheRuleIsDisabled_anyDayStillRedeems() {
+        // The kill switch, pinned so nobody "tidies it away".
+        UUID organizerUuid = UUID.randomUUID();
+        UUID scannerUuid = UUID.randomUUID();
+        BookingItem item = confirmedItem(organizerUuid);
+        authenticateAs("tariro@harare-arena.co.zw", scannerUuid, organizerUuid);
+        ReflectionTestUtils.setField(service, "eventDayCheckEnabled", false);
+        when(bookingItemRepository.findByTicketNumberWithBooking("20260619-48291X"))
+                .thenReturn(Optional.of(item));
+        when(bookingItemRepository.claimRedemption(any(), any(), any(), any())).thenReturn(1);
+
+        ScanTicketResponseDTO result = service.scan("20260619-48291X", "tariro@harare-arena.co.zw");
+
+        assertThat(result.getStatus()).isEqualTo(ScanTicketResponseDTO.Status.ALLOWED);
+        verify(eventServiceClient, never()).getEventInternal(any(), any());
     }
 }

@@ -50,6 +50,10 @@ public class CustomerService {
     @Value("${innbucks.country:ZW}")
     private String deploymentCountry = "ZW";
 
+    /** The platform admin address a customer must never be able to claim. */
+    @Value(com.innbucks.userservice.util.BootstrapAdminEmail.PROPERTY)
+    private String bootstrapAdminEmail = com.innbucks.userservice.util.BootstrapAdminEmail.DEFAULT_ADDRESS;
+
     /**
      * A01/A04 — how recently the target phone must have completed OTP
      * verification for a tier2/3/4 KYC-upgrade to be allowed. The legitimate
@@ -107,6 +111,18 @@ public class CustomerService {
 
     @Transactional
     public CustomerRegistrationResponseDTO registerTier2(CustomerTier2RegisterDTO request) {
+        // Tier-2 is the one place a self-service caller picks an arbitrary email
+        // for an existing row, and it has no uniqueness check of its own —
+        // uk_users_email is all that stands behind it, and that index is
+        // case-sensitive. Left open, a customer could park a case-variant of the
+        // platform admin's address on their own account and wait for a
+        // BOOTSTRAP_ADMIN_EMAIL re-spelling to promote it. The seeder refuses to
+        // adopt a CUSTOMER row, so this is the belt to that braces. Checked
+        // before anything is loaded or written.
+        if (com.innbucks.userservice.util.BootstrapAdminEmail.matches(bootstrapAdminEmail, request.getEmail())) {
+            log.warn("Refused tier-2 registration claiming the bootstrap admin address");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Email already registered");
+        }
         CustomerProfile profile = loadProfile(request.getMsisdn(), 1);
         requireRecentlyVerified(profile);
 

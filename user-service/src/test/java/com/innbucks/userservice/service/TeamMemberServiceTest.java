@@ -70,6 +70,8 @@ class TeamMemberServiceTest {
     @BeforeEach
     void setUp() {
         ReflectionTestUtils.setField(service, "deploymentCountry", "ZW");
+        ReflectionTestUtils.setField(service, "bootstrapAdminEmail",
+                com.innbucks.userservice.util.BootstrapAdminEmail.DEFAULT_ADDRESS);
     }
 
     @AfterEach
@@ -147,11 +149,71 @@ class TeamMemberServiceTest {
     }
 
     @Test
+    void create_forcesAPasswordChangeOnFirstUse() {
+        // The organizer relays the temporary password, so it is a shared secret
+        // from the moment it is minted. This matters more for TEAM_MEMBER than
+        // for other staff: the gate-operator exemption in MfaPolicy means they
+        // face no 2FA challenge, so without this flag the relayed temporary
+        // password would be the account's only standing credential. JwtFilter
+        // blocks every non-/auth/** path while the claim is present, so a
+        // scanner cannot redeem a ticket until it is rotated.
+        User organizer = organizer(UUID.randomUUID());
+        authenticateAs(organizer);
+        when(userRepository.existsByEmail("tariro@harare-arena.co.zw")).thenReturn(false);
+        when(userRepository.existsByPhoneNumberAndHomeCountry("+263773456789", "ZW")).thenReturn(false);
+        when(passwordEncoder.encode(any())).thenReturn("HASHED");
+
+        ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
+        when(userRepository.save(saved.capture())).thenAnswer(inv -> {
+            User u = saved.getValue();
+            u.setId(99L);
+            return u;
+        });
+
+        service.createTeamMember(createDto());
+
+        assertThat(saved.getValue().isMustChangePassword()).isTrue();
+    }
+
+    @Test
     void create_rejectsDuplicateEmail() {
         authenticateAs(organizer(UUID.randomUUID()));
         when(userRepository.existsByEmail("tariro@harare-arena.co.zw")).thenReturn(true);
 
         assertThatThrownBy(() -> service.createTeamMember(createDto()))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Email already registered");
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void create_refusesTheBootstrapAdminAddress() {
+        // An organizer must never be able to park a row at the platform admin's
+        // address. Left open, a rotated BOOTSTRAP_ADMIN_EMAIL (or a deleted
+        // admin row) would let DataInitializer adopt that row as SUPER_ADMIN —
+        // with the temporary password this call hands to the organizer.
+        // Refused before the existsByEmail lookup, so it holds on a cell where
+        // no admin row currently occupies the address.
+        authenticateAs(organizer(UUID.randomUUID()));
+        CreateTeamMemberDTO dto = createDto();
+        dto.setEmail(com.innbucks.userservice.util.BootstrapAdminEmail.DEFAULT_ADDRESS);
+
+        assertThatThrownBy(() -> service.createTeamMember(dto))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("Email already registered");
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void create_refusesACaseVariantOfTheBootstrapAdminAddress() {
+        // uk_users_email is case-sensitive, so an exact-match guard would be
+        // bypassed by re-spelling the address — and the resulting row is one
+        // BOOTSTRAP_ADMIN_EMAIL re-spelling away from being adopted.
+        authenticateAs(organizer(UUID.randomUUID()));
+        CreateTeamMemberDTO dto = createDto();
+        dto.setEmail("Admin@InnBucks.CO.ZW");
+
+        assertThatThrownBy(() -> service.createTeamMember(dto))
                 .isInstanceOf(ResponseStatusException.class)
                 .hasMessageContaining("Email already registered");
         verify(userRepository, never()).save(any());
@@ -516,6 +578,87 @@ class TeamMemberServiceTest {
     // organizer-scoped checks. Organizer-scoped behaviour for the same calls
     // is covered by the cases above.
     // -------------------------------------------------------------------------
+
+    // ---- SUPER_ADMIN creating on an organizer's behalf ----------------------
+    //
+    // Creation used to 403 for a SUPER_ADMIN while listing and managing did
+    // not, because a team member must be stamped with an owning organizer and
+    // an admin has no organizer identity. They can now create, but must name
+    // the organizer — and the stamp has to be the ORGANIZER's uuid, never the
+    // admin's, because booking-service compares that claim to the event's
+    // tenant_user_uuid at scan time.
+
+    @Test
+    void create_asSuperAdmin_withoutOrganizerUuid_isRefused() {
+        User admin = superAdmin();
+        authenticateAsSuperAdmin(admin);
+        when(userRepository.findByEmail(admin.getEmail())).thenReturn(Optional.of(admin));
+
+        assertThatThrownBy(() -> service.createTeamMember(createDto()))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("organizerUuid is required");
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void create_asSuperAdmin_stampsTheNamedOrganizer_notTheAdmin() {
+        User admin = superAdmin();
+        UUID organizerUuid = UUID.randomUUID();
+        User target = organizer(organizerUuid);
+        authenticateAsSuperAdmin(admin);
+        when(userRepository.findByEmail(admin.getEmail())).thenReturn(Optional.of(admin));
+        when(userRepository.findByUserUuid(organizerUuid)).thenReturn(Optional.of(target));
+        when(userRepository.existsByEmail(any())).thenReturn(false);
+        when(userRepository.existsByPhoneNumberAndHomeCountry(any(), any())).thenReturn(false);
+        when(passwordEncoder.encode(any())).thenReturn("HASHED");
+        ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
+        when(userRepository.save(saved.capture())).thenAnswer(inv -> saved.getValue());
+
+        CreateTeamMemberDTO dto = createDto();
+        dto.setOrganizerUuid(organizerUuid);
+        service.createTeamMember(dto);
+
+        assertThat(saved.getValue().getCreatedByOrganizerUuid())
+                .as("the member must belong to the organizer, not the admin who created them")
+                .isEqualTo(organizerUuid);
+        assertThat(saved.getValue().getCreatedByOrganizerUuid()).isNotEqualTo(admin.getUserUuid());
+    }
+
+    @Test
+    void create_asSuperAdmin_namingANonOrganizer_isRefused() {
+        // A typo must not mint a member stamped with a uuid that matches no
+        // event — that account would look fine and be unable to scan anything.
+        User admin = superAdmin();
+        UUID notAnOrganizer = UUID.randomUUID();
+        authenticateAsSuperAdmin(admin);
+        when(userRepository.findByEmail(admin.getEmail())).thenReturn(Optional.of(admin));
+        when(userRepository.findByUserUuid(notAnOrganizer))
+                .thenReturn(Optional.of(teamMember(notAnOrganizer, UUID.randomUUID())));
+
+        CreateTeamMemberDTO dto = createDto();
+        dto.setOrganizerUuid(notAnOrganizer);
+
+        assertThatThrownBy(() -> service.createTeamMember(dto))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("is not an EVENT_ORGANIZER");
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void create_asOrganizer_namingSomebodyElse_isRefused() {
+        // Refused rather than ignored: silently creating it under the caller's
+        // own name is the more surprising outcome.
+        User caller = organizer(UUID.randomUUID());
+        authenticateAs(caller);
+
+        CreateTeamMemberDTO dto = createDto();
+        dto.setOrganizerUuid(UUID.randomUUID());
+
+        assertThatThrownBy(() -> service.createTeamMember(dto))
+                .isInstanceOf(ResponseStatusException.class)
+                .hasMessageContaining("must be your own");
+        verify(userRepository, never()).save(any());
+    }
 
     private User superAdmin() {
         return User.builder()

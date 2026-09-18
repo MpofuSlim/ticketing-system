@@ -238,37 +238,42 @@ Other load-bearing details:
   tamper-evident audit chain, because "who could do what, when" is no longer
   answerable from the code once roles are data.
 
-## TEAM_MEMBER is exempt from forced 2FA (user-service)
+## The gate-operator 2FA exemption, and the refresh hole it left open
 
-`MfaPolicy.MFA_EXEMPT_ROLES = {CUSTOMER, TEAM_MEMBER}` — gate staff scanning
-tickets on a borrowed phone are not compelled to carry an authenticator. Four
-load-bearing details:
+`MfaPolicy.gateOperatorExempt` — gate staff scanning tickets on a shared
+handset are never challenged for a second factor. The policy itself is
+documented at length in the class javadoc; the two things worth repeating
+here are the shape of the key and the hole it opened one level up:
 
-- **The set is an allow-list and the predicate direction is the security
-  argument**: "holds ANY role NOT in the set ⇒ MFA mandatory". So a
-  TEAM_MEMBER who is *also* an organizer/admin is still forced (acquiring a
-  gate role can never drop your own 2FA), and a V35 runtime-created custom
-  role — never in the closed set — fails CLOSED to mandatory. Never flip the
-  predicate to "holds any exempt role".
-- **Two "not CUSTOMER" predicates now deliberately disagree.** `MfaPolicy`
-  exempts TEAM_MEMBER; `AdminUserController`'s `findAllExcludingRole(CUSTOMER)`
-  staff listing still includes them. Gate staff are staff — they just aren't
-  forced to enrol.
-- **The refresh guard exists because of this exemption.**
-  `UserAdminService.setRoles` bumps `tokenVersion` (kills access tokens) but
-  does NOT revoke refresh rows, and `/auth/refresh` re-reads the LIVE user —
-  so without the guard, a team member widened to a privileged role could mint
-  privileged tokens forever, having never passed a second factor.
-  `AuthService.refresh` refuses that shape: 403 `mfa_enrollment_required`,
-  audit `AUTH_REFRESH_MFA_REQUIRED`, family NOT revoked (not theft — the FE
-  routes to a full login, which lands on forced enrolment).
-- **There is NO self-service opt-IN enrol path** (enrolment `mfaToken`s are
-  minted only in the forced-enrolment login branch). That absence is what made
-  V38 provably safe: on an account whose every role is exempt,
-  `mfa_enabled = TRUE` could only mean force-enrolled under the old policy, so
-  V38 cleared those factors (secret, backup codes, device trust) at deploy.
-  If an opt-in path is ever added, that proof breaks — never re-run a V38-style
-  sweep after that.
+- **The exemption is keyed on exact set equality `{TEAM_MEMBER}` AND on the
+  account resolving to ZERO permissions** — not on "holds TEAM_MEMBER". Both
+  halves are load-bearing: containment would invert `isSystemUser` into a
+  fleet-wide opt-out (reachable via a service-request approval or the
+  bootstrap-admin role merge), and the permission check is what stops a
+  runtime `PUT /admin/roles/TEAM_MEMBER/permissions` grant from silently
+  minting a privileged-and-exempt account. It fails CLOSED: give gate staff
+  real authority and they stop being exempt, automatically.
+- **It ignores `mfaEnabled` on purpose.** TEAM_MEMBER used to be a system
+  user, so existing gate staff carry a force-enrolled secret; honouring the
+  flag would have applied the carve-out only to accounts created after it
+  shipped. The secret is retained, not cleared, so it starts being honoured
+  again the moment the account holds any other role. **This is why no
+  data migration was needed** — don't add one.
+- **The refresh guard exists because the exemption is evaluated at LOGIN
+  only.** `UserAdminService.setRoles` bumps `tokenVersion`, which kills the
+  access token but does NOT revoke the refresh row — and `/auth/refresh`
+  re-reads the LIVE user, so a gate operator widened to a privileged role
+  could otherwise mint privileged access tokens for the life of the refresh
+  chain, having never passed a second factor. `AuthService.refresh` refuses
+  that shape: **403 `mfa_enrollment_required`**, audit
+  `AUTH_REFRESH_MFA_REQUIRED`, family NOT revoked (the token is genuine, not
+  stolen — the FE routes to a full login, which lands on forced enrolment).
+  The same guard closes a pre-existing dodge of `MfaService.adminReset`'s
+  documented "must re-enrol on next login": a live session could previously
+  ride refresh straight past it.
+  (The class javadoc's aside that "role mutation does not bump
+  `tokenVersion`" is inaccurate — it does, at `UserAdminService:362`. The
+  hole it describes is real regardless, because the refresh ROW survives.)
 
 ## Bookings carry WHO is coming (booking-service V22)
 
@@ -402,6 +407,64 @@ its `V4`).
   already decided the row. `approve` was fixed alongside `reject` — its Swagger
   had been documenting a 404 it did not actually return.
 
+## Super-app customers federate from the InnBucks middleware (`POST /auth/exchange`)
+
+**Two audiences, two identity providers, one token shape.** Merchants and admins
+log in HERE with a password through the admin portal — unchanged. The super app's
+CUSTOMERS log in at the **InnBucks middleware** (`POST /auth/client-service/user/login`),
+whose `accessToken` this fleet can neither verify (no key) nor introspect (no
+endpoint — measured for InnRewards V42, do not re-try). So the middleware signs a
+**short-lived RS256 assertion** (`iss`/`aud` as provisioned, `sub` = phone, `jti`,
+`iat`, `exp − iat ≤ 300s`) after each login, and the app trades it at
+`POST /auth/exchange` for a normal CUSTOMER access + refresh token. Everything
+gated on `hasRole('CUSTOMER')` — marketplace orders above all — then works with
+no further change and cannot tell how the customer proved themselves.
+
+- **The assertion contract is loyalty's, verbatim.** `FederationAssertionVerifier`
+  is `RegistrationAssertionVerifier` carried across so the middleware signs ONE
+  shape for the whole fleet; keep them in lock-step. The **audience differs on
+  purpose** (`innbucks-foundry` vs `innbucks-loyalty`): a registration proof must
+  never double as a login, and the verifier requires both `iss` and `aud`.
+- **Only ever a CUSTOMER.** `FederatedLoginService` refuses a phone that belongs to
+  a non-CUSTOMER account (`not_a_customer`), so a middleware login can never turn
+  into a merchant or admin session whatever the assertion says. A staff member
+  who also shops must use a different number; that is the safe default, not a
+  gap to close.
+- **One use per assertion.** The `jti` is SETNX'd in Redis for the assertion's
+  remaining lifetime + 60s grace BEFORE any account work. If Redis cannot answer
+  the login is refused with a retryable **503** — a session that could not be
+  replay-checked is not issued. Redis is boot-required on every cell, so this is
+  an outage signal, not a routine path.
+- **It mints a LOGIN token, not a new token shape.** `AuthService.issueToken`
+  (public for this) is the same mint every password login and refresh goes
+  through: same claims, same refresh family, same tokenVersion revocation. Do
+  not add a scoped or roles-empty variant here — the roles-empty token is
+  loyalty's, deliberately inert fleet-wide.
+- **First sign-in creates the customer, shaped exactly like
+  `OtpService.materializeOrRefreshLocalAccount`** (CUSTOMER, active, approved,
+  placeholder name, tier-1 profile with `phoneVerified` stamped) with one
+  difference: **no chosen password**. `users.password` is NOT NULL, so an
+  unusable random Argon2 hash is stored; nobody ever knows the plaintext. The
+  OTP-gated forgot-password flow can set one later. A lost create race
+  (`DataIntegrityViolationException` on the phone unique index) re-reads the
+  winner's row rather than failing the customer.
+- **The assertion is a phone proof** and is treated like an OTP verify: it stamps
+  `phoneVerified`/`phoneVerifiedAt` and calls `loyaltyServiceClient.promoteUserByPhone`
+  (best-effort), so loyalty projections activate on first sign-in without an SMS.
+- **Every refusal is one opaque `401 "Assertion rejected"`**; which check failed
+  goes to the audit log as `AUTH_FEDERATED_LOGIN_REJECTED` with a `failure_reason`.
+  Off by default = **404**; enabled with a blank key = **503** plus a
+  HALF-PROVISIONED boot ERROR (`FederationProvisioningCheck`). Env:
+  `AUTH_FEDERATION_ENABLED` / `_PUBLIC_KEY` / `_PREVIOUS_PUBLIC_KEY` / `_ISSUER` /
+  `_AUDIENCE` / `_MAX_TTL_SECONDS` in `deploy/cells/cell.<iso>.env` (committed OFF,
+  enabled per host in the gitignored local file).
+- **Gateway: `auth-exchange-route`** — POST-only, exact path, IP-keyed fail-safe
+  limiter (`AUTH_EXCHANGE_RATE_LIMIT_*`, 5/20), ordered before the limiter-free
+  `/auth/**` catch-all; pinned in `GatewayRouteTableTest`.
+- **What still needs the middleware team:** sign the assertion at login and hand
+  over the public key. Until then the endpoint stays off and the super app has no
+  path to any `CUSTOMER`-gated endpoint — that is the documented state, not a bug.
+
 ## Platform staff means one role set — use it
 
 `AuthenticatedCaller.PLATFORM_STAFF_ROLES` (`SUPER_ADMIN`, `PRODUCT_OFFICER`,
@@ -522,34 +585,83 @@ with the `Instant`/`timestamptz` services), we pin UTC two ways:
 A bare call on a non-UTC JVM silently stores local time into a
 zone-less column — the bug surfaces hours-off, days later.
 
-3. **Wire format** — every `LocalDateTime` the four services serialize
-   carries the explicit `Z` designator (`2026-07-27T07:19:00Z`), via each
-   service's `UtcJsonTimeConfig` Jackson module. Browsers/FEs parse it as
-   the UTC instant it is and render local time correctly (this fixed the
-   "times show 2h behind in Harare" bug). Inbound stays permissive —
-   `Z`-suffixed, `±HH:mm` offsets (normalized to UTC) and legacy zoneless
-   strings all parse — so S2S calls and in-flight FE code survive rolling
-   deploys. Contract pinned per service by `UtcJsonTimeConfigTest`. FE code
-   parsing dates should still guard (`s.endsWith('Z') ? s : s + 'Z'`) rather
-   than blindly appending.
+This applies to **test code too**. CI runners are UTC, so a bare `now()`
+in a test agrees with the UTC-stamping code under test and stays green
+there — it only breaks locally, and every market we serve is UTC+1 to
+UTC+3, so "only locally" means every developer. Qualify a test's `now()`
+wherever the code under test reads a UTC clock or the fixture fills a UTC
+column; a test that passes its own `now` into the method under test (e.g.
+`TicketWindow.classify(start, end, now)`) is self-consistent and needs no
+change. Check a timestamp fix under both `TZ=UTC` and `TZ=Africa/Harare`.
+
+3. **Wire format — the BE renders, the FE parses nothing.** The client
+   prints the string we send, verbatim. No client-side timezone arithmetic,
+   no re-interpreting our value through `new Date(...)`, no appending a `Z`
+   to patch one up. If a timestamp reads wrong on a screen, the fix belongs
+   at our DTO edge — never in the client.
+
+   - **User-facing surfaces serve the MARKET OFFSET**, e.g.
+     `2026-09-09T08:10:22+02:00`, rendered from the stored UTC instant by the
+     service's own `MarketTimeZone.atMarket`. Same instant as `...T06:10:22Z`
+     and equally unambiguous ISO-8601, but the leading characters are the wall
+     clock the reader is actually standing in, so a screen that prints them
+     verbatim is correct with no conversion. A ZW cell shows Harare time
+     because the BE resolved Harare — not because the reader's device
+     happened to be in Harare.
+   - **S2S payloads stay `Z`.** The consumer is another service that parses
+     properly, and a per-cell offset there just invites double-conversion.
+     Market offset is for human-facing surfaces only.
+   - **Inbound stays permissive** — `Z`-suffixed, `±HH:mm` offsets
+     (normalized to UTC) and legacy zoneless strings all parse — so S2S calls
+     and in-flight clients survive rolling deploys. Clients send the wall clock
+     the user typed and do no zone arithmetic of their own; event-service's
+     `MarketTimeZone.toUtc` converts it. Contract pinned per service by
+     `UtcJsonTimeConfigTest`.
+   - **At rest is untouched.** Only the DTO edge renders at an offset. Columns,
+     queries and every comparison stay UTC — see the storage rule above.
+
+   **How the split is decided — per request, not per type.** The two surfaces
+   share DTO classes: `BookingResponseDTO` is returned by `GET /bookings/{id}`
+   *and* `GET /bookings/internal/{id}`, so the audience cannot live on the
+   type. `WireAudience.isServiceToService()` reads it off the request and the
+   Jackson 3 serializer in `UtcJsonTimeConfig` branches on it. Two markers,
+   because neither alone is enough:
+
+   - the `/internal/` path segment, covering endpoints built for S2S; and
+   - the `X-Innbucks-S2S` header, stamped on every outbound Feign call by
+     `S2sMarkerFeignInterceptor`. This is what closes the hole the path
+     convention leaves — booking-service fetches `GET /events/{id}`, a public
+     path, and that response carries `startDateTime`.
+
+   With no request in scope at all — a domain event, a scheduled job — the
+   answer is S2S, so nothing off the response path ever shifts. **Only the
+   Jackson 3 module renders at an offset.** The Jackson 2 module (Feign request
+   bodies, jjwt) stays on `Z`, so an outbound S2S call can't carry a per-cell
+   offset. All four pinned by `UtcJsonTimeConfigTest`.
+
+   Scan reports reach the same result by a different route: their DTOs are
+   typed `OffsetDateTime` and converted explicitly in `ScanReportService`,
+   because they start as `Instant` rather than a UTC `LocalDateTime`.
+
+   **Not covered: payment-service.** It has no `UtcJsonTimeConfig` at all, so
+   its user-facing `/payments` and `/payments/ecocash` responses still serialize
+   `LocalDateTime` with Jackson's default — zoneless, no designator — including
+   `promptExpiresAt`, `paymentCodeExpiresAt` and `checkoutExpiresAt`, which a
+   customer reads while waiting to pay. It is market-pinned already
+   (`innbucks.country`, `CountryMdcConfig`), so widening it is the same three
+   files as the others; it is called out here rather than left to be discovered.
 
 The remaining long-term step (LocalDateTime → Instant + `timestamptz`
 columns) is now invisible on the wire — the `Z` already ships — so it can
 be done per-service without FE coordination whenever convenient.
 
-**Called-out exception — the scan-report surface (`/scans/**`) serves the
-MARKET OFFSET, not `Z`.** `2026-09-09T08:10:22+02:00` rather than
-`...T06:10:22Z`. Same instant, equally unambiguous ISO-8601, but the leading
-characters are the wall clock the operator was standing in, so a dashboard that
-prints the string verbatim is correct with no client-side conversion. This was
-a deliberate instruction ("everything done on the BE… no FE parsing") after the
-gate dashboard displayed raw UTC and every scan read two hours early. At-rest
-is untouched: `scan_attempts.attempted_at` is a `timestamptz` mapped as
-`Instant` and every query still runs in UTC — only the DTO edge changes, via
-`booking-service`'s own `MarketTimeZone.atMarket`. Extend the same treatment to
-another operator-facing surface only on the same reasoning; **never do it for an
-S2S payload**, where the consumer parses properly and a per-cell offset just
-invites double-conversion.
+**Where the rule came from.** The gate dashboard displayed raw UTC and every
+scan read two hours early. The instruction was explicit — *"everything done on
+the BE… no FE parsing"* — so `/scans/**` moved to the market offset and
+`scan_attempts.attempted_at` stayed exactly as it was: a `timestamptz` mapped as
+`Instant`, every query still in UTC, only the DTO edge changed. Read that as the
+worked example of the rule in §3 above, not as a one-off carve-out for one
+endpoint: rendering belongs on the BE everywhere a human reads the value.
 
 ## A booked seat category can't be deleted — but CAN be repriced
 
@@ -710,7 +822,36 @@ UTC via `MarketTimeZone` before anything reads them; responses stay UTC with the
 New work goes on a **`feature/<short-kebab-description>`** branch cut from the
 latest `master`, where the suffix names the feature being added (e.g.
 `feature/api-gateway-route-tests`). One feature per branch; push with
-`git push -u origin <branch>` and open a **draft** PR.
+`git push -u origin <branch>` and open the PR **ready for review, not a
+draft**.
+
+> [!IMPORTANT]
+> **Don't open draft PRs here, and reach for the REST API rather than `gh pr *`.**
+> A draft PR cannot be merged, and taking a PR out of draft is a **GraphQL-only**
+> operation — there is no REST field for it. GraphQL on this account gets refused
+> with `graphql_rate_limit` often enough to matter, and misleadingly: `gh api
+> rate_limit` can report `graphql: 5000/5000` while mutations are still being
+> refused, because it is a secondary limit rather than the hourly quota. That
+> combination stranded PR #570 fully green but unmergeable, and it had to be
+> merged by hand.
+>
+> `gh pr create`, `gh pr ready`, `gh pr merge` and `gh pr list` all go through
+> GraphQL and fail the same way. The REST equivalents do not:
+>
+> ```sh
+> # create (accepts "draft": false in the JSON body)
+> gh api repos/MpofuSlim/ticketing-system/pulls --method POST --input pr.json
+> # edit the body
+> gh api repos/MpofuSlim/ticketing-system/pulls/<n> --method PATCH --input body.json
+> # poll CI for a commit
+> gh api repos/MpofuSlim/ticketing-system/commits/<sha>/check-runs \
+>   --jq '.check_runs[] | "\(.name): \(.status) \(.conclusion)"'
+> # merge (this repo uses merge commits — see the (#NNN) two-parent history)
+> gh api repos/MpofuSlim/ticketing-system/pulls/<n>/merge --method PUT --input merge.json
+> ```
+>
+> Un-drafting is the one step with no REST equivalent, which is the whole reason
+> not to open drafts in the first place.
 
 Schema changes go in `src/main/resources/db/migration/V<N>__*.sql`
 (PostgreSQL + Flyway, `ddl-auto: validate` on every data service). The
@@ -1029,7 +1170,20 @@ sections below).** The earlier "exclusively InnBucks" wording predates the
 other rails; what remains
 non-negotiable is that the earlier server-side wallet debit
 (`/bank/api/payment`) was removed at the InnBucks team's direction — do not
-reintroduce it. The InnBucks canonical spec is
+reintroduce it.
+
+All three rails collect for ANY product behind an `OrderGateway`
+(`orderType` + `orderRef`): `BOOKING` (the historical `bookingId` contract),
+`MARKETPLACE` (`MKT-...` refs) and **`LOYALTY_VOUCHER`** (`VCH-...` refs —
+InnRewards V47 voucher purchase orders, where a gift voucher is PAID FOR
+before it exists and loyalty issues it, and sends its WhatsApp messages, the
+moment the payment confirms). `LoyaltyVoucherOrderGateway` +
+`LoyaltyVoucherOrderClient` speak loyalty's internal
+`/loyalty/internal/voucher-orders/**` surface — loyalty serves DECIMAL major
+units and PLAIN-MAP bodies (no ApiResult envelope; a bad internal token is a
+bodyless 401), so the gateway owns the cents conversion and the client's
+parsing deliberately differs from `MarketplaceOrderClient`'s. Cash voucher
+payments never touch payment-service (staff confirm them in loyalty). The InnBucks canonical spec is
 `docs/api/InnBucks_Merchant_Api_Doc_v1.0.9.pdf`, distilled (greppable) at
 `docs/api/innbucks-merchant-api.md`.
 

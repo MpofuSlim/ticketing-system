@@ -85,7 +85,8 @@ class MarketTimeZoneTest {
     @Test
     void nullsPassThrough() {
         MarketTimeZone zw = new MarketTimeZone("ZW");
-        assertThat(zw.atMarket(null)).isNull();
+        assertThat(zw.atMarket((java.time.Instant) null)).isNull();
+        assertThat(zw.atMarketFromUtc(null)).isNull();
         assertThat(zw.endOfLocalDay(null)).isNull();
     }
 

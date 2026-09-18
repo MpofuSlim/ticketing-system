@@ -27,7 +27,7 @@
         <dependency>
             <groupId>com.googlecode.libphonenumber</groupId>
             <artifactId>libphonenumber</artifactId>
-            <version>9.0.38</version>
+            <version>9.0.39</version>
         </dependency>
 
         <dependency>
@@ -50,12 +50,12 @@
         <dependency>
             <groupId>net.javacrumbs.shedlock</groupId>
             <artifactId>shedlock-spring</artifactId>
-            <version>7.9.0</version>
+            <version>7.10.1</version>
         </dependency>
         <dependency>
             <groupId>net.javacrumbs.shedlock</groupId>
             <artifactId>shedlock-provider-jdbc-template</artifactId>
-            <version>7.9.0</version>
+            <version>7.10.1</version>
         </dependency>
 
         <dependency>

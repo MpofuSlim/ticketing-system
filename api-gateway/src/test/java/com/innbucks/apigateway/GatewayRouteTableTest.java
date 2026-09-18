@@ -43,7 +43,8 @@ class GatewayRouteTableTest {
 
     private static final List<String> EXPECTED_ROUTE_IDS = List.of(
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
-            "auth-otp-route", "auth-mfa-route", "auth-password-reset-route", "user-auth-route",
+            "auth-otp-route", "auth-exchange-route", "auth-mfa-route", "auth-password-reset-route",
+            "user-auth-route",
             "cells-lookup-route", "user-admin-route", "user-notifications-route",
             "booking-event-organizer-reports-route", "user-event-organizer-route",
             "user-internal-deny", "user-self-route",
@@ -85,7 +86,7 @@ class GatewayRouteTableTest {
 
     private static final List<String> RATE_LIMITED_ROUTES = List.of(
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
-            "auth-otp-route", "auth-mfa-route", "auth-password-reset-route",
+            "auth-otp-route", "auth-exchange-route", "auth-mfa-route", "auth-password-reset-route",
             "user-admin-route", "user-notifications-route",
             "user-event-organizer-route", "booking-event-organizer-reports-route",
             "user-self-route", "event-service-route",
@@ -109,6 +110,9 @@ class GatewayRouteTableTest {
     // (@resilientRedisRateLimiter) rather than RedisRateLimiter's fail-open one.
     private static final List<String> RESILIENT_LIMITED_ROUTES = List.of(
             "auth-register-route", "auth-otp-route", "auth-password-reset-route",
+            // Unauthenticated and session-minting: the per-IP cap is the only
+            // brake on hammering the replay guard and the find-or-create write.
+            "auth-exchange-route",
             "payment-service-read-route", "payments-innbucks-write-route",
             "ecocash-notify-write-route", "payment-service-write-route",
             // Not SMS-cost or payment, but the same fail-open hazard: this route
@@ -405,7 +409,7 @@ class GatewayRouteTableTest {
         List<String> order = orderedIds();
         int catchAll = order.indexOf("user-auth-route");
         List.of("auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
-                        "auth-otp-route", "auth-mfa-route", "auth-password-reset-route")
+                        "auth-otp-route", "auth-exchange-route", "auth-mfa-route", "auth-password-reset-route")
                 .forEach(id -> assertThat(order.indexOf(id))
                         .as("%s must match before the /auth/** catch-all", id)
                         .isBetween(0, catchAll - 1));
@@ -424,6 +428,12 @@ class GatewayRouteTableTest {
                 .containsExactly("/auth/customer/**");
         assertThat(predicateArgs("auth-register-route", "Path"))
                 .containsExactly("/auth/register");
+        // Exact path + POST-only: anything else added under /auth later must
+        // fall through to the catch-all rather than inherit a route shaped for
+        // one unauthenticated session-minting call.
+        assertThat(predicateArgs("auth-exchange-route", "Path"))
+                .containsExactly("/auth/exchange");
+        assertThat(predicateArgs("auth-exchange-route", "Method")).containsExactly("POST");
         assertThat(predicateArgs("auth-otp-route", "Path"))
                 .containsExactly("/auth/otp/**");
         assertThat(predicateArgs("auth-mfa-route", "Path"))

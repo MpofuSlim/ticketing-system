@@ -10,6 +10,7 @@ import com.innbucks.userservice.repository.TeamMemberEventAssignmentRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.security.AuthenticatedCaller;
 import com.innbucks.userservice.security.TokenVersionPublisher;
+import com.innbucks.userservice.util.BootstrapAdminEmail;
 import com.innbucks.userservice.util.HtmlSanitizer;
 import com.innbucks.userservice.util.MsisdnValidator;
 import com.innbucks.userservice.util.TemporaryPasswordGenerator;
@@ -71,11 +72,27 @@ public class TeamMemberService {
     @Value("${innbucks.country:ZW}")
     private String deploymentCountry = "ZW";
 
+    /** The platform admin address this service must never create an account at. */
+    @Value(BootstrapAdminEmail.PROPERTY)
+    private String bootstrapAdminEmail = BootstrapAdminEmail.DEFAULT_ADDRESS;
+
     @Transactional
     public UserResponseDTO createTeamMember(CreateTeamMemberDTO req) {
-        User caller = requireOrganizerCaller();
-        UUID organizerUuid = caller.getUserUuid();
+        UUID organizerUuid = resolveOwningOrganizer(req.getOrganizerUuid());
+        User caller = currentUser();
 
+        // The platform admin's address is never an organizer's to hand out. A
+        // row parked here becomes a SUPER_ADMIN candidate the next time
+        // DataInitializer boots against an admin-less cell (a rotated
+        // BOOTSTRAP_ADMIN_EMAIL, or a deleted admin row), and its temporary
+        // password went to the organizer who created it. The seeder now refuses
+        // to adopt such a row; this stops one being planted in the first place.
+        // Deliberately the same message as the duplicate case below — a
+        // distinct one would confirm the configured address to the caller.
+        if (BootstrapAdminEmail.matches(bootstrapAdminEmail, req.getEmail())) {
+            log.warn("Refused TEAM_MEMBER creation at the bootstrap admin address by={}", caller.getEmail());
+            throw badRequest("Email already registered");
+        }
         if (userRepository.existsByEmail(req.getEmail())) {
             throw badRequest("Email already registered");
         }
@@ -109,6 +126,20 @@ public class TeamMemberService {
                 // login's pending-approval check never treats a team member as a
                 // pending registration.
                 .approved(true)
+                // The organizer receives this account's temporary password and
+                // relays it to the staffer, so it is a shared secret from the
+                // moment it is minted. Forcing a rotation on first use is what
+                // keeps it a bootstrap credential rather than the account's
+                // standing one — and it matters more for this role than most,
+                // because a gate operator faces no 2FA challenge (see
+                // MfaPolicy's gate-operator exemption), making the temporary
+                // password otherwise the ONLY thing guarding the account.
+                //
+                // JwtFilter blocks every non-/auth/** path while the claim is
+                // present, so the scanner cannot redeem a ticket until the
+                // password is changed; AuthService bumps token_version on a
+                // successful change, invalidating the claim-carrying JWT.
+                .mustChangePassword(true)
                 .createdByOrganizerUuid(organizerUuid)
                 .build();
         userRepository.save(member);
@@ -236,9 +267,10 @@ public class TeamMemberService {
     }
 
     /**
-     * Assigns the team member to an event (idempotent). The first assignment
-     * for a member flips them from organizer-wide scanning to "assigned events
-     * only" — see {@link #canScanEvent}. Returns the member's full current
+     * Assigns the team member to an event (idempotent). Access is
+     * deny-by-default, so this is what GRANTS scan access rather than what
+     * narrows it: until a member has at least one assignment they can scan
+     * nothing — see {@link #canScanEvent}. Returns the member's full current
      * assignment set so the caller can refresh its view in one round trip.
      */
     @Transactional
@@ -262,7 +294,10 @@ public class TeamMemberService {
 
     /**
      * Removes an event assignment (idempotent). If this was the member's last
-     * assignment they revert to organizer-wide scanning (no rows = wide open).
+     * assignment they are left with NO scan access at all — deny-by-default,
+     * not a reversion to organizer-wide. Worth surfacing in any UI that offers
+     * an unassign control: removing the last one looks identical to removing
+     * one of several and has a completely different effect.
      */
     @Transactional
     public List<UUID> unassignEvent(UUID teamMemberUuid, UUID eventId) {
@@ -374,6 +409,67 @@ public class TeamMemberService {
         // getName() returns "" (never null) on AbstractAuthenticationToken when
         // the principal is unset, so no inner null guard is needed.
         return isCallerSuperAdmin() ? "admin:" + auth.getName() : auth.getName();
+    }
+
+    /**
+     * Which organizer the new team member belongs to.
+     *
+     * <p>Every team member is stamped with a
+     * {@link User#getCreatedByOrganizerUuid()}, and that value is not
+     * bookkeeping: it rides in their JWT as the {@code organizerUuid} claim and
+     * booking-service compares it to the event's {@code tenant_user_uuid} at
+     * scan time. A member stamped with the wrong uuid matches no event and can
+     * never scan anything — a silently broken account rather than a visible
+     * error. So this has to resolve to a real organizer or refuse.
+     *
+     * <p>An EVENT_ORGANIZER owns what they create, so the stamp is their own
+     * uuid and {@code requestedOrganizerUuid} must be null or equal to it —
+     * supplying somebody else's is refused rather than ignored, because
+     * silently creating the member under your own name is the more surprising
+     * outcome.
+     *
+     * <p>A SUPER_ADMIN has no organizer identity, which is precisely why
+     * creation used to be closed to them while listing and managing were not.
+     * They may create on an organizer's behalf, but must name which one; the
+     * target is validated to be an existing account holding the built-in
+     * EVENT_ORGANIZER role, so a typo cannot mint an unscannable member.
+     */
+    private UUID resolveOwningOrganizer(UUID requestedOrganizerUuid) {
+        User caller = currentUser();
+        if (caller.hasRole(User.Role.EVENT_ORGANIZER)) {
+            if (requestedOrganizerUuid != null
+                    && !requestedOrganizerUuid.equals(caller.getUserUuid())) {
+                throw badRequest("organizerUuid must be your own, or omitted — an organizer can "
+                        + "only create team members for themselves.");
+            }
+            return caller.getUserUuid();
+        }
+        if (isCallerSuperAdmin()) {
+            if (requestedOrganizerUuid == null) {
+                throw badRequest("organizerUuid is required when creating a team member as a "
+                        + "SUPER_ADMIN — a team member must belong to an event organizer, and an "
+                        + "admin account is not one.");
+            }
+            User organizer = userRepository.findByUserUuid(requestedOrganizerUuid)
+                    .orElseThrow(() -> badRequest("No such event organizer: " + requestedOrganizerUuid));
+            if (!organizer.hasRole(User.Role.EVENT_ORGANIZER)) {
+                throw badRequest("User " + requestedOrganizerUuid + " is not an EVENT_ORGANIZER, so a "
+                        + "team member cannot be created under them.");
+            }
+            return organizer.getUserUuid();
+        }
+        throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                "Only EVENT_ORGANIZER may manage team members");
+    }
+
+    /** The authenticated caller's User row. */
+    private User currentUser() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || auth.getName() == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Authentication required");
+        }
+        return userRepository.findByEmail(auth.getName())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Caller not found"));
     }
 
     private User requireOrganizerCaller() {

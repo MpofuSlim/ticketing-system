@@ -19,6 +19,7 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.data.domain.Page;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.Collections;
 import java.util.Optional;
 import java.util.UUID;
@@ -57,8 +58,8 @@ class EventServiceTest {
                 .venue("Venue")
                 .country("Zimbabwe")
                 .category(EventCategory.CONCERT)
-                .startDateTime(LocalDateTime.now().plusDays(5))
-                .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(5))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(5).plusHours(2))
                 .totalCapacity(100)
                 .availableTickets(100)
                 .deleted(false)
@@ -88,8 +89,8 @@ class EventServiceTest {
                 .venue("Venue")
                 .country("Zimbabwe")
                 .category(EventCategory.CONCERT)
-                .startDateTime(LocalDateTime.now().plusDays(5))
-                .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(5))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(5).plusHours(2))
                 .totalCapacity(100)
                 .availableTickets(60)
                 .deleted(false)
@@ -124,8 +125,8 @@ class EventServiceTest {
         CreateEventRequestDTO req = new CreateEventRequestDTO();
         req.setTitle("Concert"); req.setDescription("desc"); req.setVenue("Venue");
         req.setCategory(EventCategory.CONCERT);
-        req.setStartDateTime(LocalDateTime.now().plusDays(10));
-        req.setEndDateTime(LocalDateTime.now().plusDays(10).plusHours(2));
+        req.setStartDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(10));
+        req.setEndDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(10).plusHours(2));
         req.setTotalCapacity(200);
         when(repo.existsByTenantUserUuidAndTitleAndVenueAndStartDateTimeAndDeletedFalse(
                 any(), any(), any(), any())).thenReturn(false);
@@ -151,8 +152,8 @@ class EventServiceTest {
         CreateEventRequestDTO req = new CreateEventRequestDTO();
         req.setTitle("Concert"); req.setVenue("Venue");
         req.setCategory(EventCategory.CONCERT);
-        req.setStartDateTime(LocalDateTime.now().plusDays(10));
-        req.setEndDateTime(LocalDateTime.now().plusDays(10).plusHours(2));
+        req.setStartDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(10));
+        req.setEndDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(10).plusHours(2));
         req.setTotalCapacity(100);
 
         RuntimeException ex = assertThrows(RuntimeException.class,
@@ -166,7 +167,12 @@ class EventServiceTest {
         EventRepository repo = mock(EventRepository.class);
         EventService service = new EventService(repo, new com.innbucks.eventservice.config.MarketTimeZone("ZW"), mock(EventMapper.class), mock(SeatCategoryGateway.class), mock(BookingGateway.class), mock(OrganizerGateway.class), mock(BookingNotificationGateway.class), mock(OrganizerNotificationGateway.class));
 
-        LocalDateTime when = LocalDateTime.now().plusDays(10);
+        // ZoneOffset.UTC here is only a machine-independent "now" — it is NOT a
+        // claim that request bodies are UTC. A submitted time is the MARKET-LOCAL
+        // wall clock the organizer typed, and MarketTimeZone.toUtc converts it on
+        // the way in. The fixture just needs to be comfortably in the future and
+        // identical on every developer's machine.
+        LocalDateTime when = LocalDateTime.now(ZoneOffset.UTC).plusDays(10);
         CreateEventRequestDTO req = new CreateEventRequestDTO();
         req.setTitle("Concert"); req.setVenue("Harare Gardens");
         req.setCategory(EventCategory.CONCERT);
@@ -196,8 +202,8 @@ class EventServiceTest {
         Event existing = Event.builder()
                 .eventId(eventId).tenantUserUuid(OWNER_TENANT).title("Old").venue("V")
                 .country("Zimbabwe").category(EventCategory.CONCERT)
-                .startDateTime(LocalDateTime.now().plusDays(5))
-                .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(5))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(5).plusHours(2))
                 .totalCapacity(100).availableTickets(100).deleted(false).build();
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
         when(repo.save(any(Event.class))).thenAnswer(inv -> inv.getArgument(0));
@@ -218,8 +224,8 @@ class EventServiceTest {
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder().eventId(eventId).tenantUserUuid(OWNER_TENANT)
                 .title("T").venue("V").country("Zimbabwe").category(EventCategory.CONCERT)
-                .startDateTime(LocalDateTime.now().plusDays(5))
-                .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(5))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(5).plusHours(2))
                 .totalCapacity(1).availableTickets(1).deleted(false).build();
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
 
@@ -237,8 +243,8 @@ class EventServiceTest {
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder().eventId(eventId).tenantUserUuid(OWNER_TENANT)
                 .title("T").venue("V").country("Zimbabwe").category(EventCategory.CONCERT)
-                .startDateTime(LocalDateTime.now().plusDays(5))
-                .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(5))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(5).plusHours(2))
                 .totalCapacity(1).availableTickets(1).deleted(false).build();
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
 
@@ -269,8 +275,8 @@ class EventServiceTest {
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder().eventId(eventId).tenantUserUuid(ORGANIZER_A).title("T")
                 .venue("V").country("Zimbabwe").category(EventCategory.CONCERT)
-                .startDateTime(LocalDateTime.now().plusDays(1))
-                .endDateTime(LocalDateTime.now().plusDays(1).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(1))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(1).plusHours(2))
                 .totalCapacity(100).availableTickets(100).deleted(false).build();
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
         when(seats.fetchForEvent(eventId)).thenReturn(Collections.emptyList());
@@ -297,8 +303,8 @@ class EventServiceTest {
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder().eventId(eventId).tenantUserUuid(ORGANIZER_RUMBI).title("T")
                 .venue("V").country("Zimbabwe").category(EventCategory.CONCERT)
-                .startDateTime(LocalDateTime.now().plusDays(1))
-                .endDateTime(LocalDateTime.now().plusDays(1).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(1))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(1).plusHours(2))
                 .totalCapacity(100).availableTickets(100).deleted(false).build();
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
         when(seats.fetchForEvent(eventId)).thenReturn(Collections.emptyList());
@@ -331,8 +337,8 @@ class EventServiceTest {
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder().eventId(eventId).tenantUserUuid(ORGANIZER_AB).title("T")
                 .venue("V").country("Zimbabwe").category(EventCategory.CONCERT)
-                .startDateTime(LocalDateTime.now().plusDays(1))
-                .endDateTime(LocalDateTime.now().plusDays(1).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(1))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(1).plusHours(2))
                 .totalCapacity(10).availableTickets(10).deleted(false).build();
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
         when(seats.fetchForEvent(eventId)).thenReturn(Collections.emptyList());
@@ -392,8 +398,8 @@ class EventServiceTest {
         UUID draftId = UUID.randomUUID();
         Event draft = Event.builder().eventId(draftId).tenantUserUuid(ORGANIZER_AB).title("Draft")
                 .venue("V").country("Zimbabwe").category(EventCategory.CONCERT)
-                .startDateTime(LocalDateTime.now().plusDays(1))
-                .endDateTime(LocalDateTime.now().plusDays(1).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(1))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(1).plusHours(2))
                 .totalCapacity(10).availableTickets(10).deleted(false).active(false).build();
         when(repo.findByEventIdAndDeletedFalse(draftId)).thenReturn(Optional.of(draft));
         assertEquals("Event not found", assertThrows(RuntimeException.class,
@@ -403,8 +409,8 @@ class EventServiceTest {
         UUID rejectedId = UUID.randomUUID();
         Event rejected = Event.builder().eventId(rejectedId).tenantUserUuid(ORGANIZER_AB).title("Rejected")
                 .venue("V").country("Zimbabwe").category(EventCategory.CONCERT)
-                .startDateTime(LocalDateTime.now().plusDays(1))
-                .endDateTime(LocalDateTime.now().plusDays(1).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(1))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(1).plusHours(2))
                 .totalCapacity(10).availableTickets(10).deleted(false).rejected(true).build();
         when(repo.findByEventIdAndDeletedFalse(rejectedId)).thenReturn(Optional.of(rejected));
         assertEquals("Event not found", assertThrows(RuntimeException.class,
@@ -421,8 +427,8 @@ class EventServiceTest {
         UUID eventId = UUID.randomUUID();
         Event existing = Event.builder().eventId(eventId).tenantUserUuid(ORGANIZER_A).title("T")
                 .venue("V").country("Zimbabwe").category(EventCategory.CONCERT)
-                .startDateTime(LocalDateTime.now().plusDays(1))
-                .endDateTime(LocalDateTime.now().plusDays(1).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(1))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(1).plusHours(2))
                 .totalCapacity(5).availableTickets(5).deleted(false).build();
         when(repo.findByEventIdAndDeletedFalse(eventId)).thenReturn(Optional.of(existing));
         EventResponseDTO dto = new EventResponseDTO();
@@ -538,8 +544,8 @@ class EventServiceTest {
         return Event.builder()
                 .eventId(eventId).tenantUserUuid(tenantUserUuid).title("T").venue("V")
                 .country("Zimbabwe").category(EventCategory.CONCERT)
-                .startDateTime(LocalDateTime.now().plusDays(5))
-                .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(5))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(5).plusHours(2))
                 .totalCapacity(100).availableTickets(100).deleted(false).build();
     }
 
@@ -814,8 +820,8 @@ class EventServiceTest {
         return Event.builder()
                 .eventId(eventId).tenantUserUuid(TENANT_1).title("Jazz Night")
                 .venue("Old Arena").country("Zimbabwe").category(EventCategory.CONCERT)
-                .startDateTime(LocalDateTime.now().plusDays(5))
-                .endDateTime(LocalDateTime.now().plusDays(5).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(5))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(5).plusHours(2))
                 .totalCapacity(100).availableTickets(60).deleted(false).build();
     }
 
@@ -913,8 +919,8 @@ class EventServiceTest {
         return Event.builder()
                 .eventId(eventId).tenantUserUuid(organizerUuid).title("Assigned Active")
                 .venue("Arena").country("Zimbabwe").category(EventCategory.CONCERT)
-                .startDateTime(LocalDateTime.now().plusDays(3))
-                .endDateTime(LocalDateTime.now().plusDays(3).plusHours(2))
+                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(3))
+                .endDateTime(LocalDateTime.now(ZoneOffset.UTC).plusDays(3).plusHours(2))
                 .totalCapacity(100).availableTickets(100).deleted(false).active(true).build();
     }
 

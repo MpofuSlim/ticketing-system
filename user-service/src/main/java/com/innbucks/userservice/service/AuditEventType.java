@@ -63,6 +63,20 @@ public enum AuditEventType {
     AUTH_PASSWORD_CHANGED,
     /** Rate-limit threshold exceeded on /auth/login or /auth/refresh. */
     AUTH_RATE_LIMITED,
+    /**
+     * Successful /auth/exchange — a middleware-signed assertion was traded
+     * for a CUSTOMER session. Metadata {@code newAccount} says whether the
+     * customer row was created on this call.
+     */
+    AUTH_FEDERATED_LOGIN_SUCCESS,
+    /**
+     * /auth/exchange refused. The {@code failure_reason} narrows it:
+     * {@code bad_assertion} (signature/claims), {@code replay} (jti already
+     * spent), {@code not_a_customer} (the phone belongs to a staff account),
+     * {@code account_inactive}, {@code unnormalisable_phone}. The client
+     * always sees the same opaque 401.
+     */
+    AUTH_FEDERATED_LOGIN_REJECTED,
 
     /**
      * SUPER_ADMIN approved a system user's first activation — combines the
@@ -167,5 +181,17 @@ public enum AuditEventType {
     /** A TEAM_MEMBER was disabled (tokens revoked, can no longer log in). */
     TEAM_MEMBER_DISABLED,
     /** The first-run bootstrap SUPER_ADMIN was seeded from the env credential. */
-    BOOTSTRAP_ADMIN_CREATED
+    BOOTSTRAP_ADMIN_CREATED,
+    /**
+     * A pre-existing account already held BOOTSTRAP_ADMIN_EMAIL and was NOT the
+     * platform admin, so the seeder refused to adopt it. The row was left
+     * untouched; failure_reason names what disqualified it.
+     */
+    BOOTSTRAP_ADMIN_SEED_REFUSED,
+    /**
+     * A pre-existing, unprivileged row at BOOTSTRAP_ADMIN_EMAIL was adopted as
+     * the platform SUPER_ADMIN (the legacy-admin migration path). A privilege
+     * grant to an account the seeder did not create, so it is audited.
+     */
+    BOOTSTRAP_ADMIN_ADOPTED
 }

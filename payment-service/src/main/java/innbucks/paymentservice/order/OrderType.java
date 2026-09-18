@@ -13,9 +13,15 @@ package innbucks.paymentservice.order;
  *   <li>{@link #MARKETPLACE} — a marketplace order (marketplace-service). The
  *       order ref is the opaque {@code MKT-...} order reference from the
  *       marketplace's internal S2S surface.</li>
+ *   <li>{@link #LOYALTY_VOUCHER} — a voucher purchase order (loyalty-service,
+ *       InnRewards V47): a gift voucher is PAID FOR before it exists, and
+ *       loyalty issues it when this payment confirms. The order ref is the
+ *       opaque {@code VCH-...} reference from loyalty's internal S2S
+ *       surface.</li>
  * </ul>
  */
 public enum OrderType {
     BOOKING,
-    MARKETPLACE
+    MARKETPLACE,
+    LOYALTY_VOUCHER
 }

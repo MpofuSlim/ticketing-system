@@ -20,12 +20,24 @@ import java.time.format.DateTimeParseException;
 import java.time.temporal.ChronoUnit;
 
 /**
- * Wire-format rule: every {@code LocalDateTime} this service serializes is
- * UTC (see CLAUDE.md — containers pin UTC, code uses
- * {@code LocalDateTime.now(ZoneOffset.UTC)}), so JSON output carries the
- * explicit {@code Z} designator: {@code 2026-07-27T07:19:00Z}. Without it,
- * every consumer guesses the zone — browsers guess "local", which showed
- * Harare users times two hours behind.
+ * Wire-format rule (CLAUDE.md): the BE renders, the FE parses nothing. Every
+ * {@code LocalDateTime} this service stores is UTC — containers pin UTC, code
+ * uses {@code LocalDateTime.now(ZoneOffset.UTC)} — and what goes on the wire
+ * depends on who reads it:
+ *
+ * <ul>
+ *   <li><b>A person</b> gets the MARKET OFFSET,
+ *       {@code 2026-07-27T09:19:00+02:00}, so the client prints the string
+ *       verbatim and never converts. A ZW cell shows Harare time because we
+ *       resolved Harare, not because the reader's device happened to be there.
+ *   <li><b>Another service</b> gets {@code Z}, {@code 2026-07-27T07:19:00Z} —
+ *       a per-cell offset in an S2S payload just invites double-conversion.
+ * </ul>
+ *
+ * <p>Same instant either way. {@link WireAudience} decides which, per request,
+ * because the two surfaces share DTO classes. Emitting neither designator was
+ * the original bug: consumers guessed, browsers guessed "local", and Harare
+ * users saw times two hours behind.
  *
  * <p>Inbound stays permissive: {@code Z}-suffixed, {@code ±HH:mm}-offset
  * (normalized to UTC wall-clock, since our LocalDateTimes MEAN UTC), and
@@ -53,12 +65,27 @@ public class UtcJsonTimeConfig {
     private static final DateTimeFormatter UTC_WIRE =
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'");
 
-    /** Jackson 3 module — the one the HTTP message converter actually uses. */
+    /**
+     * Human-facing shape, same precision with an explicit offset:
+     * {@code yyyy-MM-dd'T'HH:mm:ss+02:00}. Still unambiguous ISO-8601, but the
+     * leading characters are the market's wall clock, so a client prints them
+     * verbatim and does no arithmetic.
+     */
+    private static final DateTimeFormatter MARKET_WIRE =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ssXXX");
+
+    /**
+     * Jackson 3 module — the one the HTTP message converter actually uses, and
+     * therefore the only one that decides what a browser sees. Market rendering
+     * lives here and nowhere else: the Jackson 2 module below still emits
+     * {@code Z} for Feign request bodies, jjwt and anything else off the
+     * response path.
+     */
     @Bean
-    public tools.jackson.databind.JacksonModule utcLocalDateTimeJackson3Module() {
+    public tools.jackson.databind.JacksonModule utcLocalDateTimeJackson3Module(MarketTimeZone marketTimeZone) {
         tools.jackson.databind.module.SimpleModule module =
                 new tools.jackson.databind.module.SimpleModule("utc-local-date-time-j3");
-        module.addSerializer(LocalDateTime.class, new UtcLocalDateTimeSerializerJ3());
+        module.addSerializer(LocalDateTime.class, new AudienceAwareLocalDateTimeSerializerJ3(marketTimeZone));
         module.addDeserializer(LocalDateTime.class, new FlexibleUtcLocalDateTimeDeserializerJ3());
         return module;
     }
@@ -72,11 +99,29 @@ public class UtcJsonTimeConfig {
         return module;
     }
 
-    static final class UtcLocalDateTimeSerializerJ3 extends tools.jackson.databind.ValueSerializer<LocalDateTime> {
+    /**
+     * Renders at the market offset for a person, {@code Z} for a service.
+     *
+     * <p>The audience is a property of the request, not of the value — the same
+     * DTO class is served on both surfaces — so it is resolved per call via
+     * {@link WireAudience}. That lookup is thread-bound to the request being
+     * serialized, which is the thread Jackson writes on.
+     */
+    static final class AudienceAwareLocalDateTimeSerializerJ3 extends tools.jackson.databind.ValueSerializer<LocalDateTime> {
+
+        private final MarketTimeZone marketTimeZone;
+
+        AudienceAwareLocalDateTimeSerializerJ3(MarketTimeZone marketTimeZone) {
+            this.marketTimeZone = marketTimeZone;
+        }
+
         @Override
         public void serialize(LocalDateTime value, tools.jackson.core.JsonGenerator gen,
                               tools.jackson.databind.SerializationContext ctxt) {
-            gen.writeString(UTC_WIRE.format(value.truncatedTo(ChronoUnit.SECONDS)));
+            LocalDateTime seconds = value.truncatedTo(ChronoUnit.SECONDS);
+            gen.writeString(WireAudience.isServiceToService()
+                    ? UTC_WIRE.format(seconds)
+                    : MARKET_WIRE.format(marketTimeZone.atMarketFromUtc(seconds)));
         }
     }
 

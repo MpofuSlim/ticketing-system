@@ -18,9 +18,13 @@ import io.swagger.v3.oas.annotations.media.Schema;
  *                      other service in the fleet rejects it. Send it as
  *                      {@code Authorization: Bearer <token>} on
  *                      {@code /loyalty/**} calls.
- * @param expiresInSeconds lifetime of {@code loyaltyToken}. There is no refresh
- *                      for it — when it expires the customer verifies a fresh
- *                      OTP.
+ * @param expiresInSeconds lifetime of {@code loyaltyToken}. Renewable, but not
+ *                      by itself: trade this token once at
+ *                      {@code POST /loyalty/session/exchange} for a rotating
+ *                      refresh chain (loyalty-service V43), then renew with
+ *                      {@code POST /loyalty/session/refresh}. A client that
+ *                      skips the exchange and re-verifies on expiry costs the
+ *                      customer an SMS every 12 hours.
  */
 @Schema(description = "Result of a successful OTP verification, including the loyalty-scoped session token")
 public record OtpVerifyResponseDTO(

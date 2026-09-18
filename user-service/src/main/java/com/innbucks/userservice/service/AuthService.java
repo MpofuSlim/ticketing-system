@@ -230,7 +230,8 @@ public class AuthService implements ApplicationEventPublisherAware {
      * two drift apart while a session is live, which happens two ways:
      *
      * <ul>
-     *   <li>An exempt account (CUSTOMER / TEAM_MEMBER) is granted a role that
+     *   <li>An account the policy exempts — a CUSTOMER, or a gate operator per
+     *       {@code MfaPolicy.gateOperatorExempt} — is granted a role that
      *       mandates MFA. {@code UserAdminService.setRoles} bumps
      *       {@code tokenVersion}, so the old ACCESS token dies — but it does
      *       not revoke the refresh-token row, and {@link #refresh} re-reads the
@@ -642,6 +643,24 @@ public class AuthService implements ApplicationEventPublisherAware {
                     .build();
         }
 
+        // Gate-operator exemption took effect: this is a pure TEAM_MEMBER
+        // (scanner account) on a channel where 2FA WOULD otherwise apply, and
+        // they haven't opted in. Recorded explicitly — without it a factorless
+        // staff session is indistinguishable in the audit trail from a customer
+        // login, which is the one thing that makes the exemption unreviewable.
+        // Mirrors the mfaSkippedViaTrustedDevice marker above.
+        if (mfaPolicy != null
+                && mfaPolicy.applicable(channel)
+                && mfaPolicy.gateOperatorExempt(user)) {
+            log.info("MFA not required for gate operator userId={}", user.getId());
+            auditService.recordSuccess(
+                    AuditEventType.AUTH_LOGIN_SUCCESS,
+                    String.valueOf(user.getId()), AuditService.ACTOR_TYPE_USER,
+                    String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
+                    java.util.Map.of("mfaSkippedViaGateOperatorRole", true),
+                    auditContext);
+        }
+
         return issueToken(user, deviceId);
     }
 
@@ -984,7 +1003,15 @@ public class AuthService implements ApplicationEventPublisherAware {
         }
     }
 
-    private AuthResponseDTO issueToken(User user, String deviceId) {
+    /**
+     * Mints a full session (access token + a fresh refresh family) for a user
+     * that some OTHER path has already authenticated. Public for
+     * {@link FederatedLoginService}, which proves the customer via a
+     * middleware-signed assertion and must then hand out exactly the token a
+     * password login would — same claims, same refresh semantics, same
+     * revocation — rather than a second token shape.
+     */
+    public AuthResponseDTO issueToken(User user, String deviceId) {
         String refreshToken = refreshTokenService.issueNewFamily(user, deviceId);
         return buildResponse(user, refreshToken);
     }

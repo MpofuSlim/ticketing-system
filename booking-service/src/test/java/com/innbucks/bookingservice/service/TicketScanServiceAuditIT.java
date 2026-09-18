@@ -47,6 +47,17 @@ import static org.assertj.core.api.Assertions.assertThat;
  * NOT_ASSIGNED outcome — same path as production when user-service is
  * unreachable.
  */
+@org.springframework.test.context.TestPropertySource(properties =
+        // The six outcomes below predate the event-day rule and are about the
+        // audit invariant, not about scheduling. Under the `it` profile every
+        // Feign client resolves to its fallback, so the event lookup cannot
+        // answer and the rule's fail-CLOSED default would 503 each scan before
+        // it reached its intended outcome. Turning the rule off keeps these
+        // cases testing what they were written to test; the rule's own
+        // behaviour is pinned by TicketScanServiceTest (guard wiring) and
+        // EventDayRuleTest (window arithmetic), and its DATABASE contract by
+        // wrongEventDayOutcomePersists below.
+        "innbucks.scan.event-day-check.enabled=false")
 class TicketScanServiceAuditIT extends PostgresIntegrationTestBase {
 
     @Autowired private TicketScanService scanService;
@@ -194,6 +205,33 @@ class TicketScanServiceAuditIT extends PostgresIntegrationTestBase {
         auth.setDetails(new JwtAuthDetails(email, null, UUID.randomUUID(), organizerUuid,
                 "Tariro", "Chikomo"));
         SecurityContextHolder.getContext().setAuthentication(auth);
+    }
+
+    /**
+     * V23 widened {@code scan_attempts}' CHECK constraint to admit
+     * WRONG_EVENT_DAY. Only a real Postgres can prove that: the column is TEXT
+     * guarded by {@code chk_outcome}, so without the migration the very first
+     * off-day scan in production would fail the INSERT at commit and roll the
+     * whole scan transaction back — turning an intended refusal into a 500.
+     * A mock-based test cannot see this at all.
+     */
+    @Test
+    void wrongEventDayOutcomePersists_soTheV23CheckConstraintAdmitsIt() {
+        ScanAttempt attempt = ScanAttempt.builder()
+                // ScanAttempt implements Persistable<UUID> with a manually
+                // assigned id — the same thing recordAttempt does.
+                .id(UUID.randomUUID())
+                .ticketNumber("20260619-48291X")
+                .outcome(ScanAttempt.Outcome.WRONG_EVENT_DAY)
+                .attemptedAt(java.time.Instant.now())
+                .scannerDisplayName("Tariro Chikomo")
+                .build();
+
+        tx.executeWithoutResult(st -> scanAttemptRepository.saveAndFlush(attempt));
+
+        List<ScanAttempt> rows = scanAttemptRepository.findAll();
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getOutcome()).isEqualTo(ScanAttempt.Outcome.WRONG_EVENT_DAY);
     }
 
     @SuppressWarnings("unused")

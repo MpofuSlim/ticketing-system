@@ -56,6 +56,7 @@ public class AuthController {
     private final MfaTokenService mfaTokenService;
     private final MfaPolicy mfaPolicy;
     private final UserRepository userRepository;
+    private final com.innbucks.userservice.service.FederatedLoginService federatedLoginService;
 
     @PostMapping("/register")
     @SecurityRequirements()
@@ -392,23 +393,14 @@ public class AuthController {
     @Operation(summary = "Disable MFA on the caller's account",
             description = """
                     Authenticated. Requires a fresh TOTP/backup code so a stolen access token alone can't
-                    turn MFA off.
-
-                    Staff roles whose policy *requires* 2FA cannot disable it here — an admin must use
-                    `/admin/users/{id}/mfa/reset` instead. `CUSTOMER` and `TEAM_MEMBER` are exempt from
-                    forced enrolment, so they may turn an enrolled factor off themselves. (V38 already
-                    cleared the factors force-enrolled under the earlier policy for accounts holding
-                    only exempt roles; this route remains for a team member still carrying a factor —
-                    e.g. enrolled while holding a staff role that was later removed.) Reaching here
-                    requires passing the MFA challenge at login; one who has lost the authenticator
-                    and backup codes cannot sign in at all and needs the admin reset instead.
+                    turn MFA off. System users cannot disable MFA via this endpoint — their policy requires
+                    it; an admin must use `/admin/users/{id}/mfa/reset` instead.
                     """)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "MFA disabled"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Wrong code"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
-                    description = "Caller holds a role that requires MFA — only an admin can reset. "
-                            + "Not returned for CUSTOMER or TEAM_MEMBER, for whom 2FA is opt-in.")
+                    description = "Caller's role requires MFA — only an admin can reset")
     })
     public ResponseEntity<ApiResult<Void>> disableMfa(HttpServletRequest httpRequest,
                                                       @Valid @RequestBody MfaDisableRequestDTO request) {
@@ -423,10 +415,7 @@ public class AuthController {
                 ? userRepository.findByEmail(subject)
                 : userRepository.findByPhoneNumber(subject))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "User not found"));
-        // A role whose policy REQUIRES MFA can't self-disable. CUSTOMER and
-        // TEAM_MEMBER are opt-in, so they fall through and may turn it off —
-        // which is how a team member force-enrolled under the earlier policy
-        // (when every non-customer role was required) gets back out.
+        // System users can't self-disable; their policy requires MFA.
         if (mfaPolicy.required(caller, com.innbucks.userservice.security.AuthChannel.WEB)) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body(ApiResult.error(HttpStatus.FORBIDDEN,
@@ -939,7 +928,13 @@ public class AuthController {
                     transfer/redeem endpoints, which bind every action to the caller's own phone, instead of
                     the unauthenticated `/loyalty/public/**` surface where any caller can name any number.
 
-                    There is no refresh: when it expires, verify a fresh OTP.
+                    **Do not let this token expire into a second SMS.** Trade it ONCE, immediately, at
+                    `POST /loyalty/session/exchange` for a rotating refresh chain (loyalty-service V43); the
+                    app then renews silently with `POST /loyalty/session/refresh` and never needs another OTP
+                    while it keeps refreshing. Registration is a permanent PHONE-level fact, so the OTP is
+                    one SMS per customer for life — but only if the client opens a chain. A client that
+                    ignores `/exchange` and re-verifies on expiry pays an SMS every 12 hours, which is the
+                    cost this whole flow exists to avoid.
                     """)
             @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -987,6 +982,111 @@ public class AuthController {
                 verifiedPhone,
                 loyaltySessionTokenIssuer.issue(verifiedPhone),
                 loyaltySessionTokenIssuer.ttlSeconds())));
+    }
+
+    @PostMapping("/exchange")
+    @SecurityRequirements()
+    @Operation(summary = "Federated customer login — exchange a middleware assertion for a fleet session",
+            description = """
+                    **For the super app.** Its customers sign in at the InnBucks middleware, not here, and the
+                    middleware's own `accessToken` is not something this fleet can verify. After a successful
+                    middleware login, the middleware signs a **short-lived assertion** (RS256, `sub` = the
+                    customer's phone, `exp` ≤ 5 minutes) and the app posts it here. On success the response is
+                    **exactly what `POST /auth/login` returns** — a CUSTOMER access token plus a refresh token —
+                    so everything downstream (marketplace orders, bookings, loyalty's authenticated surface,
+                    `/auth/refresh`, `/auth/logout`) works unchanged and cannot tell how the customer proved
+                    themselves.
+
+                    **First sign-in creates the customer.** If no account exists for the phone, a tier-1
+                    CUSTOMER is created (no password — the customer never chose one), `phoneVerified` is
+                    stamped, and loyalty is told, exactly as an OTP verify does. A returning customer is
+                    simply signed in.
+
+                    **Only ever a CUSTOMER.** A phone that belongs to a staff account (merchant admin,
+                    operator) is refused. Merchants and admins keep logging in with a password via
+                    `POST /auth/login`.
+
+                    **One use per assertion.** The `jti` is spent on first use; a replay is refused. Every
+                    refusal — bad signature, wrong issuer/audience, expired, over-long lifetime, replay, staff
+                    phone, inactive account — is the **same opaque 401**. The client's remedy is always the
+                    same: sign in at the middleware again and post the fresh assertion.
+
+                    Send `X-Device-Id` as you do on `/auth/login` so the refresh family binds to the device.
+
+                    Disabled cells answer **404**; a cell where the feature is on but the middleware's public
+                    key is not provisioned answers **503**.
+                    """)
+            @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "Assertion accepted; session issued (same shape as /auth/login)",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Customer session", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Login successful",
+                                      "data": {
+                                        "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIrMjYzNzcxMjM0NTY3Iiwicm9sZXMiOlsiQ1VTVE9NRVIiXSwidXNlclV1aWQiOiI2Zjk2MTlmZi04Yjg2LTQwMTEtYjQyZC0wMGMwNGZjOTY0ZmYiLCJwaG9uZU51bWJlciI6IisyNjM3NzEyMzQ1NjciLCJ0aWVyIjoxLCJ2ZXJpZmllZCI6ZmFsc2V9.access-signature",
+                                        "refreshToken": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIrMjYzNzcxMjM0NTY3IiwidHlwZSI6InJlZnJlc2gifQ.refresh-signature",
+                                        "roles": ["CUSTOMER"],
+                                        "defaultServices": [],
+                                        "mfaRequired": false,
+                                        "tier": 1,
+                                        "verified": false
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "Missing assertion",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "assertion is required",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
+                    description = "Assertion rejected — deliberately opaque, whatever the reason "
+                            + "(signature, issuer/audience, expiry, lifetime, replay, staff phone, inactive account)",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "401 UNAUTHORIZED",
+                                      "message": "Assertion rejected",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "Federated login is not enabled on this cell",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "Not found",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503",
+                    description = "Enabled but the middleware's public key is not provisioned, or the replay "
+                            + "guard could not be consulted — retry later",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "503 SERVICE_UNAVAILABLE",
+                                      "message": "Federated login is not provisioned on this cell",
+                                      "data": null
+                                    }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<AuthResponseDTO>> exchange(
+            HttpServletRequest httpRequest,
+            @Valid @RequestBody com.innbucks.userservice.dto.FederatedExchangeRequestDTO request,
+            @RequestHeader(value = "X-Device-Id", required = false) String deviceId) {
+        log.info("Federated exchange hasDeviceId={}", deviceId != null && !deviceId.isBlank());
+        AuthResponseDTO response = federatedLoginService.exchange(
+                request.getAssertion(), deviceId, auditContext(httpRequest));
+        log.info("Federated login successful roles={}", response.getRoles());
+        return ResponseEntity.ok(ApiResult.ok("Login successful", response));
     }
 
     @PostMapping("/forgot-password")

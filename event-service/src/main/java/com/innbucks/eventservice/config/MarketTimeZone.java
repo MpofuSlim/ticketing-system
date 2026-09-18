@@ -4,6 +4,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.Locale;
@@ -92,6 +93,20 @@ public class MarketTimeZone {
     public LocalDateTime toUtc(LocalDateTime marketLocal) {
         return marketLocal == null ? null
                 : marketLocal.atZone(zone).withZoneSameInstant(ZoneOffset.UTC).toLocalDateTime();
+    }
+
+    /**
+     * Render a stored UTC wall-clock at the market offset for the wire.
+     *
+     * <p>Same conversion as {@link #toMarketLocal}, but keeping the offset so
+     * the value is self-describing: {@code 05:00} stored becomes
+     * {@code 07:00+02:00} for a ZW cell. {@link UtcJsonTimeConfig} uses this on
+     * the response path so a client prints the string verbatim and never
+     * converts. Null passes through.
+     */
+    public OffsetDateTime atMarketFromUtc(LocalDateTime utc) {
+        return utc == null ? null
+                : utc.atOffset(ZoneOffset.UTC).atZoneSameInstant(zone).toOffsetDateTime();
     }
 
     /**

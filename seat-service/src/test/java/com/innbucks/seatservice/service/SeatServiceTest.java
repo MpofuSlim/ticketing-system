@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.InOrder;
 
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -55,7 +56,10 @@ class SeatServiceTest {
         when(seatRepo.findByIdForUpdate(seatId)).thenReturn(Optional.of(seat));
         when(catRepo.decrementAvailableSeats(cat.getId())).thenReturn(1);
 
-        LocalDateTime beforeLock = LocalDateTime.now();
+        // SeatService reads LocalDateTime.now(ZoneOffset.UTC); a bare now()
+        // here would sit hours off it on any non-UTC dev machine, and a lock
+        // set "30s ago" would land in the future instead of expiring.
+        LocalDateTime beforeLock = LocalDateTime.now(ZoneOffset.UTC);
         SeatLockResponseDTO resp = service.lockSeat(seatId, "user@example.com");
 
         assertEquals(Seat.SeatStatus.LOCKED, seat.getStatus());
@@ -80,7 +84,7 @@ class SeatServiceTest {
         SeatCategory cat = category(9); // previous owner already cost us 1
         Seat seat = availableSeat(seatId, cat);
         seat.setStatus(Seat.SeatStatus.LOCKED);
-        seat.setLockExpiresAt(LocalDateTime.now().minusSeconds(30));
+        seat.setLockExpiresAt(LocalDateTime.now(ZoneOffset.UTC).minusSeconds(30));
         when(seatRepo.findByIdForUpdate(seatId)).thenReturn(Optional.of(seat));
 
         SeatLockResponseDTO resp = service.lockSeat(seatId, "new-owner@example.com");
@@ -91,7 +95,7 @@ class SeatServiceTest {
         verify(catRepo, never()).decrementAvailableSeats(any());
         // Expiry must be pushed into the future.
         assertNotNull(seat.getLockExpiresAt());
-        assertTrue(seat.getLockExpiresAt().isAfter(LocalDateTime.now()));
+        assertTrue(seat.getLockExpiresAt().isAfter(LocalDateTime.now(ZoneOffset.UTC)));
         // New owner's lock takes over.
         verify(store).put(eq("seat:lock:" + seatId), eq("new-owner@example.com"), eq(300L));
     }
@@ -105,7 +109,7 @@ class SeatServiceTest {
         UUID seatId = UUID.randomUUID();
         Seat seat = availableSeat(seatId, category(9));
         seat.setStatus(Seat.SeatStatus.LOCKED);
-        seat.setLockExpiresAt(LocalDateTime.now().plusSeconds(120));
+        seat.setLockExpiresAt(LocalDateTime.now(ZoneOffset.UTC).plusSeconds(120));
         when(seatRepo.findByIdForUpdate(seatId)).thenReturn(Optional.of(seat));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
@@ -197,7 +201,7 @@ class SeatServiceTest {
         UUID seatId = UUID.randomUUID();
         Seat seat = availableSeat(seatId, category(9));
         seat.setStatus(Seat.SeatStatus.LOCKED);
-        seat.setLockExpiresAt(LocalDateTime.now().plusSeconds(60));
+        seat.setLockExpiresAt(LocalDateTime.now(ZoneOffset.UTC).plusSeconds(60));
         when(seatRepo.findById(seatId)).thenReturn(Optional.of(seat));
         when(store.get("seat:lock:" + seatId)).thenReturn("user@example.com");
 
@@ -252,7 +256,7 @@ class SeatServiceTest {
         SeatCategory cat = category(9);
         Seat seat = availableSeat(seatId, cat);
         seat.setStatus(Seat.SeatStatus.LOCKED);
-        seat.setLockExpiresAt(LocalDateTime.now().plusSeconds(60));
+        seat.setLockExpiresAt(LocalDateTime.now(ZoneOffset.UTC).plusSeconds(60));
         when(seatRepo.findByIdForUpdate(seatId)).thenReturn(Optional.of(seat));
         when(store.get(any())).thenReturn("me@example.com");
         when(catRepo.incrementAvailableSeats(cat.getId())).thenReturn(1);
@@ -277,7 +281,7 @@ class SeatServiceTest {
         SeatCategory cat = category(9);
         Seat seat = availableSeat(seatId, cat);
         seat.setStatus(Seat.SeatStatus.LOCKED);
-        seat.setLockExpiresAt(LocalDateTime.now().minusSeconds(10));
+        seat.setLockExpiresAt(LocalDateTime.now(ZoneOffset.UTC).minusSeconds(10));
         when(seatRepo.findByIdForUpdate(seatId)).thenReturn(Optional.of(seat));
         when(catRepo.incrementAvailableSeats(cat.getId())).thenReturn(1);
 
@@ -322,7 +326,7 @@ class SeatServiceTest {
         Seat seat = availableSeat(seatId, category(9));
         seat.setStatus(Seat.SeatStatus.LOCKED);
         // Another user reclaimed via lockSeat between candidate-find and now.
-        seat.setLockExpiresAt(LocalDateTime.now().plusSeconds(290));
+        seat.setLockExpiresAt(LocalDateTime.now(ZoneOffset.UTC).plusSeconds(290));
         when(seatRepo.findByIdForUpdate(seatId)).thenReturn(Optional.of(seat));
 
         boolean released = service.releaseStaleLock(seatId);

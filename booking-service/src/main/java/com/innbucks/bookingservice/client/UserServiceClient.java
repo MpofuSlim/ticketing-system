@@ -25,9 +25,11 @@ public interface UserServiceClient {
     ApiResult<CustomerTierResponseDTO> getCustomerTier(@RequestParam("phoneNumber") String phoneNumber);
 
     // S2S scan-authorization check: may this team member scan tickets for this
-    // event? user-service encodes the assignment product rule (no assignments
-    // = organizer-wide = allowed) in the `allowed` flag. Internal endpoint,
-    // gated by X-Internal-Token and blocked at the gateway edge.
+    // event? user-service encodes the assignment rule in the `allowed` flag,
+    // and that rule is DENY-BY-DEFAULT: true only when an assignment row exists
+    // for this exact (member, event) pair, so a member with no assignments
+    // scans nothing. Internal endpoint, gated by X-Internal-Token and blocked
+    // at the gateway edge.
     @GetMapping("/users/internal/team-members/{teamMemberUuid}/can-scan/{eventId}")
     ApiResult<ScanAccessDTO> canScanEvent(
             @PathVariable("teamMemberUuid") UUID teamMemberUuid,

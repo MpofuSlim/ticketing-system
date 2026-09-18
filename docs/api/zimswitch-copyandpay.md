@@ -112,6 +112,9 @@ handle.
 ## 2. Create the payment form (browser)
 
 ```html
+<!-- ZimSwitch's own doc sample. `VISA MASTER AMEX` is THEIRS, not ours — do
+     not copy it: our channel is private-label only. Render the `checkoutBrands`
+     the payment response returns (currently PRIVATE_LABEL). See below. -->
 <script src="{{baseUrl}}/v1/paymentWidgets.js?checkoutId={checkoutId}"
         integrity="{integrity}"
         crossorigin="anonymous"></script>
@@ -124,22 +127,44 @@ handle.
   log, or server-side-post card fields, ever.
 - Multiple `<form>` elements with different `data-brands` render separate
   branded forms.
-- **Verified 2026-08-12:** the widget renders against the test gateway with
-  `data-brands="VISA MASTER AMEX"`, so standard card brands are a working
-  starting value for UAT.
-- **STILL UNVERIFIED — the `data-brands` value for TICKETIZE's `Private label`
-  payment mode.** The full supported-brands table HAS now been read (Card
-  Account / Virtual Account / Bank Account brands, each with its sync-vs-async
-  workflow) and contains **no ZimSwitch domestic-scheme entry**. The nearest
-  structural analogue is `PMICHAELS_PLCC` — a US store card, PLCC = *private
-  label credit card* — which confirms the platform models private-label
-  schemes as their own named brand codes, but that specific code is obviously
-  not ours. Conclusion: if ZimSwitch provisioned a private-label brand for
-  TICKETIZE it is a **custom code the generic catalog does not list**, and
-  only ZimSwitch (or a playground run against OUR entity) can supply it.
-  Carried as `zimswitch.brands` / `ZIMSWITCH_BRANDS` so landing the real value
-  is a config change with no code change and no FE deploy — the FE reads it
-  from the payment response.
+- **2026-08-12, since SUPERSEDED — do not act on this line alone.** The widget
+  was observed rendering against the test gateway with
+  `data-brands="VISA MASTER AMEX"`. That only ever proved the widget *draws a
+  form*; it was never a payment completing. The value was set on the staging
+  test entity on **2026-09-16 and does not work**. Standard card brands are
+  therefore NOT a working starting value for UAT on our channel — see the next
+  bullet. The line is kept because it is the record of what was observed, not
+  because it is still advice.
+- **ANSWERED 2026-09-11 — the brand is `PRIVATE_LABEL`, and Visa/Mastercard
+  are NOT supported on this channel.** ZimSwitch, in writing: *"For now it's
+  supporting zimswitch enabled cards only, payment brand being
+  PRIVATE_LABEL."* `ZIMSWITCH_BRANDS` and the `application.yaml` default were
+  moved to `PRIVATE_LABEL` accordingly — `VISA MASTER` is no longer merely a
+  placeholder, it is **wrong for the live channel** and would render a card
+  form the gateway declines.
+
+  The earlier investigation still explains why this could not be looked up:
+  the full supported-brands table (Card Account / Virtual Account / Bank
+  Account, each with its sync-vs-async workflow) contains **no ZimSwitch
+  domestic-scheme entry**. The nearest structural analogue is
+  `PMICHAELS_PLCC` — a US store card, PLCC = *private label credit card* —
+  which confirms the platform models private-label schemes as their own named
+  brand codes. `PRIVATE_LABEL` is exactly such a per-entity custom code, which
+  is why it never appeared in the generic catalog.
+
+  > **Residual uncertainty, deliberately recorded.** ZimSwitch named the
+  > *payment brand*; nobody has yet rendered the COPYandPAY widget with
+  > `data-brands="PRIVATE_LABEL"` against our entity. If the widget renders
+  > **empty**, that is this token being spelled differently on the widget
+  > side — not a bug in our code. Re-confirm the literal with ZimSwitch and
+  > correct `ZIMSWITCH_BRANDS`; it stays a config change with no code change
+  > and no FE deploy, because the FE reads it from the payment response.
+  >
+  > **Do NOT fall back to `VISA MASTER`.** It does not work on this channel
+  > (staging test entity, 2026-09-16). The only correction an empty widget
+  > justifies is a different spelling of the private-label token, and that
+  > spelling comes from ZimSwitch — not from the generic brands catalog, which
+  > has no ZimSwitch domestic entry at all.
 - Brands differ in **sync vs async workflow**: async brands (3-D Secure and
   friends) bounce the shopper through an extra redirect before returning to
   `shopperResultUrl`. This needs no special handling here — the return path
@@ -330,7 +355,7 @@ the open attempt to lapse first.
 | `zimswitch.base-url` | `ZIMSWITCH_BASE_URL` | default `https://eu-test.oppwa.com` (UAT) |
 | `zimswitch.entity-id` | `ZIMSWITCH_ENTITY_ID` | channel id; blank = rail disabled |
 | `zimswitch.access-token` | `ZIMSWITCH_ACCESS_TOKEN` | Bearer token; SECRET; blank = rail disabled |
-| `zimswitch.brands` | `ZIMSWITCH_BRANDS` | `data-brands` value; `VISA MASTER` works on the test gateway, the private-label code is still pending (see §2) |
+| `zimswitch.brands` | `ZIMSWITCH_BRANDS` | `data-brands` value; **`PRIVATE_LABEL`** on EVERY host, staging included (ZimSwitch, 2026-09-11 — Visa/Mastercard unsupported). There is no per-host override: `VISA MASTER` was set on the staging test entity on 2026-09-16 and does not work (see §2) |
 | `zimswitch.test-mode` | `ZIMSWITCH_TEST_MODE` | `EXTERNAL` in UAT; blank in prod (param omitted) |
 | `zimswitch.shopper-result-url` | `ZIMSWITCH_SHOPPER_RESULT_URL` | FE result page; echoed to the FE as the widget form action |
 | `zimswitch.request-integrity` | `ZIMSWITCH_REQUEST_INTEGRITY` | default `true` — SRI digest for the widget script |
@@ -385,14 +410,20 @@ isConfigured() gate, mirroring the `BANK_API_*` credential pattern.
 
 Tracked here so the answers land in-tree with the code they affect:
 
-1. **Private-label `data-brands` code** for TICKETIZE's entity — see §2. The
-   generic supported-brands catalog does not list a ZimSwitch domestic scheme,
-   so this must come from ZimSwitch or from a playground run against our own
-   entity + Bearer.
+1. ~~**Private-label `data-brands` code** for TICKETIZE's entity.~~
+   **ANSWERED 2026-09-11: `PRIVATE_LABEL`** (see §2). Still worth a single
+   widget render against our entity to confirm the token spells the same way
+   on the widget as it does on the payment brand.
 2. **Test cards** (and any 3-D Secure test credentials) for a `testMode=EXTERNAL`
    entity, to drive approved/declined UAT cases.
 3. **Webhooks** — available on our entity? See "Not yet modelled" above.
 
-Until (1) is answered, `ZIMSWITCH_BRANDS` stays at its `VISA MASTER` default,
-which is sufficient for UAT on the test gateway but is NOT assumed correct for
-the live private-label channel.
+(1) is answered: `ZIMSWITCH_BRANDS` is `PRIVATE_LABEL` on **every** host,
+staging included. `VISA MASTER` is not a fallback and there is no per-host
+override — it was set on the staging test entity on 2026-09-16 and does not
+work, which is why the earlier override advice is removed here rather than
+merely qualified.
+
+An empty widget is therefore a brand-token spelling question for ZimSwitch, not
+a reason to reach for Visa/Mastercard — and it is a one-line config correction,
+not a code defect.
