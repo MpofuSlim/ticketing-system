@@ -1467,4 +1467,104 @@ class AuthServiceTest {
         // Password change must wipe any standing trusted-device 2FA bypass.
         verify(trust).clearTrustForUser(7L);
     }
+
+    // ---- TEAM_MEMBER 2FA exemption + the refresh guard it makes necessary ----
+
+    private static User teamMember(boolean mfaEnabled) {
+        return User.builder()
+                .id(77L)
+                .email("gate@innbucks.co.zw")
+                .password("hashed")
+                .roles(User.roleNames(User.Role.TEAM_MEMBER))
+                .active(true)
+                .mfaEnabled(mfaEnabled)
+                .build();
+    }
+
+    /**
+     * A real {@link com.innbucks.userservice.security.MfaPolicy} wired to a
+     * PermissionResolver that answers "no permissions", which is what makes a
+     * single-role TEAM_MEMBER genuinely gate-operator-exempt under the policy's
+     * own rules (set equality AND zero resolved permissions). Using the real
+     * policy rather than a mock is deliberate: these tests exist to prove the
+     * refresh gate consults it correctly, so stubbing it would test nothing.
+     */
+    private static com.innbucks.userservice.security.MfaPolicy realPolicy() {
+        com.innbucks.userservice.security.PermissionResolver resolver =
+                mock(com.innbucks.userservice.security.PermissionResolver.class);
+        when(resolver.resolve(any())).thenReturn(java.util.Set.of());
+        return new com.innbucks.userservice.security.MfaPolicy(resolver);
+    }
+
+    private static AuthService refreshOnlyService(RefreshTokenService refreshTokenService, JwtUtil jwt) {
+        AuthService svc = withLockoutConfig(new AuthService(mock(UserRepository.class),
+                mock(TenantProfileRepository.class), mock(CustomerProfileRepository.class),
+                mock(PasswordEncoder.class), jwt, mock(TokenRevocationService.class),
+                refreshTokenService, mock(RefreshTokenRepository.class), mock(AuditService.class)));
+        wireMfa(svc, realPolicy(),
+                mock(com.innbucks.userservice.security.MfaTokenService.class),
+                mock(MfaService.class), mock(DeviceTrustService.class));
+        return svc;
+    }
+
+    /**
+     * The hole the exemption opens, and the guard that closes it. A TEAM_MEMBER
+     * holds a session that never passed a second factor (legitimately). An admin
+     * then widens their roles: {@code UserAdminService.setRoles} bumps
+     * tokenVersion so the ACCESS token dies, but it does not revoke the refresh
+     * row — and {@code refresh} re-reads the live user, so without this guard it
+     * would mint a fresh token carrying the new privileged role, indefinitely,
+     * having never satisfied MFA.
+     */
+    @Test
+    void refresh_refusedWhenWidenedRolesMandateMfaButNoneIsEnrolled() {
+        RefreshTokenService refreshTokenService = mock(RefreshTokenService.class);
+        User escalated = User.builder()
+                .id(77L)
+                .email("gate@innbucks.co.zw")
+                .roles(User.roleNames(User.Role.TEAM_MEMBER, User.Role.EVENT_ORGANIZER))
+                .active(true)
+                .mfaEnabled(false)
+                .build();
+        when(refreshTokenService.rotate("rt", null))
+                .thenReturn(new RefreshTokenService.Rotation(escalated, "rt2"));
+
+        AuthService svc = refreshOnlyService(refreshTokenService, mock(JwtUtil.class));
+
+        assertThrows(AuthService.MfaEnrollmentRequiredException.class,
+                () -> svc.refresh("rt", null, AuditContext.none()));
+    }
+
+    /** The same guard must not fire for the exempt role it was built around. */
+    @Test
+    void refresh_stillWorksForATeamMemberWhoseRolesAreUnchanged() {
+        RefreshTokenService refreshTokenService = mock(RefreshTokenService.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(refreshTokenService.rotate("rt", null))
+                .thenReturn(new RefreshTokenService.Rotation(teamMember(false), "rt2"));
+        when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean())).thenReturn("tok");
+
+        AuthResponseDTO resp = refreshOnlyService(refreshTokenService, jwt)
+                .refresh("rt", null, AuditContext.none());
+
+        assertEquals("tok", resp.getToken());
+        assertEquals("rt2", resp.getRefreshToken());
+    }
+
+    /** Nor for a mandatory role that HAS enrolled — the ordinary staff refresh. */
+    @Test
+    void refresh_stillWorksForAnEnrolledMandatoryRole() {
+        RefreshTokenService refreshTokenService = mock(RefreshTokenService.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(refreshTokenService.rotate("rt", null))
+                .thenReturn(new RefreshTokenService.Rotation(mfaSystemUser(), "rt2"));
+        when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean())).thenReturn("tok");
+
+        AuthResponseDTO resp = refreshOnlyService(refreshTokenService, jwt)
+                .refresh("rt", null, AuditContext.none());
+
+        assertEquals("tok", resp.getToken());
+    }
 }

@@ -238,6 +238,43 @@ Other load-bearing details:
   tamper-evident audit chain, because "who could do what, when" is no longer
   answerable from the code once roles are data.
 
+## The gate-operator 2FA exemption, and the refresh hole it left open
+
+`MfaPolicy.gateOperatorExempt` — gate staff scanning tickets on a shared
+handset are never challenged for a second factor. The policy itself is
+documented at length in the class javadoc; the two things worth repeating
+here are the shape of the key and the hole it opened one level up:
+
+- **The exemption is keyed on exact set equality `{TEAM_MEMBER}` AND on the
+  account resolving to ZERO permissions** — not on "holds TEAM_MEMBER". Both
+  halves are load-bearing: containment would invert `isSystemUser` into a
+  fleet-wide opt-out (reachable via a service-request approval or the
+  bootstrap-admin role merge), and the permission check is what stops a
+  runtime `PUT /admin/roles/TEAM_MEMBER/permissions` grant from silently
+  minting a privileged-and-exempt account. It fails CLOSED: give gate staff
+  real authority and they stop being exempt, automatically.
+- **It ignores `mfaEnabled` on purpose.** TEAM_MEMBER used to be a system
+  user, so existing gate staff carry a force-enrolled secret; honouring the
+  flag would have applied the carve-out only to accounts created after it
+  shipped. The secret is retained, not cleared, so it starts being honoured
+  again the moment the account holds any other role. **This is why no
+  data migration was needed** — don't add one.
+- **The refresh guard exists because the exemption is evaluated at LOGIN
+  only.** `UserAdminService.setRoles` bumps `tokenVersion`, which kills the
+  access token but does NOT revoke the refresh row — and `/auth/refresh`
+  re-reads the LIVE user, so a gate operator widened to a privileged role
+  could otherwise mint privileged access tokens for the life of the refresh
+  chain, having never passed a second factor. `AuthService.refresh` refuses
+  that shape: **403 `mfa_enrollment_required`**, audit
+  `AUTH_REFRESH_MFA_REQUIRED`, family NOT revoked (the token is genuine, not
+  stolen — the FE routes to a full login, which lands on forced enrolment).
+  The same guard closes a pre-existing dodge of `MfaService.adminReset`'s
+  documented "must re-enrol on next login": a live session could previously
+  ride refresh straight past it.
+  (The class javadoc's aside that "role mutation does not bump
+  `tokenVersion`" is inaccurate — it does, at `UserAdminService:362`. The
+  hole it describes is real regardless, because the refresh ROW survives.)
+
 ## Bookings carry WHO is coming (booking-service V22)
 
 `bookings.customer_name` is the purchaser's full name; `booking_items.attendee_*`

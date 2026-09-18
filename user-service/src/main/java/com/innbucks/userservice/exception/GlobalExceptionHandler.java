@@ -177,6 +177,23 @@ public class GlobalExceptionHandler {
                 .body(ApiResult.error(HttpStatus.BAD_REQUEST, ex.getMessage()));
     }
 
+    // Refresh refused because the account's current roles mandate 2FA but none
+    // is enrolled — the role set was widened (or the secret admin-reset) while
+    // the session was live. 403 not 400: the refresh token is genuine, the
+    // account state simply isn't permitted to hold a session. The
+    // `mfa_enrollment_required` code routes the FE to a full login, which lands
+    // the user on forced enrolment. Message is a typed constant — safe to
+    // passthrough.
+    @ExceptionHandler(AuthService.MfaEnrollmentRequiredException.class)
+    public ResponseEntity<ApiResult<Map<String, String>>> handleMfaEnrollmentRequired(
+            AuthService.MfaEnrollmentRequiredException ex) {
+        log.info("Refresh rejected — MFA enrolment required for the account's current roles");
+        Map<String, String> data = new LinkedHashMap<>();
+        data.put("errorCode", "mfa_enrollment_required");
+        return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                .body(ApiResult.of(HttpStatus.FORBIDDEN, ex.getMessage(), data));
+    }
+
     // Change-password validation failures. Without this handler every distinct
     // reason (wrong current password, same-as-old, expired token) collapsed into
     // the generic catch-all below ("We couldn't process your request") and the

@@ -48,6 +48,15 @@ public enum AuditEventType {
      * the family was bound to at login — family revoked.
      */
     AUTH_REFRESH_DEVICE_MISMATCH,
+    /**
+     * /auth/refresh refused because the account's CURRENT role set mandates
+     * 2FA but nothing is enrolled — the roles were widened (or the secret was
+     * admin-reset) while the session was live. Not theft: the refresh token is
+     * genuine, so the family is NOT revoked; the user simply has to log in
+     * again and enrol. Worth a row because it is the audit trail of an account
+     * that gained privilege without ever passing a second factor.
+     */
+    AUTH_REFRESH_MFA_REQUIRED,
     /** /auth/logout — explicit user-initiated session termination. */
     AUTH_LOGOUT,
     /** /auth/change-password completed. */

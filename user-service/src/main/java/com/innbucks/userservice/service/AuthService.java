@@ -225,6 +225,40 @@ public class AuthService implements ApplicationEventPublisherAware {
     }
 
     /**
+     * Raised by {@link #refresh} when the account's CURRENT role set mandates a
+     * second factor but the account has none enrolled. Only reachable when the
+     * two drift apart while a session is live, which happens two ways:
+     *
+     * <ul>
+     *   <li>An account the policy exempts — a CUSTOMER, or a gate operator per
+     *       {@code MfaPolicy.gateOperatorExempt} — is granted a role that
+     *       mandates MFA. {@code UserAdminService.setRoles} bumps
+     *       {@code tokenVersion}, so the old ACCESS token dies — but it does
+     *       not revoke the refresh-token row, and {@link #refresh} re-reads the
+     *       live user and mints a fresh access token carrying the new
+     *       privileged roles. Without this guard that token would never have
+     *       passed an MFA gate, indefinitely, because each refresh rotates a
+     *       new one.</li>
+     *   <li>A SUPER_ADMIN calls {@code /admin/users/{id}/mfa/reset}, which
+     *       wipes the secret so the user "must re-enrol on next login" — but
+     *       leaves their refresh token live, so refreshing instead of logging
+     *       in dodged the re-enrolment entirely. This predates the TEAM_MEMBER
+     *       exemption; the same guard closes it.</li>
+     * </ul>
+     *
+     * <p>403 rather than 400 for the same reason as
+     * {@link AccountPendingApprovalException}: the token is genuine, the
+     * account state is simply not permitted to hold a session. The
+     * {@code mfa_enrollment_required} code tells the FE to send the user
+     * through a full login, which lands them on forced enrolment.
+     */
+    public static class MfaEnrollmentRequiredException extends RuntimeException {
+        public MfaEnrollmentRequiredException() {
+            super("Your role now requires two-factor authentication. Please sign in again to set it up.");
+        }
+    }
+
+    /**
      * Thrown by {@link #changePassword(String, ChangePasswordRequestDTO,
      * AuditContext)} when the request can't be processed. The {@link #message}
      * is user-facing and safe to forward verbatim — every constructor argument
@@ -906,7 +940,30 @@ public class AuthService implements ApplicationEventPublisherAware {
         String subject = safeRefreshSubject(refreshToken);
         try {
             RefreshTokenService.Rotation rotation = refreshTokenService.rotate(refreshToken, deviceId);
-            AuthResponseDTO response = buildResponse(rotation.user(), rotation.refreshToken());
+            // Re-apply the MFA policy to the LIVE role set before minting. A
+            // refresh is the one mint site that can hand out authority the
+            // session never held: rotate() re-reads the user, so a role granted
+            // since login rides the new access token. Refuse when the current
+            // roles mandate a second factor the account hasn't enrolled — the
+            // user must do a full login, which routes them to enrolment.
+            // mfaPolicy is null only in plain unit tests (no Spring), matching
+            // the login gate's convention.
+            User rotated = rotation.user();
+            if (mfaPolicy != null
+                    && mfaPolicy.required(rotated, com.innbucks.userservice.security.AuthChannel.WEB)
+                    && (!rotated.isMfaEnabled() || rotated.getMfaSecret() == null)) {
+                log.warn("Refresh refused — role set mandates MFA but none enrolled userId={} roles={}",
+                        rotated.getId(), rotated.getRoles());
+                auditService.recordFailure(
+                        AuditEventType.AUTH_REFRESH_MFA_REQUIRED,
+                        String.valueOf(rotated.getId()), AuditService.ACTOR_TYPE_USER,
+                        String.valueOf(rotated.getId()), AuditService.TARGET_TYPE_USER,
+                        "mfa_enrollment_required",
+                        java.util.Map.of("roles", String.valueOf(rotated.getRoles())),
+                        auditContext);
+                throw new MfaEnrollmentRequiredException();
+            }
+            AuthResponseDTO response = buildResponse(rotated, rotation.refreshToken());
             log.info("Token refreshed subject={} roles={} tier={} verified={}",
                     rotation.user().getEmail() != null ? rotation.user().getEmail() : rotation.user().getPhoneNumber(),
                     response.getRoles(), response.getTier(), response.getVerified());
