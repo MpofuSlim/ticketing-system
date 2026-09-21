@@ -8,6 +8,14 @@ categories with it.
 
 Merged in **PR #557** (`event-service`). Anchored to the merged code.
 
+> [!IMPORTANT]
+> **Update, PR #606 (merged 2026-09-21): use `POST`, not `PUT`, for the replace
+> call.** The endpoint now accepts both verbs on the same path with identical
+> behaviour, but **`PUT` is blocked by Cloudflare before it reaches our servers**,
+> so from a browser it fails every time with an unreadable network error. Nothing
+> else changed — same path, same `eventBanner` part, same response, same auth.
+> Full explanation in [§8](#8-why-post-and-not-put).
+
 ---
 
 ## 1. Base URL, auth, headers
@@ -15,7 +23,7 @@ Merged in **PR #557** (`event-service`). Anchored to the merged code.
 | | |
 |---|---|
 | **Base URL** | the API gateway, e.g. `https://<host>/foundry` |
-| **Auth** | `Authorization: Bearer <JWT>` — required on **PUT** and **DELETE** |
+| **Auth** | `Authorization: Bearer <JWT>` — required on **POST**, **PUT** and **DELETE** |
 | **Roles** | `EVENT_ORGANIZER` (own events only) or `SUPER_ADMIN` (any event) |
 | **`X-Tenant-Id`** | **not used** by event-service. Do not send it. |
 | **Gateway route** | none added — the existing `event-service-route` (`Path=/events/**`) already covers both methods. |
@@ -30,7 +38,7 @@ the listing page.
 ### 2.1 Replace the banner
 
 ```
-PUT /events/{id}/banner
+POST /events/{id}/banner
 Content-Type: multipart/form-data
 Authorization: Bearer <JWT>
 ```
@@ -41,6 +49,10 @@ Authorization: Bearer <JWT>
 
 > The part name is **`eventBanner`** — the same name `POST /events` uses. A
 > different name is rejected by Spring before the handler runs.
+
+> **`PUT` maps to the same handler** and is identical in every respect the server
+> can see — it is kept so nothing existing breaks. But a browser's `PUT` never
+> arrives: Cloudflare refuses it at the edge. **Send `POST`.** See [§8](#8-why-post-and-not-put).
 
 **200 response** — the full refreshed event:
 
@@ -165,7 +177,7 @@ const form = new FormData();
 form.append('eventBanner', file);            // the part name matters
 
 const res = await fetch(`${BASE}/events/${eventId}/banner`, {
-  method: 'PUT',
+  method: 'POST',                                 // NOT 'PUT' — see §8
   headers: { Authorization: `Bearer ${token}` },  // do NOT set Content-Type —
   body: form,                                     // the browser adds the boundary
 });
@@ -196,7 +208,7 @@ setBannerSrc(null);            // body.data.bannerUrl is null — render the pla
 
 ```sh
 # replace
-curl -X PUT "$BASE/events/$EVENT_ID/banner" \
+curl -X POST "$BASE/events/$EVENT_ID/banner" \
   -H "Authorization: Bearer $TOKEN" \
   -F "eventBanner=@poster.png;type=image/png"
 
@@ -209,8 +221,10 @@ curl -X DELETE "$BASE/events/$EVENT_ID/banner" \
 
 ## 6. Gotchas checklist
 
+- [ ] **Use `POST`, not `PUT`**, for the replace. A `PUT` is blocked at the edge
+      and surfaces as a bare "network error" with nothing in our logs (§8).
 - [ ] **Part name is `eventBanner`** — not `file`, not `banner`, not `image`.
-- [ ] **Don't set `Content-Type`** on the PUT; let the browser add the boundary.
+- [ ] **Don't set `Content-Type`** on the upload; let the browser add the boundary.
 - [ ] **`bannerUrl` never changes** on a replace. Append `?v=<timestamp>` (or the
       event's `updatedAt`) yourself, or the browser serves the **old image for
       up to an hour** from the `max-age=3600` cache and the organizer will
@@ -234,10 +248,61 @@ curl -X DELETE "$BASE/events/$EVENT_ID/banner" \
 
 ## 7. What did *not* change
 
-- `POST /events` — unchanged, banner still optional at creation.
-- `PUT /events/{id}` — still JSON-only. It does **not** accept a banner; use the
-  new `PUT /events/{id}/banner` for that. The two are independent calls, so an
+- `POST /events` — unchanged, banner still optional at creation. Event creation
+  **with** a banner was never affected by the Cloudflare issue in §8: it is
+  already a `POST`.
+- `PUT /events/{id}` — still JSON-only. It does **not** accept a banner; use
+  `POST /events/{id}/banner` for that. The two are independent calls, so an
   "edit event" screen that changes both text and image makes two requests.
 - `GET /events/{id}/banner` — unchanged shape, headers and public access.
+- `DELETE /events/{id}/banner` — unchanged, and unaffected by §8.
 - No new gateway route, no schema migration, no change to `EventResponseDTO`'s
-  fields.
+  fields. Adding `POST` changed no request or response shape at all — only which
+  verb you send.
+
+---
+
+## 8. Why `POST` and not `PUT`
+
+Cloudflare's WAF on the `innbucks.co.zw` zone blocks `PUT` carrying a
+`multipart/form-data` body **before it reaches our servers**. The failure is
+silent in a way that costs real debugging time, so the shape is worth knowing:
+
+1. The CORS preflight is an `OPTIONS` with **no body**, so it passes cleanly —
+   `200`, every `Access-Control-*` header correct.
+2. The browser therefore sends the real `PUT`.
+3. Cloudflare answers `403` with an HTML block page.
+4. That page carries no `Access-Control-Allow-Origin`, so the browser can't read
+   the `403` either, and `fetch` rejects.
+5. Your error handler shows a generic *"Network error. Please check your internet
+   connection."*
+
+Nothing reaches nginx, the gateway or event-service, so **there is no server-side
+log of the attempt at all** — which is why this looked like a backend bug for a
+while.
+
+Measured on the ZW cell 2026-09-21, identical 300 KB body, varying only the verb
+or content type:
+
+| request | result |
+|---|---|
+| `OPTIONS` preflight | `200`, all CORS headers correct |
+| **`PUT` multipart** | **`403` HTML from Cloudflare** (4/4) |
+| `POST` multipart | reached the server (3/3) |
+| `PUT` with a JSON body | reached the server |
+| `PUT` with no body | reached the server |
+| `DELETE` | reached the server |
+
+So the trigger is `PUT` **combined with** a multipart body — not the verb alone
+(`DELETE` is fine), not multipart alone (`POST` is fine), and not the file size
+(the edge allows 50 MB).
+
+**`PUT` is kept server-side** so no existing client breaks and so the endpoint is
+correct again if the WAF rule is lifted. But the console should use **`POST`**,
+today and after any WAF change — it works in both worlds.
+
+> **General rule for any future upload:** if an endpoint takes a file, reach it
+> with `POST`. And if an upload ever fails with a bare "network error" while
+> other calls to the same API succeed, suspect the edge before suspecting us —
+> tell the backend team and they can check in minutes whether the request ever
+> arrived.
