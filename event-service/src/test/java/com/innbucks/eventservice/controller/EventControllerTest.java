@@ -499,6 +499,22 @@ class EventControllerTest {
                 .andExpect(status().isUnauthorized());
     }
 
+    /**
+     * The POST alias is a banner-WRITE verb, so it must be as closed as PUT.
+     * Asserted as an exact 401 rather than {@code is4xxClientError()}: the
+     * point is that Spring Security refuses it at the URL level, and a loose
+     * assertion would stay green if it ever fell through to a 403 or a 405.
+     */
+    @Test
+    void replaceBanner_viaPOST_anonymously_isUnauthorized() throws Exception {
+        Event saved = saveBannerEvent(ORGANIZER_1, png((byte) 0x01), MediaType.IMAGE_PNG_VALUE);
+
+        mockMvc.perform(multipart("/events/" + saved.getEventId() + "/banner")
+                        .file(new MockMultipartFile("eventBanner", "x.png",
+                                MediaType.IMAGE_PNG_VALUE, png((byte) 0x07))))
+                .andExpect(status().isUnauthorized());
+    }
+
     @Test
     void deleteBanner_clearsTheImage_andNullsBannerUrl() throws Exception {
         Event saved = saveBannerEvent(ORGANIZER_1, png((byte) 0x01), MediaType.IMAGE_PNG_VALUE);
