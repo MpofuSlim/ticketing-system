@@ -1088,7 +1088,24 @@ public class EventController {
                 .body(ApiResult.created("Event created successfully", created));
     }
 
-    @PutMapping(value = "/{id}/banner", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    // POST is an ALIAS for PUT here, and it is not REST pedantry — it is the
+    // only verb that reaches us. Cloudflare's WAF on the innbucks.co.zw zone
+    // blocks PUT-with-a-multipart-body outright: the browser's preflight
+    // succeeds (OPTIONS carries no body), so the FE sends the upload and
+    // Cloudflare answers 403 with an HTML block page BEFORE origin. That page
+    // carries no Access-Control-Allow-Origin, so the browser cannot read the
+    // 403 either and surfaces a bare "Network error" — nothing reaches nginx,
+    // the gateway or this service, and no log anywhere names the cause.
+    // Measured on the ZW cell 2026-09-21 with an identical 300 KB body: PUT
+    // multipart 403 (x4, Cloudflare HTML); POST multipart, PUT with a JSON
+    // body, PUT with no body and DELETE all reached us (401 JSON). So the
+    // trigger is PUT+multipart specifically, and POST is the way through.
+    // PUT is KEPT so no existing client breaks and so the endpoint is correct
+    // again the moment the WAF exception lands.
+    @RequestMapping(
+            method = {RequestMethod.PUT, RequestMethod.POST},
+            value = "/{id}/banner",
+            consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','SUPER_ADMIN')")
     @Operation(
             summary = "Replace the event banner image",
@@ -1100,6 +1117,11 @@ public class EventController {
                     must be **JPG, PNG or WEBP** and **under 10 MB**; the payload's real
                     format is verified by its magic bytes, so renaming a file or faking the
                     `Content-Type` is rejected.
+
+                    **`POST` and `PUT` are accepted on this path and behave identically.**
+                    Prefer **`POST`** from a browser: the Cloudflare WAF in front of this
+                    deployment blocks `PUT` carrying a multipart body before it reaches the
+                    server, which a client sees only as an unexplained network failure.
 
                     `PUT /events/{id}` (JSON) does NOT carry the image — this is the only
                     way to change a banner after creation. Use `DELETE /events/{id}/banner`

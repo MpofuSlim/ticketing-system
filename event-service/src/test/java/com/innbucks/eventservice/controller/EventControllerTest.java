@@ -294,7 +294,7 @@ class EventControllerTest {
                 .andExpect(jsonPath("$.message", containsString("valid image file")));
     }
 
-    // -- PUT/DELETE /events/{id}/banner ---------------------------------------
+    // -- PUT/POST/DELETE /events/{id}/banner -----------------------------------
     // The banner used to be write-once (applyBanner ran only on create), so an
     // organizer who uploaded the wrong poster had to delete the event — taking
     // its bookings and seat categories with it. These pin the replace path,
@@ -359,6 +359,51 @@ class EventControllerTest {
                         .with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER")))
                 .andExpect(status().isOk())
                 .andExpect(content().bytes(replacement));
+    }
+
+    /**
+     * POST is an alias for PUT on this path, and the alias is load-bearing:
+     * Cloudflare's WAF on the innbucks.co.zw zone blocks PUT-with-a-multipart
+     * body before it reaches origin (measured 2026-09-21 — identical body,
+     * POST reached us and PUT was answered 403 by Cloudflare), so POST is the
+     * only verb a browser can actually get through with an upload. If this
+     * fails, the console's banner replace is broken on the ZW cell with no
+     * server-side log anywhere naming the cause.
+     */
+    @Test
+    void replaceBanner_acceptsPOST_asWellAsPUT_soTheEdgeCannotBlockTheUpload() throws Exception {
+        byte[] original = png((byte) 0x01);
+        Event saved = saveBannerEvent(ORGANIZER_1, original, MediaType.IMAGE_PNG_VALUE);
+        byte[] replacement = png((byte) 0x04);
+
+        mockMvc.perform(multipart("/events/" + saved.getEventId() + "/banner")
+                        .file(new MockMultipartFile("eventBanner", "new.png",
+                                MediaType.IMAGE_PNG_VALUE, replacement))
+                        .with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.bannerUrl",
+                        containsString("/events/" + saved.getEventId() + "/banner")));
+
+        // Same bytes land as via PUT — one handler, so the two verbs cannot drift.
+        mockMvc.perform(get("/events/" + saved.getEventId() + "/banner")
+                        .with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER")))
+                .andExpect(status().isOk())
+                .andExpect(content().bytes(replacement));
+    }
+
+    /**
+     * The POST alias must not widen authorization — it reuses the same handler,
+     * so the ownership rule has to hold on both verbs.
+     */
+    @Test
+    void replaceBanner_viaPOST_byANonOwningOrganizer_isStillForbidden() throws Exception {
+        Event saved = saveBannerEvent(ORGANIZER_1, png((byte) 0x01), MediaType.IMAGE_PNG_VALUE);
+
+        mockMvc.perform(multipart("/events/" + saved.getEventId() + "/banner")
+                        .file(new MockMultipartFile("eventBanner", "new.png",
+                                MediaType.IMAGE_PNG_VALUE, png((byte) 0x05)))
+                        .with(jwtAuth("tenant-99", ORGANIZER_99, "EVENT_ORGANIZER")))
+                .andExpect(status().isForbidden());
     }
 
     @Test

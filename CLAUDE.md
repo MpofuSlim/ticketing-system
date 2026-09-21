@@ -807,6 +807,40 @@ UTC via `MarketTimeZone` before anything reads them; responses stay UTC with the
   need a one-off shift per cell, which is a deliberate data decision — see the
   PR for the query.
 
+## Cloudflare blocks `PUT` + multipart — uploads take `POST`
+
+**The banner upload accepts BOTH `POST` and `PUT` on `/events/{id}/banner`, and
+`POST` is the one that works from a browser.** Cloudflare's WAF on the
+`innbucks.co.zw` zone refuses a `PUT` carrying a `multipart/form-data` body
+before it reaches origin. Any new upload endpoint must be reachable by `POST`.
+
+- **The symptom is a lie, and that is the expensive part.** The CORS preflight
+  is an `OPTIONS` with no body, so it passes cleanly — the browser therefore
+  sends the upload, Cloudflare answers `403` with its HTML block page, and that
+  page carries no `Access-Control-Allow-Origin`, so the browser cannot read the
+  403 either. The console shows *"Network error. Please check your internet
+  connection"*. **Nothing reaches nginx, the gateway or the service**, so every
+  server-side log is empty and the endpoint looks broken in Java.
+- **Measured on the ZW cell 2026-09-21**, identical 300 KB body, only the verb
+  or content type varying: `PUT` multipart → `403 text/html` (4/4, `server:
+  cloudflare`); `POST` multipart → `401` JSON (3/3); `PUT` with a JSON body,
+  `PUT` with no body, and `DELETE` → `401` JSON. So the trigger is `PUT`
+  **combined with** a multipart body — not the method alone (`DELETE` is fine),
+  not multipart alone (`POST` is fine), and not the body size (nginx allows
+  50 MB and never logged a rejection). Ray ID `a3e73ca4aea45b7c`.
+- **`PUT` is kept, deliberately.** It is the correct verb, no existing client
+  breaks, and the endpoint is right again the moment a WAF exception lands.
+  `EventControllerTest.replaceBanner_acceptsPOST_asWellAsPUT_soTheEdgeCannotBlockTheUpload`
+  fails if the alias is removed; a second test pins that the alias does NOT
+  widen the ownership rule — one handler serves both verbs, so they cannot drift.
+- **Debugging rule this bought:** an unexplained "network error" on a write is
+  an EDGE question before it is a code question. Read nginx's access log first —
+  a request with no line there never reached us, and no amount of reading Java
+  will explain it. `curl` the same call unauthenticated from the box; a
+  `text/html` body means Cloudflare answered, `application/json` means we did.
+  Same family as the EcoCash Cloudflare bot-challenge trap above: a partner (or
+  our own) edge refusing a request the application never sees.
+
 ## Branching
 
 > [!IMPORTANT]
