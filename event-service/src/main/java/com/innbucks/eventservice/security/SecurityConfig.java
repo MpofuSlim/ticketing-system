@@ -49,12 +49,23 @@ public class SecurityConfig {
                         // explicit so tightening that rule can't silently 401 S2S calls.
                         .requestMatchers(HttpMethod.GET, "/events/internal/*").permitAll()
                         // Banner WRITE (replace / clear) is organizer-only. The
-                        // permitAll below is GET-scoped so PUT/DELETE already fall
-                        // through to anyRequest().authenticated(); stated explicitly
-                        // as a URL-level backstop for the @PreAuthorize, and so that
-                        // anyone widening the rule below to all methods can see this
-                        // pair must stay authenticated. GET /events/{id}/banner
-                        // remains public — it serves the poster on the listing page.
+                        // permitAll below is GET-scoped so POST/PUT/DELETE already
+                        // fall through to anyRequest().authenticated(); stated
+                        // explicitly as a URL-level backstop for the @PreAuthorize,
+                        // and so that anyone widening the rule below to all methods
+                        // can see this TRIO must stay authenticated. GET
+                        // /events/{id}/banner remains public — it serves the poster
+                        // on the listing page.
+                        //
+                        // POST is listed because it is now a banner-write verb too:
+                        // #606 made it an alias for PUT (Cloudflare's WAF blocks
+                        // PUT+multipart before it reaches origin, so POST is the only
+                        // verb a browser can upload with). Without this line the
+                        // backstop would name two of the three write verbs, and
+                        // widening the GET rule below to all methods would silently
+                        // make the ACTUAL upload path public while the two protected
+                        // ones stayed visibly listed.
+                        .requestMatchers(HttpMethod.POST, "/events/*/banner").authenticated()
                         .requestMatchers(HttpMethod.PUT, "/events/*/banner").authenticated()
                         .requestMatchers(HttpMethod.DELETE, "/events/*/banner").authenticated()
                         .requestMatchers(HttpMethod.GET, "/events/**").permitAll()
