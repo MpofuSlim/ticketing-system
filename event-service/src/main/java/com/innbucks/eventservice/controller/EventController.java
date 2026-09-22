@@ -147,7 +147,7 @@ public class EventController {
                                             "venue": "Harare Gardens",
                                             "country": "Zimbabwe", "category": "CONCERT",
                                             "location": { "latitude": -17.8252, "longitude": 31.0335 },
-                                            "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+                                            "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner?v=1777734000000",
                                             "startDateTime": "2026-06-15T19:00:00", "endDateTime": "2026-06-15T22:00:00",
                                             "totalCapacity": 500,
                                             "availableTickets": 420,
@@ -386,7 +386,7 @@ public class EventController {
                                             "venue": "Harare Gardens",
                                             "country": "Zimbabwe", "category": "CONCERT",
                                             "location": { "latitude": -17.8252, "longitude": 31.0335 },
-                                            "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+                                            "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner?v=1777734000000",
                                             "startDateTime": "2026-06-15T19:00:00", "endDateTime": "2026-06-15T22:00:00",
                                             "totalCapacity": 500,
                                             "availableTickets": 420,
@@ -501,7 +501,7 @@ public class EventController {
                                             "venue": "Harare Gardens",
                                             "country": "Zimbabwe", "category": "CONCERT",
                                             "location": { "latitude": -17.8252, "longitude": 31.0335 },
-                                            "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+                                            "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner?v=1777734000000",
                                             "startDateTime": "2026-06-15T19:00:00", "endDateTime": "2026-06-15T22:00:00",
                                             "totalCapacity": 500,
                                             "availableTickets": 420,
@@ -785,7 +785,7 @@ public class EventController {
                                         "venue": "Harare Gardens",
                                         "country": "Zimbabwe", "category": "CONCERT",
                                         "location": { "latitude": -17.8252, "longitude": 31.0335 },
-                                        "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+                                        "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner?v=1777734000000",
                                         "startDateTime": "2026-06-15T19:00:00", "endDateTime": "2026-06-15T22:00:00",
                                         "totalCapacity": 500,
                                         "availableTickets": 420,
@@ -858,7 +858,7 @@ public class EventController {
                                             "venue": "Harare Gardens",
                                             "country": "Zimbabwe", "category": "CONCERT",
                                             "location": { "latitude": -17.8252, "longitude": 31.0335 },
-                                            "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+                                            "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner?v=1777734000000",
                                             "startDateTime": "2026-06-15T19:00:00", "endDateTime": "2026-06-15T22:00:00",
                                             "totalCapacity": 500,
                                             "availableTickets": 420,
@@ -944,7 +944,7 @@ public class EventController {
                                             "venue": "Harare Gardens",
                                             "country": "Zimbabwe", "category": "CONCERT",
                                             "location": { "latitude": -17.8252, "longitude": 31.0335 },
-                                            "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+                                            "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner?v=1777734000000",
                                             "startDateTime": "2026-06-15T19:00:00", "endDateTime": "2026-06-15T22:00:00",
                                             "totalCapacity": 500,
                                             "availableTickets": 420,
@@ -1050,7 +1050,7 @@ public class EventController {
                                         "venue": "Harare Gardens",
                                         "country": "Zimbabwe", "category": "CONCERT",
                                         "location": { "latitude": -17.8252, "longitude": 31.0335 },
-                                        "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+                                        "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner?v=1777734000000",
                                         "startDateTime": "2026-06-15T19:00:00", "endDateTime": "2026-06-15T22:00:00",
                                         "totalCapacity": 500,
                                         "availableTickets": 500,
@@ -1128,9 +1128,13 @@ public class EventController {
                     to remove one without uploading a replacement.
 
                     Authorization: **EVENT_ORGANIZER** may replace the banner only on their
-                    own event; **SUPER_ADMIN** on any. Returns the full updated event, whose
-                    `bannerUrl` is unchanged in shape — the URL is stable across replacements,
-                    so refresh any cached image (the bytes are served with a 1-hour cache).
+                    own event; **SUPER_ADMIN** on any. Returns the full updated event.
+
+                    **`bannerUrl` carries a `?v=` version that changes on every replace**, so
+                    render the returned value verbatim and caches resolve themselves. The
+                    bytes are served `Cache-Control: public, max-age=3600` and the PATH is
+                    fixed, so without that version a client would keep showing the previous
+                    image for up to an hour. No client-side cache-busting is needed.
                     """
     )
     @ApiResponses({
@@ -1146,7 +1150,7 @@ public class EventController {
                                         "title": "Summer Concert (Updated)",
                                         "venue": "Harare Gardens",
                                         "country": "Zimbabwe", "category": "CONCERT",
-                                        "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+                                        "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner?v=1777740000000",
                                         "startDateTime": "2026-06-15T19:00:00Z", "endDateTime": "2026-06-15T22:00:00Z",
                                         "totalCapacity": 600, "availableTickets": 520, "active": true
                                       }
@@ -1324,7 +1328,7 @@ public class EventController {
                                         "venue": "Harare Gardens",
                                         "country": "Zimbabwe", "category": "CONCERT",
                                         "location": { "latitude": -17.8252, "longitude": 31.0335 },
-                                        "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+                                        "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner?v=1777737600000",
                                         "startDateTime": "2026-06-15T19:00:00", "endDateTime": "2026-06-15T22:00:00",
                                         "totalCapacity": 600,
                                         "availableTickets": 520,
@@ -1397,7 +1401,7 @@ public class EventController {
                                         "venue": "Harare Gardens",
                                         "country": "Zimbabwe", "category": "CONCERT",
                                         "location": { "latitude": -17.8252, "longitude": 31.0335 },
-                                        "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+                                        "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner?v=1777737600000",
                                         "startDateTime": "2026-06-15T19:00:00", "endDateTime": "2026-06-15T22:00:00",
                                         "totalCapacity": 500,
                                         "availableTickets": 500,
@@ -1468,7 +1472,7 @@ public class EventController {
                                         "venue": "Harare Gardens",
                                         "country": "Zimbabwe", "category": "CONCERT",
                                         "location": { "latitude": -17.8252, "longitude": 31.0335 },
-                                        "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+                                        "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner?v=1777739400000",
                                         "startDateTime": "2026-06-15T19:00:00", "endDateTime": "2026-06-15T22:00:00",
                                         "totalCapacity": 500,
                                         "availableTickets": 500,

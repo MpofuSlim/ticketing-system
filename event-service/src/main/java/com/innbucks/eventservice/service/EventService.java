@@ -634,7 +634,14 @@ public class EventService {
         }
         Event event = requireOwnedEvent(tenantUserUuid, role, eventId, "update");
         applyBanner(event, banner);
-        Event saved = eventRepository.save(event);
+        // saveAndFlush, NOT save: @PreUpdate runs at FLUSH, and inside this
+        // @Transactional method the flush would otherwise happen at commit —
+        // after the mapper has already read updatedAt. The DTO would then carry
+        // the PREVIOUS ?v= on bannerUrl (or fall back to createdAt on an event
+        // updated for the first time), so the one response that must hand the
+        // client a fresh URL would hand it the cached one. Pinned by
+        // replaceBanner_swapsTheStoredBytes_andVersionsTheBannerUrl.
+        Event saved = eventRepository.saveAndFlush(event);
         log.info("Event banner replaced eventId={} tenantUserUuid={} contentType={} bytes={}",
                 eventId, tenantUserUuid, saved.getBannerContentType(), banner.getSize());
         return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
