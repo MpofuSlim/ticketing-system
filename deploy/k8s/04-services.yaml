@@ -159,11 +159,25 @@ spec:
             - { name: REDIS_PORT, value: "6379" }
             - { name: IDEMPOTENCY_STORE, value: "redis" }
             - { name: TICKETS_PUBLIC_BASE_URL, value: "https://dtx.innbucks.co.zw" }
-            - { name: INVOICE_DEFAULT_COMMISSION_RATE, value: "10.0" }
+            # Organizer commission is OFF on this cell, by decision (2026-09-22).
+            # Two independent switches, deliberately both set — either alone would
+            # leave a way for an invoice to be raised:
+            #   rate 0     -> InvoiceGenerator skips ("don't issue a $0 invoice"),
+            #                 so even a manual POST /invoices/generate bills nothing.
+            #   scheduler  -> no daily generation, no overdue/due-soon dunning mail.
+            # Turning either back on resumes billing on the NEXT closed period; it
+            # does not back-bill, and issued invoices snapshot the rate they were
+            # billed at, so existing ones are unaffected either way.
+            # NOTE: a per-organizer row in organizer_billing_config overrides this
+            # rate. Zeroing here does NOT clear those — check that table before
+            # assuming nobody is billed.
+            # booking-service's own defaults (10% / enabled) are left alone: they
+            # document the intended business rate, which this only suspends.
+            - { name: INVOICE_DEFAULT_COMMISSION_RATE, value: "0" }
             - { name: INVOICE_VAT_RATE, value: "15.0" }
             - { name: INVOICE_DEFAULT_BILLING_CYCLE, value: "MONTHLY" }
             - { name: INVOICE_DUE_DAYS, value: "14" }
-            - { name: INVOICE_SCHEDULER_ENABLED, value: "true" }
+            - { name: INVOICE_SCHEDULER_ENABLED, value: "false" }
           resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }
           readinessProbe: { httpGet: { path: /actuator/health, port: 8084 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8084 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
