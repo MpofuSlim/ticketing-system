@@ -1,6 +1,7 @@
 package com.innbucks.eventservice.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jayway.jsonpath.JsonPath;
 import com.innbucks.eventservice.client.UserUuidLookupGateway;
 import com.innbucks.eventservice.dto.CreateEventRequestDTO;
 import com.innbucks.eventservice.dto.LocationDTO;
@@ -340,25 +341,60 @@ class EventControllerTest {
     }
 
     @Test
-    void replaceBanner_swapsTheStoredBytes_andKeepsTheSameBannerUrl() throws Exception {
+    void replaceBanner_swapsTheStoredBytes_andVersionsTheBannerUrl() throws Exception {
         byte[] original = png((byte) 0x01);
         Event saved = saveBannerEvent(ORGANIZER_1, original, MediaType.IMAGE_PNG_VALUE);
         byte[] replacement = png((byte) 0x02);
 
-        mockMvc.perform(multipartPut("/events/" + saved.getEventId() + "/banner")
-                        .file(new MockMultipartFile("eventBanner", "new.png",
-                                MediaType.IMAGE_PNG_VALUE, replacement))
-                        .with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER")))
-                .andExpect(status().isOk())
-                // The URL is stable across replacements — clients re-fetch, they
-                // don't get a new path.
-                .andExpect(jsonPath("$.data.bannerUrl",
-                        containsString("/events/" + saved.getEventId() + "/banner")));
+        String before = JsonPath.read(
+                mockMvc.perform(get("/events/" + saved.getEventId())
+                                .with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER")))
+                        .andExpect(status().isOk())
+                        .andReturn().getResponse().getContentAsString(),
+                "$.data.bannerUrl");
+
+        String after = JsonPath.read(
+                mockMvc.perform(multipartPut("/events/" + saved.getEventId() + "/banner")
+                                .file(new MockMultipartFile("eventBanner", "new.png",
+                                        MediaType.IMAGE_PNG_VALUE, replacement))
+                                .with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER")))
+                        .andExpect(status().isOk())
+                        // The PATH is fixed — only the ?v= moves.
+                        .andExpect(jsonPath("$.data.bannerUrl",
+                                containsString("/events/" + saved.getEventId() + "/banner?v=")))
+                        .andReturn().getResponse().getContentAsString(),
+                "$.data.bannerUrl");
+
+        // The whole point: a client rendering bannerUrl verbatim re-fetches,
+        // because the string it was given is different. Without this the bytes
+        // are served Cache-Control: public, max-age=3600 behind an unchanging
+        // URL, and the organizer who just uploaded keeps seeing the old poster
+        // for an hour — observed on the ZW cell 2026-09-22.
+        org.junit.jupiter.api.Assertions.assertNotEquals(before, after,
+                "a replace must change bannerUrl, or every cache serves the previous image");
 
         mockMvc.perform(get("/events/" + saved.getEventId() + "/banner")
                         .with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER")))
                 .andExpect(status().isOk())
                 .andExpect(content().bytes(replacement));
+    }
+
+    /**
+     * A freshly created event has never been UPDATEd, so {@code @PreUpdate} has
+     * not fired and {@code updatedAt} is null — {@code @PrePersist} sets only
+     * {@code createdAt}. The URL must still carry a version rather than emitting
+     * {@code ?v=null}, which would be a literal string every client caches once
+     * and never re-fetches.
+     */
+    @Test
+    void bannerUrl_isVersionedFromCreatedAt_whenTheEventHasNeverBeenUpdated() throws Exception {
+        Event saved = saveBannerEvent(ORGANIZER_1, png((byte) 0x01), MediaType.IMAGE_PNG_VALUE);
+
+        mockMvc.perform(get("/events/" + saved.getEventId())
+                        .with(jwtAuth("tenant-1", ORGANIZER_1, "EVENT_ORGANIZER")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.bannerUrl",
+                        matchesPattern("^/events/" + saved.getEventId() + "/banner\\?v=\\d+$")));
     }
 
     /**

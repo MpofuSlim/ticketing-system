@@ -16,6 +16,13 @@ Merged in **PR #557** (`event-service`). Anchored to the merged code.
 > else changed — same path, same `eventBanner` part, same response, same auth.
 > Full explanation in [§8](#8-why-post-and-not-put).
 
+> [!IMPORTANT]
+> **Update (2026-09-22): `bannerUrl` now carries a `?v=` version and changes on
+> every replace.** Render it verbatim; you no longer need to append a
+> cache-buster of your own. This replaces the previous guidance in [§3](#3-bannerurl-is-versioned--render-it-verbatim).
+> Without it a replaced banner kept showing the OLD image until a hard refresh,
+> on every client — observed on both the console and the storefront.
+
 ---
 
 ## 1. Base URL, auth, headers
@@ -66,7 +73,7 @@ Authorization: Bearer <JWT>
     "venue": "Harare Gardens",
     "country": "Zimbabwe",
     "category": "CONCERT",
-    "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner",
+    "bannerUrl": "/events/3fa85f64-5717-4562-b3fc-2c963f66afa6/banner?v=1777740000000",
     "startDateTime": "2026-06-15T19:00:00Z",
     "endDateTime": "2026-06-15T22:00:00Z",
     "totalCapacity": 600,
@@ -108,17 +115,31 @@ GET /events/{id}/banner            # public, no token
 Returns the **raw image bytes** with the stored `Content-Type`, plus:
 
 - `X-Content-Type-Options: nosniff`
-- `Cache-Control: public, max-age=3600` ← **1 hour**. See the caching gotcha below.
+- `Cache-Control: public, max-age=3600` ← **1 hour**, which is why `bannerUrl`
+  carries a version (§3). Request it by the `bannerUrl` the API gave you, not by
+  a path you build yourself.
 
 ---
 
-## 3. `bannerUrl` is stable across replacements
+## 3. `bannerUrl` is versioned — render it verbatim
 
-The URL is **always** `/events/{id}/banner` — it does not change when the image
-changes, and it is `null` only when there is no banner. So:
+> [!IMPORTANT]
+> **Changed.** This section previously said the URL never changes and told you to
+> append your own cache-buster. The server now does it for you.
 
-- **Do not** treat a returned `bannerUrl` as a new, cache-busting path.
-- **Do** append your own cache-buster after a successful replace (below).
+`bannerUrl` is `/events/{id}/banner?v=<number>`, and the `?v=` **changes whenever
+the event does** — including on every banner replace. So:
+
+- **Do** render the returned string verbatim, query string included.
+- **Do not** strip the query, rebuild the path yourself, or add a second buster.
+  A stale banner now means the value wasn't re-read from the response, not that
+  you forgot to bust a cache.
+- It is `null` only when there is no banner.
+
+The version is the event's `updatedAt` in epoch milliseconds, so it also moves on
+an unrelated edit (a title change). That is deliberate — one redundant image fetch
+is cheaper than a stale poster. Appending your own `?v=` on top still works and is
+harmless, it's just no longer necessary.
 
 ---
 
@@ -185,8 +206,8 @@ const res = await fetch(`${BASE}/events/${eventId}/banner`, {
 const body = await res.json();
 if (!res.ok) throw new Error(body.message);
 
-// bannerUrl is unchanged; bust the 1-hour cache yourself:
-setBannerSrc(`${BASE}${body.data.bannerUrl}?v=${Date.now()}`);
+// bannerUrl comes back with a fresh ?v= — render it verbatim, no buster needed:
+setBannerSrc(`${BASE}${body.data.bannerUrl}`);
 ```
 
 > **Never set `Content-Type` manually on a multipart request.** The browser must
@@ -225,10 +246,11 @@ curl -X DELETE "$BASE/events/$EVENT_ID/banner" \
       and surfaces as a bare "network error" with nothing in our logs (§8).
 - [ ] **Part name is `eventBanner`** — not `file`, not `banner`, not `image`.
 - [ ] **Don't set `Content-Type`** on the upload; let the browser add the boundary.
-- [ ] **`bannerUrl` never changes** on a replace. Append `?v=<timestamp>` (or the
-      event's `updatedAt`) yourself, or the browser serves the **old image for
-      up to an hour** from the `max-age=3600` cache and the organizer will
-      report the upload as "not working".
+- [ ] **Render `bannerUrl` verbatim, query string and all.** It now carries a
+      `?v=` that changes on every replace. Stripping it, or rebuilding the path
+      from the event id, brings back the bug it was added for: the browser
+      serves the **old image for up to an hour** from the `max-age=3600` cache
+      and the organizer reports the upload as "not working".
 - [ ] **`bannerUrl: null`** after a DELETE, and on any event that never had one
       — render your placeholder, don't request the URL.
 - [ ] **Empty file → 400**, not a silent no-op. Guard the form.
