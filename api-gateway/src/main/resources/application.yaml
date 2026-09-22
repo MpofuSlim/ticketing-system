@@ -672,6 +672,22 @@ spring:
                   - DELETE
                   - OPTIONS
                 allowedHeaders: "*"
+                # Response headers cross-origin JS may READ. Without this list
+                # the browser hides everything but the CORS-safelisted basics,
+                # which silently breaks three published FE contracts:
+                # - Content-Disposition: every CSV export puts its meaning in
+                #   the FILENAME (fleet rule) - unexposed, the portal reads it
+                #   as null and saves "download.csv".
+                # - ETag: the notifications unread-count contract has the
+                #   client hold the validator and send If-None-Match -
+                #   unexposed, the client can never learn it and every poll
+                #   pays a full 200.
+                # - X-Correlation-Id: the support-lookup ref the services
+                #   return on every response; error dialogs surface it.
+                exposedHeaders:
+                  - Content-Disposition
+                  - ETag
+                  - X-Correlation-Id
                 allowCredentials: true
                 maxAge: 3600
 
