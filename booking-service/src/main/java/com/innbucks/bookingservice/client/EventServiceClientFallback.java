@@ -41,4 +41,21 @@ public class EventServiceClientFallback implements EventServiceClient {
         return ApiResult.<AvailabilityResponseDTO>builder()
                 .code("503").message("event unavailable").data(null).build();
     }
+
+    // NULL data, deliberately NOT an empty list — and this is the one fallback
+    // on this client where the distinction bills money. InvoiceService reads
+    // empty as "asked, no events ended in that period" and null as "could not
+    // ask", and only the first is allowed to produce invoices. An empty list
+    // here would let a single failed call issue a period's invoices with the
+    // ended events missing; the invoice is keyed (organizer, period) for
+    // idempotency, so that under-billing could never be corrected by a later
+    // run. Skipping instead costs a day and the next run picks the period up.
+    @Override
+    public ApiResult<java.util.List<java.util.UUID>> eventIdsEndedBetween(
+            String from, String to, String internalToken) {
+        log.warn("event-service circuit open or call failed (eventIdsEndedBetween) from={} to={} "
+                + "— invoice generation for this period will be SKIPPED, not billed as empty", from, to);
+        return ApiResult.<java.util.List<java.util.UUID>>builder()
+                .code("503").message("event unavailable").data(null).build();
+    }
 }

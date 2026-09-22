@@ -34,6 +34,7 @@ import java.security.MessageDigest;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -1734,6 +1735,69 @@ public class EventController {
                     .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing or invalid X-Internal-Token"));
         }
         return ResponseEntity.ok(ApiResult.ok("Event retrieved successfully", eventService.getEventInternal(id)));
+    }
+
+    @GetMapping("/internal/ended")
+    @SecurityRequirements()
+    @Operation(
+            summary = "Event ids that ended in a window (internal)",
+            description = """
+                    Internal endpoint: booking-service calls this to decide which
+                    events to bill organizer commission on. Commission is invoiced
+                    AFTER an event has run, not in the month its tickets happened
+                    to sell, so the billing period selects on the event's END.
+
+                    `from` is inclusive, `to` is EXCLUSIVE — an event ending exactly
+                    at midnight belongs to the period starting, so two adjacent
+                    calls count it once rather than twice or never. Both are UTC,
+                    matching how `end_date_time` is stored.
+
+                    Returns ids only. The caller already holds the bookings and
+                    needs nothing else; returning full events would put every
+                    organizer's unpublished drafts on an S2S response for no reason.
+                    Soft-deleted events are excluded.
+
+                    Requires the `X-Internal-Token` shared secret; the gateway's
+                    `event-internal-deny` route also makes `/events/internal/**`
+                    unreachable from the public internet.
+                    """
+    )
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Ids of events that ended in the window",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Two events ended", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Ended events retrieved successfully",
+                                      "data": [
+                                        "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+                                        "8b3a9c0e-9d12-4a3c-9c8a-2a1f0bda1d3e"
+                                      ]
+                                    }
+                                    """),
+                            @ExampleObject(name = "None ended", value = """
+                                    { "code": "200 OK", "message": "Ended events retrieved successfully", "data": [] }
+                                    """)})),
+            @ApiResponse(responseCode = "401", description = "Missing or invalid X-Internal-Token",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "401 UNAUTHORIZED", "message": "Missing or invalid X-Internal-Token", "data": null }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<List<UUID>>> eventsEndedBetween(
+            @Parameter(description = "Window start, inclusive (UTC)")
+            @RequestParam("from") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
+            @Parameter(description = "Window end, EXCLUSIVE (UTC)")
+            @RequestParam("to") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestHeader(value = "X-Internal-Token", required = false) String internalToken
+    ) {
+        if (!authorizedInternal(internalToken)) {
+            log.warn("Unauthorized GET /events/internal/ended — missing or wrong X-Internal-Token");
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing or invalid X-Internal-Token"));
+        }
+        return ResponseEntity.ok(ApiResult.ok("Ended events retrieved successfully",
+                eventService.eventIdsEndedBetween(from, to)));
     }
 
     @PatchMapping("/{id}/availability/consume")

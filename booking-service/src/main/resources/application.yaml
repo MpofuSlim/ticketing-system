@@ -181,6 +181,11 @@ app:
     default-billing-cycle: ${INVOICE_DEFAULT_BILLING_CYCLE:MONTHLY}
     due-days: ${INVOICE_DUE_DAYS:14}
     scheduler-enabled: ${INVOICE_SCHEDULER_ENABLED:true}
+    # Days after a billing period closes before the events that ended in it are
+    # invoiced. Organizers are billed AFTER an event runs; the grace lets any
+    # post-event refunds land before the invoice snapshots its numbers, since
+    # there is no credit note to correct one afterwards.
+    settle-grace-days: ${INVOICE_SETTLE_GRACE_DAYS:7}
     generation-cron: ${INVOICE_GENERATION_CRON:0 30 1 * * *}
     overdue-cron: ${INVOICE_OVERDUE_CRON:0 0 2 * * *}
 

@@ -178,6 +178,12 @@ spec:
             - { name: INVOICE_DEFAULT_BILLING_CYCLE, value: "MONTHLY" }
             - { name: INVOICE_DUE_DAYS, value: "14" }
             - { name: INVOICE_SCHEDULER_ENABLED, value: "false" }
+            # Days after a period closes before the events that ended in it are
+            # invoiced — organizers are billed AFTER an event runs, and this lets
+            # post-event refunds land before the invoice snapshots its numbers.
+            # Inert while the two switches above are off; set here so turning
+            # commission back on does not also need this remembered.
+            - { name: INVOICE_SETTLE_GRACE_DAYS, value: "7" }
           resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }
           readinessProbe: { httpGet: { path: /actuator/health, port: 8084 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8084 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }

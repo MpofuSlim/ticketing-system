@@ -391,6 +391,27 @@ public class EventService {
     }
 
     /**
+     * The ids of events whose END fell inside {@code [from, to)} — the set
+     * booking-service bills commission on for that period, now that an organizer
+     * is invoiced after their event has run rather than in whatever month the
+     * tickets happened to sell.
+     *
+     * <p>Ids only, deliberately. The caller needs nothing else — it already
+     * holds the bookings — and returning full events would put every organizer's
+     * unpublished drafts on an S2S response for no reason.
+     *
+     * <p>The bounds arrive as UTC, matching how {@code end_date_time} is stored
+     * (see the timestamps rule); no market-offset conversion happens here,
+     * because both ends of this call are servers rather than a screen.
+     */
+    @Transactional(readOnly = true)
+    public List<UUID> eventIdsEndedBetween(LocalDateTime from, LocalDateTime to) {
+        List<UUID> ids = eventRepository.findEventIdsEndedBetween(from, to);
+        log.info("Internal lookup: {} event(s) ended in [{}, {})", ids.size(), from, to);
+        return ids;
+    }
+
+    /**
      * Whether the current caller may view an UNPUBLISHED (draft or admin-rejected)
      * event: the owning organizer (JWT {@code organizerUuid} == the event's
      * {@code tenantUserUuid}) or a SUPER_ADMIN. Anonymous callers and other

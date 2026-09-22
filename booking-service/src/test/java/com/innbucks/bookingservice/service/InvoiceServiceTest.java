@@ -1,5 +1,7 @@
 package com.innbucks.bookingservice.service;
 
+import com.innbucks.bookingservice.client.EventServiceClient;
+import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.config.InvoiceMetrics;
 import com.innbucks.bookingservice.dto.invoice.InvoiceResponse;
 import com.innbucks.bookingservice.dto.invoice.InvoiceSummaryResponse;
@@ -37,6 +39,7 @@ class InvoiceServiceTest {
     private EventInvoiceRepository invoices;
     private InvoiceGenerator generator;
     private InvoiceMetrics metrics;
+    private EventServiceClient eventServiceClient;
     private InvoiceService service;
 
     private final UUID organizer = UUID.randomUUID();
@@ -49,8 +52,88 @@ class InvoiceServiceTest {
         invoices = mock(EventInvoiceRepository.class);
         generator = mock(InvoiceGenerator.class);
         metrics = mock(InvoiceMetrics.class);
+        eventServiceClient = mock(EventServiceClient.class);
         service = new InvoiceService(aggregation, invoices, generator, metrics,
-                mock(InvoiceNotifier.class), "USD");
+                mock(InvoiceNotifier.class), eventServiceClient, "tok", "USD");
+    }
+
+    // -- Event-completion billing -------------------------------------------
+    // An organizer is invoiced AFTER their event has run, so the period selects
+    // on the EVENT's end date and the bookings are taken whenever they sold.
+
+    private static ApiResult<List<UUID>> endedEvents(List<UUID> ids) {
+        return ApiResult.<List<UUID>>builder().code("200").message("ok").data(ids).build();
+    }
+
+    @Test
+    void endedEvents_billsEveryConfirmedBooking_whenEVERitSold() {
+        UUID event = UUID.randomUUID();
+        when(eventServiceClient.eventIdsEndedBetween(any(), any(), eq("tok")))
+                .thenReturn(endedEvents(List.of(event)));
+        when(aggregation.aggregateConfirmedRevenueForEvents(null, List.of(event)))
+                .thenReturn(List.of(revenueRow(organizer, event, 3, "300.00")));
+        when(aggregation.aggregateTicketCountsForEvents(null, List.of(event)))
+                .thenReturn(List.of(ticketRow(organizer, event, 5)));
+
+        var lines = service.aggregateLinesForEndedEvents(null, start, end);
+
+        assertThat(lines).isPresent();
+        assertThat(lines.get().get(organizer)).singleElement()
+                .satisfies(l -> {
+                    assertThat(l.eventId()).isEqualTo(event);
+                    assertThat(l.grossSales()).isEqualByComparingTo("300.00");
+                    assertThat(l.ticketsSold()).isEqualTo(5);
+                });
+        // No sale-date window is passed: a ticket bought months before the event
+        // still belongs to the event's invoice. Passing one is the bug this replaced.
+        verify(aggregation, never()).aggregateConfirmedRevenue(any(), any(), any());
+    }
+
+    /**
+     * The distinction that bills money. An empty LIST means "asked, nothing
+     * ended" and is allowed to produce (no) invoices; a NULL payload means
+     * event-service could not be asked, and must abort the whole period.
+     * Collapsing them would let one failed S2S call issue a period's invoices
+     * with its completed events missing — and the (organizer, period) unique key
+     * makes that under-billing permanent, since a later run finds the period
+     * already invoiced.
+     */
+    @Test
+    void endedEvents_returnsEmptyOptional_whenEventServiceCannotBeAsked() {
+        when(eventServiceClient.eventIdsEndedBetween(any(), any(), eq("tok")))
+                .thenReturn(ApiResult.<List<UUID>>builder().code("503").message("down").data(null).build());
+
+        assertThat(service.aggregateLinesForEndedEvents(null, start, end))
+                .as("a period whose ended events are unknown must be skipped, never billed as empty")
+                .isEmpty();
+
+        verify(aggregation, never()).aggregateConfirmedRevenueForEvents(any(), any());
+    }
+
+    @Test
+    void endedEvents_returnsEmptyOptional_whenTheCallThrows() {
+        when(eventServiceClient.eventIdsEndedBetween(any(), any(), eq("tok")))
+                .thenThrow(new RuntimeException("connect timed out"));
+
+        assertThat(service.aggregateLinesForEndedEvents(null, start, end)).isEmpty();
+        verify(aggregation, never()).aggregateConfirmedRevenueForEvents(any(), any());
+    }
+
+    /**
+     * No events ended is a real, billable answer meaning "nobody owes anything"
+     * — distinct from the failures above. It must NOT reach the aggregation
+     * query either, because `IN ()` is invalid SQL.
+     */
+    @Test
+    void endedEvents_noEventsEnded_isAnEmptyMapNotAFailure_andSkipsTheQuery() {
+        when(eventServiceClient.eventIdsEndedBetween(any(), any(), eq("tok")))
+                .thenReturn(endedEvents(List.of()));
+
+        var lines = service.aggregateLinesForEndedEvents(null, start, end);
+
+        assertThat(lines).isPresent();
+        assertThat(lines.get()).isEmpty();
+        verify(aggregation, never()).aggregateConfirmedRevenueForEvents(any(), any());
     }
 
     @Test

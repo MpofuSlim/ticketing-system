@@ -1,5 +1,6 @@
 package com.innbucks.bookingservice.service;
 
+import com.innbucks.bookingservice.config.InvoiceProperties;
 import com.innbucks.bookingservice.entity.OrganizerBillingConfig.BillingCycle;
 import com.innbucks.bookingservice.service.InvoiceCalculations.BillingPeriod;
 import com.innbucks.bookingservice.service.InvoiceGenerator.EventRevenueLine;
@@ -15,6 +16,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -28,8 +30,14 @@ import java.util.UUID;
  *
  * <p>Disabled as a unit via {@code app.invoicing.scheduler-enabled=false} (e.g.
  * in tests). Crons default to the small hours UTC; the daily cadence is harmless
- * because generation only fires for a period that has actually closed and isn't
- * already invoiced.
+ * because generation only fires for a period that has closed, has cleared its
+ * settle grace, and isn't already invoiced.
+ *
+ * <p><b>Generation bills the events that ENDED in the period</b>, not the
+ * tickets that sold in it — see {@link InvoiceService}. The daily cadence is
+ * what makes the two skip conditions safe: a period waiting out its grace, or
+ * one whose ended events could not be resolved, is simply picked up on a later
+ * run while it is still the previous closed period.
  */
 @Component
 @ConditionalOnProperty(prefix = "app.invoicing", name = "scheduler-enabled", havingValue = "true", matchIfMissing = true)
@@ -39,13 +47,16 @@ public class InvoiceScheduler {
     private final InvoiceService invoiceService;
     private final InvoiceNotifier invoiceNotifier;
     private final BillingConfigService billingConfig;
+    private final InvoiceProperties properties;
 
     public InvoiceScheduler(InvoiceService invoiceService,
                             InvoiceNotifier invoiceNotifier,
-                            BillingConfigService billingConfig) {
+                            BillingConfigService billingConfig,
+                            InvoiceProperties properties) {
         this.invoiceService = invoiceService;
         this.invoiceNotifier = invoiceNotifier;
         this.billingConfig = billingConfig;
+        this.properties = properties;
     }
 
     /**
@@ -60,8 +71,34 @@ public class InvoiceScheduler {
         LocalDate today = LocalDate.now(ZoneOffset.UTC);
         for (BillingCycle cycle : BillingCycle.values()) {
             BillingPeriod period = InvoiceCalculations.previousClosed(cycle, today);
-            Map<UUID, List<EventRevenueLine>> byOrganizer =
-                    invoiceService.aggregateLines(null, period.start(), period.endInclusive());
+
+            // Wait out the settle grace before billing a closed period. An event
+            // that ran on the last day of the period may still be refunding, and
+            // an invoice snapshots its numbers — bill too early and the organizer
+            // is charged commission on a ticket that no longer exists, with no
+            // credit note to undo it. Skipping is free: this runs daily and the
+            // same period is still the previous closed one tomorrow.
+            LocalDate billableFrom = InvoiceCalculations.billableFrom(period, properties.getSettleGraceDays());
+            if (today.isBefore(billableFrom)) {
+                log.debug("Cycle={} period={}..{} not billable until {} ({}d settle grace) — skipping",
+                        cycle, period.start(), period.endInclusive(), billableFrom,
+                        properties.getSettleGraceDays());
+                continue;
+            }
+
+            // Events that ENDED in the period, not tickets that sold in it.
+            // Optional.empty() means event-service could not be asked — skip the
+            // whole cycle rather than bill a period with its events missing,
+            // which the (organizer, period) idempotency key would then make
+            // permanent. See InvoiceService.aggregateLinesForEndedEvents.
+            Optional<Map<UUID, List<EventRevenueLine>>> resolved =
+                    invoiceService.aggregateLinesForEndedEvents(null, period.start(), period.endInclusive());
+            if (resolved.isEmpty()) {
+                log.warn("Cycle={} period={}..{}: could not resolve ended events — generation SKIPPED, "
+                        + "will retry on the next run", cycle, period.start(), period.endInclusive());
+                continue;
+            }
+            Map<UUID, List<EventRevenueLine>> byOrganizer = resolved.get();
 
             int generated = 0;
             int onCycle = 0;

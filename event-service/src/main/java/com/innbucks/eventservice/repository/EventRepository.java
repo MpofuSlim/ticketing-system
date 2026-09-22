@@ -10,6 +10,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -489,4 +490,28 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
           AND e.availableTickets + :count <= e.totalCapacity
     """)
     int releaseAvailableTickets(@Param("eventId") UUID eventId, @Param("count") int count);
+
+    // Events whose END has fallen inside [from, to). Internal: booking-service
+    // asks this to decide which events to bill commission on, now that an
+    // organizer is invoiced AFTER the event has run rather than in the month
+    // the tickets happened to sell.
+    //
+    // Read LIVE, never denormalised onto the booking: a postponed event has its
+    // endDateTime edited, and the whole point is that it bills in the period it
+    // ACTUALLY ended in. A copy taken at booking time would bill the original
+    // date and be wrong for exactly the events most likely to move.
+    //
+    // Half-open on purpose, matching the aggregation window it feeds: an event
+    // ending at midnight belongs to the period that is starting, and is counted
+    // once across two adjacent calls rather than twice or never.
+    //
+    // Soft-deleted events are excluded — a deleted event has no bookings worth
+    // billing and would otherwise resurrect as an invoice line.
+    @Query("""
+        SELECT e.eventId FROM Event e
+        WHERE e.deleted = false
+          AND e.endDateTime >= :from
+          AND e.endDateTime < :to
+    """)
+    List<UUID> findEventIdsEndedBetween(@Param("from") LocalDateTime from, @Param("to") LocalDateTime to);
 }
