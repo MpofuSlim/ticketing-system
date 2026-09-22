@@ -91,7 +91,7 @@ class FederatedLoginServiceTest {
         passwordEncoder = mock(PasswordEncoder.class);
         when(passwordEncoder.encode(anyString())).thenReturn("$argon2id$unusable");
         authService = mock(AuthService.class);
-        when(authService.issueToken(any(User.class), any())).thenReturn(
+        when(authService.issuePhoneProofToken(any(User.class), any())).thenReturn(
                 AuthResponseDTO.builder().token("access").refreshToken("refresh").roles(List.of("CUSTOMER")).build());
         loyalty = mock(LoyaltyServiceClient.class);
         auditService = mock(AuditService.class);
@@ -218,8 +218,32 @@ class FederatedLoginServiceTest {
         assertThat(ex.getReason()).isEqualTo(FederatedLoginService.REJECTED_REASON);
         verify(auditService).recordFailure(eq(AuditEventType.AUTH_FEDERATED_LOGIN_REJECTED), eq(PHONE), any(),
                 eq(PHONE), any(), eq("not_a_customer"), any(), eq(CTX));
-        verify(authService, never()).issueToken(any(), any());
+        verify(authService, never()).issuePhoneProofToken(any(), any());
         verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("a DUAL-role account signs in — the shopkeeper who also shops, on one number")
+    void dualRolePhone_signsInThroughTheScopedMint() {
+        // The case that made scoping necessary. A merchant admin using the super
+        // app to buy things, on the same number their shop runs on, is ordinary
+        // and must work — so the not_a_customer guard has to let them past.
+        // What stops phone possession becoming merchant authority is the MINT
+        // they go through, not a refusal here.
+        User shopkeeperWhoShops = User.builder()
+                .id(11L).userUuid(UUID.randomUUID()).phoneNumber(PHONE)
+                .roles(User.roleNames(User.Role.CUSTOMER, User.Role.MERCHANT_ADMIN))
+                .active(true).approved(true).password("x").build();
+        when(userRepository.findByPhoneNumber(PHONE)).thenReturn(Optional.of(shopkeeperWhoShops));
+
+        AuthResponseDTO response = service(true).exchange(assertion(PHONE, "j1", 60), "device-1", CTX);
+
+        assertThat(response.getToken()).isEqualTo("access");
+        // issuePhoneProofToken, never issueToken: the difference between the two
+        // IS the narrowing, so calling the wrong one would hand this account its
+        // MERCHANT_ADMIN role and merchant scope off a phone proof alone.
+        verify(authService).issuePhoneProofToken(shopkeeperWhoShops, "device-1");
+        verify(authService, never()).issueToken(any(), any());
     }
 
     @Test
@@ -232,7 +256,7 @@ class FederatedLoginServiceTest {
         assertThat(ex.getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
         verify(auditService).recordFailure(eq(AuditEventType.AUTH_FEDERATED_LOGIN_REJECTED), eq(PHONE), any(),
                 eq(PHONE), any(), eq("account_inactive"), any(), eq(CTX));
-        verify(authService, never()).issueToken(any(), any());
+        verify(authService, never()).issuePhoneProofToken(any(), any());
     }
 
     // ------------------------------------------------------------------
@@ -269,7 +293,7 @@ class FederatedLoginServiceTest {
         assertThat(profile.getValue().isVerified()).isFalse();
 
         verify(loyalty).promoteUserByPhone(PHONE);
-        verify(authService).issueToken(user, "device-1");
+        verify(authService).issuePhoneProofToken(user, "device-1");
         verify(auditService).recordSuccess(eq(AuditEventType.AUTH_FEDERATED_LOGIN_SUCCESS), eq(PHONE), any(),
                 eq(PHONE), any(), eq(Map.of("newAccount", true)), eq(CTX));
         assertThat(response.getToken()).isEqualTo("access");
@@ -291,7 +315,7 @@ class FederatedLoginServiceTest {
         assertThat(profile.getPhoneVerifiedAt()).isNotNull();
         verify(profileRepository).save(profile);
         verify(loyalty).promoteUserByPhone(PHONE);
-        verify(authService).issueToken(existing, null);
+        verify(authService).issuePhoneProofToken(existing, null);
         verify(auditService).recordSuccess(eq(AuditEventType.AUTH_FEDERATED_LOGIN_SUCCESS), eq(PHONE), any(),
                 eq(PHONE), any(), eq(Map.of("newAccount", false)), eq(CTX));
     }
@@ -322,7 +346,7 @@ class FederatedLoginServiceTest {
         AuthResponseDTO response = service(true).exchange(assertion(PHONE, "j1", 60), null, CTX);
 
         assertThat(response.getToken()).isEqualTo("access");
-        verify(authService).issueToken(winner, null);
+        verify(authService).issuePhoneProofToken(winner, null);
     }
 
     @Test

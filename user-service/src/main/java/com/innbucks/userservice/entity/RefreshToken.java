@@ -59,6 +59,25 @@ public class RefreshToken {
     @Column(name = "device_id_hash", length = 64)
     private String deviceIdHash;
 
+    /**
+     * TRUE when this family was born from a PHONE PROOF rather than a password
+     * login — today, {@code POST /auth/exchange}.
+     *
+     * <p>Sessions in such a family are scoped to {@code CUSTOMER} on every mint,
+     * refresh included. A middleware assertion proves the holder controls a
+     * phone number; it does not prove they are the merchant admin who happens
+     * to share that number, and it never passed the MFA challenge a password
+     * login demands of one.
+     *
+     * <p>It lives here, beside {@code deviceIdHash}, because it has exactly the
+     * same lifecycle: stamped once when the family is minted, carried onto every
+     * successor, never re-derived. {@code /auth/refresh} re-reads the live user,
+     * so a scoping decision kept anywhere else would evaporate on the first
+     * rotation.
+     */
+    @Column(name = "phone_proof", nullable = false)
+    private boolean phoneProof;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 }

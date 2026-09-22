@@ -1527,7 +1527,7 @@ class AuthServiceTest {
                 .mfaEnabled(false)
                 .build();
         when(refreshTokenService.rotate("rt", null))
-                .thenReturn(new RefreshTokenService.Rotation(escalated, "rt2"));
+                .thenReturn(new RefreshTokenService.Rotation(escalated, "rt2", false));
 
         AuthService svc = refreshOnlyService(refreshTokenService, mock(JwtUtil.class));
 
@@ -1541,7 +1541,7 @@ class AuthServiceTest {
         RefreshTokenService refreshTokenService = mock(RefreshTokenService.class);
         JwtUtil jwt = mock(JwtUtil.class);
         when(refreshTokenService.rotate("rt", null))
-                .thenReturn(new RefreshTokenService.Rotation(teamMember(false), "rt2"));
+                .thenReturn(new RefreshTokenService.Rotation(teamMember(false), "rt2", false));
         when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
                 any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean())).thenReturn("tok");
 
@@ -1558,7 +1558,7 @@ class AuthServiceTest {
         RefreshTokenService refreshTokenService = mock(RefreshTokenService.class);
         JwtUtil jwt = mock(JwtUtil.class);
         when(refreshTokenService.rotate("rt", null))
-                .thenReturn(new RefreshTokenService.Rotation(mfaSystemUser(), "rt2"));
+                .thenReturn(new RefreshTokenService.Rotation(mfaSystemUser(), "rt2", false));
         when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
                 any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean())).thenReturn("tok");
 
