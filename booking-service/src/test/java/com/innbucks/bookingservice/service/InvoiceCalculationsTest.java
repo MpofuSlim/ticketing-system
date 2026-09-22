@@ -67,4 +67,47 @@ class InvoiceCalculationsTest {
         assertThat(p.start()).isEqualTo(LocalDate.of(2026, 6, 1));
         assertThat(p.endInclusive()).isEqualTo(LocalDate.of(2026, 6, 7));
     }
+
+    // -- Settle grace --------------------------------------------------------
+    // Organizers are billed AFTER their event runs, and an event on the period's
+    // last day may still be refunding. An invoice snapshots its numbers and
+    // there is no credit note, so billing before refunds settle charges
+    // commission on a ticket that no longer exists.
+
+    @Test
+    void billableFrom_waitsTheGraceAfterThePeriodActuallyCloses() {
+        BillingPeriod august = new BillingPeriod(LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31));
+
+        // The period's last day is 31 Aug, so it only CLOSES at midnight on
+        // 1 Sept — the grace runs from there, not from the 31st.
+        assertThat(InvoiceCalculations.billableFrom(august, 7)).isEqualTo(LocalDate.of(2026, 9, 8));
+    }
+
+    @Test
+    void billableFrom_zeroGrace_isTheDayAfterThePeriodEnds_notItsLastDay() {
+        BillingPeriod august = new BillingPeriod(LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31));
+
+        // Off-by-one guard: billing on the 31st would invoice a period whose
+        // final day is still selling tickets.
+        assertThat(InvoiceCalculations.billableFrom(august, 0)).isEqualTo(LocalDate.of(2026, 9, 1));
+    }
+
+    @Test
+    void billableFrom_treatsANegativeGraceAsZero_ratherThanBillingEarly() {
+        BillingPeriod august = new BillingPeriod(LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 31));
+
+        // A misconfigured negative must never pull billing INTO the period.
+        assertThat(InvoiceCalculations.billableFrom(august, -5)).isEqualTo(LocalDate.of(2026, 9, 1));
+    }
+
+    @Test
+    void billableFrom_crossesAMonthBoundaryCorrectly() {
+        // Weekly period ending Sun 7 Jun; +7d grace lands in the following week.
+        BillingPeriod week = new BillingPeriod(LocalDate.of(2026, 6, 1), LocalDate.of(2026, 6, 7));
+        assertThat(InvoiceCalculations.billableFrom(week, 7)).isEqualTo(LocalDate.of(2026, 6, 15));
+
+        // Period ending on the last day of the year rolls into January.
+        BillingPeriod december = new BillingPeriod(LocalDate.of(2026, 12, 1), LocalDate.of(2026, 12, 31));
+        assertThat(InvoiceCalculations.billableFrom(december, 7)).isEqualTo(LocalDate.of(2027, 1, 8));
+    }
 }

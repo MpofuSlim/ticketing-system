@@ -34,4 +34,22 @@ public class InvoiceProperties {
 
     /** Master switch for the periodic generation + overdue-sweep jobs. */
     private boolean schedulerEnabled = true;
+
+    /**
+     * Days to wait after a billing period closes before invoicing the events
+     * that ended in it.
+     *
+     * <p>Organizers are billed after an event runs, but "ran" and "settled" are
+     * not the same instant — a refund issued in the days after an event would
+     * otherwise land behind an already-snapshotted invoice, leaving the
+     * organizer billed commission on a ticket that no longer exists and no way
+     * to correct it (a credit note is not modelled). The grace lets those
+     * settle first.
+     *
+     * <p>Zero is legal and means "invoice as soon as the period closes", which
+     * reinstates that race. Raising it only delays revenue; it never loses any,
+     * because generation is idempotent on (organizer, period) and the scheduler
+     * runs daily until the period is billed.
+     */
+    private int settleGraceDays = 7;
 }

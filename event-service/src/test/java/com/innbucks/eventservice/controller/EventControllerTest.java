@@ -849,6 +849,80 @@ class EventControllerTest {
                 .andExpect(status().isUnauthorized());
     }
 
+    // ---- GET /events/internal/ended — which events to bill commission on ---
+    // booking-service invoices an organizer AFTER their event has run, so it
+    // asks this which events ENDED in a billing period. Read live, never
+    // denormalised: a postponed event must bill in the period it actually
+    // ended in.
+
+    @Test
+    void eventsEndedBetween_withoutInternalToken_returns401() throws Exception {
+        // Exact 401, not is4xxClientError: a loose assertion passes on Spring
+        // Security's own 401 even when the controller never ran, which is how a
+        // missing SecurityConfig permitAll has slipped through before (#145).
+        mockMvc.perform(get("/events/internal/ended")
+                        .param("from", "2026-08-01T00:00:00")
+                        .param("to", "2026-09-01T00:00:00"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void eventsEndedBetween_withWrongInternalToken_returns401() throws Exception {
+        mockMvc.perform(get("/events/internal/ended")
+                        .param("from", "2026-08-01T00:00:00")
+                        .param("to", "2026-09-01T00:00:00")
+                        .header("X-Internal-Token", "wrong-token"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void eventsEndedBetween_returnsOnlyEventsEndingInsideTheWindow_halfOpen() throws Exception {
+        Event inside = eventRepository.save(eventBuilder()
+                .title("Ended mid-window")
+                .startDateTime(LocalDateTime.of(2026, 8, 15, 18, 0))
+                .endDateTime(LocalDateTime.of(2026, 8, 15, 22, 0))
+                .build());
+        // Exactly ON the exclusive upper bound — belongs to the NEXT period, so
+        // two adjacent calls count it once rather than twice.
+        eventRepository.save(eventBuilder()
+                .title("Ends exactly at the boundary")
+                .startDateTime(LocalDateTime.of(2026, 8, 31, 20, 0))
+                .endDateTime(LocalDateTime.of(2026, 9, 1, 0, 0))
+                .build());
+        eventRepository.save(eventBuilder()
+                .title("Ended before the window")
+                .startDateTime(LocalDateTime.of(2026, 7, 10, 18, 0))
+                .endDateTime(LocalDateTime.of(2026, 7, 10, 22, 0))
+                .build());
+
+        mockMvc.perform(get("/events/internal/ended")
+                        .param("from", "2026-08-01T00:00:00")
+                        .param("to", "2026-09-01T00:00:00")
+                        .header("X-Internal-Token", VALID_INTERNAL_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(1)))
+                .andExpect(jsonPath("$.data[0]", is(inside.getEventId().toString())));
+    }
+
+    @Test
+    void eventsEndedBetween_excludesSoftDeletedEvents() throws Exception {
+        eventRepository.save(eventBuilder()
+                .title("Deleted but ended in window")
+                .deleted(true)
+                .startDateTime(LocalDateTime.of(2026, 8, 15, 18, 0))
+                .endDateTime(LocalDateTime.of(2026, 8, 15, 22, 0))
+                .build());
+
+        // A deleted event has no bookings worth billing; including it would
+        // resurrect it as an invoice line.
+        mockMvc.perform(get("/events/internal/ended")
+                        .param("from", "2026-08-01T00:00:00")
+                        .param("to", "2026-09-01T00:00:00")
+                        .header("X-Internal-Token", VALID_INTERNAL_TOKEN))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data", hasSize(0)));
+    }
+
     @Test
     void getEventInternal_withWrongInternalToken_returns401() throws Exception {
         Event saved = eventRepository.save(eventBuilder()

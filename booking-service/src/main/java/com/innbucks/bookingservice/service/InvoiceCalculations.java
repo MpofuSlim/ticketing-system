@@ -51,6 +51,28 @@ public final class InvoiceCalculations {
     }
 
     /**
+     * The first day a closed period may be invoiced: its last day, plus the
+     * settle grace, plus one.
+     *
+     * <p>The {@code + 1} is the period itself — a period whose last day is
+     * 31 Aug only actually closes at midnight on 1 Sept, so a zero grace means
+     * "billable from 1 Sept", not "from 31 Aug". Getting that wrong bills a
+     * period while its final day is still selling.
+     *
+     * <p>The grace on top exists because organizers are billed AFTER an event
+     * runs, and an event on the period's last day may still be refunding. An
+     * invoice snapshots its numbers and there is no credit note, so billing
+     * before refunds settle leaves the organizer charged commission on a ticket
+     * that no longer exists. A grace of 0 is legal and reinstates that race.
+     *
+     * <p>Pure so the arithmetic is testable without a clock — the scheduler
+     * compares today against this.
+     */
+    public static LocalDate billableFrom(BillingPeriod period, int settleGraceDays) {
+        return period.endInclusive().plusDays(Math.max(0, settleGraceDays) + 1L);
+    }
+
+    /**
      * A billing period as inclusive [start, endInclusive] days, with helpers to
      * turn it into the half-open [start, endExclusive) instant range the
      * aggregation queries use (so the whole last day is counted).

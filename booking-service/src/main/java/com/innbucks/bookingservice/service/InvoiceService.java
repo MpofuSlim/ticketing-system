@@ -1,5 +1,6 @@
 package com.innbucks.bookingservice.service;
 
+import com.innbucks.bookingservice.client.EventServiceClient;
 import com.innbucks.bookingservice.config.InvoiceMetrics;
 import com.innbucks.bookingservice.dto.invoice.InvoiceLineItemResponse;
 import com.innbucks.bookingservice.dto.invoice.InvoiceResponse;
@@ -42,12 +43,25 @@ import java.util.UUID;
  * {@link InvoiceGenerator}, one transaction per organizer), and serves the
  * read + lifecycle (mark-paid / cancel / overdue-sweep) operations.
  *
- * <p>Revenue recognition matches {@link OrganizerReportService}: only CONFIRMED
- * bookings count, keyed on {@code createdAt} in UTC. A booking confirmed then
- * later reversed (refunded) is already excluded from the CONFIRMED aggregate, so
- * commission is charged on revenue currently kept. (A refund that lands in a
- * <em>later</em> period than the invoice is not retro-applied — that's a credit
- * note, deferred.)
+ * <p><b>An organizer is billed AFTER their event has run</b>, not in the month
+ * its tickets happened to sell. The scheduled path selects on the EVENT's end
+ * date ({@link #aggregateLinesForEndedEvents}); a ticket sold in July for a
+ * November event belongs to November's invoice. Billing on sale date charged
+ * commission for an outcome that had not happened and could still be undone —
+ * an organizer could be invoiced in September for an event in the new year.
+ *
+ * <p>This also all but removes the credit-note gap below. Only CONFIRMED
+ * bookings count, so a refund excludes itself from the aggregate, but an invoice
+ * SNAPSHOTS its numbers and a refund landing after generation was never
+ * retro-applied. Billing after the event — plus
+ * {@code app.invoicing.settle-grace-days} before the period is cut — means the
+ * refund window has effectively closed by the time the invoice exists, so the
+ * case is rare rather than routine. It is not eliminated: a refund issued long
+ * after an event still needs a credit note, which remains deferred.
+ *
+ * <p>The explicit-period admin path ({@link #generateForPeriod}) still scopes on
+ * booking {@code createdAt}, because an operator naming a date range means a
+ * SALES window. Keep the two paths distinct.
  */
 @Service
 @Slf4j
@@ -61,6 +75,8 @@ public class InvoiceService {
     private final InvoiceGenerator generator;
     private final InvoiceMetrics metrics;
     private final InvoiceNotifier invoiceNotifier;
+    private final EventServiceClient eventServiceClient;
+    private final String internalToken;
     private final String cellCurrency;
 
     public InvoiceService(InvoiceAggregationRepository aggregation,
@@ -68,13 +84,82 @@ public class InvoiceService {
                           InvoiceGenerator generator,
                           InvoiceMetrics metrics,
                           InvoiceNotifier invoiceNotifier,
+                          EventServiceClient eventServiceClient,
+                          @Value("${innbucks.internal-api-token:}") String internalToken,
                           @Value("${innbucks.currency:USD}") String cellCurrency) {
         this.aggregation = aggregation;
         this.invoices = invoices;
         this.generator = generator;
         this.metrics = metrics;
         this.invoiceNotifier = invoiceNotifier;
+        this.eventServiceClient = eventServiceClient;
+        this.internalToken = internalToken == null ? "" : internalToken;
         this.cellCurrency = (cellCurrency == null || cellCurrency.isBlank()) ? "USD" : cellCurrency.trim();
+    }
+
+    /**
+     * The billable lines for every event that ENDED in {@code [periodStart,
+     * periodEnd]} — the unit of event-completion billing.
+     *
+     * <p>Returns {@link Optional#empty()} when event-service could not be asked,
+     * and that distinction is the whole safety of this method. An empty LIST is
+     * "no events ended, bill nobody"; an empty OPTIONAL is "we don't know what
+     * ended". Collapsing the two would let one failed S2S call issue a period's
+     * invoices with its completed events missing — and because an invoice is
+     * idempotency-keyed on (organizer, period), that under-billing could never
+     * be corrected by a later run. Skipping costs a day; the scheduler runs
+     * daily and the period is still the previous closed one tomorrow.
+     *
+     * <p>Note there is NO date filter on the bookings themselves: a ticket sold
+     * in July for a November event belongs to November's invoice. Filtering by
+     * sale date as well is precisely the bug this replaced.
+     */
+    public Optional<Map<UUID, List<EventRevenueLine>>> aggregateLinesForEndedEvents(
+            UUID organizerFilter, LocalDate periodStart, LocalDate periodEnd) {
+
+        LocalDateTime from = periodStart.atStartOfDay();
+        LocalDateTime to = periodEnd.plusDays(1).atStartOfDay();
+
+        List<UUID> endedEventIds;
+        try {
+            var response = eventServiceClient.eventIdsEndedBetween(from.toString(), to.toString(), internalToken);
+            endedEventIds = response == null ? null : response.getData();
+        } catch (Exception e) {
+            log.warn("Could not resolve events ended in [{}, {}) — skipping invoice generation for this period: {}",
+                    from, to, e.toString());
+            return Optional.empty();
+        }
+        if (endedEventIds == null) {
+            log.warn("event-service did not answer which events ended in [{}, {}) "
+                    + "— skipping invoice generation for this period", from, to);
+            return Optional.empty();
+        }
+        if (endedEventIds.isEmpty()) {
+            log.info("No events ended in [{}, {}) — nothing to invoice", from, to);
+            return Optional.of(Map.of());
+        }
+
+        // IN () is invalid SQL, so the empty case short-circuits above rather
+        // than reaching the query.
+        List<OrganizerEventRevenueRow> revenueRows =
+                aggregation.aggregateConfirmedRevenueForEvents(organizerFilter, endedEventIds);
+        List<OrganizerEventTicketRow> ticketRows =
+                aggregation.aggregateTicketCountsForEvents(organizerFilter, endedEventIds);
+
+        Map<String, Long> ticketsByKey = new LinkedHashMap<>();
+        for (OrganizerEventTicketRow t : ticketRows) {
+            ticketsByKey.put(key(t.getOrganizerUuid(), t.getEventId()), t.getTicketsSold());
+        }
+
+        Map<UUID, List<EventRevenueLine>> byOrganizer = new LinkedHashMap<>();
+        for (OrganizerEventRevenueRow r : revenueRows) {
+            long tickets = ticketsByKey.getOrDefault(key(r.getOrganizerUuid(), r.getEventId()), 0L);
+            byOrganizer.computeIfAbsent(r.getOrganizerUuid(), k -> new ArrayList<>())
+                    .add(new EventRevenueLine(r.getEventId(), r.getConfirmedBookings(), tickets, r.getGrossSales()));
+        }
+        log.info("{} event(s) ended in [{}, {}): {} organizer(s) with billable revenue",
+                endedEventIds.size(), from, to, byOrganizer.size());
+        return Optional.of(byOrganizer);
     }
 
     // ------------------------------------------------------------------

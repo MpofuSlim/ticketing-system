@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 
+import java.util.List;
 import java.util.UUID;
 
 @FeignClient(
@@ -57,6 +58,25 @@ public interface EventServiceClient {
     ApiResult<AvailabilityResponseDTO> releaseAvailability(
             @PathVariable("id") UUID id,
             @RequestParam("count") int count,
+            @RequestHeader("X-Internal-Token") String internalToken
+    );
+
+    // The events that ENDED in [from, to) — the set an organizer is billed
+    // commission on for that period. Commission is invoiced after an event has
+    // run, so the billing period selects on the event's end rather than on when
+    // its tickets sold, and booking-service holds no event dates of its own.
+    //
+    // `to` is EXCLUSIVE, matching the aggregation window it feeds.
+    //
+    // The fallback returns null rather than an empty list, and InvoiceService
+    // treats the two differently: empty means "asked, nothing ended", null means
+    // "could not ask". Billing an organizer on a list we failed to fetch would
+    // silently under-bill them for a whole period, and the invoice would be
+    // idempotency-keyed so the shortfall could never be corrected.
+    @GetMapping("/events/internal/ended")
+    ApiResult<List<UUID>> eventIdsEndedBetween(
+            @RequestParam("from") String from,
+            @RequestParam("to") String to,
             @RequestHeader("X-Internal-Token") String internalToken
     );
 }
