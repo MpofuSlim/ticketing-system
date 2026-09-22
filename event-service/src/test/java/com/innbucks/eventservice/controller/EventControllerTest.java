@@ -236,7 +236,11 @@ class EventControllerTest {
                         .with(jwtAuth("tenant-99", ORGANIZER_99, "EVENT_ORGANIZER"))
                         .requestAttr("jwtCountry", "Zimbabwe"))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.data.bannerUrl", containsString("/banner")))
+                // Versioned already on the CREATE response: @PrePersist fires on
+                // persist() itself, so createdAt is populated before the mapper
+                // runs. Its sibling @PreUpdate fires only at FLUSH, which is why
+                // the replace path needs saveAndFlush — see EventService.
+                .andExpect(jsonPath("$.data.bannerUrl", matchesPattern("^/events/[0-9a-f-]+/banner\\?v=\\d+$")))
                 .andReturn().getResponse().getContentAsString();
 
         String eventId = objectMapper.readTree(body).path("data").path("eventId").asText();
