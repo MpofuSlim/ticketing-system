@@ -1181,13 +1181,13 @@ public class AuthService implements ApplicationEventPublisherAware {
         // saves a loyalty round-trip on every super-app sign-in.
         java.util.UUID loyaltyMerchantId = null;
         java.util.UUID loyaltyShopId = null;
-        if (phoneProof) {
-            // deliberately none
-        } else if (user.hasRole(User.Role.SHOP_ADMIN) || user.hasRole(User.Role.SHOP_USER)) {
-            loyaltyShopId = user.getLoyaltyShopId();
-            loyaltyMerchantId = user.getLoyaltyMerchantId();
-        } else if (user.hasRole(User.Role.MERCHANT_ADMIN)) {
-            loyaltyMerchantId = resolveMerchantIdClaim(user);
+        if (!phoneProof) {
+            if (user.hasRole(User.Role.SHOP_ADMIN) || user.hasRole(User.Role.SHOP_USER)) {
+                loyaltyShopId = user.getLoyaltyShopId();
+                loyaltyMerchantId = user.getLoyaltyMerchantId();
+            } else if (user.hasRole(User.Role.MERCHANT_ADMIN)) {
+                loyaltyMerchantId = resolveMerchantIdClaim(user);
+            }
         }
 
         String country = user.getCountry();
