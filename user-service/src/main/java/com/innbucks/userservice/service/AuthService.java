@@ -963,7 +963,12 @@ public class AuthService implements ApplicationEventPublisherAware {
                         auditContext);
                 throw new MfaEnrollmentRequiredException();
             }
-            AuthResponseDTO response = buildResponse(rotated, rotation.refreshToken());
+            // rotation.phoneProof() carries the scope decided when this family
+            // was born. Re-deriving it from `rotated` is impossible by
+            // construction — the live user's roles are exactly what a phone
+            // proof declines to trust — which is why it rides the refresh row.
+            AuthResponseDTO response =
+                    buildResponse(rotated, rotation.refreshToken(), rotation.phoneProof());
             log.info("Token refreshed subject={} roles={} tier={} verified={}",
                     rotation.user().getEmail() != null ? rotation.user().getEmail() : rotation.user().getPhoneNumber(),
                     response.getRoles(), response.getTier(), response.getVerified());
@@ -1014,6 +1019,40 @@ public class AuthService implements ApplicationEventPublisherAware {
     public AuthResponseDTO issueToken(User user, String deviceId) {
         String refreshToken = refreshTokenService.issueNewFamily(user, deviceId);
         return buildResponse(user, refreshToken);
+    }
+
+    /**
+     * The mint for a PHONE PROOF — today, {@code POST /auth/exchange}.
+     *
+     * <p>Identical to {@link #issueToken} in every respect that a consumer can
+     * observe: same token shape, same claims, same refresh family, same
+     * tokenVersion revocation. Nothing downstream needs to learn a new format,
+     * which is the rule this endpoint has always followed. The one difference is
+     * the CONTENT of the roles claim, narrowed to {@code CUSTOMER}.
+     *
+     * <p><b>Why narrowing is the whole point.</b> A merchant admin may legitimately
+     * shop on the super app with the same phone number they run their shop on —
+     * that is an ordinary thing for a shopkeeper to do, and it is the case this
+     * exists to serve. But the assertion proves one fact: whoever holds that
+     * number authenticated at the middleware. It does not prove they are the
+     * merchant admin, and it never passed the MFA challenge
+     * {@code MfaPolicy.required} demands of one on the password path. Handing
+     * back the account's full role set would let phone possession alone reach
+     * every merchant surface in the fleet — marketplace's payout destination
+     * among them, which is where a seller's money is sent.
+     *
+     * <p>So the split follows the surfaces the fleet already has: the super app
+     * is the customer surface and this mint serves it; the admin portal is the
+     * merchant surface and it stays behind password + MFA. A dual-role account
+     * uses both, with the same number, and neither is degraded.
+     *
+     * <p>The scope is recorded on the refresh family rather than inferred later,
+     * because {@code refresh} re-reads the live user — see the migration note on
+     * {@code refresh_tokens.phone_proof}.
+     */
+    public AuthResponseDTO issuePhoneProofToken(User user, String deviceId) {
+        String refreshToken = refreshTokenService.issueNewFamily(user, deviceId, true);
+        return buildResponse(user, refreshToken, true);
     }
 
     /**
@@ -1075,6 +1114,16 @@ public class AuthService implements ApplicationEventPublisherAware {
     }
 
     private AuthResponseDTO buildResponse(User user, String refreshToken) {
+        return buildResponse(user, refreshToken, false);
+    }
+
+    /**
+     * @param phoneProof when true, the session was authenticated by a phone
+     *                   proof, so the roles claim is narrowed to {@code CUSTOMER}
+     *                   and the merchant/shop scope claims are withheld. See
+     *                   {@link #issuePhoneProofToken}.
+     */
+    private AuthResponseDTO buildResponse(User user, String refreshToken, boolean phoneProof) {
         String subject = user.getEmail() != null ? user.getEmail() : user.getPhoneNumber();
 
         int tier;
@@ -1100,14 +1149,22 @@ public class AuthService implements ApplicationEventPublisherAware {
             verified = true;
         }
 
-        List<String> roleNames = roleNames(user.getRoles());
+        // A phone proof authenticates a CUSTOMER and nothing more, whatever else
+        // the account holds. Narrowed HERE, at the single mint site every login
+        // and every refresh funnels through, so there is no second path that
+        // could forget — and so the account itself is untouched: the same person
+        // still signs in to the admin portal with a password and gets their full
+        // role set there.
+        List<String> roleNames = phoneProof
+                ? List.of(User.Role.CUSTOMER.name())
+                : roleNames(user.getRoles());
         List<String> bundles = user.getDefaultServices() == null
                 ? List.of() : new ArrayList<>(user.getDefaultServices());
 
         // SUPER_ADMIN is granted access to every microservice across every bundle, even if their
         // stored bundle list happens to be empty. Otherwise, expand the picked bundles to their
         // backing microservices for the JWT services claim.
-        Set<String> microservices = user.hasRole(User.Role.SUPER_ADMIN)
+        Set<String> microservices = user.hasRole(User.Role.SUPER_ADMIN) && !phoneProof
                 ? Services.expandToMicroservices(Services.ALL_BUNDLES)
                 : Services.expandToMicroservices(bundles);
 
@@ -1115,13 +1172,22 @@ public class AuthService implements ApplicationEventPublisherAware {
         // ShopStaffService at creation time — no lookup required. A MERCHANT_ADMIN
         // has nothing stamped (they may run several merchants), so their claim is
         // resolved from loyalty-service — see resolveMerchantIdClaim.
+        // Withheld entirely on a phone proof. These are SCOPE claims — they say
+        // which merchant's or shop's money and inventory the caller speaks for —
+        // and marketplace reads merchantId as authoritative ownership. Leaving
+        // them on a token whose roles no longer include the staff role would be
+        // the worst of both: a claim naming authority the roles do not grant,
+        // waiting for the first consumer that trusts the claim alone. It also
+        // saves a loyalty round-trip on every super-app sign-in.
         java.util.UUID loyaltyMerchantId = null;
         java.util.UUID loyaltyShopId = null;
-        if (user.hasRole(User.Role.SHOP_ADMIN) || user.hasRole(User.Role.SHOP_USER)) {
-            loyaltyShopId = user.getLoyaltyShopId();
-            loyaltyMerchantId = user.getLoyaltyMerchantId();
-        } else if (user.hasRole(User.Role.MERCHANT_ADMIN)) {
-            loyaltyMerchantId = resolveMerchantIdClaim(user);
+        if (!phoneProof) {
+            if (user.hasRole(User.Role.SHOP_ADMIN) || user.hasRole(User.Role.SHOP_USER)) {
+                loyaltyShopId = user.getLoyaltyShopId();
+                loyaltyMerchantId = user.getLoyaltyMerchantId();
+            } else if (user.hasRole(User.Role.MERCHANT_ADMIN)) {
+                loyaltyMerchantId = resolveMerchantIdClaim(user);
+            }
         }
 
         String country = user.getCountry();
@@ -1136,8 +1202,13 @@ public class AuthService implements ApplicationEventPublisherAware {
         //   - everyone else   : null (no team scoping applies)
         // Booking-service uses this to authorize ticket scans without a
         // per-request lookup back into user-service.
+        // Also a scope claim, so also withheld on a phone proof: it authorizes
+        // ticket scans in booking-service without a lookup, which is organiser
+        // authority and not something phone possession establishes.
         UUID organizerUuid;
-        if (user.hasRole(User.Role.EVENT_ORGANIZER)) {
+        if (phoneProof) {
+            organizerUuid = null;
+        } else if (user.hasRole(User.Role.EVENT_ORGANIZER)) {
             organizerUuid = user.getUserUuid();
         } else if (user.hasRole(User.Role.TEAM_MEMBER)) {
             organizerUuid = user.getCreatedByOrganizerUuid();

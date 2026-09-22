@@ -425,21 +425,49 @@ no further change and cannot tell how the customer proved themselves.
   shape for the whole fleet; keep them in lock-step. The **audience differs on
   purpose** (`innbucks-foundry` vs `innbucks-loyalty`): a registration proof must
   never double as a login, and the verifier requires both `iss` and `aud`.
-- **Only ever a CUSTOMER.** `FederatedLoginService` refuses a phone that belongs to
-  a non-CUSTOMER account (`not_a_customer`), so a middleware login can never turn
-  into a merchant or admin session whatever the assertion says. A staff member
-  who also shops must use a different number; that is the safe default, not a
-  gap to close.
+- **Only ever a CUSTOMER — enforced in TWO places, because the guard alone was a
+  hole.** `FederatedLoginService` refuses a phone belonging to an account with NO
+  customer role (`not_a_customer`). That check reads like it delivers the
+  headline, and for a *pure staff* account it does. **It never did for a DUAL-role
+  account**: a merchant admin who also shops holds both roles, passes the guard,
+  and `buildResponse` used to hand back every role it found plus the `merchantId`
+  scope claim — so phone possession alone reached every merchant surface in the
+  fleet (marketplace's payout destination among them), having never passed the
+  MFA challenge `MfaPolicy.required` mandates for a system user on the password
+  path. `AuthService.refresh`'s MFA guard did not catch it either: it checks a
+  secret is *enrolled*, not that it was *used*, and an active merchant admin is
+  force-enrolled.
+  So the session is now **SCOPED at the mint** (`issuePhoneProofToken`): roles
+  narrowed to `CUSTOMER`, and the `merchantId` / `shopId` / `organizerUuid` scope
+  claims withheld — a claim naming authority the roles no longer grant is worse
+  than no claim, since it waits for the first consumer that trusts the claim
+  alone. **A merchant admin CAN be a customer on the same number** (the operator's
+  explicit requirement, 2026-09-22): they shop in the super app and sell in the
+  admin portal behind password + MFA, and the account itself is untouched. The
+  earlier note here — "a staff member who also shops must use a different number"
+  — was the workaround for the hole, not a policy; it is gone.
+  Pinned by `PhoneProofScopeTest` and the dual-role case in
+  `FederatedLoginServiceTest`.
+- **The scope rides the REFRESH ROW (`refresh_tokens.phone_proof`, V38), not the
+  access token.** `/auth/refresh` re-reads the LIVE user and re-derives claims
+  from their current roles, so a login-time narrowing kept anywhere else would
+  evaporate on the first rotation — the same shape as the gate-operator hole
+  above. Stamped once when the family is minted and copied onto every successor,
+  exactly like `device_id_hash`. Default FALSE, which is the truth for every
+  pre-V38 row rather than a guess.
 - **One use per assertion.** The `jti` is SETNX'd in Redis for the assertion's
   remaining lifetime + 60s grace BEFORE any account work. If Redis cannot answer
   the login is refused with a retryable **503** — a session that could not be
   replay-checked is not issued. Redis is boot-required on every cell, so this is
   an outage signal, not a routine path.
-- **It mints a LOGIN token, not a new token shape.** `AuthService.issueToken`
-  (public for this) is the same mint every password login and refresh goes
-  through: same claims, same refresh family, same tokenVersion revocation. Do
-  not add a scoped or roles-empty variant here — the roles-empty token is
-  loyalty's, deliberately inert fleet-wide.
+- **It mints a LOGIN token, not a new token shape.** `AuthService.issuePhoneProofToken`
+  runs the same `buildResponse` every password login and refresh goes through:
+  same claims, same refresh family, same tokenVersion revocation, so no consumer
+  needs to learn a second format. What differs is the **content** of the roles
+  claim (see the scoping above), never the shape. **Still do not add a
+  roles-EMPTY variant here** — that token is loyalty's, deliberately inert
+  fleet-wide, and a phone-proof session is the opposite: a fully ordinary
+  CUSTOMER session that simply declines to also be a staff one.
 - **First sign-in creates the customer, shaped exactly like
   `OtpService.materializeOrRefreshLocalAccount`** (CUSTOMER, active, approved,
   placeholder name, tier-1 profile with `phoneVerified` stamped) with one

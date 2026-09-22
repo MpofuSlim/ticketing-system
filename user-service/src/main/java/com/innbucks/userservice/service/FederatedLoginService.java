@@ -53,19 +53,37 @@ import java.util.Optional;
  *
  * <h2>What it guarantees</h2>
  * <ul>
- *   <li><b>Only ever a CUSTOMER.</b> A phone that belongs to a staff account is
- *       refused outright. A middleware login can never turn into a merchant or
- *       admin session, whatever the assertion says.</li>
+ *   <li><b>Only ever a CUSTOMER — enforced twice, because the guard alone was
+ *       not enough.</b> A phone belonging to an account with NO customer role is
+ *       refused outright ({@code not_a_customer}): there is no customer identity
+ *       there to issue. But a merchant admin may legitimately shop on the super
+ *       app with the very number they run their shop on, so that account holds
+ *       BOTH roles and passes the guard — and the mint used to hand back every
+ *       role it found, including the staff one, with its merchant scope claim
+ *       attached. Phone possession alone then reached every merchant surface in
+ *       the fleet, never having passed the MFA challenge
+ *       {@code MfaPolicy.required} demands of a system user on the password
+ *       path. So the session is now SCOPED at the mint
+ *       ({@link AuthService#issuePhoneProofToken}): roles are narrowed to
+ *       {@code CUSTOMER} and the merchant/shop/organizer scope claims are
+ *       withheld, whatever the account holds. The guard stays as the other half
+ *       — scoping answers "how much authority", the guard answers "is there a
+ *       customer here at all".</li>
  *   <li><b>One use per assertion.</b> The {@code jti} is burned in Redis for the
  *       assertion's remaining lifetime (plus skew) BEFORE any account work. A
  *       captured assertion is worth at most one login, and only until it
  *       expires. If the guard cannot be consulted the login is refused — a
  *       session that could not be replay-checked is not issued.</li>
- *   <li><b>The token is a login token.</b> It comes out of
- *       {@link AuthService#issueToken}, the same mint every password login and
- *       refresh goes through, so it carries the same claims (roles, userUuid,
- *       phoneNumber, tier, permissions) and the same refresh/revocation story.
- *       Nothing downstream can tell how the customer proved themselves.</li>
+ *   <li><b>The token is a login token</b> — the same shape, not a new one. It comes out of
+ *       {@link AuthService#issuePhoneProofToken}, which runs the same
+ *       {@code buildResponse} every password login and refresh goes through, so
+ *       it carries the same claims (roles, userUuid, phoneNumber, tier,
+ *       permissions) and the same refresh/revocation story. No consumer needs to
+ *       learn a new format, and none can tell how the customer proved
+ *       themselves. What differs is the CONTENT of the roles claim, not the
+ *       shape of the token — this is emphatically not a second token type, and
+ *       not the roles-empty, fleet-inert token loyalty issues for its OTP
+ *       sessions.</li>
  *   <li><b>The assertion is a phone proof.</b> It stamps {@code phoneVerified}
  *       exactly as an OTP does, and tells loyalty, exactly as an OTP does
  *       ({@link OtpService#finalizeVerification}) — so the customer's loyalty
@@ -189,7 +207,7 @@ public class FederatedLoginService {
                 Map.of("newAccount", account.created()), auditContext);
         log.info("Federated login phone={} newAccount={}", MsisdnMasking.mask(phone), account.created());
 
-        return authService.issueToken(account.user(), deviceId);
+        return authService.issuePhoneProofToken(account.user(), deviceId);
     }
 
     /**
@@ -226,9 +244,12 @@ public class FederatedLoginService {
         Optional<User> existing = userRepository.findByPhoneNumber(phone);
         if (existing.isPresent()) {
             User user = existing.get();
-            // The one thing this endpoint must never do: hand a middleware login
-            // a staff session. A merchant admin's or operator's phone on their
-            // account is not a customer identity.
+            // Half of "only ever a CUSTOMER"; the other half is the scoping in
+            // issuePhoneProofToken. This one answers a different question: an
+            // account with no customer role has no customer identity to sign
+            // in AS, so scoping it down to CUSTOMER would invent one. A
+            // DUAL-role account — the shopkeeper who also shops, on one number —
+            // passes here on purpose and is narrowed at the mint instead.
             if (!user.hasRole(User.Role.CUSTOMER)) {
                 log.warn("Federated login refused: phone belongs to a non-customer account phone={}",
                         MsisdnMasking.mask(phone));

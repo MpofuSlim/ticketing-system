@@ -41,8 +41,15 @@ public class RefreshTokenService {
         public ReuseDetectedException(String msg) { super(msg); }
     }
 
-    /** Result of a rotation: the new refresh token (raw JWT) and the user it belongs to. */
-    public record Rotation(User user, String refreshToken) {}
+    /**
+     * Result of a rotation: the new refresh token (raw JWT), the user it belongs
+     * to, and whether the family was born from a phone proof.
+     *
+     * <p>The caller needs that last flag because it re-derives the access token's
+     * claims from the LIVE user, and a phone-proof family must stay scoped to
+     * CUSTOMER however many roles that user has since acquired.
+     */
+    public record Rotation(User user, String refreshToken, boolean phoneProof) {}
 
     /**
      * Mints the first refresh token of a new family for {@code user}. Called on login.
@@ -55,8 +62,22 @@ public class RefreshTokenService {
      */
     @Transactional
     public String issueNewFamily(User user, String deviceId) {
+        return issueNewFamily(user, deviceId, false);
+    }
+
+    /**
+     * As above, but records whether this family was born from a PHONE PROOF
+     * ({@code POST /auth/exchange}) rather than a password login.
+     *
+     * <p>A phone-proof family is scoped to CUSTOMER on every mint, refresh
+     * included — see {@link com.innbucks.userservice.entity.RefreshToken#isPhoneProof()}.
+     * The flag is stamped here and only here: nothing re-derives it from the
+     * user, because the user's roles are exactly what it exists to ignore.
+     */
+    @Transactional
+    public String issueNewFamily(User user, String deviceId, boolean phoneProof) {
         UUID familyId = UUID.randomUUID();
-        return mint(user, familyId, null, hashOrNull(deviceId));
+        return mint(user, familyId, null, hashOrNull(deviceId), phoneProof);
     }
 
     /**
@@ -125,7 +146,13 @@ public class RefreshTokenService {
         // family stays bound to whatever device its first token was
         // minted for — a customer can't sneak their session onto a new
         // device just by refreshing.
-        String newToken = mint(user, row.getFamilyId(), row.getId(), row.getDeviceIdHash());
+        //
+        // The phone-proof flag rides along for the same reason, and it is
+        // load-bearing rather than tidy: the caller re-derives the access
+        // token's claims from the LIVE user, so dropping it here would let a
+        // scoped session silently regain every role on its first refresh.
+        String newToken = mint(user, row.getFamilyId(), row.getId(),
+                row.getDeviceIdHash(), row.isPhoneProof());
 
         // Mark the consumed token as revoked and chained to its replacement.
         RefreshToken successor = refreshTokenRepository.findByTokenHash(sha256(newToken))
@@ -134,7 +161,7 @@ public class RefreshTokenService {
         row.setReplacedById(successor.getId());
         refreshTokenRepository.save(row);
 
-        return new Rotation(user, newToken);
+        return new Rotation(user, newToken, row.isPhoneProof());
     }
 
     /** Revokes every active refresh token in the family that owns {@code rawToken}. */
@@ -154,7 +181,8 @@ public class RefreshTokenService {
         }
     }
 
-    private String mint(User user, UUID familyId, UUID parentId, String deviceIdHash) {
+    private String mint(User user, UUID familyId, UUID parentId, String deviceIdHash,
+                        boolean phoneProof) {
         String subject = user.getEmail() != null ? user.getEmail() : user.getPhoneNumber();
         String raw = jwtUtil.generateRefreshToken(subject);
         RefreshToken row = RefreshToken.builder()
@@ -164,6 +192,7 @@ public class RefreshTokenService {
                 .familyId(familyId)
                 .parentId(parentId)
                 .deviceIdHash(deviceIdHash)
+                .phoneProof(phoneProof)
                 .expiresAt(jwtUtil.extractExpiration(raw).toInstant())
                 .createdAt(Instant.now())
                 .build();
