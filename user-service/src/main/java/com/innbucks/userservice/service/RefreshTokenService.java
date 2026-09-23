@@ -49,7 +49,26 @@ public class RefreshTokenService {
      * claims from the LIVE user, and a phone-proof family must stay scoped to
      * CUSTOMER however many roles that user has since acquired.
      */
-    public record Rotation(User user, String refreshToken, boolean phoneProof) {}
+    public record Rotation(User user, String refreshToken, boolean phoneProof, UUID organizationId) {
+        /** A rotation that carries no organization — pre-V39 shape, kept for callers that don't need one. */
+        public Rotation(User user, String refreshToken, boolean phoneProof) {
+            this(user, refreshToken, phoneProof, null);
+        }
+    }
+
+    /**
+     * Organizations (V39). Field-injected so the plain {@code RefreshTokenServiceTest}
+     * construction doesn't widen; null there means sessions carry no
+     * organization, exactly as before V39.
+     *
+     * <p>The organization a session acts for is decided HERE, inside the
+     * rotation transaction and before the successor is minted, for two reasons:
+     * every rotation re-checks membership without any caller having to remember
+     * to, and a refused switch throws before the presented token is consumed,
+     * so the client keeps a working session.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private OrganizationService organizationService;
 
     /**
      * Mints the first refresh token of a new family for {@code user}. Called on login.
@@ -77,7 +96,12 @@ public class RefreshTokenService {
     @Transactional
     public String issueNewFamily(User user, String deviceId, boolean phoneProof) {
         UUID familyId = UUID.randomUUID();
-        return mint(user, familyId, null, hashOrNull(deviceId), phoneProof);
+        // A new session starts in the person's only organization when they have
+        // exactly one; with several it starts in none and they choose. Never on
+        // a phone proof, which proves a phone and not business authority.
+        UUID organizationId = phoneProof || organizationService == null
+                ? null : organizationService.defaultOrganizationFor(user);
+        return mint(user, familyId, null, hashOrNull(deviceId), phoneProof, organizationId);
     }
 
     /**
@@ -102,6 +126,22 @@ public class RefreshTokenService {
     // UPDATE and an attacker could keep replaying the stolen token.
     @Transactional(noRollbackFor = ReuseDetectedException.class)
     public Rotation rotate(String rawToken, String deviceId) {
+        return rotate(rawToken, deviceId, null, false);
+    }
+
+    /**
+     * Rotates like {@link #rotate(String, String)}, and moves the session into
+     * {@code organizationId}. The person must belong to it and it must be
+     * ACTIVE; that is checked before the successor is minted, so a refusal
+     * throws with the presented token still valid. A phone-proof session can
+     * never be moved into an organization.
+     */
+    @Transactional(noRollbackFor = ReuseDetectedException.class)
+    public Rotation rotateInto(String rawToken, String deviceId, UUID organizationId) {
+        return rotate(rawToken, deviceId, organizationId, true);
+    }
+
+    private Rotation rotate(String rawToken, String deviceId, UUID switchTo, boolean switching) {
         if (rawToken == null || rawToken.isBlank() || !jwtUtil.isTokenValid(rawToken)) {
             throw new RuntimeException("Invalid or expired refresh token");
         }
@@ -151,8 +191,13 @@ public class RefreshTokenService {
         // load-bearing rather than tidy: the caller re-derives the access
         // token's claims from the LIVE user, so dropping it here would let a
         // scoped session silently regain every role on its first refresh.
+        //
+        // The organization is decided before anything is consumed. On a plain
+        // rotation it is re-validated against the live memberships; on a switch
+        // the target must be one the person belongs to.
+        UUID organizationId = nextOrganization(user, row, switchTo, switching);
         String newToken = mint(user, row.getFamilyId(), row.getId(),
-                row.getDeviceIdHash(), row.isPhoneProof());
+                row.getDeviceIdHash(), row.isPhoneProof(), organizationId);
 
         // Mark the consumed token as revoked and chained to its replacement.
         RefreshToken successor = refreshTokenRepository.findByTokenHash(sha256(newToken))
@@ -161,7 +206,25 @@ public class RefreshTokenService {
         row.setReplacedById(successor.getId());
         refreshTokenRepository.save(row);
 
-        return new Rotation(user, newToken, row.isPhoneProof());
+        return new Rotation(user, newToken, row.isPhoneProof(), organizationId);
+    }
+
+    private UUID nextOrganization(User user, RefreshToken row, UUID switchTo, boolean switching) {
+        if (switching) {
+            if (row.isPhoneProof()) {
+                throw new com.innbucks.userservice.exception.OrganizationException(
+                        org.springframework.http.HttpStatus.FORBIDDEN, "organization_context_not_allowed",
+                        "This session can't act for a business. Sign in with your password to do that.");
+            }
+            if (organizationService == null) {
+                throw com.innbucks.userservice.exception.OrganizationException.notFound();
+            }
+            return organizationService.requireSelectable(user, switchTo);
+        }
+        if (row.isPhoneProof() || organizationService == null) {
+            return null;
+        }
+        return organizationService.revalidate(user, row.getOrganizationId());
     }
 
     /** Revokes every active refresh token in the family that owns {@code rawToken}. */
@@ -182,7 +245,7 @@ public class RefreshTokenService {
     }
 
     private String mint(User user, UUID familyId, UUID parentId, String deviceIdHash,
-                        boolean phoneProof) {
+                        boolean phoneProof, UUID organizationId) {
         String subject = user.getEmail() != null ? user.getEmail() : user.getPhoneNumber();
         String raw = jwtUtil.generateRefreshToken(subject);
         RefreshToken row = RefreshToken.builder()
@@ -193,6 +256,7 @@ public class RefreshTokenService {
                 .parentId(parentId)
                 .deviceIdHash(deviceIdHash)
                 .phoneProof(phoneProof)
+                .organizationId(organizationId)
                 .expiresAt(jwtUtil.extractExpiration(raw).toInstant())
                 .createdAt(Instant.now())
                 .build();

@@ -53,9 +53,30 @@ public class ServiceRequestService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.innbucks.userservice.notification.NotificationService notifications;
 
+    /**
+     * Organizations (V39): a request is made FOR an organization, and approving
+     * it grants the product to that organization as well as the bundle to the
+     * person. Field-injected like {@link #notifications}; null in the plain
+     * unit tests means the person-level grant only, exactly as before.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private OrganizationService organizationService;
+
     /** Submit a request to be granted access to an additional default service bundle. */
     @Transactional
     public ServiceRequestResponseDTO submit(String requesterEmail, CreateServiceRequestDTO request) {
+        return submit(requesterEmail, null, request);
+    }
+
+    /**
+     * As above, for the organization the caller's session is acting for
+     * ({@code orgId} claim). The request is stamped with the organization it is
+     * FOR, so approving it grants the product to that business — see
+     * {@link OrganizationService#organizationForRequest}.
+     */
+    @Transactional
+    public ServiceRequestResponseDTO submit(String requesterEmail, java.util.UUID activeOrganizationId,
+                                            CreateServiceRequestDTO request) {
         User user = userRepository.findByEmail(requesterEmail)
                 .orElseThrow(() -> new RuntimeException("User not found: " + requesterEmail));
 
@@ -80,6 +101,8 @@ public class ServiceRequestService {
 
         ServiceRequest saved = serviceRequestRepository.save(ServiceRequest.builder()
                 .userId(user.getId())
+                .organizationId(organizationService == null ? null
+                        : organizationService.organizationForRequest(user, activeOrganizationId))
                 .service(service)
                 .reason(request.getReason().trim())
                 .status(ServiceRequest.Status.PENDING)
@@ -185,6 +208,11 @@ public class ServiceRequestService {
             user.getRoles().add(grantedRole.name());
         }
         userRepository.save(user);
+        // And to the business the request was made for (V39). Same transaction:
+        // an approval never grants the person without the organization.
+        if (organizationService != null) {
+            organizationService.grantProduct(user, req.getOrganizationId(), req.getService(), reviewer);
+        }
 
         req.setStatus(ServiceRequest.Status.APPROVED);
         req.setReviewedAt(LocalDateTime.now(ZoneOffset.UTC));

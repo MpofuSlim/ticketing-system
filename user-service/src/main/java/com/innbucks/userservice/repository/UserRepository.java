@@ -25,6 +25,14 @@ public interface UserRepository extends JpaRepository<User, Long> {
      * {@link #existsByEmail(String)} alone would let the variant through.
      */
     boolean existsByEmailIgnoreCase(String email);
+
+    /**
+     * Every account whose email matches case-insensitively. A LIST, because
+     * {@code uk_users_email} is case-sensitive and accounts created before the
+     * case-insensitive registration check may genuinely share a spelling
+     * variant — a single-result finder would throw on exactly those rows.
+     */
+    List<User> findAllByEmailIgnoreCase(String email);
     boolean existsByPhoneNumber(String phoneNumber);
     /**
      * Composite uniqueness check matching the {@code uk_users_phone_country}

@@ -78,6 +78,17 @@ public class RefreshToken {
     @Column(name = "phone_proof", nullable = false)
     private boolean phoneProof;
 
+    /**
+     * The organization this session is acting for (V39), or null when none is
+     * chosen yet. Same lifecycle as {@link #phoneProof}: carried onto every
+     * successor, because {@code /auth/refresh} re-derives the claims from the
+     * live user. Unlike phone_proof it can CHANGE across a rotation — that is
+     * how switching organization works — and it is re-validated against the
+     * user's live memberships every time.
+     */
+    @Column(name = "organization_id")
+    private java.util.UUID organizationId;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 }

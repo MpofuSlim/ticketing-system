@@ -183,10 +183,12 @@ public class JwtFilter extends OncePerRequestFilter {
             // {@link AuthenticatedCaller#userUuid(Authentication)}.
             UUID userUuid = jwtUtil.extractUserUuid(token);
             UUID organizerUuid = jwtUtil.extractOrganizerUuid(token);
-            if (userUuid != null || organizerUuid != null) {
+            UUID organizationId = jwtUtil.extractOrganizationId(token);
+            if (userUuid != null || organizerUuid != null || organizationId != null) {
                 Map<String, Object> details = new LinkedHashMap<>();
                 if (userUuid != null) details.put(AuthDetailsKeys.USER_UUID, userUuid);
                 if (organizerUuid != null) details.put(AuthDetailsKeys.ORGANIZER_UUID, organizerUuid);
+                if (organizationId != null) details.put(AuthDetailsKeys.ORGANIZATION_ID, organizationId);
                 auth.setDetails(details);
             }
             SecurityContextHolder.getContext().setAuthentication(auth);

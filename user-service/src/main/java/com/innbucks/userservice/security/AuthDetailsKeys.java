@@ -12,4 +12,6 @@ public final class AuthDetailsKeys {
 
     public static final String USER_UUID = "userUuid";
     public static final String ORGANIZER_UUID = "organizerUuid";
+    /** The organization the session acts for (V39), from the {@code orgId} claim. */
+    public static final String ORGANIZATION_ID = "orgId";
 }

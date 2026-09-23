@@ -238,6 +238,20 @@ public class GlobalExceptionHandler {
      * knows it) the home cell's public base URL so the FE can switch base
      * URL and retry without an extra lookup round-trip.
      */
+    /**
+     * Organization surface refusals (V39). The stable errorCode is what the FE
+     * branches on; the message is a typed constant written for a person.
+     */
+    @ExceptionHandler(OrganizationException.class)
+    public ResponseEntity<ApiResult<Map<String, String>>> handleOrganization(OrganizationException ex) {
+        log.info("Organization request refused status={} errorCode={}",
+                ex.getStatus().value(), ex.getErrorCode());
+        Map<String, String> data = new LinkedHashMap<>();
+        data.put("errorCode", ex.getErrorCode());
+        return ResponseEntity.status(ex.getStatus())
+                .body(ApiResult.of(ex.getStatus(), ex.getMessage(), data));
+    }
+
     @ExceptionHandler(WrongCellException.class)
     public ResponseEntity<ApiResult<Map<String, String>>> handleWrongCell(WrongCellException ex) {
         Map<String, String> data = new LinkedHashMap<>();

@@ -193,6 +193,22 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
+            # Organizations (V39): the business a person works for, its members
+            # and details. Same shape as user-notifications-route: authenticated,
+            # JWT-keyed limiter. The session-switch endpoint lives under /auth
+            # (POST /auth/organization-context) and rides user-auth-route.
+            - id: user-organizations-route
+              uri: lb://user-service
+              predicates:
+                - Path=/organizations/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
+
             - id: booking-event-organizer-reports-route
               uri: lb://booking-service
               predicates:

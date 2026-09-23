@@ -535,6 +535,144 @@ public class AuthController {
         return ResponseEntity.ok(ApiResult.ok("Token refreshed", response));
     }
 
+    @PostMapping("/organization-context")
+    @SecurityRequirement(name = "bearerAuth")
+    @Operation(summary = "Choose the organization this session acts for",
+            description = """
+                    Moves the session into one of the caller's organizations and returns a fresh
+                    access + refresh token pair whose `orgId` / `orgRole` / `products` claims name it.
+
+                    **Call it when** the login or refresh response carries
+                    `organizationSelectionRequired: true` (the account belongs to several
+                    organizations), or when the user picks a different organization from the
+                    switcher. An account with exactly one organization never needs it — that
+                    one is chosen automatically.
+
+                    **Same contract as `/auth/refresh`:** the bearer token is the `refreshToken`,
+                    `X-Device-Id` must match the device the session was issued to, and the
+                    presented refresh token is consumed. Replace both tokens atomically.
+
+                    **A refusal leaves the session intact.** If the caller does not belong to the
+                    organization, or it is suspended, nothing is consumed and the presented
+                    refresh token keeps working.
+
+                    Sessions from a phone proof (`POST /auth/exchange`, the super app) cannot act
+                    for a business and are refused.
+                    """)
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
+                    description = "Session now acts for the chosen organization",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Organization selected",
+                                      "data": {
+                                        "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJydWRvQGNoaWt3YW5oYS10cmFkZXJzLmNvLnp3Iiwib3JnSWQiOiI3YjFlMmM0ZC05ZjNhLTRlNWItOGM2ZC0wYTFiMmMzZDRlNWYiLCJvcmdSb2xlIjoiT1dORVIiLCJwcm9kdWN0cyI6WyJtYXJrZXRwbGFjZSJdfQ.access-signature",
+                                        "refreshToken": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJydWRvQGNoaWt3YW5oYS10cmFkZXJzLmNvLnp3IiwidHlwZSI6InJlZnJlc2gifQ.refresh-signature",
+                                        "email": "rudo@chikwanha-traders.co.zw",
+                                        "roles": ["MERCHANT_ADMIN"],
+                                        "defaultServices": ["marketplace"],
+                                        "mfaRequired": false,
+                                        "mustChangePassword": false,
+                                        "tier": 4,
+                                        "verified": true,
+                                        "organizationId": "7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f",
+                                        "organizationRole": "OWNER"
+                                      }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "Body invalid, or the refresh token was already rotated (reuse — family revoked)",
+                    content = @Content(mediaType = "application/json",
+                            examples = {
+                                    @ExampleObject(name = "No organization named", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Validation failed",
+                                              "data": { "organizationId": "organizationId is required" }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Already rotated (reuse)", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Refresh token reuse detected; family revoked",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
+                    description = "Missing or malformed bearer header",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "401 UNAUTHORIZED",
+                                      "message": "Missing Bearer token",
+                                      "data": null
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "The organization is suspended, the session is a phone proof, or the account "
+                            + "must enrol in 2FA first. The presented refresh token is NOT consumed on the "
+                            + "first two.",
+                    content = @Content(mediaType = "application/json",
+                            examples = {
+                                    @ExampleObject(name = "Suspended organization", value = """
+                                            {
+                                              "code": "403 FORBIDDEN",
+                                              "message": "This organization is suspended. Contact support.",
+                                              "data": { "errorCode": "organization_suspended" }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Phone-proof session", value = """
+                                            {
+                                              "code": "403 FORBIDDEN",
+                                              "message": "This session can't act for a business. Sign in with your password to do that.",
+                                              "data": { "errorCode": "organization_context_not_allowed" }
+                                            }
+                                            """)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "The caller does not belong to that organization, or it does not exist — "
+                            + "deliberately the same answer. Nothing is consumed.",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "We couldn't find that organization.",
+                                      "data": { "errorCode": "organization_not_found" }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "429",
+                    description = "Same limiter as /auth/refresh.",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "429 TOO_MANY_REQUESTS",
+                                      "message": "Too many refresh attempts from this address; try again shortly",
+                                      "data": { "retryAfterSeconds": 60 }
+                                    }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<AuthResponseDTO>> selectOrganization(
+            HttpServletRequest request,
+            @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+            @jakarta.validation.Valid @RequestBody
+            com.innbucks.userservice.dto.OrganizationDTOs.SelectOrganizationRequest body) {
+        String authHeader = request.getHeader("Authorization");
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(ApiResult.error(HttpStatus.UNAUTHORIZED, "Missing Bearer token"));
+        }
+        String token = authHeader.substring(7);
+        // Same limiter as /auth/refresh: this is a rotation, and it must not be a
+        // way around the refresh budget.
+        loginRateLimiter.checkRefresh(safeSubject(token), clientIp(request));
+        AuthResponseDTO response = authService.switchOrganization(token, deviceId,
+                body.getOrganizationId(), auditContext(request));
+        return ResponseEntity.ok(ApiResult.ok("Organization selected", response));
+    }
+
     @ExceptionHandler(LoginRateLimiter.RateLimitedException.class)
     public ResponseEntity<ApiResult<RateLimitDetail>> handleRateLimited(
             LoginRateLimiter.RateLimitedException ex) {

@@ -68,6 +68,8 @@ public class AuditService {
     public static final String TARGET_TYPE_USER = "USER";
     /** Target of the ROLE_* events (V35); the target id is the role name. */
     public static final String TARGET_TYPE_ROLE = "ROLE";
+    /** Target of the ORGANIZATION_* events (V39); the target id is the organization id. */
+    public static final String TARGET_TYPE_ORGANIZATION = "ORGANIZATION";
 
     private static final String HMAC_ALGORITHM = "HmacSHA256";
     /** Field separator for the canonical HMAC input — the ASCII Unit Separator,

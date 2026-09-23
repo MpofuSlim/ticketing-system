@@ -96,6 +96,16 @@ public class AuthService implements ApplicationEventPublisherAware {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private com.innbucks.userservice.security.PermissionResolver permissionResolver;
 
+    /**
+     * Organizations (V39): created at registration, and the source of the
+     * orgId / orgRole / products claims. Field-injected for the same reason as
+     * the collaborators above; null in a plain unit test means no organization
+     * is created and no organization claims are minted — exactly the pre-V39
+     * token those tests assert.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private OrganizationService organizationService;
+
     /** Null-safe security-metric emit — no-op when SecurityMetrics isn't wired
      *  (plain unit tests). Keeps the call sites free of repeated null checks. */
     private void sec(java.util.function.Consumer<com.innbucks.userservice.config.SecurityMetrics> op) {
@@ -364,6 +374,24 @@ public class AuthService implements ApplicationEventPublisherAware {
                     .build();
             tenantProfileRepository.save(profile);
             log.info("Tenant profile saved userId={}", user.getId());
+        }
+
+        // Every account registered here owns a business: the bundles above only
+        // grant owner roles (EVENT_ORGANIZER / MERCHANT_ADMIN). So each gets the
+        // organization it runs, named after the business when there is one and
+        // after the person otherwise, with the chosen bundles as its products.
+        // Same transaction as the user row — a registration never leaves an
+        // owner without their organization.
+        if (organizationService != null) {
+            organizationService.createForOwner(user,
+                    request.isBusiness() ? request.getBusinessName() : null,
+                    request.isBusiness() && request.getBusinessEmail() != null
+                            && !request.getBusinessEmail().isBlank()
+                            ? request.getBusinessEmail() : user.getEmail(),
+                    user.getPhoneNumber(),
+                    request.isBusiness() ? request.getBusinessAddress() : null,
+                    null,
+                    bundles);
         }
 
         log.info("Registration complete (pending approval) email={} roles={} bundles={}", user.getEmail(), roles, bundles);
@@ -948,8 +976,18 @@ public class AuthService implements ApplicationEventPublisherAware {
             // user must do a full login, which routes them to enrolment.
             // mfaPolicy is null only in plain unit tests (no Spring), matching
             // the login gate's convention.
+            //
+            // A PHONE-PROOF family is exempt, for the same reason its login is:
+            // buildResponse narrows it to CUSTOMER and withholds every scope
+            // claim, so this rotation cannot mint the authority the guard
+            // exists to protect. Applying it anyway refused the super-app
+            // session of any customer whose account ALSO holds staff authority
+            // — a dual-role merchant admin not yet enrolled, or (since V39) a
+            // customer added to an organization as STAFF — and the super app
+            // has no enrolment flow to send them to.
             User rotated = rotation.user();
             if (mfaPolicy != null
+                    && !rotation.phoneProof()
                     && mfaPolicy.required(rotated, com.innbucks.userservice.security.AuthChannel.WEB)
                     && (!rotated.isMfaEnabled() || rotated.getMfaSecret() == null)) {
                 log.warn("Refresh refused — role set mandates MFA but none enrolled userId={} roles={}",
@@ -968,7 +1006,8 @@ public class AuthService implements ApplicationEventPublisherAware {
             // construction — the live user's roles are exactly what a phone
             // proof declines to trust — which is why it rides the refresh row.
             AuthResponseDTO response =
-                    buildResponse(rotated, rotation.refreshToken(), rotation.phoneProof());
+                    buildResponse(rotated, rotation.refreshToken(), rotation.phoneProof(),
+                            rotation.organizationId());
             log.info("Token refreshed subject={} roles={} tier={} verified={}",
                     rotation.user().getEmail() != null ? rotation.user().getEmail() : rotation.user().getPhoneNumber(),
                     response.getRoles(), response.getTier(), response.getVerified());
@@ -999,6 +1038,62 @@ public class AuthService implements ApplicationEventPublisherAware {
         }
     }
 
+    /**
+     * Moves the session into {@code organizationId} (V39): a rotation, like
+     * {@link #refresh}, whose successor acts for the chosen organization.
+     *
+     * <p>The person must belong to it and it must be ACTIVE — checked inside the
+     * rotation before anything is consumed, so a refusal leaves the presented
+     * refresh token working. Everything else is refresh's contract verbatim:
+     * device binding, replay detection, and the MFA guard, because a switch can
+     * hand out authority exactly as a refresh can.
+     */
+    public AuthResponseDTO switchOrganization(String refreshToken, String deviceId, UUID organizationId,
+                                              AuditContext auditContext) {
+        String subject = safeRefreshSubject(refreshToken);
+        try {
+            RefreshTokenService.Rotation rotation =
+                    refreshTokenService.rotateInto(refreshToken, deviceId, organizationId);
+            User rotated = rotation.user();
+            if (mfaPolicy != null
+                    && mfaPolicy.required(rotated, com.innbucks.userservice.security.AuthChannel.WEB)
+                    && (!rotated.isMfaEnabled() || rotated.getMfaSecret() == null)) {
+                log.warn("Organization switch refused — role set mandates MFA but none enrolled userId={}",
+                        rotated.getId());
+                auditService.recordFailure(
+                        AuditEventType.AUTH_REFRESH_MFA_REQUIRED,
+                        String.valueOf(rotated.getId()), AuditService.ACTOR_TYPE_USER,
+                        String.valueOf(rotated.getId()), AuditService.TARGET_TYPE_USER,
+                        "mfa_enrollment_required",
+                        java.util.Map.of("organizationSwitch", true),
+                        auditContext);
+                throw new MfaEnrollmentRequiredException();
+            }
+            AuthResponseDTO response = buildResponse(rotated, rotation.refreshToken(),
+                    rotation.phoneProof(), rotation.organizationId());
+            log.info("Organization context switched userId={} organizationId={}",
+                    rotated.getId(), rotation.organizationId());
+            auditService.recordSuccess(
+                    AuditEventType.AUTH_REFRESH_SUCCESS,
+                    String.valueOf(rotated.getId()), AuditService.ACTOR_TYPE_USER,
+                    String.valueOf(rotated.getId()), AuditService.TARGET_TYPE_USER,
+                    java.util.Map.of("organizationSwitch", true,
+                            "organizationId", String.valueOf(rotation.organizationId())),
+                    auditContext);
+            return response;
+        } catch (RefreshTokenService.ReuseDetectedException ex) {
+            auditService.recordFailure(
+                    AuditEventType.AUTH_REFRESH_REUSE_DETECTED,
+                    subject, AuditService.ACTOR_TYPE_USER,
+                    subject, AuditService.TARGET_TYPE_USER,
+                    "refresh_token_reuse_or_device_mismatch",
+                    java.util.Map.of("organizationSwitch", true),
+                    auditContext);
+            sec(m -> m.tokenReuse());
+            throw ex;
+        }
+    }
+
     private String safeRefreshSubject(String token) {
         if (token == null || token.isBlank()) return null;
         try {
@@ -1018,7 +1113,13 @@ public class AuthService implements ApplicationEventPublisherAware {
      */
     public AuthResponseDTO issueToken(User user, String deviceId) {
         String refreshToken = refreshTokenService.issueNewFamily(user, deviceId);
-        return buildResponse(user, refreshToken);
+        // The organization the new session starts in: the person's only one, or
+        // none when they have several and must choose. issueNewFamily recorded
+        // the same answer on the refresh row — same function, same data, same
+        // transaction — and the next refresh re-validates it either way.
+        UUID organizationId = organizationService == null
+                ? null : organizationService.defaultOrganizationFor(user);
+        return buildResponse(user, refreshToken, false, organizationId);
     }
 
     /**
@@ -1052,7 +1153,7 @@ public class AuthService implements ApplicationEventPublisherAware {
      */
     public AuthResponseDTO issuePhoneProofToken(User user, String deviceId) {
         String refreshToken = refreshTokenService.issueNewFamily(user, deviceId, true);
-        return buildResponse(user, refreshToken, true);
+        return buildResponse(user, refreshToken, true, null);
     }
 
     /**
@@ -1114,7 +1215,7 @@ public class AuthService implements ApplicationEventPublisherAware {
     }
 
     private AuthResponseDTO buildResponse(User user, String refreshToken) {
-        return buildResponse(user, refreshToken, false);
+        return buildResponse(user, refreshToken, false, null);
     }
 
     /**
@@ -1123,7 +1224,8 @@ public class AuthService implements ApplicationEventPublisherAware {
      *                   and the merchant/shop scope claims are withheld. See
      *                   {@link #issuePhoneProofToken}.
      */
-    private AuthResponseDTO buildResponse(User user, String refreshToken, boolean phoneProof) {
+    private AuthResponseDTO buildResponse(User user, String refreshToken, boolean phoneProof,
+                                          UUID organizationId) {
         String subject = user.getEmail() != null ? user.getEmail() : user.getPhoneNumber();
 
         int tier;
@@ -1225,11 +1327,22 @@ public class AuthService implements ApplicationEventPublisherAware {
                 ? List.of()
                 : new ArrayList<>(permissionResolver.resolve(roleNames));
 
+        // Organization scope (V39): the business this session acts for. Withheld
+        // on a phone proof for the same reason as merchantId / shopId / organizerUuid
+        // above — it is authority phone possession does not establish.
+        com.innbucks.userservice.security.OrgScope orgScope = null;
+        boolean organizationSelectionRequired = false;
+        if (!phoneProof && organizationService != null) {
+            orgScope = organizationService.scopeFor(user, organizationId).orElse(null);
+            organizationSelectionRequired = organizationService.selectionRequired(user,
+                    orgScope == null ? null : orgScope.orgId());
+        }
+
         String newToken = jwtUtil.generateToken(subject, roleNames, permissions,
                 new ArrayList<>(microservices),
                 tier, verified, user.getPhoneNumber(), loyaltyMerchantId, loyaltyShopId,
                 firstName, middleName, lastName, user.getTokenVersion(), country,
-                user.getUserUuid(), organizerUuid, user.isMustChangePassword());
+                user.getUserUuid(), organizerUuid, user.isMustChangePassword(), orgScope);
 
         return AuthResponseDTO.builder()
                 .token(newToken)
@@ -1241,6 +1354,9 @@ public class AuthService implements ApplicationEventPublisherAware {
                 .mustChangePassword(user.isMustChangePassword())
                 .tier(tier)
                 .verified(verified)
+                .organizationId(orgScope == null ? null : orgScope.orgId())
+                .organizationRole(orgScope == null ? null : orgScope.orgRole())
+                .organizationSelectionRequired(organizationSelectionRequired ? Boolean.TRUE : null)
                 .build();
     }
 
