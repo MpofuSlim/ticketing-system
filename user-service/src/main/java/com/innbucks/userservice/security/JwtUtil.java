@@ -283,6 +283,28 @@ public class JwtUtil {
                                 long tokenVersion, String country,
                                 UUID userUuid, UUID organizerUuid,
                                 boolean mustChangePassword) {
+        return generateToken(email, roles, permissions, defaultServices, tier, verified, phoneNumber,
+                merchantId, shopId, firstName, middleName, lastName, tokenVersion, country,
+                userUuid, organizerUuid, mustChangePassword, null);
+    }
+
+    /**
+     * The canonical mint, carrying the organization claims added in V39.
+     *
+     * <p>{@code org} adds three keys and changes none: {@code orgId} (the one
+     * organization the session acts for), {@code orgRole} (the caller's role in
+     * it) and {@code products} (its ACTIVE products). Null — no organization
+     * chosen, or a phone-proof session — emits none of them, which is byte for
+     * byte the token every overload above produces.
+     */
+    public String generateToken(String email, Collection<String> roles, Collection<String> permissions,
+                                Collection<String> defaultServices,
+                                int tier, boolean verified, String phoneNumber,
+                                UUID merchantId, UUID shopId,
+                                String firstName, String middleName, String lastName,
+                                long tokenVersion, String country,
+                                UUID userUuid, UUID organizerUuid,
+                                boolean mustChangePassword, OrgScope org) {
         List<String> roleList = roles == null ? List.of()
                 : roles.stream().filter(r -> r != null && !r.isBlank()).collect(Collectors.toList());
         List<String> serviceList = defaultServices == null ? List.of()
@@ -357,6 +379,14 @@ public class JwtUtil {
         }
         if (shopId != null) {
             builder.claim("shopId", shopId.toString());
+        }
+        // Organization scope (V39). Singular on purpose: a consumer treats orgId
+        // as authoritative ownership, so a session speaks for exactly one
+        // business, chosen by the person (see OrganizationService).
+        if (org != null && org.orgId() != null) {
+            builder.claim("orgId", org.orgId().toString());
+            builder.claim("orgRole", org.orgRole());
+            builder.claim("products", org.products());
         }
         // Display-name claims (firstName / middleName / lastName) — emitted on:
         //   CUSTOMER       : the original use case (the FE shows the signed-in
@@ -619,6 +649,11 @@ public class JwtUtil {
      */
     public UUID extractOrganizerUuid(String token) {
         return extractUuidClaim(token, "organizerUuid");
+    }
+
+    /** The {@code orgId} claim (V39): the organization the session acts for. */
+    public UUID extractOrganizationId(String token) {
+        return extractUuidClaim(token, "orgId");
     }
 
     private UUID extractUuidClaim(String token, String name) {

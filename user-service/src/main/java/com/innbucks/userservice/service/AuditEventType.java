@@ -193,5 +193,19 @@ public enum AuditEventType {
      * the platform SUPER_ADMIN (the legacy-admin migration path). A privilege
      * grant to an account the seeder did not create, so it is audited.
      */
-    BOOTSTRAP_ADMIN_ADOPTED
+    BOOTSTRAP_ADMIN_ADOPTED,
+
+    /**
+     * Organizations (V39). Membership and products are business authority —
+     * who may speak for a business, and what it may use — so, like role
+     * changes, every move is on the tamper-evident chain. The target is the
+     * organization id; the affected person is named by userUuid in the
+     * metadata, never by email.
+     */
+    ORGANIZATION_CREATED,
+    ORGANIZATION_UPDATED,
+    ORGANIZATION_MEMBER_ADDED,
+    ORGANIZATION_MEMBER_ROLE_CHANGED,
+    ORGANIZATION_MEMBER_REMOVED,
+    ORGANIZATION_PRODUCT_GRANTED
 }

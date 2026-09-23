@@ -62,6 +62,15 @@ public class ServiceRequest {
     @Column(name = "reviewed_at")
     private LocalDateTime reviewedAt;
 
+    /**
+     * The organization the product was requested FOR (V39), so approving it
+     * grants the product to that business. Null on pre-V39 rows and when the
+     * requester spoke for no organization; approval then falls back to the
+     * requester's own organization.
+     */
+    @Column(name = "organization_id")
+    private java.util.UUID organizationId;
+
     /** users.id of the SUPER_ADMIN who decided this request. Null while PENDING. */
     @Column(name = "reviewed_by")
     private Long reviewedBy;

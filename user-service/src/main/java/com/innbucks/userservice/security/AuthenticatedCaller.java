@@ -29,6 +29,11 @@ public final class AuthenticatedCaller {
         return readUuid(auth, AuthDetailsKeys.ORGANIZER_UUID);
     }
 
+    /** The organization the session acts for (V39), or null when none is chosen. */
+    public static UUID organizationId(Authentication auth) {
+        return readUuid(auth, AuthDetailsKeys.ORGANIZATION_ID);
+    }
+
     @SuppressWarnings("unchecked")
     private static UUID readUuid(Authentication auth, String key) {
         if (auth == null) return null;

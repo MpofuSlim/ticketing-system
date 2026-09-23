@@ -100,7 +100,7 @@ class MerchantAdminMerchantIdClaimTest {
         JwtUtil jwt = mock(JwtUtil.class);
         when(jwt.generateToken(anyString(), any(), any(), any(), anyInt(), anyBoolean(),
                 any(), any(), any(), any(), any(), any(), anyLong(), any(), any(), any(),
-                anyBoolean())).thenReturn("tok");
+                anyBoolean(), any())).thenReturn("tok");
 
         AuthResponseDTO resp = login(merchantAdmin("owner@rudo.co.zw"), loyalty, jwt);
 
@@ -193,7 +193,7 @@ class MerchantAdminMerchantIdClaimTest {
         ArgumentCaptor<UUID> merchantId = ArgumentCaptor.forClass(UUID.class);
         verify(jwt).generateToken(anyString(), any(), any(), any(), anyInt(), anyBoolean(),
                 any(), merchantId.capture(), any(), any(), any(), any(), anyLong(), any(),
-                any(), any(), anyBoolean());
+                any(), any(), anyBoolean(), any());
         return merchantId.getValue();
     }
 }

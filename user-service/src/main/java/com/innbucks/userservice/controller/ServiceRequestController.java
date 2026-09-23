@@ -129,7 +129,8 @@ public class ServiceRequestController {
             Authentication authentication,
             @Valid @RequestBody CreateServiceRequestDTO request) {
 
-        ServiceRequestResponseDTO body = serviceRequestService.submit(authentication.getName(), request);
+        ServiceRequestResponseDTO body = serviceRequestService.submit(authentication.getName(),
+                com.innbucks.userservice.security.AuthenticatedCaller.organizationId(authentication), request);
         log.info("Service request submitted by {} for service={}", authentication.getName(), request.getService());
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResult.created("Service request submitted", body));

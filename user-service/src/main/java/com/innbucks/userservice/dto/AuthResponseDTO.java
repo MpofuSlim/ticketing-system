@@ -93,4 +93,25 @@ public class AuthResponseDTO {
             example = "2026-07-30T10:00:00",
             nullable = true)
     private java.time.LocalDateTime deviceTrustExpiresAt;
+
+    @Schema(description = "The organization this session acts for (V39) — the same value as the token's "
+            + "`orgId` claim. Absent when the account belongs to no organization, when it belongs to "
+            + "several and none is chosen yet (see `organizationSelectionRequired`), and on phone-proof "
+            + "sessions.",
+            example = "7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f",
+            nullable = true)
+    private java.util.UUID organizationId;
+
+    @Schema(description = "The caller's role in `organizationId`: OWNER, ADMIN or STAFF. Absent whenever "
+            + "`organizationId` is.",
+            example = "OWNER",
+            nullable = true)
+    private String organizationRole;
+
+    @Schema(description = "Present and `true` when the account belongs to several organizations and this "
+            + "session has not chosen one. Show the organization picker (GET /organizations/me) and "
+            + "call POST /auth/organization-context with the choice. Absent otherwise.",
+            example = "true",
+            nullable = true)
+    private Boolean organizationSelectionRequired;
 }

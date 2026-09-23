@@ -106,6 +106,39 @@ public class MfaPolicy {
     }
 
     /**
+     * Organization memberships (V39). Field-injected, not a constructor
+     * argument, so {@code MfaPolicyTest}'s construction sites don't widen; null
+     * there means "no memberships", which is exactly the pre-V39 behaviour
+     * those tests pin.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.innbucks.userservice.repository.OrganizationMemberRepository organizationMembers;
+
+    /**
+     * Whether the account works for any organization, in any role.
+     *
+     * <p>Membership is business authority: a member speaks for that business on
+     * every product that trusts the {@code orgId} claim, which is where a
+     * seller's listings and payout destination live. That authority must never
+     * ride a session that skipped the second factor. Two account shapes would
+     * otherwise do exactly that, because {@link #isSystemUser} reads only the
+     * GLOBAL role set:
+     * <ul>
+     *   <li>a plain CUSTOMER added to an organization — CUSTOMER is not a
+     *       system role, so no challenge;</li>
+     *   <li>a gate operator added to an organization — exempt by
+     *       {@link #gateOperatorExempt}.</li>
+     * </ul>
+     * Counting ANY membership, STAFF included, is the conservative line and
+     * matches how shop staff are already treated (SHOP_USER is a system role).
+     */
+    private boolean belongsToAnOrganization(User user) {
+        return organizationMembers != null
+                && user.getId() != null
+                && organizationMembers.existsByUserId(user.getId());
+    }
+
+    /**
      * True iff a second factor can be exchanged on this channel. Returns false
      * for USSD / WhatsApp regardless of role — those channels don't have a UI
      * for a TOTP code or a backup code.
@@ -199,6 +232,13 @@ public class MfaPolicy {
         //
         // Cost note: this resolve() only runs for accounts that already passed
         // the single-role test, i.e. gate staff. No other login pays for it.
+        //
+        // Organization membership fails it CLOSED in the same way (V39): a gate
+        // operator who joins a business holds that business's authority and
+        // stops being exempt automatically.
+        if (belongsToAnOrganization(user)) {
+            return false;
+        }
         return permissionResolver.resolve(roles).isEmpty();
     }
 
@@ -219,6 +259,11 @@ public class MfaPolicy {
         // the same MFA enrolment and challenge rules as any other staff account.
         // Defaulting a custom role to the customer path would let someone opt
         // out of MFA by creating a role.
-        return user.getRoles().stream().anyMatch(r -> !User.Role.CUSTOMER.name().equals(r));
+        if (user.getRoles().stream().anyMatch(r -> !User.Role.CUSTOMER.name().equals(r))) {
+            return true;
+        }
+        // A plain CUSTOMER is not a system user — unless they work for a
+        // business (V39). See belongsToAnOrganization.
+        return belongsToAnOrganization(user);
     }
 }

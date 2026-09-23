@@ -407,6 +407,85 @@ its `V4`).
   already decided the row. `approve` was fixed alongside `reject` — its Swagger
   had been documenting a 404 it did not actually return.
 
+## Organizations — the business is the tenant (user-service V39)
+
+`organizations` + `organization_members` (`OWNER` / `ADMIN` / `STAFF`) +
+`organization_products` (`ticketing` / `loyalty` / `marketplace`). Until V39 a
+"tenant" was a PERSON: roles sat on one account, merchant scope was recovered
+from loyalty's `merchants.admin_email`, nobody could add a colleague, and an
+admin running two businesses got no `merchantId` claim at all. This is **step 1**
+of the organizations plan: user-service only, additive, safe to ship to
+production ahead of everything else.
+
+- **The token gains `orgId`, `orgRole`, `products` — additively.** An account
+  with no organization mints a token byte-identical to pre-V39; one with an
+  organization gains exactly those three claims and nothing else changes.
+  Pinned by `OrganizationClaimsTest`. After the backfill every organizer and
+  merchant admin is in the second group, so their tokens DO change shape —
+  additively, which every consumer already tolerates.
+- **Which organization a session acts for is never guessed.** Exactly one
+  ACTIVE membership → chosen automatically. Several → none, the auth response
+  carries `organizationSelectionRequired: true`, and the person picks through
+  `POST /auth/organization-context` (the refresh token as Bearer +
+  `X-Device-Id`, body `{ organizationId }`). Same reason the `merchantId`
+  claim is withheld from a multi-merchant admin: a pick we made would
+  attribute their actions to a business they did not choose.
+- **The choice rides the REFRESH ROW (`refresh_tokens.organization_id`)**, same
+  lifecycle as `phone_proof`, because `/auth/refresh` re-derives claims from the
+  live user. Unlike `phone_proof` it can change — that is how switching works —
+  and it is **re-validated on every rotation**: removed from the organization,
+  or the organization suspended, and the next refresh falls back to the
+  default. A role change or a removal also bumps the member's `tokenVersion`,
+  so authority that was taken away dies with the access token at once rather
+  than at expiry. An ADD does not: it only grants, and the new organization
+  arrives at the member's next refresh — behind the MFA guard below.
+- **Phone-proof sessions carry no organization claims and cannot switch**
+  (403 `organization_context_not_allowed`), for the same reason they carry no
+  `merchantId`: a phone proof is not a staff login.
+- **Belonging to an organization requires 2FA** (`MfaPolicy.isSystemUser`),
+  whatever the roles say: a plain CUSTOMER added as STAFF now works for a
+  business and is challenged like staff, and a gate operator added to one loses
+  the gate exemption. Fails CLOSED. The **refresh MFA guard skips phone-proof
+  families**: what they mint is CUSTOMER-only with no scope claims — the same
+  authority the exchange login grants without a second factor — and without the
+  skip a shopper added as STAFF lost their super-app session at the next
+  refresh, with no enrolment flow in the app. Pinned by the two
+  `refresh_*OrganizationMember*` cases in `AuthServiceTest`.
+- **Authority inside an organization is ordered OWNER > ADMIN > STAFF.** Any
+  member may read it; OWNER/ADMIN edit it and list members; an OWNER adds or
+  removes anyone and is the only one who changes roles; an ADMIN adds or
+  removes STAFF only. The last OWNER can be neither demoted nor removed (409
+  `last_owner`), so an organization can never be orphaned. Non-members get a
+  404 indistinguishable from a missing organization — no existence oracle.
+- **Products are granted by service-request APPROVAL.** The request is stamped
+  at submission with the organization it is FOR (the session's organization if
+  the requester is OWNER/ADMIN there, else the one they own); approval grants
+  the product to that organization, else to their sole owned one, else creates
+  one for them (approving a business product is what makes them a business).
+  An owner of several with nothing stamped is **skipped with a WARN, never
+  guessed**. The user-level bundle and role are still granted exactly as
+  before — roles remain how every service authorizes today.
+- **Registration** creates the organization in the same transaction as the
+  user (every self-registered account owns a business), named after the
+  business when there is one and after the person otherwise.
+- **The backfill** (V39 itself) gives every `EVENT_ORGANIZER` /
+  `MERCHANT_ADMIN` account one organization it OWNS, named from its tenant
+  profile or the person, with products from `user_default_services`
+  (normalised, unknown values skipped). Customers and platform staff get none.
+  Pinned against real Postgres by `OrganizationBackfillPostgresIT`.
+- **S2S for step 2's consumers:** `GET /users/internal/organizations/names?ids=`
+  (≤ 200 per call) and `/{organizationId}/admins` — both behind the existing
+  `/users/internal/**` permitAll + `user-internal-deny`. Gateway route
+  `user-organizations-route` (`/organizations/**`), pinned by
+  `GatewayRouteTableTest`.
+- **The `merchantId` claim and its login-time loyalty lookup are KEPT in step
+  1.** Marketplace and loyalty still scope on it, and removing it before they
+  re-key on `orgId` would break staging. Its removal belongs to step 2, in the
+  same change as those consumers.
+- Every membership and product change is on the tamper-evident chain
+  (`ORGANIZATION_*`), target = the organization id, the affected person named by
+  `userUuid` — never by email.
+
 ## Super-app customers federate from the InnBucks middleware (`POST /auth/exchange`)
 
 **Two audiences, two identity providers, one token shape.** Merchants and admins
