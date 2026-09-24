@@ -1290,6 +1290,7 @@ public class AuthService implements ApplicationEventPublisherAware {
                 .verified(verified)
                 .organizationId(orgScope == null ? null : orgScope.orgId())
                 .organizationRole(orgScope == null ? null : orgScope.orgRole())
+                .organizationProducts(orgScope == null ? null : orgScope.products())
                 .organizationSelectionRequired(organizationSelectionRequired ? Boolean.TRUE : null)
                 .build();
     }

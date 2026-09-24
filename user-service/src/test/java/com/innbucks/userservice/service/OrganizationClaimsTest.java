@@ -102,6 +102,7 @@ class OrganizationClaimsTest {
 
         assertThat(stable(claims(after.getToken()))).isEqualTo(before);
         assertThat(after.getOrganizationId()).isNull();
+        assertThat(after.getOrganizationProducts()).isNull();
         assertThat(after.getOrganizationSelectionRequired()).isNull();
     }
 
@@ -128,6 +129,9 @@ class OrganizationClaimsTest {
         assertThat(now.get("products")).isEqualTo(List.of("ticketing"));
         assertThat(after.getOrganizationId()).isEqualTo(orgId);
         assertThat(after.getOrganizationRole()).isEqualTo("OWNER");
+        // The response echoes the products claim, so a client gates its menus
+        // on the same list the services authorize from without decoding the token.
+        assertThat(after.getOrganizationProducts()).isEqualTo(now.get("products"));
     }
 
     @Test
@@ -141,6 +145,7 @@ class OrganizationClaimsTest {
         AuthResponseDTO response = authService.issueToken(organizer(), "d");
 
         assertThat(claims(response.getToken())).doesNotContainKeys("orgId", "orgRole", "products");
+        assertThat(response.getOrganizationProducts()).isNull();
         assertThat(response.getOrganizationSelectionRequired()).isTrue();
     }
 
@@ -159,6 +164,7 @@ class OrganizationClaimsTest {
 
         assertThat(claims(response.getToken())).doesNotContainKeys("orgId", "orgRole", "products");
         assertThat(response.getOrganizationId()).isNull();
+        assertThat(response.getOrganizationProducts()).isNull();
         assertThat(response.getOrganizationSelectionRequired()).isNull();
         verify(organizations, never()).scopeFor(any(), any());
     }
