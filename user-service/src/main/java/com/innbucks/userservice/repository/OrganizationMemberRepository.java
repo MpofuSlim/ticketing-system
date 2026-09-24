@@ -22,4 +22,7 @@ public interface OrganizationMemberRepository extends JpaRepository<Organization
                                                           Collection<OrganizationMember.Role> roles);
 
     long countByOrganizationIdAndRole(UUID organizationId, OrganizationMember.Role role);
+
+    List<OrganizationMember> findByOrganizationIdInAndRole(Collection<UUID> organizationIds,
+                                                          OrganizationMember.Role role);
 }

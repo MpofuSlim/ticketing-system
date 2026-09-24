@@ -128,7 +128,10 @@ class PhoneProofScopeTest {
         // narrowed. The shopkeeper signs in to the admin portal exactly as
         // before, password plus MFA, and sells.
         assertThat(roles(token)).contains("CUSTOMER", "MERCHANT_ADMIN");
-        assertThat(jwt.extractMerchantId(token)).isNotNull();
+        // Their business scope is the organization (orgId — OrganizationClaimsTest),
+        // not a loyalty merchantId: that claim is no longer minted for a merchant
+        // admin on ANY path, password included.
+        assertThat(jwt.extractMerchantId(token)).isNull();
     }
 
     @Test

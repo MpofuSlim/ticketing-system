@@ -15,6 +15,13 @@ import com.innbucks.userservice.security.TokenVersionPublisher;
 import com.innbucks.userservice.util.HtmlSanitizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import jakarta.persistence.criteria.Predicate;
+import jakarta.persistence.criteria.Root;
+import jakarta.persistence.criteria.Subquery;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -41,7 +48,9 @@ import java.util.stream.Collectors;
  *
  * <p>Every endpoint scopes to the caller by membership. A caller who is not a
  * member gets the same 404 as for an organization that does not exist, so
- * nothing here is an oracle for which businesses are on the platform.
+ * nothing here is an oracle for which businesses are on the platform. The one
+ * exception is {@link #directory}, the platform staff's list of every business,
+ * which is why it sits behind a permission instead of on the member surface.
  */
 @Service
 @RequiredArgsConstructor
@@ -463,6 +472,83 @@ public class OrganizationService {
                 .toList();
     }
 
+    /**
+     * The platform directory: every organization, for platform staff
+     * ({@code organizations:read}, which SUPER_ADMIN holds through its
+     * wildcard). It is what an operator picks from when onboarding a loyalty
+     * merchant or creating a marketplace listing on a business's behalf — both
+     * of which now take the ORGANIZATION id, and nothing else lists them.
+     *
+     * <p>Each filter is APPENDED as a predicate only when present, never bound
+     * as a null: Postgres infers {@code bytea} for an untyped null parameter and
+     * {@code lower(bytea)} does not exist. The sort ends on {@code id} so the
+     * order is TOTAL — two businesses sharing a name can neither repeat nor go
+     * missing across a page boundary. Products and owners for the page come from
+     * two batched reads, never one per row.
+     */
+    @Transactional(readOnly = true)
+    public OrganizationDTOs.DirectoryPage directory(String query, String product, int page, int size) {
+        String nameLike = query == null || query.isBlank()
+                ? null : "%" + escapeLike(query.trim().toLowerCase(Locale.ROOT)) + "%";
+        String wanted = product == null || product.isBlank()
+                ? null : product.trim().toLowerCase(Locale.ROOT);
+        if (wanted != null && !Services.isKnownBundle(wanted)) {
+            throw new OrganizationException(HttpStatus.BAD_REQUEST, "unknown_product",
+                    "Unknown product. Use one of: " + String.join(", ", Services.ALL_BUNDLES) + ".");
+        }
+
+        Specification<Organization> spec = (root, cq, cb) -> {
+            List<Predicate> where = new ArrayList<>();
+            if (nameLike != null) {
+                where.add(cb.like(cb.lower(root.get("name")), nameLike, '\\'));
+            }
+            if (wanted != null) {
+                Subquery<UUID> holds = cq.subquery(UUID.class);
+                Root<OrganizationProduct> granted = holds.from(OrganizationProduct.class);
+                holds.select(granted.get("organizationId")).where(
+                        cb.equal(granted.get("organizationId"), root.get("id")),
+                        cb.equal(granted.get("product"), wanted),
+                        cb.equal(granted.get("status"), OrganizationProduct.Status.ACTIVE));
+                where.add(cb.exists(holds));
+            }
+            return cb.and(where.toArray(Predicate[]::new));
+        };
+        Page<Organization> found = organizations.findAll(spec,
+                PageRequest.of(page, size, Sort.by(Sort.Order.asc("name"), Sort.Order.asc("id"))));
+
+        List<UUID> ids = found.getContent().stream().map(Organization::getId).toList();
+        Map<UUID, List<String>> productsOf = new HashMap<>();
+        Map<UUID, List<String>> ownersOf = new HashMap<>();
+        if (!ids.isEmpty()) {
+            for (OrganizationProduct p : products.findByOrganizationIdIn(ids)) {
+                if (p.getStatus() == OrganizationProduct.Status.ACTIVE) {
+                    productsOf.computeIfAbsent(p.getOrganizationId(), k -> new ArrayList<>()).add(p.getProduct());
+                }
+            }
+            List<OrganizationMember> owners = members.findByOrganizationIdInAndRole(ids, OrganizationMember.Role.OWNER);
+            Map<Long, String> emailOf = users.findAllById(owners.stream().map(OrganizationMember::getUserId).toList())
+                    .stream()
+                    .filter(u -> u.getEmail() != null && !u.getEmail().isBlank())
+                    .collect(Collectors.toMap(User::getId, User::getEmail, (a, b) -> a));
+            for (OrganizationMember owner : owners) {
+                String email = emailOf.get(owner.getUserId());
+                if (email != null) {
+                    ownersOf.computeIfAbsent(owner.getOrganizationId(), k -> new ArrayList<>()).add(email);
+                }
+            }
+        }
+
+        List<OrganizationDTOs.DirectoryEntry> content = found.getContent().stream()
+                .map(o -> new OrganizationDTOs.DirectoryEntry(
+                        o.getId(), o.getName(), o.getStatus().name(),
+                        productsOf.getOrDefault(o.getId(), List.of()).stream().sorted().toList(),
+                        ownersOf.getOrDefault(o.getId(), List.of()).stream().sorted().toList(),
+                        o.getContactEmail(), o.getCreatedAt()))
+                .toList();
+        return new OrganizationDTOs.DirectoryPage(content, found.getTotalElements(), found.getTotalPages(),
+                found.getNumber(), found.getSize());
+    }
+
     // ----------------------------------------------------------------------
     // Helpers
     // ----------------------------------------------------------------------
@@ -566,6 +652,11 @@ public class OrganizationService {
                 + (owner.getLastName() == null ? "" : owner.getLastName())).trim();
         if (!person.isEmpty()) return person;
         return owner.getEmail() != null ? owner.getEmail() : String.valueOf(owner.getPhoneNumber());
+    }
+
+    /** Makes a search term literal inside LIKE: its own % and _ match themselves. */
+    private static String escapeLike(String s) {
+        return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_");
     }
 
     private static String blankToNull(String s) {

@@ -330,44 +330,52 @@ organizer's bookings view from a list of MSISDNs into a guest list.
   event-change/cancel notifications — those still go to the purchaser only.
   Extending them is a separate decision (it multiplies SMS cost per booking).
 
-## A MERCHANT_ADMIN's token carries a `merchantId` claim (and why it didn't)
+## A MERCHANT_ADMIN's token carries NO `merchantId` claim — the organization is the scope
 
-**`AuthService.resolveMerchantIdClaim` mints the loyalty `merchants.id` onto a
-MERCHANT_ADMIN's JWT**, resolved from loyalty-service by the admin's email —
-the binding InnRewards stamps at merchant creation (`merchants.admin_email`,
-its `V4`).
+**Step 2 of the organizations plan removed `AuthService.resolveMerchantIdClaim`
+and its login-time loyalty lookup.** A merchant admin's scope is now the
+ORGANIZATION their session acts for: `orgId` + `orgRole` + `products` (V39),
+which loyalty (InnRewards V51) and marketplace-service each read directly.
 
-- **Why it changed.** Merchant scope used to be resolved per request from the
-  body, so MERCHANT_ADMIN tokens deliberately carried no claim. That is fine
-  for an endpoint that takes a merchant in the body — but **marketplace-service
-  (`MpofuSlim/market-place`) scopes a seller EXCLUSIVELY from the claim** and
-  refuses without one (`403 merchant_scope_missing`,
-  `ListingService.requireMerchantId`). Merchant self-service listing was
-  therefore unreachable with a real fleet token; only the SUPER_ADMIN
-  on-behalf path worked. The claim is minted in **one** place — `buildResponse`,
-  which login, MFA completion and refresh all funnel through — rather than
-  teaching each consumer a second lookup.
-- **Exactly one merchant, or none — never a guess.** An admin may own several
-  (`ShopStaffService.resolveCallerMerchantIds` handles the set), but a claim is
-  singular and the consumer treats it as authoritative ownership. Minting one
-  of several would silently attribute listings — and therefore commission — to
-  an arbitrary merchant, surfacing at invoicing rather than at the call. So a
-  multi-merchant admin gets **no** claim and the same clean refusal as before,
-  plus a boot-visible WARN. Widening this needs an explicit merchant selector
-  on the consumer side; that is a design change, not a default.
-  `MerchantAdminMerchantIdClaimTest` pins both directions.
-- **It can never fail a login.** `LoyaltyServiceClient.merchantIdsForAdmin` is
-  best-effort by construction (swallows 4xx + network errors, returns an empty
-  list), and a null client — a plain unit test — skips the lookup. A loyalty
-  outage mints a token *without* the claim: the user signs in and only
-  merchant-scoped calls are refused until loyalty is back.
-- **Only MERCHANT_ADMIN pays for it.** Shop staff keep the value stamped on
-  their `User` row (no network call); every other role short-circuits before
-  the lookup, so no customer or organiser login gains a round-trip.
-- `Listing.merchantId` and `Listing.shopId` in marketplace-service are the
-  **loyalty** merchant/shop ids, copied from these claims. `GET /loyalty/merchants`
-  is the authoritative registry for them — **not** `GET /admin/users/merchants`,
-  which returns account `userUuid`s.
+- **Why the claim went.** It was minted from loyalty's `merchants.admin_email`
+  — one email per merchant — and was withheld whenever that email matched more
+  than one merchant, so an admin running two businesses had no scope at all,
+  and a colleague could never be added. The organization carries both: several
+  people per business, several businesses per person (picked through
+  `POST /auth/organization-context`, never guessed).
+- **The consumers decide authority from the ORG claims, not the role.** Both
+  loyalty and marketplace grant their merchant-admin authority only to an
+  OWNER/ADMIN of an organization holding THEIR product (`loyalty` /
+  `marketplace`); a bare `MERCHANT_ADMIN` role grants nothing there. So a
+  marketplace-only business cannot administer loyalty, and an ADMIN colleague
+  with no staff role at all can sell.
+- **Shop staff keep their row-stamped claims.** SHOP_ADMIN / SHOP_USER still get
+  `merchantId` + `shopId` from their `User` row (no network call) — moving shop
+  staff under organization membership is a separate design change.
+  `MerchantIdClaimTest` pins both halves.
+- **`ShopStaffService.resolveCallerMerchantIds`** asks loyalty
+  `GET /loyalty/internal/merchants/ids-by-organization` for the session
+  organization's merchants — only when the caller RUNS it (OWNER/ADMIN, read
+  live from `organization_members`, so a demotion bites at once). Best-effort:
+  any miss is an empty set, and an empty set fails every ownership check
+  closed. Pinned by `LoyaltyMerchantIdsByOrganizationContractTest` and
+  `ShopStaffServiceTest`.
+- **Retired with the email binding:** `/users/internal/merchants/{id}/admins`
+  (marketplace now calls `/users/internal/organizations/{id}/admins`) and
+  `/users/internal/merchants/assigned` (backed loyalty's removed
+  `?unassigned`).
+- **`GET /admin/organizations`** (`organizations:read`, SUPER_ADMIN via its
+  wildcard; not granted to PRODUCT_OFFICER/MANAGER, whose remit V35 left
+  deliberately undecided) is the directory an operator picks from when acting
+  on a business's behalf — loyalty's merchant create and marketplace's
+  on-behalf listing now take an ORGANIZATION id, and `/organizations/**` only
+  lists the caller's own. Filters are appended Criteria predicates (never a
+  null bind); the sort ends on `id` so paging is a total order. Pinned by
+  `AdminOrganizationControllerTest`.
+- `Listing.merchantId` in marketplace-service now holds the seller's
+  ORGANIZATION id (the API name was kept). `GET /admin/organizations` is the
+  registry for it — **not** `GET /admin/users/merchants` (account `userUuid`s)
+  and no longer `GET /loyalty/merchants`.
 
 ## Service requests can be REJECTED (user-service V36)
 
@@ -413,9 +421,10 @@ its `V4`).
 `organization_products` (`ticketing` / `loyalty` / `marketplace`). Until V39 a
 "tenant" was a PERSON: roles sat on one account, merchant scope was recovered
 from loyalty's `merchants.admin_email`, nobody could add a colleague, and an
-admin running two businesses got no `merchantId` claim at all. This is **step 1**
+admin running two businesses got no `merchantId` claim at all. This was **step 1**
 of the organizations plan: user-service only, additive, safe to ship to
-production ahead of everything else.
+production ahead of everything else. Step 2 (the section above) moved loyalty and
+the marketplace onto it.
 
 - **The token gains `orgId`, `orgRole`, `products` — additively.** An account
   with no organization mints a token byte-identical to pre-V39; one with an
@@ -478,10 +487,10 @@ production ahead of everything else.
   `/users/internal/**` permitAll + `user-internal-deny`. Gateway route
   `user-organizations-route` (`/organizations/**`), pinned by
   `GatewayRouteTableTest`.
-- **The `merchantId` claim and its login-time loyalty lookup are KEPT in step
-  1.** Marketplace and loyalty still scope on it, and removing it before they
-  re-key on `orgId` would break staging. Its removal belongs to step 2, in the
-  same change as those consumers.
+- **Step 2 has landed**: the `merchantId` claim and its login-time loyalty
+  lookup are gone for merchant admins, and loyalty + marketplace scope on
+  `orgId` instead — see the section above. Those three changes deploy
+  together.
 - Every membership and product change is on the tamper-evident chain
   (`ORGANIZATION_*`), target = the organization id, the affected person named by
   `userUuid` — never by email.

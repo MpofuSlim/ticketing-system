@@ -73,6 +73,8 @@ public final class PermissionCatalog {
     public static final String SHOP_STAFF_MERCHANT_READ = "shop-staff:merchant:read";
     public static final String SHOP_STAFF_PASSWORD_RESET = "shop-staff:password:reset";
 
+    public static final String ORGANIZATIONS_READ = "organizations:read";
+
     /**
      * Every permission this service defines, in declaration order, mapped to the
      * description an operator sees in {@code GET /admin/permissions}. Ordered
@@ -106,6 +108,7 @@ public final class PermissionCatalog {
         all.put(SHOP_STAFF_READ, "Read the shop staff of your own shop or merchant");
         all.put(SHOP_STAFF_MERCHANT_READ, "Read shop staff across any shop of a merchant");
         all.put(SHOP_STAFF_PASSWORD_RESET, "Issue a temporary password for a shop staff account");
+        all.put(ORGANIZATIONS_READ, "List every organization on the platform");
         ALL = Collections.unmodifiableMap(all);
     }
 

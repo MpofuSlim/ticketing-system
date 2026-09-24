@@ -24,7 +24,7 @@ import static org.mockito.Mockito.*;
  * Security + behaviour tests for the internal contact lookup consumed by
  * loyalty-service's tenant-attach notifier.
  *
- * <p>Mirrors {@link InternalMerchantAssignmentControllerTest}: the token check
+ * <p>Mirrors {@link InternalOrganizationControllerTest}: the token check
  * must reject with a SPECIFIC code (401) — asserted directly on the returned
  * status, never via a vague {@code is4xxClientError()} (per CLAUDE.md) — and the
  * repository is only queried once the shared X-Internal-Token matches. An

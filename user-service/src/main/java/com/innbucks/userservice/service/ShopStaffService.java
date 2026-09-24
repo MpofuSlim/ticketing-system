@@ -7,11 +7,14 @@ import com.innbucks.userservice.dto.UserResponseDTO;
 import com.innbucks.userservice.util.CsvParser;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.event.CredentialDeliveryRequested;
+import com.innbucks.userservice.entity.OrganizationMember;
 import com.innbucks.userservice.integration.LoyaltyServiceClient;
+import com.innbucks.userservice.repository.OrganizationMemberRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.util.BootstrapAdminEmail;
 import com.innbucks.userservice.util.HtmlSanitizer;
 import com.innbucks.userservice.util.MsisdnValidator;
+import com.innbucks.userservice.security.AuthenticatedCaller;
 import com.innbucks.userservice.util.TemporaryPasswordGenerator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -64,6 +67,9 @@ public class ShopStaffService {
      *  {@code this.createShopUser(...)} would bypass the proxy and share (and
      *  poison) a single transaction. */
     private final org.springframework.beans.factory.ObjectProvider<ShopStaffService> self;
+    /** Whether the caller RUNS the organization their session acts for — the
+     *  gate on which loyalty merchants' staff they may manage. */
+    private final OrganizationMemberRepository organizationMembers;
 
     /** Upper bound on rows per bulk upload — a guard rail on an unbounded import,
      *  not a product limit; split larger files. */
@@ -303,10 +309,10 @@ public class ShopStaffService {
     @Transactional(readOnly = true)
     public List<UserResponseDTO> listForCallerShop() {
         User caller = requireCaller();
-        // MERCHANT_ADMIN: "my staff" spans every shop under every merchant they
-        // administer. Their JWT/row carries no shop (or merchant) scope, so
-        // resolve their merchants from loyalty-service and return the full
-        // headcount across them. Empty set => they own nothing yet => empty list.
+        // MERCHANT_ADMIN: "my staff" spans every shop under every merchant their
+        // organization owns. Their JWT/row carries no shop (or merchant) scope, so
+        // resolve the organization's merchants from loyalty-service and return the
+        // full headcount across them. Empty set => they own nothing yet => empty list.
         if (caller.hasRole(User.Role.MERCHANT_ADMIN)) {
             java.util.Set<UUID> merchantIds = resolveCallerMerchantIds(caller);
             if (merchantIds.isEmpty()) {
@@ -525,24 +531,39 @@ public class ShopStaffService {
     }
 
     /**
-     * The set of merchants a caller administers. A MERCHANT_ADMIN carries no
-     * merchantId on their JWT or User row (they may run several merchants), so we
-     * resolve the set from loyalty-service by their admin email — the same
-     * binding loyalty stamps on every merchant at creation
-     * ({@code merchant.adminEmail}). Any {@code loyaltyMerchantId} on the row
-     * (defensive; normally only shop staff carry one) is folded in too. An empty
-     * set means the caller owns nothing, so every ownership check fails closed.
+     * The set of merchants a caller administers: every loyalty merchant owned by
+     * the organization their session acts for, provided they RUN that
+     * organization (OWNER or ADMIN, read live — a demotion takes effect at once,
+     * not at the next refresh). Any {@code loyaltyMerchantId} on the row
+     * (defensive; normally only shop staff carry one) is folded in too.
+     *
+     * <p>This used to ask loyalty for the merchants bound to the caller's EMAIL
+     * ({@code merchants.admin_email}). Ownership is the organization now, in
+     * loyalty as everywhere else, so an email is no longer an ownership key.
+     *
+     * <p>Every miss is an empty set — no organization chosen, not a member, a
+     * STAFF member, or a loyalty outage — and an empty set fails every
+     * ownership check closed.
      */
     private java.util.Set<UUID> resolveCallerMerchantIds(User caller) {
         java.util.Set<UUID> ids = new java.util.LinkedHashSet<>();
         if (caller.getLoyaltyMerchantId() != null) {
             ids.add(caller.getLoyaltyMerchantId());
         }
-        String email = caller.getEmail();
-        if (email != null && !email.isBlank()) {
-            ids.addAll(loyaltyServiceClient.merchantIdsForAdmin(email));
+        UUID organizationId = AuthenticatedCaller.organizationId(
+                SecurityContextHolder.getContext().getAuthentication());
+        if (organizationId != null && runsOrganization(caller, organizationId)) {
+            ids.addAll(loyaltyServiceClient.merchantIdsForOrganization(organizationId));
         }
         return ids;
+    }
+
+    private boolean runsOrganization(User caller, UUID organizationId) {
+        if (caller.getId() == null) return false;
+        return organizationMembers.findByOrganizationIdAndUserId(organizationId, caller.getId())
+                .map(m -> m.getRole() == OrganizationMember.Role.OWNER
+                        || m.getRole() == OrganizationMember.Role.ADMIN)
+                .orElse(false);
     }
 
     private ResponseStatusException badRequest(String msg) {
