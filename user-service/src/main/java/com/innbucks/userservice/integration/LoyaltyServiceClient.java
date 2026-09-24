@@ -76,22 +76,26 @@ public class LoyaltyServiceClient {
     }
 
     /**
-     * Resolve every merchantId a MERCHANT_ADMIN owns, by their admin email.
-     * A MERCHANT_ADMIN's JWT / User row carries no merchantId, so ShopStaffService
-     * uses this to authorize the shop-staff endpoints — a merchant admin may run
-     * more than one merchant, so the whole set is returned. Best-effort: returns
-     * an empty list on any failure (missing token, 4xx, network) so the caller
-     * surfaces a clean 403 rather than a 500 on a downstream blip.
+     * Every loyalty merchant an organization owns. ShopStaffService uses this to
+     * decide which merchants' shops a merchant admin may staff: ownership is
+     * {@code merchants.organization_id} in loyalty, and the organization is the
+     * one the caller's session acts for. It used to be looked up by the caller's
+     * EMAIL ({@code ids-by-admin}), which made an email column the ownership key
+     * for two products at once; that lookup no longer exists.
+     *
+     * <p>Best-effort: an empty list on any failure (missing token, 4xx, network),
+     * so the caller fails closed with a clean 403 rather than a 500 on a
+     * downstream blip.
      */
-    public List<UUID> merchantIdsForAdmin(String email) {
-        if (email == null || email.isBlank()) return List.of();
+    public List<UUID> merchantIdsForOrganization(UUID organizationId) {
+        if (organizationId == null) return List.of();
         if (internalToken == null || internalToken.isBlank()) {
             log.warn("Skipping loyalty merchant lookup; INTERNAL_API_TOKEN is not configured");
             return List.of();
         }
         try {
             MerchantIdsResponse body = http.get()
-                    .uri("/loyalty/internal/merchants/ids-by-admin?email={email}", email)
+                    .uri("/loyalty/internal/merchants/ids-by-organization?organizationId={id}", organizationId)
                     .header("X-Internal-Token", internalToken)
                     .retrieve()
                     .onStatus(HttpStatusCode::is4xxClientError, (req, res) -> {})
@@ -107,7 +111,7 @@ public class LoyaltyServiceClient {
             }
             return ids;
         } catch (Exception ex) {
-            log.warn("Loyalty merchant lookup failed adminEmail={} error={}", email, ex.getMessage());
+            log.warn("Loyalty merchant lookup failed organizationId={} error={}", organizationId, ex.getMessage());
             return List.of();
         }
     }
@@ -151,60 +155,9 @@ public class LoyaltyServiceClient {
         }
     }
 
-    /**
-     * The INVERSE of {@link #merchantIdsForAdmin}: the admin email recorded
-     * against one merchant.
-     *
-     * <p>Needed because this service cannot answer "who runs merchant X" from
-     * its own tables. {@code users.loyalty_merchant_id} is stamped by
-     * {@code ShopStaffService} on SHOP_ADMIN / SHOP_USER rows only, so a
-     * MERCHANT_ADMIN's own row does not name their merchant — which is exactly
-     * why {@code AuthService.resolveMerchantIdClaim} asks loyalty by email in
-     * the first place. Loyalty's {@code merchants.admin_email} is the one place
-     * the link is recorded.
-     *
-     * <p>Best-effort by construction, like its siblings: an empty Optional on a
-     * missing token, a 4xx (including the 404 for an unknown merchant) or a
-     * network failure. The only caller is a notification lookup, so a loyalty
-     * blip must cost a message, never an error.
-     *
-     * <p>An empty Optional and a merchant with no admin on file are deliberately
-     * the SAME answer here — both mean "nobody to notify". Loyalty distinguishes
-     * them (200-with-null vs 404) for its own logs; nothing downstream acts on
-     * the difference.
-     */
-    public Optional<String> adminEmailForMerchant(UUID merchantId) {
-        if (merchantId == null) return Optional.empty();
-        if (internalToken == null || internalToken.isBlank()) {
-            log.warn("Skipping loyalty merchant-admin lookup; INTERNAL_API_TOKEN is not configured");
-            return Optional.empty();
-        }
-        try {
-            MerchantAdminEmailResponse body = http.get()
-                    .uri("/loyalty/internal/merchants/{id}/admin-email", merchantId)
-                    .header("X-Internal-Token", internalToken)
-                    .retrieve()
-                    .onStatus(HttpStatusCode::is4xxClientError, (req, res) -> {})
-                    .body(MerchantAdminEmailResponse.class);
-            if (body == null || body.adminEmail() == null || body.adminEmail().isBlank()) {
-                return Optional.empty();
-            }
-            return Optional.of(body.adminEmail().trim());
-        } catch (HttpClientErrorException.NotFound nf) {
-            return Optional.empty();
-        } catch (Exception ex) {
-            log.warn("Loyalty merchant-admin lookup failed merchantId={} error={}",
-                    merchantId, ex.getMessage());
-            return Optional.empty();
-        }
-    }
-
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record ShopLookupResponse(String shopId, String merchantId, String tenantId, String status) {}
 
     @JsonIgnoreProperties(ignoreUnknown = true)
     public record MerchantIdsResponse(List<String> merchantIds) {}
-
-    @JsonIgnoreProperties(ignoreUnknown = true)
-    public record MerchantAdminEmailResponse(String merchantId, String adminEmail) {}
 }

@@ -37,11 +37,11 @@ public final class Services {
         Map<String, List<String>> bundles = new LinkedHashMap<>();
         bundles.put(TICKETING,   List.of("events", "seats", "bookings", "payments"));
         bundles.put(LOYALTY,     List.of("loyalty", "payments"));
-        // marketplace-service (MpofuSlim/market-place) — sellers ride the same
-        // MERCHANT_ADMIN role + merchantId scoping as loyalty (owner decision,
-        // 2026-08-05: marketplace administration is MERCHANT_ADMIN-only). The
-        // role alone doesn't unlock selling: listing writes also need the
-        // merchantId claim, which comes from the merchant-assignment flow.
+        // marketplace-service (MpofuSlim/market-place). The role granted here
+        // is still MERCHANT_ADMIN, but it no longer unlocks selling on its own:
+        // marketplace (like loyalty) scopes a seller by the session's
+        // ORGANIZATION — orgId, an OWNER/ADMIN orgRole and this product in the
+        // products claim — which approval grants to the organization.
         bundles.put(MARKETPLACE, List.of("marketplace", "payments"));
         BUNDLES = Map.copyOf(bundles);
 

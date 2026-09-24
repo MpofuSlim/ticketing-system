@@ -190,7 +190,7 @@ public class OrganizationController {
                                   "lastName": "Chikwanha",
                                   "email": "rudo@chikwanha-traders.co.zw",
                                   "role": "OWNER",
-                                  "joinedAt": "2026-09-23T10:15:00"
+                                  "joinedAt": "2026-09-23T12:15:00+02:00"
                                 },
                                 {
                                   "userUuid": "9a8b7c6d-5e4f-4a3b-9c2d-1e0f2a3b4c5d",
@@ -198,7 +198,7 @@ public class OrganizationController {
                                   "lastName": "Moyo",
                                   "email": "tendai@chikwanha-traders.co.zw",
                                   "role": "STAFF",
-                                  "joinedAt": "2026-09-23T11:02:00"
+                                  "joinedAt": "2026-09-23T13:02:00+02:00"
                                 }
                               ]
                             }
@@ -246,7 +246,7 @@ public class OrganizationController {
                                 "lastName": "Moyo",
                                 "email": "tendai@chikwanha-traders.co.zw",
                                 "role": "STAFF",
-                                "joinedAt": "2026-09-23T11:02:00"
+                                "joinedAt": "2026-09-23T13:02:00+02:00"
                               }
                             }
                             """))),
@@ -327,7 +327,7 @@ public class OrganizationController {
                                 "lastName": "Moyo",
                                 "email": "tendai@chikwanha-traders.co.zw",
                                 "role": "ADMIN",
-                                "joinedAt": "2026-09-23T11:02:00"
+                                "joinedAt": "2026-09-23T13:02:00+02:00"
                               }
                             }
                             """))),

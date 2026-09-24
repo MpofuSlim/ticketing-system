@@ -3,10 +3,13 @@ package com.innbucks.userservice.service;
 import com.innbucks.userservice.dto.CreateShopAdminDTO;
 import com.innbucks.userservice.dto.CreateShopUserDTO;
 import com.innbucks.userservice.dto.UserResponseDTO;
+import com.innbucks.userservice.entity.OrganizationMember;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.event.CredentialDeliveryRequested;
 import com.innbucks.userservice.integration.LoyaltyServiceClient;
+import com.innbucks.userservice.repository.OrganizationMemberRepository;
 import com.innbucks.userservice.repository.UserRepository;
+import com.innbucks.userservice.security.AuthDetailsKeys;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -54,6 +57,7 @@ class ShopStaffServiceTest {
     @Mock private PasswordEncoder passwordEncoder;
     @Mock private LoyaltyServiceClient loyaltyServiceClient;
     @Mock private ApplicationEventPublisher eventPublisher;
+    @Mock private OrganizationMemberRepository organizationMembers;
 
     @InjectMocks private ShopStaffService service;
 
@@ -354,18 +358,36 @@ class ShopStaffServiceTest {
     // admin email. Before the fix, every one of these returned 403 because the
     // code read the (always-null) caller.getLoyaltyMerchantId().
 
+    private static final UUID ORG = UUID.fromString("7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f");
+
     private User merchantAdminNoBinding(String email) {
-        return User.builder().email(email)
+        return User.builder().id(501L).email(email)
                 .roles(User.roleNames(User.Role.MERCHANT_ADMIN))
                 .build();
     }
 
+    /**
+     * A merchant admin whose session acts for {@link #ORG}, holding {@code role}
+     * there. Ownership of loyalty merchants is the ORGANIZATION's, so this is the
+     * shape every merchant-scoped shop-staff call now resolves against.
+     */
+    private void authenticateInOrganization(User caller, OrganizationMember.Role role) {
+        UsernamePasswordAuthenticationToken auth =
+                new UsernamePasswordAuthenticationToken(caller.getEmail(), null);
+        auth.setDetails(new java.util.HashMap<>(java.util.Map.of(AuthDetailsKeys.ORGANIZATION_ID, ORG)));
+        SecurityContextHolder.getContext().setAuthentication(auth);
+        when(userRepository.findByEmail(caller.getEmail())).thenReturn(Optional.of(caller));
+        when(organizationMembers.findByOrganizationIdAndUserId(ORG, caller.getId()))
+                .thenReturn(Optional.of(OrganizationMember.builder()
+                        .organizationId(ORG).userId(caller.getId()).role(role).build()));
+    }
+
     @Test
-    void listForShop_merchantAdminWithoutLocalBinding_resolvesMerchantByEmail_allowsOwnShop() {
+    void listForShop_merchantAdminWithoutLocalBinding_resolvesMerchantByOrganization_allowsOwnShop() {
         UUID shopId = UUID.randomUUID();
         UUID merchantId = UUID.randomUUID();
-        authenticateAs(merchantAdminNoBinding("merchant@x.com"));
-        when(loyaltyServiceClient.merchantIdsForAdmin("merchant@x.com"))
+        authenticateInOrganization(merchantAdminNoBinding("merchant@x.com"), OrganizationMember.Role.OWNER);
+        when(loyaltyServiceClient.merchantIdsForOrganization(ORG))
                 .thenReturn(List.of(merchantId));
         when(loyaltyServiceClient.findShop(shopId)).thenReturn(Optional.of(
                 new LoyaltyServiceClient.ShopLookupResponse(
@@ -381,8 +403,8 @@ class ShopStaffServiceTest {
         UUID shopId = UUID.randomUUID();
         UUID ownedMerchant = UUID.randomUUID();
         UUID foreignMerchant = UUID.randomUUID();
-        authenticateAs(merchantAdminNoBinding("merchant@x.com"));
-        when(loyaltyServiceClient.merchantIdsForAdmin("merchant@x.com"))
+        authenticateInOrganization(merchantAdminNoBinding("merchant@x.com"), OrganizationMember.Role.OWNER);
+        when(loyaltyServiceClient.merchantIdsForOrganization(ORG))
                 .thenReturn(List.of(ownedMerchant));
         when(loyaltyServiceClient.findShop(shopId)).thenReturn(Optional.of(
                 new LoyaltyServiceClient.ShopLookupResponse(
@@ -396,10 +418,10 @@ class ShopStaffServiceTest {
     }
 
     @Test
-    void listForMerchant_merchantAdminWithoutLocalBinding_resolvesOwnershipByEmail() {
+    void listForMerchant_merchantAdminWithoutLocalBinding_resolvesOwnershipByOrganization() {
         UUID merchantId = UUID.randomUUID();
-        authenticateAs(merchantAdminNoBinding("merchant@x.com"));
-        when(loyaltyServiceClient.merchantIdsForAdmin("merchant@x.com"))
+        authenticateInOrganization(merchantAdminNoBinding("merchant@x.com"), OrganizationMember.Role.OWNER);
+        when(loyaltyServiceClient.merchantIdsForOrganization(ORG))
                 .thenReturn(List.of(merchantId));
         when(userRepository.findByLoyaltyMerchantId(merchantId)).thenReturn(List.of());
 
@@ -411,8 +433,8 @@ class ShopStaffServiceTest {
     void listForCallerShop_merchantAdmin_returnsStaffAcrossAllTheirMerchants() {
         UUID m1 = UUID.randomUUID();
         UUID m2 = UUID.randomUUID();
-        authenticateAs(merchantAdminNoBinding("merchant@x.com"));
-        when(loyaltyServiceClient.merchantIdsForAdmin("merchant@x.com"))
+        authenticateInOrganization(merchantAdminNoBinding("merchant@x.com"), OrganizationMember.Role.OWNER);
+        when(loyaltyServiceClient.merchantIdsForOrganization(ORG))
                 .thenReturn(List.of(m1, m2));
         when(userRepository.findByLoyaltyMerchantId(m1))
                 .thenReturn(List.of(shopAdminTarget(UUID.randomUUID(), m1, UUID.randomUUID())));
@@ -427,8 +449,8 @@ class ShopStaffServiceTest {
 
     @Test
     void listForCallerShop_merchantAdminOwningNothing_returnsEmpty() {
-        authenticateAs(merchantAdminNoBinding("merchant@x.com"));
-        when(loyaltyServiceClient.merchantIdsForAdmin("merchant@x.com")).thenReturn(List.of());
+        authenticateInOrganization(merchantAdminNoBinding("merchant@x.com"), OrganizationMember.Role.OWNER);
+        when(loyaltyServiceClient.merchantIdsForOrganization(ORG)).thenReturn(List.of());
 
         assertThat(service.listForCallerShop()).isEmpty();
         verify(userRepository, never()).findByLoyaltyMerchantId(any());
@@ -447,6 +469,41 @@ class ShopStaffServiceTest {
         List<UserResponseDTO> staff = service.listForCallerShop();
 
         assertThat(staff).hasSize(1);
-        verify(loyaltyServiceClient, never()).merchantIdsForAdmin(any());
+        verify(loyaltyServiceClient, never()).merchantIdsForOrganization(any());
+    }
+
+    @Test
+    void listForMerchant_staffOfTheOrganization_isForbidden_andLoyaltyIsNeverAsked() {
+        UUID merchantId = UUID.randomUUID();
+        authenticateInOrganization(merchantAdminNoBinding("merchant@x.com"), OrganizationMember.Role.STAFF);
+
+        assertThatThrownBy(() -> service.listForMerchant(merchantId))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.FORBIDDEN));
+        verify(loyaltyServiceClient, never()).merchantIdsForOrganization(any());
+    }
+
+    @Test
+    void listForMerchant_sessionWithNoOrganization_isForbidden_andNoEmailLookupHappens() {
+        UUID merchantId = UUID.randomUUID();
+        authenticateAs(merchantAdminNoBinding("merchant@x.com"));
+
+        assertThatThrownBy(() -> service.listForMerchant(merchantId))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.FORBIDDEN));
+        verify(loyaltyServiceClient, never()).merchantIdsForOrganization(any());
+        verify(organizationMembers, never()).findByOrganizationIdAndUserId(any(), any());
+    }
+
+    @Test
+    void listForMerchant_adminOfTheOrganization_isAllowed() {
+        UUID merchantId = UUID.randomUUID();
+        authenticateInOrganization(merchantAdminNoBinding("merchant@x.com"), OrganizationMember.Role.ADMIN);
+        when(loyaltyServiceClient.merchantIdsForOrganization(ORG)).thenReturn(List.of(merchantId));
+        when(userRepository.findByLoyaltyMerchantId(merchantId)).thenReturn(List.of());
+
+        assertThatCode(() -> service.listForMerchant(merchantId)).doesNotThrowAnyException();
     }
 }

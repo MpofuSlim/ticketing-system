@@ -77,7 +77,9 @@ public final class OrganizationDTOs {
             @Schema(example = "Chikwanha") String lastName,
             @Schema(example = "rudo@chikwanha-traders.co.zw", nullable = true) String email,
             @Schema(example = "OWNER") String role,
-            @Schema(example = "2026-09-23T10:15:00") LocalDateTime joinedAt) {}
+            @Schema(example = "2026-09-23T12:15:00+02:00",
+                    description = "When they joined, in the market's local time with its offset.")
+            LocalDateTime joinedAt) {}
 
     @Data
     @Schema(name = "AddOrganizationMemberRequest",
@@ -115,6 +117,34 @@ public final class OrganizationDTOs {
         @Schema(example = "7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f")
         private UUID organizationId;
     }
+
+    @Schema(name = "OrganizationDirectoryEntry",
+            description = "One organization in the platform directory (SUPER_ADMIN). Its id is what "
+                    + "loyalty's `POST /loyalty/merchants` and the marketplace's on-behalf listing "
+                    + "create take to act for this business.")
+    public record DirectoryEntry(
+            @Schema(example = "7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f") UUID organizationId,
+            @Schema(example = "Chikwanha Traders") String name,
+            @Schema(example = "ACTIVE", description = "ACTIVE or SUSPENDED.") String status,
+            @Schema(example = "[\"loyalty\", \"marketplace\"]",
+                    description = "The organization's ACTIVE products.")
+            List<String> products,
+            @Schema(example = "[\"rudo@chikwanha-traders.co.zw\"]",
+                    description = "Email of every OWNER, so two businesses with one name can be told "
+                            + "apart. Empty when no owner has an email on file.")
+            List<String> ownerEmails,
+            @Schema(example = "rudo@chikwanha-traders.co.zw", nullable = true) String contactEmail,
+            @Schema(example = "2026-09-23T12:15:00+02:00",
+                    description = "When the organization was created, in the market's local time with its offset.")
+            LocalDateTime createdAt) {}
+
+    @Schema(name = "OrganizationDirectoryPage")
+    public record DirectoryPage(
+            List<DirectoryEntry> content,
+            @Schema(example = "1") long totalElements,
+            @Schema(example = "1") int totalPages,
+            @Schema(example = "0", description = "Zero-based page index.") int number,
+            @Schema(example = "20") int size) {}
 
     /** S2S: an organization's display name. */
     public record OrganizationName(UUID organizationId, String name) {}
