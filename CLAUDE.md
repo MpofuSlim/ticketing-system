@@ -487,6 +487,21 @@ the marketplace onto it.
   `/users/internal/**` permitAll + `user-internal-deny`. Gateway route
   `user-organizations-route` (`/organizations/**`), pinned by
   `GatewayRouteTableTest`.
+- **Every response that issues a session carries the scope, INCLUDING
+  `POST /auth/mfa/enroll/complete`** — `organizationId`, `organizationRole`,
+  `organizationProducts` (the token's `products`, so a client gates menus
+  without decoding the JWT) and `organizationSelectionRequired`. Enrolment is
+  where every staff account's FIRST sign-in ends (belonging to an organization
+  forces 2FA), and it used to return only the tokens, so a colleague's first
+  session never learned which business it acted for or that it had to pick.
+  `MfaEnrollCompleteResponseDTO.from` copies them; pinned end to end by
+  `OrganizationColleagueSignInIT` (an ADMIN colleague with NO platform role,
+  and one who also owns a business of their own).
+- **A colleague must already have an account with an email** —
+  `POST /organizations/{id}/members` adds, it does not create. Today that is a
+  super-app customer who reached tier 2, or a self-registered portal account
+  (which always creates the registrant's OWN organization, so they then belong
+  to two and pick at every sign-in). There is no invite-by-email flow yet.
 - **Step 2 has landed**: the `merchantId` claim and its login-time loyalty
   lookup are gone for merchant admins, and loyalty + marketplace scope on
   `orgId` instead — see the section above. Those three changes deploy

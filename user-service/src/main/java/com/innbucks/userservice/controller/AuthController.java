@@ -366,7 +366,10 @@ public class AuthController {
                             examples = @ExampleObject(value = """
                                     { "code": "200 OK", "message": "MFA enabled",
                                       "data": { "token": "eyJ...", "refreshToken": "eyJ...",
-                                                "backupCodes": ["X4Q7-K9F2-A3B1-M8H6", "..."] } }
+                                                "backupCodes": ["X4Q7-K9F2-A3B1-M8H6", "..."],
+                                                "organizationId": "7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f",
+                                                "organizationRole": "ADMIN",
+                                                "organizationProducts": ["loyalty", "marketplace"] } }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
                     description = "Wrong code or expired/mismatched mfaToken")
@@ -385,7 +388,7 @@ public class AuthController {
         AuthResponseDTO authResponse = authService.completeLoginWithMfa(
                 reusableLoginToken, request.getCode(), deviceId, auditContext(httpRequest));
         return ResponseEntity.ok(ApiResult.ok("MFA enabled",
-                new MfaEnrollCompleteResponseDTO(authResponse.getToken(), authResponse.getRefreshToken(), backupCodes)));
+                MfaEnrollCompleteResponseDTO.from(authResponse, backupCodes)));
     }
 
     @PostMapping("/mfa/disable")
@@ -578,7 +581,8 @@ public class AuthController {
                                         "tier": 4,
                                         "verified": true,
                                         "organizationId": "7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f",
-                                        "organizationRole": "OWNER"
+                                        "organizationRole": "OWNER",
+                                        "organizationProducts": ["marketplace"]
                                       }
                                     }
                                     """))),

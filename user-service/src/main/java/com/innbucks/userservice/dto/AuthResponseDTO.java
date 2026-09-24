@@ -108,6 +108,15 @@ public class AuthResponseDTO {
             nullable = true)
     private String organizationRole;
 
+    @Schema(description = "The ACTIVE products of `organizationId` (lowercase: `ticketing`, `loyalty`, "
+            + "`marketplace`) — the same list as the token's `products` claim, so a client can gate its "
+            + "menus without decoding the token. Loyalty and the marketplace treat an OWNER or ADMIN "
+            + "session as their merchant admin only when its organization holds their product. Absent "
+            + "whenever `organizationId` is; an empty list means the organization holds no product yet.",
+            example = "[\"loyalty\", \"marketplace\"]",
+            nullable = true)
+    private java.util.List<String> organizationProducts;
+
     @Schema(description = "Present and `true` when the account belongs to several organizations and this "
             + "session has not chosen one. Show the organization picker (GET /organizations/me) and "
             + "call POST /auth/organization-context with the choice. Absent otherwise.",
