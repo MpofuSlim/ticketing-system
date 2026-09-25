@@ -280,7 +280,7 @@ public class EventReminderScheduler {
     /** The reminder text — sent verbatim on both WhatsApp and SMS. */
     static String reminderText(String title, Booking booking, String when) {
         return "Reminder: " + title + " starts on " + when
-                + ". The e-ticket(s) were sent on WhatsApp when you booked (confirmation "
+                + ". The e-ticket(s) were sent on WhatsApp/Text when you booked (confirmation "
                 + booking.getConfirmationNumber() + "). See you there!";
     }
 }

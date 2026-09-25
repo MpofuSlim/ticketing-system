@@ -270,7 +270,7 @@ class EventReminderSchedulerTest {
         assertThat(EventReminderScheduler.reminderText("Test", b,
                 scheduler.when(LocalDateTime.of(2026, 9, 26, 8, 0))))
                 .isEqualTo("Reminder: Test starts on Sat 26 Sep 2026 at 10:00. The e-ticket(s) "
-                        + "were sent on WhatsApp when you booked (confirmation INN-20260901-3C8849). "
+                        + "were sent on WhatsApp/Text when you booked (confirmation INN-20260901-3C8849). "
                         + "See you there!");
     }
 
