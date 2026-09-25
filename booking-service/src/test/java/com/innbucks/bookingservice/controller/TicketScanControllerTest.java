@@ -41,7 +41,7 @@ class TicketScanControllerTest {
     }
 
     private static TicketScanController controller(TicketScanService service) {
-        return new TicketScanController(service);
+        return new TicketScanController(service, null);
     }
 
     private static UsernamePasswordAuthenticationToken authWith(

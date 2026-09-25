@@ -356,6 +356,35 @@ public class TicketScanService {
     }
 
     /**
+     * The scan's two authorization gates — organizer ownership, then a team
+     * member's per-event assignment — for a caller that holds a BOOKING rather
+     * than a ticket ({@link GateLookupService}). Returns the refusal, or null
+     * when the caller may act on this booking.
+     *
+     * <p>Composes the same private checks {@link #scan} runs, in the same
+     * order, so the gate lookup can never be looser than the scan it feeds:
+     * a scanner who could not redeem a booking's tickets cannot list them
+     * either. {@code reference} is only for the log lines.
+     */
+    public ScanTicketResponseDTO.Status authorizationRefusal(Booking booking, String reference) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        UUID scannerOrganizerUuid = AuthenticatedCaller.organizerUuid(auth);
+        UUID scannerUserUuid = AuthenticatedCaller.userUuid(auth);
+        String scannerEmail = auth == null ? null : auth.getName();
+        if (!scannerOwnsEvent(booking, scannerOrganizerUuid)) {
+            log.warn("Gate lookup rejected, organizer mismatch reference={} scannerEmail={} "
+                            + "scannerOrganizerUuid={} bookingTenantUserUuid={}",
+                    reference, scannerEmail, scannerOrganizerUuid, booking.getTenantUserUuid());
+            return ScanTicketResponseDTO.Status.WRONG_ORGANIZER;
+        }
+        if (!isOrganizer(auth) && scannerUserUuid != null
+                && !assignmentAllowsScan(scannerUserUuid, booking.getEventId(), reference, scannerEmail)) {
+            return ScanTicketResponseDTO.Status.NOT_ASSIGNED_TO_EVENT;
+        }
+        return null;
+    }
+
+    /**
      * Persist one {@code scan_attempts} row capturing the outcome plus the
      * request-scoped fingerprinting bits (correlation id from MDC, client IP
      * / user-agent from the current servlet request, country from MDC). The
