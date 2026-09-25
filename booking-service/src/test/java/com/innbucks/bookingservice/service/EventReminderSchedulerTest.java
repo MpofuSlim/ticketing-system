@@ -4,12 +4,14 @@ import com.innbucks.bookingservice.client.EmailNotificationClient;
 import com.innbucks.bookingservice.client.EventServiceClient;
 import com.innbucks.bookingservice.client.SmsNotificationClient;
 import com.innbucks.bookingservice.client.WhatsAppNotificationClient;
+import com.innbucks.bookingservice.config.MarketTimeZone;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.EventLookupDTO;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.repository.BookingRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -55,7 +57,8 @@ class EventReminderSchedulerTest {
         whatsApp = mock(WhatsAppNotificationClient.class);
         sms = mock(SmsNotificationClient.class);
         email = mock(EmailNotificationClient.class);
-        scheduler = new EventReminderScheduler(bookings, events, whatsApp, sms, email, 24, 48);
+        scheduler = new EventReminderScheduler(bookings, events, whatsApp, sms, email,
+                new MarketTimeZone("ZW"), 24, 48);
         // Default: neither stage has anything to scan; tests override per stage.
         lenient().when(bookings.findEventIdsWithUnremindedConfirmed()).thenReturn(List.of());
         lenient().when(bookings.findEventIdsWithUn2dRemindedConfirmed()).thenReturn(List.of());
@@ -73,10 +76,14 @@ class EventReminderSchedulerTest {
     }
 
     private void eventStartsInHours(long hours) {
+        eventStartsAt(LocalDateTime.now(ZoneOffset.UTC).plusHours(hours));
+    }
+
+    private void eventStartsAt(LocalDateTime utcStart) {
         EventLookupDTO dto = EventLookupDTO.builder()
                 .eventId(eventId)
                 .title("Test Fest")
-                .startDateTime(LocalDateTime.now(ZoneOffset.UTC).plusHours(hours))
+                .startDateTime(utcStart)
                 .build();
         when(events.getEvent(eventId))
                 .thenReturn(ApiResult.<EventLookupDTO>builder().code("200").data(dto).build());
@@ -106,7 +113,7 @@ class EventReminderSchedulerTest {
 
         verify(whatsApp).sendCustomNotification(eq("+263771234567"), contains("Test Fest"));
         verify(sms).sendSms(eq("+263771234567"), contains("Test Fest"), startsWith("RMD-DAY-CONF-1"));
-        verify(email).sendEmail(eq("guest@example.com"), contains("today"),
+        verify(email).sendEmail(eq("guest@example.com"), contains("starts on"),
                 contains("Test Fest"), startsWith("RMD-DAY-CONF-1"));
         assertThat(b.getReminderSentAt()).isNotNull();
         verify(bookings).saveAll(List.of(b));
@@ -195,8 +202,8 @@ class EventReminderSchedulerTest {
 
         scheduler.remind();
 
-        verify(sms).sendSms(eq("+263771234567"), contains("in 2 days"), startsWith("RMD-2D-CONF-1"));
-        verify(email).sendEmail(eq("guest@example.com"), contains("in 2 days"),
+        verify(sms).sendSms(eq("+263771234567"), contains("Test Fest starts on"), startsWith("RMD-2D-CONF-1"));
+        verify(email).sendEmail(eq("guest@example.com"), contains("starts on"),
                 contains("Test Fest"), startsWith("RMD-2D-CONF-1"));
         verify(whatsApp, never()).sendCustomNotification(anyString(), anyString());
         assertThat(b.getReminder2dSentAt()).isNotNull();
@@ -233,5 +240,60 @@ class EventReminderSchedulerTest {
         verify(email, never()).sendEmail(anyString(), anyString(), anyString(), startsWith("RMD-2D-"));
         assertThat(b.getReminder2dSentAt()).isNotNull();
         assertThat(b.getReminderSentAt()).isNotNull();
+    }
+
+    // ---- copy -----------------------------------------------------------------
+
+    @Test
+    void dayOf_smsIsWordForWordTheWhatsAppText() {
+        Booking b = confirmed("+263771234567", null);
+        dayOfScanReturns(b);
+        eventStartsInHours(5);
+
+        scheduler.remind();
+
+        ArgumentCaptor<String> wa = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> text = ArgumentCaptor.forClass(String.class);
+        verify(whatsApp).sendCustomNotification(eq("+263771234567"), wa.capture());
+        verify(sms).sendSms(eq("+263771234567"), text.capture(), anyString());
+        assertThat(text.getValue()).isEqualTo(wa.getValue());
+    }
+
+    @Test
+    void reminderText_isTheWhatsAppCopy_inMarketTime() {
+        // 08:00Z on Sat 26 Sep is 10:00 in Harare — the customer reads the
+        // local clock, never the UTC digits.
+        // Exercised directly: the scheduler reads a real clock, so a fixed
+        // date cannot be driven through remind().
+        Booking b = confirmed("+263771234567", null);
+        b.setConfirmationNumber("INN-20260901-3C8849");
+        assertThat(EventReminderScheduler.reminderText("Test", b,
+                scheduler.when(LocalDateTime.of(2026, 9, 26, 8, 0))))
+                .isEqualTo("Reminder: Test starts on Sat 26 Sep 2026 at 10:00. The e-ticket(s) "
+                        + "were sent on WhatsApp when you booked (confirmation INN-20260901-3C8849). "
+                        + "See you there!");
+    }
+
+    @Test
+    void neitherStage_everAssertsARelativeDay() {
+        // The day-of window is 24h wide, so an event tomorrow morning is inside
+        // it tonight: "today" was false for most of that window, and "in 2 days"
+        // was false for everything 25-47h out.
+        Booking b = confirmed("+263771234567", "guest@example.com");
+        twoDayScanReturns(b);
+        eventStartsInHours(30);
+
+        scheduler.remind();
+
+        ArgumentCaptor<String> text = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> body = ArgumentCaptor.forClass(String.class);
+        verify(sms).sendSms(anyString(), text.capture(), anyString());
+        verify(email).sendEmail(anyString(), subject.capture(), body.capture(), anyString());
+        for (String s : List.of(text.getValue(), subject.getValue(), body.getValue())) {
+            assertThat(s).doesNotContainIgnoringCase("today")
+                    .doesNotContainIgnoringCase("tomorrow")
+                    .doesNotContainIgnoringCase("in 2 days");
+        }
     }
 }
