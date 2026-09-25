@@ -4,6 +4,7 @@ import com.innbucks.bookingservice.client.EmailNotificationClient;
 import com.innbucks.bookingservice.client.EventServiceClient;
 import com.innbucks.bookingservice.client.SmsNotificationClient;
 import com.innbucks.bookingservice.client.WhatsAppNotificationClient;
+import com.innbucks.bookingservice.config.MarketTimeZone;
 import com.innbucks.bookingservice.dto.ApiResult;
 import com.innbucks.bookingservice.dto.EventLookupDTO;
 import com.innbucks.bookingservice.entity.Booking;
@@ -45,6 +46,18 @@ import java.util.UUID;
  * event via the existing {@link EventServiceClient} Feign lookup (circuit-
  * breaker fallback returns a null payload, which simply defers that event to
  * the next tick).
+ *
+ * <p><b>One text for WhatsApp and SMS, and it names the date, never a
+ * relative day.</b> The SMS used to say "is today, on Sat 26 Sep" for anything
+ * inside the 24h day-of window — so an event on Saturday morning was announced
+ * as "today" on Friday. "In 2 days" had the same flaw for anything 25-48h out.
+ * The WhatsApp copy never had the problem because it only ever stated the
+ * date; every channel now reuses it ({@link #reminderText}).
+ *
+ * <p><b>The time is the market's wall clock</b>, rendered by
+ * {@link MarketTimeZone} from the stored UTC start — a customer reads this
+ * text verbatim, and the raw UTC digits read two hours early in Harare
+ * (same rule as the scan reports: the BE renders, the reader parses nothing).
  */
 @Service
 @Slf4j
@@ -58,6 +71,7 @@ public class EventReminderScheduler {
     private final WhatsAppNotificationClient whatsApp;
     private final SmsNotificationClient sms;
     private final EmailNotificationClient email;
+    private final MarketTimeZone market;
     private final Duration dayOfWindow;
     private final Duration twoDayWindow;
 
@@ -66,6 +80,7 @@ public class EventReminderScheduler {
                                   WhatsAppNotificationClient whatsApp,
                                   SmsNotificationClient sms,
                                   EmailNotificationClient email,
+                                  MarketTimeZone market,
                                   @Value("${app.booking.reminder-window-hours:24}") long dayOfWindowHours,
                                   @Value("${app.booking.reminder-2d-window-hours:48}") long twoDayWindowHours) {
         this.bookingRepository = bookingRepository;
@@ -73,6 +88,7 @@ public class EventReminderScheduler {
         this.whatsApp = whatsApp;
         this.sms = sms;
         this.email = email;
+        this.market = market;
         this.dayOfWindow = Duration.ofHours(dayOfWindowHours);
         this.twoDayWindow = Duration.ofHours(twoDayWindowHours);
     }
@@ -119,7 +135,7 @@ public class EventReminderScheduler {
         int sent = 0;
         for (Booking booking : bookings) {
             if (sendable) {
-                boolean any = deliver(booking, event, "in 2 days", start,
+                boolean any = deliver(booking, event, start,
                         "RMD-2D-" + booking.getConfirmationNumber());
                 if (any) sent++;
             }
@@ -158,12 +174,12 @@ public class EventReminderScheduler {
                 eventId, Booking.BookingStatus.CONFIRMED);
         int sent = 0;
         for (Booking booking : bookings) {
-            boolean any = deliver(booking, event, "today", start,
+            boolean any = deliver(booking, event, start,
                     "RMD-DAY-" + booking.getConfirmationNumber());
             String phone = booking.getPhoneNumber();
             if (phone != null && !phone.isBlank()) {
                 try {
-                    whatsApp.sendCustomNotification(phone, reminderText(event, booking, start));
+                    whatsApp.sendCustomNotification(phone, reminderText(titleOf(event), booking, when(start)));
                     any = true;
                 } catch (RuntimeException e) {
                     log.warn("Event-reminder WhatsApp failed bookingId={} (marked reminded anyway): {}",
@@ -191,30 +207,25 @@ public class EventReminderScheduler {
 
     /**
      * SMS + email for one booking, independent best-effort per channel.
-     * Returns whether at least one channel accepted the send. {@code stage} is
-     * the human phrase for how soon the event is ("in 2 days" / "today");
+     * Returns whether at least one channel accepted the send.
      * {@code reference} is the notification-API reference — per-channel
      * suffixed, and the email client clamps it to the API's 46-char cap.
      * All copy is deliberately plain ASCII (the notification API rejects
      * non-ASCII subjects, and GSM-unsafe SMS chars cost message parts).
      */
-    private boolean deliver(Booking booking, EventLookupDTO event, String stage,
+    private boolean deliver(Booking booking, EventLookupDTO event,
                             LocalDateTime start, String reference) {
         String title = titleOf(event);
-        String when = stage + ", on " + START_FMT.format(start);
+        String when = when(start);
         boolean any = false;
         String phone = booking.getPhoneNumber();
         if (phone != null && !phone.isBlank()) {
             try {
-                // Copy is holder-neutral: since the per-holder routing (V22
-                // follow-up), a guest's QR may live on the guest's phone, not
-                // this (purchaser's) one — so never assert "YOUR e-ticket was
-                // sent to YOUR WhatsApp" here.
-                sms.sendSms(phone,
-                        "Reminder: " + title + " is " + when + ". Booking "
-                                + booking.getConfirmationNumber()
-                                + ". Present the WhatsApp QR e-ticket at the gate - see you there!",
-                        reference + "-S");
+                // Same text as the WhatsApp reminder, word for word. It is
+                // holder-neutral ("the e-ticket(s) were sent"), which matters
+                // since per-holder routing (V22): a guest's QR may live on the
+                // guest's phone, not this (purchaser's) one.
+                sms.sendSms(phone, reminderText(title, booking, when), reference + "-S");
                 any = true;
             } catch (RuntimeException e) {
                 log.warn("Event-reminder SMS failed bookingId={} (marker still stamped): {}",
@@ -225,7 +236,7 @@ public class EventReminderScheduler {
         if (emailAddr != null && !emailAddr.isBlank()) {
             try {
                 email.sendEmail(emailAddr,
-                        "Reminder: your event is " + stage + " - booking " + booking.getConfirmationNumber(),
+                        "Reminder: your event starts on " + when + " - booking " + booking.getConfirmationNumber(),
                         emailBody(booking, title, when),
                         reference + "-E");
                 any = true;
@@ -239,12 +250,17 @@ public class EventReminderScheduler {
 
     private static String emailBody(Booking booking, String title, String when) {
         return "Hi!\n\n"
-                + "This is a reminder that " + title + " is " + when + ".\n\n"
+                + "This is a reminder that " + title + " starts on " + when + ".\n\n"
                 + "Booking reference: " + booking.getConfirmationNumber() + "\n\n"
                 + "The scannable e-tickets were sent on WhatsApp when you booked - your own "
                 + "to you, and any named guest's directly to them. Present the QR at the "
                 + "gate. Need one again? Ask the organizer to resend it.\n\n"
                 + "See you there!";
+    }
+
+    /** The event start as the market's wall clock, e.g. "Sat 26 Sep 2026 at 10:00". */
+    String when(LocalDateTime utcStart) {
+        return START_FMT.format(market.atMarketFromUtc(utcStart));
     }
 
     private EventLookupDTO lookupEvent(UUID eventId) {
@@ -261,10 +277,10 @@ public class EventReminderScheduler {
         return event.getTitle() == null || event.getTitle().isBlank() ? "your event" : event.getTitle();
     }
 
-    private static String reminderText(EventLookupDTO event, Booking booking, LocalDateTime start) {
-        return "Reminder: " + titleOf(event) + " starts on "
-                + START_FMT.format(start)
-                + ". The e-ticket(s) were sent on WhatsApp when you booked (confirmation "
+    /** The reminder text — sent verbatim on both WhatsApp and SMS. */
+    static String reminderText(String title, Booking booking, String when) {
+        return "Reminder: " + title + " starts on " + when
+                + ". The e-ticket(s) were sent on WhatsApp/Text when you booked (confirmation "
                 + booking.getConfirmationNumber() + "). See you there!";
     }
 }
