@@ -1,9 +1,12 @@
 package com.innbucks.bookingservice.controller;
 
 import com.innbucks.bookingservice.dto.ApiResult;
+import com.innbucks.bookingservice.dto.GateLookupRequestDTO;
+import com.innbucks.bookingservice.dto.GateLookupResponseDTO;
 import com.innbucks.bookingservice.dto.ScanTicketRequestDTO;
 import com.innbucks.bookingservice.dto.ScanTicketResponseDTO;
 import com.innbucks.bookingservice.security.JwtAuthDetails;
+import com.innbucks.bookingservice.service.GateLookupService;
 import com.innbucks.bookingservice.service.TicketScanService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
@@ -48,6 +51,7 @@ import org.springframework.web.bind.annotation.RestController;
 public class TicketScanController {
 
     private final TicketScanService ticketScanService;
+    private final GateLookupService gateLookupService;
 
     @PostMapping("/scan")
     @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','TEAM_MEMBER')")
@@ -157,8 +161,8 @@ public class TicketScanController {
                             examples = @ExampleObject(value = """
                                     {
                                       "code": "400 BAD_REQUEST",
-                                      "message": "ticketNumber is required",
-                                      "data": null
+                                      "message": "Validation failed",
+                                      "data": { "ticketNumber": "ticketNumber is required" }
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -194,6 +198,128 @@ public class TicketScanController {
         String scannerDisplayName = resolveScannerDisplayName(authentication);
         ScanTicketResponseDTO result = ticketScanService.scan(request.getTicketNumber(), scannerDisplayName);
         return ResponseEntity.ok(ApiResult.ok("Scan result", result));
+    }
+
+    @PostMapping("/lookup")
+    @PreAuthorize("hasAnyRole('EVENT_ORGANIZER','TEAM_MEMBER')")
+    @Operation(
+            summary = "Find a booking by confirmation number (no-QR fallback)",
+            description = "For a customer who cannot open the WhatsApp QR but has the confirmation number "
+                          + "from their SMS. **Read-only — it admits nobody.** Returns the booking's tickets "
+                          + "with each holder's name and whether it has been used; to admit a holder, send "
+                          + "that ticket's `ticketNumber` to `POST /tickets/scan`, exactly as if the QR had "
+                          + "been scanned (so ALREADY_REDEEMED, WRONG_EVENT_DAY and the scan audit all apply). "
+                          + "The confirmation number is case-insensitive. "
+                          + "**Check who you are admitting**: a confirmation number is easier to share than "
+                          + "a QR, so compare the holder's name and ask for the phone number ending in "
+                          + "`customerPhoneLast4`. "
+                          + "Same authorization as the scan: WRONG_ORGANIZER / NOT_ASSIGNED_TO_EVENT when this "
+                          + "scanner could not redeem the booking's tickets. Every outcome is 200 with a "
+                          + "`status`; anything but FOUND carries only the echoed confirmation number. "
+                          + "Requires **EVENT_ORGANIZER** or **TEAM_MEMBER** role."
+    )
+    @ApiResponses({
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "200", description = "Lookup result",
+                    content = @Content(mediaType = "application/json",
+                            examples = {
+                                    @ExampleObject(name = "FOUND", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Lookup result",
+                                              "data": {
+                                                "status": "FOUND",
+                                                "confirmationNumber": "INN-20260901-3C8849",
+                                                "customerName": "Tendai Ncube",
+                                                "customerPhoneLast4": "****4567",
+                                                "tickets": [
+                                                  {
+                                                    "ticketNumber": "20260901-48291X",
+                                                    "bookingItemId": "f1c0d2e3-2345-6789-abcd-ef0123456789",
+                                                    "categoryName": "VIP",
+                                                    "holderName": "Tendai Ncube",
+                                                    "redeemed": true,
+                                                    "redeemedAt": "2026-09-26T09:42:11+02:00",
+                                                    "redeemedByName": "Tariro Chikomo"
+                                                  },
+                                                  {
+                                                    "ticketNumber": "20260901-73015K",
+                                                    "bookingItemId": "0a9b8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d",
+                                                    "categoryName": "VIP",
+                                                    "holderName": "Rufaro Moyo",
+                                                    "redeemed": false
+                                                  }
+                                                ]
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "BOOKING_NOT_FOUND", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Lookup result",
+                                              "data": {
+                                                "status": "BOOKING_NOT_FOUND",
+                                                "confirmationNumber": "INN-20260901-000000"
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "BOOKING_NOT_CONFIRMED", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Lookup result",
+                                              "data": {
+                                                "status": "BOOKING_NOT_CONFIRMED",
+                                                "confirmationNumber": "INN-20260901-3C8849"
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "WRONG_ORGANIZER", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Lookup result",
+                                              "data": {
+                                                "status": "WRONG_ORGANIZER",
+                                                "confirmationNumber": "INN-20260901-3C8849"
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "NOT_ASSIGNED_TO_EVENT", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "Lookup result",
+                                              "data": {
+                                                "status": "NOT_ASSIGNED_TO_EVENT",
+                                                "confirmationNumber": "INN-20260901-3C8849"
+                                              }
+                                            }
+                                            """)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "400", description = "confirmationNumber missing, blank or too long",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "Validation failed",
+                                      "data": { "confirmationNumber": "confirmationNumber is required" }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(
+                    responseCode = "403", description = "Caller is not an EVENT_ORGANIZER or TEAM_MEMBER",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "403 FORBIDDEN",
+                                      "message": "Forbidden - insufficient role",
+                                      "data": null
+                                    }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<GateLookupResponseDTO>> lookup(
+            @Valid @RequestBody GateLookupRequestDTO request
+    ) {
+        GateLookupResponseDTO result = gateLookupService.lookup(request.getConfirmationNumber());
+        return ResponseEntity.ok(ApiResult.ok("Lookup result", result));
     }
 
     /**
