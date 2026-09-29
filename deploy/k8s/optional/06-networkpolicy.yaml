@@ -38,7 +38,7 @@ spec:
 ---
 # 2) Allow any pod in the ticketing namespace to reach any other pod in it.
 #    This restores the intra-cell service mesh (gateway->services, service->
-#    service via discovery, services->postgres/redis, eureka registration)
+#    service by Service name, services->postgres/redis)
 #    while cross-namespace and external direct access stays denied.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

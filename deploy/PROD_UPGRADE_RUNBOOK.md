@@ -231,22 +231,11 @@ is green. If any service fails, go to §9 before continuing.
 Each step below uses `kubectl set image` with `$TAG` from §4, which pins and rolls in one action.
 Re-export `TAG` if you have opened a new shell since §4.
 
-### 7.1 discovery-server — usually skip
+### 7.1 discovery-server — retired
 
-Roll this **only if discovery-server's own source changed**. For the 13add2eb → d74a643d upgrade
-only its Dockerfile base image and pom dependencies moved, so it was deliberately left alone:
-restarting the registry churns every service's registration for no functional gain.
-
-```bash
-# check first — if this shows only Dockerfile/pom, skip the section
-git diff --stat <previous-sha> HEAD -- discovery-server/
-
-# only if there are real source changes:
-kubectl -n ticketing set image deployment/discovery-server "*=ghcr.io/mpofuslim/discovery-server:$TAG"
-kubectl -n ticketing rollout status deployment/discovery-server --timeout=5m
-kubectl -n ticketing set image deployment/discovery-server-2 "*=ghcr.io/mpofuslim/discovery-server:$TAG"
-kubectl -n ticketing rollout status deployment/discovery-server-2 --timeout=5m
-```
+The Eureka registry no longer exists: every service finds its siblings by k8s Service name through
+the static discovery map in its `application.yaml` (see `CLAUDE.md`, "Service discovery"). There
+is nothing to roll here; the section number is kept so the references below still line up.
 
 ### 7.2 user-service — runs V35, V36, V37
 
@@ -315,7 +304,7 @@ kubectl -n ticketing rollout status deployment/marketplace-service --timeout=10m
 kubectl -n ticketing logs -l app=marketplace-service --tail=50
 ```
 
-A healthy first boot logs `Secrets guard passed`, registers with Eureka, and ends with
+A healthy first boot logs `Secrets guard passed` and ends with
 `Started MarketplaceServiceApplication`. If it crashloops, the usual cause is the database from §3
 missing; `ImagePullBackOff` instead means no image has ever been published from its own repo.
 

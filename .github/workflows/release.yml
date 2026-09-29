@@ -106,7 +106,6 @@ jobs:
       max-parallel: 4
       matrix:
         service:
-          - discovery-server
           - api-gateway
           - user-service
           - event-service

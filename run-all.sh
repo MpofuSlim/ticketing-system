@@ -7,11 +7,18 @@
 #     ./mvnw clean package spring-boot:repackage -Dmaven.test.skip=true
 #
 # Then run from a working dir that contains:
-#     ./jars/*.jar     the 8 service jars (copy them from */target/)
+#     ./jars/*.jar     the 7 service jars (copy them from */target/)
 #     ./.env           secrets + DB/Redis/Kafka config (see .env.example)
 #
 # Host prerequisites: Java 21; PostgreSQL with the 6 *_service databases;
-# Redis; Kafka (booking + payment only); ~6-8 GB RAM for all 8 JVMs.
+# Redis; Kafka (booking + payment only); ~6-8 GB RAM for all 7 JVMs.
+#
+# Siblings are found by NAME through the static discovery map at the end of
+# each application.yaml (http://user-service:8081, ...). Outside k8s those
+# names must resolve to this host, so either run with the `local` profile
+# (which maps them to localhost, but also relaxes the production-secrets
+# guard) or alias them in /etc/hosts:
+#     127.0.0.1 user-service event-service seat-service booking-service payment-service loyalty-service marketplace-service
 #
 # Usage:  ./run-all.sh start | stop
 set -euo pipefail
@@ -42,10 +49,7 @@ wait_health() { # name port
 }
 
 start_all() {
-  # 1) Eureka registry must be up before anything registers.
-  start_one discovery-server discovery-server-1.0.0.jar
-  wait_health discovery-server 8761
-  # 2) Backend services register with Eureka.
+  # 1) Backend services.
   start_one user-service    user-service-1.0.0.jar
   start_one event-service   event-service-1.0.0.jar
   start_one seat-service    seat-service-1.0.0.jar
@@ -53,7 +57,7 @@ start_all() {
   start_one payment-service payment-service-1.0.0.jar
   start_one loyalty-service loyalty-service-1.0.0.jar
   wait_health user-service 8081
-  # 3) Gateway last -- it resolves the services from Eureka.
+  # 2) Gateway last -- it resolves the services by name (discovery map).
   start_one api-gateway api-gateway-1.0.0.jar
   wait_health api-gateway 8080
   echo "All started. Gateway -> http://localhost:8080  (logs in $LOG_DIR/)"
