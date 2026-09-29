@@ -145,6 +145,26 @@ class FleetServiceMapTest {
     }
 
     @Test
+    void noDeployManifestOrCellEnvCarriesEurekaConfig() throws IOException {
+        // discovery-server is deleted. A leftover EUREKA_* configMapKeyRef /
+        // secretKeyRef is worse than dead config: once the key is gone from
+        // the cell ConfigMap/Secret, the pod is CreateContainerConfigError.
+        List<Path> files;
+        try (Stream<Path> k8s = Files.list(ROOT.resolve("deploy/k8s"));
+             Stream<Path> cells = Files.list(ROOT.resolve("deploy/cells"))) {
+            files = Stream.concat(k8s, cells)
+                    .filter(p -> p.toString().endsWith(".yaml") || p.toString().endsWith(".env"))
+                    .toList();
+        }
+        assertThat(files).as("deploy files scanned").isNotEmpty();
+        for (Path f : files) {
+            assertThat(Files.readString(f)).as(ROOT.relativize(f) + " still carries Eureka config")
+                    .doesNotContain("EUREKA_")
+                    .doesNotContain("discovery-server");
+        }
+    }
+
+    @Test
     void theMapBindsIntoSpringsDiscoveryClientAndResolvesEachName() throws IOException {
         MapPropertySource doc = defaultDocument("api-gateway");
         SimpleDiscoveryProperties properties = new Binder(ConfigurationPropertySources.from(doc))

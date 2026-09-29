@@ -84,7 +84,6 @@ the flags.
    cat > deploy/cells/cell.ke.local.env <<EOF
    POSTGRES_PASSWORD=$(openssl rand -base64 32)
    REDIS_PASSWORD=$(openssl rand -base64 32)
-   EUREKA_PASSWORD=$(openssl rand -hex 24)
    JWT_SECRET=$(openssl rand -base64 48)
    INTERNAL_API_TOKEN=$(openssl rand -base64 32)
    LOYALTY_VOUCHER_SECRET=$(openssl rand -base64 32)

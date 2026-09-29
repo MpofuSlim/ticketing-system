@@ -149,14 +149,17 @@ which keep a plain `RestClient` + explicit URL. Tests disable discovery via
 `spring.cloud.discovery.enabled: false` in the `test` / `it` profiles; keep
 that in a new service's test profiles.
 
-**Transition state (remove this paragraph when done):** the six ticketing
-services and the gateway are off Eureka. `discovery-server` still runs in the
-cell (`02-discovery.yaml`, `EUREKA_*` in the cell env) only for
-`loyalty-service` (InnRewards) and `marketplace-service` (market-place) until
-their repos make the same switch; then it is deleted — module,
-`02-discovery.yaml`, their `EUREKA_*` env in `04-services.yaml`, the cell
-`EUREKA_*` keys, and its Release matrix entry. Deleting it earlier breaks
-their outbound calls, which still resolve through it.
+**`discovery-server` is deleted** — module, `02-discovery.yaml`, every
+`EUREKA_*` key (cell env and Deployments) and its Release matrix entry — once
+all eight services (these six, InnRewards' `loyalty-service`, market-place's
+`marketplace-service`) ran the Service-DNS build. Two things a deletion like
+this does NOT do on its own, worth knowing for the next one: **`kubectl apply`
+never deletes an object whose manifest was removed** (the running Deployments
+and Services had to be deleted by hand), and **the Deployments' `EUREKA_*`
+`configMapKeyRef`/`secretKeyRef` entries had to go BEFORE the keys left the
+cell ConfigMap/Secret** — a pod referencing a missing key is
+`CreateContainerConfigError`, not a warning. The FreeMarker CVE override went
+with it: nothing else in the reactor pulls FreeMarker.
 
 ## External-service contract tests (WireMock)
 
@@ -1210,7 +1213,8 @@ new sensitive columns MUST follow suit:
   + rate-limit state, so an unauthenticated Redis is a tamper surface; compose/k8s
   already require `REDIS_PASSWORD`, and this makes a forgotten one fail fast.
   **A02-M3 (done):** the guard is now **fail-closed on an EMPTY active-profile
-  set** across all seven guards (6 data services + discovery-server) —
+  set** across all six data services' guards (discovery-server had a seventh
+  until it was deleted) —
   "deployment" = an active-profile set containing NO `dev/test/it/local` profile,
   which now includes the empty set. A prod container launched without
   `SPRING_PROFILES_ACTIVE` no longer boots on the placeholders; local dev / a

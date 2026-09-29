@@ -21,7 +21,7 @@
 # Pin a specific build instead of latest:  IMAGE_TAG=sha-<commit> ./run-stack.sh up
 set -euo pipefail
 export IMAGE_TAG="${IMAGE_TAG:-latest}"
-SLIM="discovery-server user-service event-service api-gateway"
+SLIM="user-service event-service api-gateway"
 
 [ -f docker-compose.yml ] || { echo "Run this from the repo root (no docker-compose.yml here)."; exit 1; }
 [ -f .env ]              || { echo "No .env found -- copy .env.example to .env and fill it in first."; exit 1; }

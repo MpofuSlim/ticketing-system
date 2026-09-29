@@ -25,7 +25,7 @@ export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 Config + secrets come straight from the cell env files (the same source of
 truth as Compose). Every workload sets `envFrom` ordered **configmap → secret**,
 so the secret (`cell.<iso>.local.env`) wins on any shared key — exactly like
-Compose's layered `--env-file`s (e.g. the real `EUREKA_PASSWORD` overrides the
+Compose's layered `--env-file`s (e.g. the real `REDIS_PASSWORD` overrides the
 `REPLACE_ME` placeholder, and the CORS override wins over the committed default).
 
 ```sh
@@ -79,7 +79,6 @@ kubectl -n ticketing rollout status  deployment/<service>
 
 ```sh
 kubectl apply -f 01-infra.yaml        # postgres, redis (local-path PVCs)
-kubectl apply -f 02-discovery.yaml    # Eureka HA pair
 kubectl apply -f 03-user-service.yaml
 kubectl apply -f 04-services.yaml     # event, seat, booking, payment, loyalty
 kubectl apply -f 05-gateway.yaml      # api-gateway (NodePort 30080)
@@ -160,8 +159,7 @@ auto-applied change.
   static discovery client), so the gateway resolves `lb://<svc>` →
   `<svc>:<port>` → a ready pod. A Service's name and port are therefore part of
   the contract: `FleetServiceMapTest` fails the build if they drift from the
-  map. `02-discovery.yaml` (Eureka) remains only for loyalty-service and
-  marketplace-service until they switch too, then it is deleted.
+  map. There is no registry: the Eureka pair (`02-discovery.yaml`) is retired.
 - **Core banking**: there is no server-side core-banking provider. The Oradian
   integration was removed — the frontend talks to Veengu directly — so tier-2
   registration is a purely local state change and payment-service no longer

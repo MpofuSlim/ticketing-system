@@ -29,7 +29,7 @@ admin.
 - **Firewall / security group:**
   - `22` (SSH) — your IP only
   - `18080` (api-gateway — the public entrypoint) — from your edge / Cloudflare only
-  - **Nothing else.** Every other port (`5432`, `6379`, `8081–8086`, `8761`, …)
+  - **Nothing else.** Every other port (`5432`, `6379`, `8081–8086`, …)
     is published on `127.0.0.1` only in `docker-compose.yml`; do not expose them.
 
 ## 2. Install Docker + the Compose v2 plugin
@@ -77,7 +77,6 @@ cat > deploy/cells/cell.zw.local.env <<EOF
 # --- generate fresh: empty DB, nothing encrypted/hashed/signed under old keys ---
 POSTGRES_PASSWORD=$(openssl rand -base64 32)
 REDIS_PASSWORD=$(openssl rand -base64 32)
-EUREKA_PASSWORD=$(openssl rand -hex 24)
 JWT_SECRET=$(openssl rand -base64 48)
 INTERNAL_API_TOKEN=$(openssl rand -base64 32)
 LOYALTY_VOUCHER_SECRET=$(openssl rand -base64 32)
@@ -185,7 +184,7 @@ The container fails to boot (a `${VAR:?}` guard fires) if any of these is
 missing. All live in `cell.<iso>.local.env` except `INNBUCKS_COUNTRY`, which is
 in the committed `cell.<iso>.env`:
 
-`POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `EUREKA_PASSWORD`, `JWT_SECRET`,
+`POSTGRES_PASSWORD`, `REDIS_PASSWORD`, `JWT_SECRET`,
 `INTERNAL_API_TOKEN`, `LOYALTY_VOUCHER_SECRET`,
 `LOYALTY_QR_SECRET`, `NATIONAL_ID_HMAC_SECRET`, `MFA_ENCRYPTION_KEY`,
 `WHATSAPP_API_KEY`, `BANK_API_KEY`, `BANK_API_USERNAME`, `BANK_API_PASSWORD`
@@ -216,6 +215,5 @@ heredoc already does this.)
 |---|---|---|
 | `18080` | api-gateway (→ 8080) | **public** (front with edge/TLS) |
 | `8081–8086` | user / event / seat / booking / payment / loyalty | `127.0.0.1` |
-| `18761` / `18762` | discovery-server (Eureka) | `127.0.0.1` |
 | `5432` / `6379` | Postgres / Redis | `127.0.0.1` |
 | `19090` | gateway management/actuator | `127.0.0.1` |

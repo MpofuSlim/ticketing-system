@@ -65,7 +65,8 @@ choose) before batch-onboarding the rest.
 
 The ticketing-system fleet is a 7-service Spring Boot deployment:
 
-- `api-gateway`, `discovery-server` (Eureka)
+- `api-gateway`, `discovery-server` (Eureka — since retired; siblings now
+  resolve by k8s Service name)
 - `user-service`, `event-service`, `seat-service`, `booking-service`,
   `payment-service`, `loyalty-service`
 

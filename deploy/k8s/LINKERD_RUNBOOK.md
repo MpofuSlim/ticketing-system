@@ -22,7 +22,7 @@ and it adds a proxy container to every pod (memory, see §2).
 ## 0. Before you start
 
 - [ ] Phase 1 is deployed everywhere: all services run the Service-DNS build and
-      `discovery-server` is gone (or at least nothing depends on it).
+      the `discovery-server` Deployments/Services are deleted from the cell.
 - [ ] Read the current install guide at <https://linkerd.io/2/getting-started/>
       and the release notes. **Check the release channel**: the open-source
       project publishes *edge* releases; *stable* builds are distributed by

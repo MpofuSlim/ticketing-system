@@ -9,7 +9,6 @@ other by Kubernetes Service name and communicate over REST.
 | Service            | Port | Responsibility                                                              |
 |--------------------|------|-----------------------------------------------------------------------------|
 | `api-gateway`      | 8080 | Public entry point. Routing, CORS, Redis-backed rate limiting.              |
-| `discovery-server` | 8761 | **Being retired.** Netflix Eureka registry, still running in the cell only for `loyalty-service` and `marketplace-service` until they switch to Service DNS. |
 | `user-service`     | 8081 | Auth: registration, login, JWT issuance, OTP, token revocation; admin & shop-staff users. |
 | `event-service`    | 8082 | Event catalogue and tenant-scoped event admin.                              |
 | `seat-service`     | 8083 | Seat inventory, categories, optimistic-locked holds.                        |
@@ -201,7 +200,6 @@ GitHub Actions workflows in `.github/workflows/`:
 ```
 .
 ├── api-gateway/           Spring Cloud Gateway (WebFlux)
-├── discovery-server/      Netflix Eureka registry
 ├── user-service/          Auth + JWT + OTP
 ├── event-service/         Event catalogue
 ├── seat-service/          Seat inventory + holds
