@@ -67,10 +67,13 @@ public class AdminUserController {
                     super_admin`): the platform-owner account is managed only through
                     `BOOTSTRAP_ADMIN_PASSWORD`.
 
-                    **Refuses a target holding any permission the caller does not** — `403
-                    target_not_manageable` (`reason: exceeds_your_authority`), read from the caller's
-                    current roles. Resetting someone's 2FA opens their account to whoever holds their
-                    password, so a narrower administrator cannot do it to a broader one.
+                    **Refuses a target holding any permission the caller does not, or a platform staff
+                    built-in (`PRODUCT_*`, `CALL_CENTER_*`, `FRAUD_DESK`) the caller does not hold
+                    themselves** — `403 target_not_manageable` (`reason: exceeds_your_authority`), read
+                    from the caller's current roles (SUPER_ADMIN passes both). Resetting someone's 2FA
+                    opens their account to whoever holds their password, so a narrower administrator
+                    cannot do it to a broader one — including a `PRODUCT_MANAGER`, whose authority is
+                    mostly its name in event-service and booking-service.
 
                     Requires the `users:mfa:reset` permission.
                     """)
@@ -386,9 +389,10 @@ public class AdminUserController {
                     "is ever permitted to toggle it. The SUPER_ADMIN's `active` state is fixed at seed time " +
                     "(BOOTSTRAP_ADMIN_PASSWORD).\n\n" +
                     "**Deactivating a STAFF-role holder needs the caller to hold every permission the " +
-                    "account holds** (read from the caller's current roles) — otherwise `403 " +
-                    "target_not_manageable` (`reason: exceeds_your_authority`), so a narrower administrator " +
-                    "cannot switch off a broader one. A staff role is a platform staff built-in (PRODUCT_*, " +
+                    "account holds, and every platform staff built-in it holds** (read from the caller's " +
+                    "current roles; SUPER_ADMIN passes both) — otherwise `403 target_not_manageable` " +
+                    "(`reason: exceeds_your_authority`), so a narrower administrator cannot switch off a " +
+                    "broader one. A staff role is a platform staff built-in (PRODUCT_*, " +
                     "CALL_CENTER_*, FRAUD_DESK) or any role holding a PLATFORM permission; business " +
                     "accounts are not gated this way.\n\n" +
                     "Requires the `users:activation:write` permission."
@@ -477,8 +481,10 @@ public class AdminUserController {
 
         // Capture the admin's identity + request envelope so the audit row
         // (written inside setActive) ties the action back to whoever made it.
-        // Authentication is non-null here — @PreAuthorize already enforced
-        // hasRole('SUPER_ADMIN'), so Spring Security would have 401'd anonymous.
+        // Authentication is non-null here — @PreAuthorize already required
+        // users:activation:write, so Spring Security would have 401'd anonymous.
+        // The name is also what bounds a staff deactivation: setActive reads this
+        // account's LIVE roles and refuses a target it does not cover.
         String adminEmail = authentication.getName();
         AuditContext auditContext = new AuditContext(clientIp(httpRequest),
                 httpRequest.getHeader("User-Agent"));
@@ -532,11 +538,18 @@ public class AdminUserController {
                       platform staff built-in (`PRODUCT_*`, `CALL_CENTER_*`, `FRAUD_DESK`) also needs
                       the caller to hold that same role (or be SUPER_ADMIN) — **400
                       `role_not_assignable`**, `data.roles` naming each refused role with its reason
-                      (`exceeds_your_authority`, `named_role_not_held`). Roles the account already
+                      (`exceeds_your_authority`, `named_role_not_held`, `reserved_to_super_admin`). A
+                      stored code the catalog no longer defines counts as one the caller does not
+                      hold. Roles the account already
                       holds are not re-checked.
+                    * **Every role ADDED** that stores a code reserved to SUPER_ADMIN (`roles:write`,
+                      `users:roles:write` — a legacy grant from before they were reserved) can be given
+                      by SUPER_ADMIN only — **400 `role_not_assignable`** (`reserved_to_super_admin`).
                     * **Removing any role** needs the caller to hold every permission the account
-                      holds now — **403 `target_not_manageable`** (`reason: exceeds_your_authority`),
-                      so a narrower administrator cannot strip a broader one.
+                      holds now, and every platform staff built-in it holds — **403
+                      `target_not_manageable`** (`reason: exceeds_your_authority`), so a narrower
+                      administrator cannot strip a broader one (a `PRODUCT_MANAGER` included, whose
+                      authority is mostly its name in other services).
 
                     ### Refusals
 
@@ -586,6 +599,18 @@ public class AdminUserController {
                                                 "roles": {
                                                   "FRAUD_DESK": "exceeds_your_authority",
                                                   "PRODUCT_OFFICER": "named_role_not_held"
+                                                }
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Legacy role storing a code reserved to SUPER_ADMIN", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "These roles can't be given to this account: SUPPORT_ADMIN (reserved to SUPER_ADMIN).",
+                                              "data": {
+                                                "errorCode": "role_not_assignable",
+                                                "roles": {
+                                                  "SUPPORT_ADMIN": "reserved_to_super_admin"
                                                 }
                                               }
                                             }

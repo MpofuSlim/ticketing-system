@@ -117,7 +117,8 @@ class V43CollisionFailsMigrationIT {
         JdbcTemplate jdbc = new JdbcTemplate(ds);
         jdbc.update("INSERT INTO users (id, first_name, last_name, phone_number, email, password, home_country, "
                 + "active, approved, created_at) VALUES "
-                + "(900, 'Rudo', 'Banda', '+263771900900', 'rudo.banda@innbucks.co.zw', 'x', 'ZW', true, true, NOW())");
+                + "(900, 'Rudo', 'Banda', '+263771900900', 'rudo.banda@innbucks.co.zw', 'x', 'ZW', true, true, "
+                + "(now() AT TIME ZONE 'UTC'))");
         jdbc.update("INSERT INTO user_roles (user_id, role) VALUES (900, 'FRAUD_DESK')");
 
         assertThatThrownBy(() -> flyway(ds, "43").migrate())

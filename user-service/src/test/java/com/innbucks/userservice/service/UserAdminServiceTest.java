@@ -67,7 +67,7 @@ class UserAdminServiceTest {
         {
             com.innbucks.userservice.testsupport.BuiltInRoleRows.stub(roleRepo);
             // The administrator every case acts as is the platform owner, so the
-            // no-escalation rules (RoleGrantNoEscalationTest) never refuse here.
+            // no-escalation rules (NamedRoleAssignmentTest, RoleRemovalAuthorityTest) never refuse here.
             com.innbucks.userservice.testsupport.BuiltInRoleRows.caller(userRepo, "admin@innbucks.co.zw",
                     User.Role.SUPER_ADMIN.name());
         }

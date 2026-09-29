@@ -50,7 +50,8 @@ public final class RoleDTOs {
     @Schema(name = "SetRolePermissionsRequest",
             description = "Replace a role's permission set. This is a REPLACE, not a merge — send "
                     + "every permission the role should keep. Codes ADDED must be held by the caller and "
-                    + "not reserved to SUPER_ADMIN; removing codes is never refused.")
+                    + "not reserved to SUPER_ADMIN; removing codes is never refused on those grounds, "
+                    + "but a role must keep at least one code.")
     public static class SetRolePermissionsRequest {
 
         @NotEmpty(message = "permissions must contain at least one permission")
@@ -81,7 +82,7 @@ public final class RoleDTOs {
                             + "PRODUCT_OFFICER, PRODUCT_MANAGER, CALL_CENTER_AGENT, CALL_CENTER_SUPERVISOR, "
                             + "FRAUD_DESK), or any role holding a PLATFORM permission. Staff roles reset "
                             + "passwords by email only, and switching off one of their holders needs the "
-                            + "caller to hold everything that holder holds.")
+                            + "caller to hold everything that holder holds (and, for a built-in, that role).")
             boolean staffRole) {
 
         public static RoleResponse of(Role role) {

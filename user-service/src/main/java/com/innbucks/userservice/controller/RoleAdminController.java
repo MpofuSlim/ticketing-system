@@ -312,8 +312,10 @@ public class RoleAdminController {
                     **No escalation.** Every code ADDED must be one the caller holds (read from their \
                     current roles) and must not be reserved to SUPER_ADMIN (`roles:write`, \
                     `users:roles:write`) — otherwise `400 permission_not_assignable` naming each code. \
-                    **An edit that only removes codes is never refused**, including on a role that \
-                    still holds a code reserved today.
+                    **Removing codes is never refused on those grounds**, including on a role that \
+                    still holds a code reserved today — but a role must keep at least one code \
+                    (`400`, "permissions must contain at least one permission…"); delete the role \
+                    instead.
 
                     **When holders see it.** Removing a **PLATFORM** code (see `scope` on \
                     `GET /admin/roles/permissions`) signs every holder of the role out at once: their \
@@ -321,8 +323,11 @@ public class RoleAdminController {
                     so their next request answers `401 SESSION_SUPERSEDED` and they refresh or sign \
                     in again. Removing only **TENANT** codes, or adding any, reaches holders when \
                     their token is next minted (next `POST /auth/refresh` — at most the 15-minute \
-                    access-token lifetime), so trimming a business role does not sign every business \
-                    out at once.
+                    access-token lifetime), so trimming a business role's TENANT codes does not sign \
+                    every business out at once. **The sign-out is sized by the role's holders**: \
+                    removing a PLATFORM code — or a code the catalog no longer defines, which counts \
+                    as PLATFORM — from a widely held business role such as `MERCHANT_ADMIN` signs \
+                    every business out at once.
 
                     **Audited or not made:** if the `ROLE_PERMISSIONS_CHANGED` audit row cannot be \
                     written, nothing changes — `503 audit_unavailable`.""")

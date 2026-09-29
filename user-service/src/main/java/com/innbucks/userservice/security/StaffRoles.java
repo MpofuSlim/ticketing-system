@@ -35,7 +35,9 @@ import java.util.Set;
  * <p>What reads it: phone-based password reset is a no-op for any holder of a
  * staff role ({@code PasswordResetService}), deactivating one needs the caller
  * to hold everything the target does ({@code UserAdminService.setActive}), and
- * assigning a NAMED one needs the caller to hold it ({@code RoleGrantGuard}).
+ * assigning a NAMED one — or removing, deactivating or resetting the 2FA of a
+ * holder of one — needs the caller to hold it or the wildcard
+ * ({@code RoleGrantGuard}).
  */
 public final class StaffRoles {
 

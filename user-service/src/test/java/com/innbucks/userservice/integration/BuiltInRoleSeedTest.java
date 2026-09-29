@@ -1,6 +1,7 @@
 package com.innbucks.userservice.integration;
 
 import com.innbucks.userservice.entity.User;
+import com.innbucks.userservice.testsupport.BuiltInRoleRows;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -68,7 +69,7 @@ class BuiltInRoleSeedTest {
 
     @Test
     @EnabledIf("com.innbucks.userservice.testsupport.PostgresIntegrationTestBase#isDockerAvailable")
-    @DisplayName("against Postgres: every User.Role constant has a builtin = TRUE row after migrating")
+    @DisplayName("against Postgres: every User.Role constant has a builtin = TRUE row, granted as the fixture says")
     void everyConstantHasABuiltinRow() {
         try (PostgreSQLContainer<?> pg = new PostgreSQLContainer<>("postgres:16-alpine")
                 .withDatabaseName("builtin_seed").withUsername("user_svc").withPassword("user_svc")) {
@@ -80,9 +81,25 @@ class BuiltInRoleSeedTest {
             Flyway.configure().dataSource(ds).locations("classpath:db/migration")
                     .placeholders(Map.of("innbucks_country", "ZW")).load().migrate();
 
-            List<String> builtins = new JdbcTemplate(ds)
-                    .queryForList("SELECT name FROM roles WHERE builtin = TRUE", String.class);
+            JdbcTemplate jdbc = new JdbcTemplate(ds);
+            List<String> builtins = jdbc.queryForList("SELECT name FROM roles WHERE builtin = TRUE", String.class);
             assertThat(new TreeSet<>(builtins)).containsAll(enumNames());
+
+            // The unit tests' copy of the built-ins (BuiltInRoleRows) is exactly
+            // what the migrations seed. NamedRoleAssignmentTest,
+            // RoleRemovalAuthorityTest and TenantPermissionRemovalDoesNotBumpTest
+            // all decide on these grants (PRODUCT_OFFICER = users:merchants:read,
+            // MERCHANT_ADMIN's shop codes, …), so a drift here would let them pass
+            // against a role table that does not exist.
+            Map<String, Set<String>> seeded = new java.util.TreeMap<>();
+            for (String name : BuiltInRoleRows.GRANTS.keySet()) seeded.put(name, new TreeSet<>());
+            jdbc.query("SELECT rp.role_name, rp.permission_code FROM role_permissions rp "
+                    + "JOIN roles r ON r.name = rp.role_name WHERE r.builtin = TRUE", rs -> {
+                seeded.computeIfAbsent(rs.getString(1), k -> new TreeSet<>()).add(rs.getString(2));
+            });
+            Map<String, Set<String>> fixture = new java.util.TreeMap<>();
+            BuiltInRoleRows.GRANTS.forEach((name, grants) -> fixture.put(name, new TreeSet<>(grants)));
+            assertThat(seeded).isEqualTo(fixture);
         }
     }
 }

@@ -21,9 +21,9 @@ import static org.mockito.Mockito.when;
 /**
  * The built-in role rows exactly as the migrations seed them (V35's grants plus
  * V43's call-center roles), for unit tests that mock {@link RoleRepository}.
- * {@code CallCenterRoleGrantsIT} and {@code BuiltInRoleSeedTest} pin the real
- * rows against Postgres; this copy only has to be right for the tests that read
- * it, and a drift shows up there first.
+ * {@code BuiltInRoleSeedTest}'s Postgres half migrates a fresh database and
+ * asserts its built-in {@code role_permissions} EQUAL {@link #GRANTS}, so this
+ * copy cannot drift from the migrations unnoticed.
  */
 public final class BuiltInRoleRows {
 

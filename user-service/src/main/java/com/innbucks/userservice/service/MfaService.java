@@ -69,9 +69,9 @@ public class MfaService {
      */
     private final TokenVersionBumper tokenVersionBumper;
     /**
-     * An admin reset needs the caller to hold everything the target holds — a
-     * narrower administrator must not be able to strip a broader one's second
-     * factor. Required: a missing guard must fail the wiring, not the check.
+     * An admin reset needs the caller to hold everything the target holds, and
+     * every NAMED staff role it holds — a narrower administrator must not be able
+     * to strip a broader one's second factor. Required: a missing guard must fail the wiring, not the check.
      */
     private final RoleGrantGuard roleGrantGuard;
 
@@ -282,9 +282,10 @@ public class MfaService {
      *       factor is a takeover step, not a recovery; that account is managed
      *       through {@code BOOTSTRAP_ADMIN_PASSWORD} only, the same rule
      *       {@code setActive} and {@code setRoles} already apply.</li>
-     *   <li><b>Refuses a target holding a permission the caller does not</b> —
-     *       403 {@code target_not_manageable} ({@code reason:
-     *       exceeds_your_authority}), read from the caller's live roles. Resetting
+     *   <li><b>Refuses a target holding a permission, or a NAMED staff role, the
+     *       caller does not</b> — 403 {@code target_not_manageable} ({@code reason:
+     *       exceeds_your_authority}), read from the caller's live roles
+     *       ({@link RoleGrantGuard#requireMayManage}). Resetting
      *       someone's 2FA opens their account to whoever holds their password, so
      *       a narrower administrator must not be able to do it to a broader one.</li>
      *   <li><b>Takes effect immediately.</b> Bumps {@code tokenVersion}

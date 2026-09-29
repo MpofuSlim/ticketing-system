@@ -49,7 +49,7 @@ class MfaServiceTest {
         props.setBackupCodeCount(10);
         tokenVersionBumper = mock(TokenVersionBumper.class);
         // The admin-reset caller check reads live roles; a SUPER_ADMIN acts in
-        // every case here (RoleGrantNoEscalationTest covers the refusals).
+        // every case here (RoleRemovalAuthorityTest covers the refusals).
         com.innbucks.userservice.repository.RoleRepository roleRepository =
                 mock(com.innbucks.userservice.repository.RoleRepository.class);
         com.innbucks.userservice.testsupport.BuiltInRoleRows.stub(roleRepository);

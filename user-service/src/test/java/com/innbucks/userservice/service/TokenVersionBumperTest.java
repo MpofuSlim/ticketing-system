@@ -117,8 +117,13 @@ class TokenVersionBumperTest {
                 .thenReturn(java.util.List.of(new Object[]{a, 9L}, new Object[]{b.toString(), 4}));
 
         assertThat(bumper.bumpAllHolding("CALL_CENTER_AGENT")).isEqualTo(2);
-        verify(publisher).publishAfterCommit(a, 9L);
-        verify(publisher).publishAfterCommit(b, 4L);
+        // ONE after-commit hand-off for the whole set, in the order returned —
+        // not one synchronous publish per holder on the request thread.
+        java.util.Map<UUID, Long> expected = new java.util.LinkedHashMap<>();
+        expected.put(a, 9L);
+        expected.put(b, 4L);
+        verify(publisher).publishAllAfterCommit(expected);
+        verify(publisher, never()).publishAfterCommit(any(), anyLong());
         verify(publisher, never()).publish(any(), anyLong());
     }
 
@@ -127,7 +132,33 @@ class TokenVersionBumperTest {
         when(users.incrementTokenVersionForRoleHolders("FRAUD_DESK")).thenReturn(java.util.List.of());
 
         assertThat(bumper.bumpAllHolding("FRAUD_DESK")).isZero();
-        verifyNoInteractions(publisher);
+        verify(publisher).publishAllAfterCommit(java.util.Map.of());
+        verify(publisher, never()).publishAfterCommit(any(), anyLong());
+    }
+
+    @Test
+    void bumpAllHolding_aboveTheThreshold_isCountedForOperators() {
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        bumper.setMeterRegistry(registry);
+        io.micrometer.core.instrument.Counter large =
+                registry.find(TokenVersionBumper.LARGE_BULK_BUMP_METRIC).counter();
+        assertThat(large).as("registered at zero before the first large bump").isNotNull();
+        assertThat(large.count()).isZero();
+
+        java.util.List<Object[]> atThreshold = new java.util.ArrayList<>();
+        for (int i = 0; i < TokenVersionBumper.LARGE_BULK_BUMP_THRESHOLD; i++) {
+            atThreshold.add(new Object[]{UUID.randomUUID(), 2L});
+        }
+        when(users.incrementTokenVersionForRoleHolders("CALL_CENTER_AGENT")).thenReturn(atThreshold);
+        bumper.bumpAllHolding("CALL_CENTER_AGENT");
+        assertThat(large.count()).isZero();
+
+        java.util.List<Object[]> above = new java.util.ArrayList<>(atThreshold);
+        above.add(new Object[]{UUID.randomUUID(), 2L});
+        when(users.incrementTokenVersionForRoleHolders("MERCHANT_ADMIN")).thenReturn(above);
+        assertThat(bumper.bumpAllHolding("MERCHANT_ADMIN")).isEqualTo(TokenVersionBumper.LARGE_BULK_BUMP_THRESHOLD + 1);
+        assertThat(large.count()).isEqualTo(1.0);
     }
 
     @Test

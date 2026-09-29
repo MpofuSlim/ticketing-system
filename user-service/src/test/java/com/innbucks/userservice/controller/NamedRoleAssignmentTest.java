@@ -111,6 +111,45 @@ class NamedRoleAssignmentTest {
     }
 
     @Test
+    @DisplayName("a legacy role STORING a code reserved to the wildcard cannot be spread, even by its own holder")
+    void legacyReservedCodeRoleIsNotAssignable() throws Exception {
+        // LEGACY_GRANTER stores users:roles:write from before that code was
+        // reserved. The granter holds the role and so every code in it — the
+        // permission comparison alone would wave it through.
+        setRoles(GRANTER, "{\"roles\":[\"CUSTOMER\",\"LEGACY_GRANTER\"]}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(
+                        "These roles can't be given to this account: LEGACY_GRANTER (reserved to SUPER_ADMIN)."))
+                .andExpect(jsonPath("$.data.errorCode").value("role_not_assignable"))
+                .andExpect(jsonPath("$.data.roles.LEGACY_GRANTER").value("reserved_to_super_admin"));
+
+        assertThat(target.getRoles()).containsExactly("CUSTOMER");
+    }
+
+    @Test
+    @DisplayName("the platform owner may still give a legacy role that stores a reserved code")
+    void wildcardMayGiveALegacyReservedCodeRole() throws Exception {
+        setRoles(OWNER, "{\"roles\":[\"CUSTOMER\",\"LEGACY_GRANTER\"]}")
+                .andExpect(status().isOk());
+        assertThat(target.getRoles()).containsExactlyInAnyOrder("CUSTOMER", "LEGACY_GRANTER");
+    }
+
+    @Test
+    @DisplayName("a role storing a code the catalog no longer defines counts as granting more than the caller holds")
+    void staleCodeCountsAsNotHeld() throws Exception {
+        // refunds:approve is not in the catalog: it grants nobody anything, so
+        // the granter does not hold it — and it must not be read as "nothing to
+        // compare" (an unknown code classifies as PLATFORM, failing closed).
+        h.role("STALE_ROLE", "users:merchants:read", "refunds:approve");
+        setRoles(GRANTER, "{\"roles\":[\"CUSTOMER\",\"STALE_ROLE\"]}")
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.data.roles.STALE_ROLE").value("exceeds_your_authority"));
+
+        setRoles(OWNER, "{\"roles\":[\"CUSTOMER\",\"STALE_ROLE\"]}")
+                .andExpect(status().isOk());
+    }
+
+    @Test
     @DisplayName("a role the account already holds is not re-checked — only ADDED roles are")
     void onlyAddedRolesAreChecked() throws Exception {
         target.getRoles().add("PRODUCT_OFFICER");

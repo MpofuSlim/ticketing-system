@@ -134,7 +134,7 @@ public class AuditService {
             // security.audit.write_failed counter pages them that it happened.
             log.error("AUDIT_WRITE_FAILED type={} outcome={} actorId={} reason={}",
                     type.name(), outcome, actorId, ex.getMessage(), ex);
-            writeFailed(type, "best_effort");
+            writeFailed(false);
         }
     }
 
@@ -171,15 +171,15 @@ public class AuditService {
         } catch (RuntimeException ex) {
             log.error("AUDIT_WRITE_FAILED (required — the change is refused) type={} actorId={} reason={}",
                     type.name(), actorId, ex.getMessage(), ex);
-            writeFailed(type, "required");
+            writeFailed(true);
             throw new com.innbucks.userservice.exception.AuditUnavailableException(ex);
         }
     }
 
-    private void writeFailed(AuditEventType type, String mode) {
+    private void writeFailed(boolean required) {
         if (securityMetrics == null) return;
         try {
-            securityMetrics.auditWriteFailed(type.name(), mode);
+            securityMetrics.auditWriteFailed(required);
         } catch (RuntimeException ignored) {
             // a metrics failure must never change the audit outcome
         }

@@ -23,7 +23,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * API: not to a custom role, not to a built-in, and not by SUPER_ADMIN.
  *
  * <p>Before this, anyone holding {@code roles:write} could add {@code roles:write}
- * (and everything else) to a role they held — self-escalation by role edit (T3).
+ * (and everything else) to a role they held — self-escalation by role edit.
  */
 class PermissionNotAssignableTest {
 

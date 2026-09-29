@@ -153,9 +153,10 @@ public class UserAdminService {
         }
 
         // Switching off a STAFF-role holder needs the caller to hold everything
-        // the target holds: otherwise a narrower administrator could lock out a
-        // broader one (a support agent with users:activation:write switching off
-        // the product manager who supervises them). Business accounts are not
+        // the target holds, NAMED roles included: otherwise a narrower
+        // administrator could lock out a broader one (a support agent with
+        // users:activation:write switching off the product manager who
+        // supervises them). Business accounts are not
         // gated here — their authority reaches one business, not the platform.
         if (!active && roleGrantGuard.holdsStaffRole(user)) {
             roleGrantGuard.requireMayManage(roleGrantGuard.resolveCaller(adminEmail), user);
@@ -284,9 +285,10 @@ public class UserAdminService {
      * below: every role ADDED must grant only permissions the caller holds, and a
      * NAMED staff role (PRODUCT_*, CALL_CENTER_*, FRAUD_DESK) also needs the
      * caller to hold it or the wildcard (400 {@code role_not_assignable}); any
-     * role REMOVED needs the caller to hold everything the account holds now
-     * (403 {@code target_not_manageable}), so a narrower administrator cannot
-     * strip a broader one. The caller's authority is read live, never from their
+     * role REMOVED needs the caller to hold everything the account holds now,
+     * NAMED roles included (403 {@code target_not_manageable}), so a narrower
+     * administrator cannot strip a broader one. An added role storing a code
+     * reserved to the wildcard can be given by the wildcard only. The caller's authority is read live, never from their
      * token.
      *
      * <p><b>Replace, not merge.</b> The submitted set becomes the account's

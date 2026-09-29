@@ -32,9 +32,10 @@ import java.util.regex.Pattern;
  *
  * <p>No-escalation ({@link RoleGrantGuard}): a code ADDED to a role must be one
  * the caller holds, and never one reserved to the wildcard
- * ({@link PermissionCatalog#WILDCARD_RESERVED}); an edit that only removes codes
- * is never refused. Removing a PLATFORM code signs every holder out at once
- * (see {@link #setPermissions}).
+ * ({@link PermissionCatalog#WILDCARD_RESERVED}); removing codes is never
+ * refused on authority or reserved-code grounds (a role must still keep at
+ * least one code — that is validation). Removing a PLATFORM code signs every
+ * holder out at once (see {@link #setPermissions}).
  */
 @Slf4j
 @Service
@@ -155,16 +156,23 @@ public class RoleAdminService {
      * and it is only the NAME of a built-in that code depends on.
      *
      * <p><b>Added codes</b> must each be held by the caller and never be reserved
-     * to the wildcard ({@link RoleGrantGuard#requireMayGrant}). <b>An edit that
-     * only removes codes is never refused</b> — taking authority away must always
-     * be possible, including from a role an earlier release let hold a code that
-     * is reserved today.
+     * to the wildcard ({@link RoleGrantGuard#requireMayGrant}). <b>Removing codes
+     * is never refused on authority or reserved-code grounds</b> — taking
+     * authority away must always be possible, including from a role an earlier
+     * release let hold a code that is reserved today. The one limit is
+     * validation, not authority: a role must keep at least one code (400), so
+     * emptying a role takes deleting it instead.
      *
      * <p><b>Removing a PLATFORM code signs every holder out at once</b>: one
      * atomic {@code token_version} bump across everyone holding the role, each
-     * new version published to the shared Redis after commit. Staff populations
-     * are small, and a support agent who loses {@code device-security:manage}
-     * must not keep using it for the rest of their access token's life.
+     * new version published to the shared Redis after commit (pipelined, in
+     * batches — {@link TokenVersionBumper#bumpAllHolding}). A support agent who
+     * loses {@code device-security:manage} must not keep using it for the rest of
+     * their access token's life. <b>The cost is the ROLE's holder count</b>, not
+     * any staff population: a PLATFORM (or stale) code taken off a widely held
+     * business role signs every holder out — every business, for
+     * {@code MERCHANT_ADMIN}. Correct, since the code was on their tokens, and
+     * WARNed + counted above {@link TokenVersionBumper#LARGE_BULK_BUMP_THRESHOLD}.
      * <b>Removing only TENANT codes does not bump</b>: the change reaches each
      * holder at their next refresh (at most the access-token lifetime, 15
      * minutes), so trimming what every MERCHANT_ADMIN can do does not sign out
@@ -273,7 +281,7 @@ public class RoleAdminService {
      * <p>A code the role ALREADY holds is not re-validated against the catalog:
      * keeping a stale grant is harmless (the resolver drops it), and refusing it
      * would refuse an edit that only removes something — which must always be
-     * possible.
+     * possible (down to the last code; see the empty check).
      */
     private Set<String> validatePermissions(Collection<String> permissions, Collection<String> alreadyHeld) {
         Set<String> granted = new LinkedHashSet<>();

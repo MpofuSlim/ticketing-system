@@ -328,7 +328,9 @@ bounded what they could hand out. `RoleGrantGuard` now does, and every rule
 reads the caller's **LIVE** authority (their current roles through
 `PermissionResolver`), never the token's `perms` — a token minted before a
 release that added a code would otherwise refuse the platform owner a code they
-hold. A caller that does not resolve to an active account holds nothing.
+hold. A caller that does not resolve to an active account is refused every
+grant and every target check outright — including a role or account carrying no
+permission, where "holds everything it holds" would be vacuously true.
 
 - **Scope is code.** `PLATFORM` = acts across every business (`users:*`,
   `roles:*`, `service-requests:*`, `organizations:read`, `device-security:*`, and
@@ -342,9 +344,13 @@ hold. A caller that does not resolve to an active account holds nothing.
   or built-in, even by SUPER_ADMIN** (400 `permission_not_assignable`, reason
   `reserved_to_super_admin`). SUPER_ADMIN holds them through `*`; only a reviewed
   migration could grant one to a built-in, and none does. A role an earlier
-  release let hold one keeps it (the pre-deploy query flags them) — an edit that
-  only REMOVES codes is never refused. A new code that hands out authority itself
-  belongs in this set.
+  release let hold one keeps it (the pre-deploy query flags them), and removing
+  codes is never refused on authority or reserved-code grounds (a role must still
+  keep at least one code — that is validation). **Such a legacy role can be put
+  on an account by SUPER_ADMIN only** (400 `role_not_assignable`,
+  `reserved_to_super_admin`) — otherwise its holders could spread `roles:write` /
+  `users:roles:write` through `PUT /admin/users/{id}/roles`. A new code that
+  hands out authority itself belongs in this set.
 - **A staff role** (`StaffRoles`) is one whose name is in `StaffRoles.NAMED`
   (`SUPER_ADMIN`, `PRODUCT_OFFICER`, `PRODUCT_MANAGER`, `CALL_CENTER_AGENT`,
   `CALL_CENTER_SUPERVISOR`, `FRAUD_DESK`), or that holds `*`, or any PLATFORM
@@ -358,17 +364,33 @@ hold. A caller that does not resolve to an active account holds nothing.
   hold that role or `*` (400 `role_not_assignable`, `data.roles` = name → reason);
   **removing** a role from an account, **deactivating a staff-role holder**, and
   **resetting anyone's 2FA** need the caller to hold everything the target holds
-  (403 `target_not_manageable`, `reason: exceeds_your_authority`). Business
-  accounts are not gated on deactivation — their authority reaches one business.
-  Only ADDED roles/codes are checked; what an account or role already holds is not.
+  AND every NAMED role it holds, or `*` (403 `target_not_manageable`, `reason:
+  exceeds_your_authority`). **The NAME half is load-bearing on both sides**:
+  `PRODUCT_MANAGER` resolves to one read-only code here while its authority is
+  its name in event and booking, so comparing codes alone let a custom role that
+  covered that one code strip, switch off or reset the 2FA of a product manager
+  it could never have appointed. Business accounts are not gated on deactivation
+  — their authority reaches one business. Only ADDED roles/codes are checked;
+  what an account or role already holds is not.
+- **The two sides are compared differently, on purpose.** The caller's
+  authority is what their roles EFFECTIVELY grant (a stale code grants them
+  nothing); what they hand out or act against is read as STORED, so a stale code
+  on a role or account counts as one the caller lacks and only `*` covers it.
+  Dropping unknown codes before the comparison would have been the one place an
+  unknown code failed open.
 - **Removing a PLATFORM code from a role signs every holder out at once** — one
   atomic `UPDATE users … WHERE id IN (SELECT user_id FROM user_roles WHERE role =
   :name) RETURNING …` through `TokenVersionBumper.bumpAllHolding` (still the one
-  writer of `token_version`), each new version published after commit. **Removing
-  only TENANT codes does not bump**: the change reaches holders at their next
-  refresh (≤ 15 minutes), so trimming MERCHANT_ADMIN does not sign every business
-  out at once. Adding codes never bumps (and `perms: []` tokens pick an addition up
-  on their next request — T21).
+  writer of `token_version`), the new versions published after commit through
+  ONE synchronization, as pipelined `EVAL`s 500 per round trip
+  (`TokenVersionPublisher.publishAll`) — never one synchronous Redis call per
+  holder on the request thread. **It is sized by the ROLE's holders**: a PLATFORM
+  or stale code removed from `MERCHANT_ADMIN` signs every business out at once.
+  Above 500 holders it logs a WARN and counts `user.tokenver.bulk_bump.large`.
+  **Removing only TENANT codes does not bump**: the change reaches holders at
+  their next refresh (≤ 15 minutes), so trimming MERCHANT_ADMIN's shop codes does
+  not sign every business out. Adding codes never bumps (and `perms: []` tokens
+  pick an addition up on their next request).
 - **Reserved role names:** `ADMIN` (never a platform role — V3 rewrote it to
   SUPER_ADMIN, nothing names it), a bare `CALL_CENTER`, and any `CALL_CENTRE…`
   spelling are refused by `POST /admin/roles` (400). The spelling is `CALL_CENTER`
@@ -378,11 +400,12 @@ hold. A caller that does not resolve to an active account holds nothing.
   (an add-on, held with one of them) holds `:read` + `:fraud`. **V43 FAILS rather
   than adopt** a same-named `roles` row or orphan `user_roles` string — adopting
   would merge an operator's grants into an undeletable built-in and hand
-  device-security authority to unchecked holders, at once for `perms: []` tokens
-  (T21). A later grant migration must follow the same rule and only target these
-  built-ins. **Never add `CALL_CENTER_*` to booking/event `PLATFORM_STAFF_ROLES`,
-  and never name a support role in a `hasRole()`** (T11): support reaches
-  customer data only through user-service endpoints that check a permission.
+  device-security authority to unchecked holders, at once for `perms: []`
+  tokens. A later grant migration must follow the same rule and only target
+  these built-ins. **Never add `CALL_CENTER_*` to booking/event
+  `PLATFORM_STAFF_ROLES`, and never name a support role in a `hasRole()`**:
+  support reaches customer data only through user-service endpoints that check a
+  permission.
 - **Staff reset their password by EMAIL only.** `PasswordResetService` makes both
   phone steps no-ops (the generic 200 / "Invalid or expired code") for any
   staff-role holder — a phone on a staff account is a takeover path.
@@ -391,7 +414,7 @@ hold. A caller that does not resolve to an active account holds nothing.
   organization switch, exchange, enrolment-complete. Gate console screens on it,
   not on role names. `AuthResponsePermissionsFieldTest`.
 - `ShopStaffService` / `TeamMemberService` service-layer built-in-role guards are
-  deliberately untouched by any of this (T13).
+  deliberately untouched by any of this.
 
 ## The gate-operator 2FA exemption, and the refresh hole it left open
 

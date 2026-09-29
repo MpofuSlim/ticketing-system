@@ -56,9 +56,16 @@ public class StaffPolicyException extends RuntimeException {
      * handing out (or the account they are acting on) holds.
      */
     public static final String REASON_EXCEEDS_YOUR_AUTHORITY = "exceeds_your_authority";
-    /** {@code reason}: a NAMED staff role the caller does not hold themselves. */
+    /**
+     * {@code reason}: a NAMED staff role the caller does not hold themselves
+     * (on assignment; acting on a holder of one reports
+     * {@link #REASON_EXCEEDS_YOUR_AUTHORITY}).
+     */
     public static final String REASON_NAMED_ROLE_NOT_HELD = "named_role_not_held";
-    /** {@code reason}: a code only the wildcard may hold. */
+    /**
+     * {@code reason}: a code only the wildcard may hold — or, for a role being
+     * given to an account, a role that stores one (a legacy grant).
+     */
     public static final String REASON_RESERVED_TO_SUPER_ADMIN = "reserved_to_super_admin";
 
     /** {@code errorCode} for a role the caller may not give to this account. */
