@@ -45,6 +45,10 @@ public final class SupportDTOs {
             @Schema(example = "null", nullable = true) LocalDateTime trustedUntil,
             @Schema(example = "2026-07-02T08:16:40+02:00", nullable = true) LocalDateTime boundAt,
             @Schema(example = "null", nullable = true) LocalDateTime coolingUntil,
+            @Schema(example = "2026-07-02T08:15:52+02:00", nullable = true,
+                    description = "Last time this phone verified a sign-in code. Null on a TRUSTED phone = trusted "
+                            + "while DTX was only watching; it is asked for one code once codes are switched on.")
+            LocalDateTime otpVerifiedAt,
             @Schema(example = "2026-07-02T08:14:03+02:00") LocalDateTime firstSeenAt,
             @Schema(example = "2026-09-29T16:14:51+02:00") LocalDateTime lastSeenAt,
             @Schema(example = "Harare", nullable = true) String lastSeenNear,

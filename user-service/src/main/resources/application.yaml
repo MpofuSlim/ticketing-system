@@ -118,9 +118,12 @@ auth:
 # DTX device security ("Device Registration, Fraud Detection and Sign-In Through
 # DTX", the InnBucks 2.0 app contract v2.1). DTX checks the super app's device
 # before staging's /auth/client-service and is the ONLY holder of that
-# credential. Off by default (every endpoint 404s). On with every enforce flag
-# false is WATCH MODE: all decisions are logged, everyone gets TOKEN. Roll out
-# per the contract's §14: otp, then blocks, then bans. Enabled with a blank
+# credential. Off by default (every endpoint 404s). Once on, every rule family
+# ENFORCES by default — the app and DTX launch together, so there is no watch
+# period (operator's decision, 2026-09-29). Setting all three enforce flags false
+# is WATCH MODE (every decision logged, everyone gets TOKEN): an explicit opt-out
+# for tuning, never the default. Trust a phone earned while watching is
+# provisional and asked for one code once OTP is enforced. Enabled with a blank
 # credential = 503 / 401 on the affected calls plus a HALF-PROVISIONED boot ERROR
 # (DeviceSecurityProvisioningCheck). Secrets belong in the host's gitignored
 # cell.<iso>.local.env, never in the committed cell file.
@@ -130,9 +133,9 @@ device-security:
   # risk signal there, and the fixed test OTP is refused whatever it says below.
   production: ${DEVICE_SECURITY_PRODUCTION:true}
   enforce:
-    otp: ${DEVICE_SECURITY_ENFORCE_OTP:false}
-    blocks: ${DEVICE_SECURITY_ENFORCE_BLOCKS:false}
-    bans: ${DEVICE_SECURITY_ENFORCE_BANS:false}
+    otp: ${DEVICE_SECURITY_ENFORCE_OTP:true}
+    blocks: ${DEVICE_SECURITY_ENFORCE_BLOCKS:true}
+    bans: ${DEVICE_SECURITY_ENFORCE_BANS:true}
   # x-api-key the broker presents (every app-facing and broker call), and the
   # one the *569# USSD service presents. Distinct values: openssl rand -base64 48
   broker-api-key: ${DEVICE_SECURITY_BROKER_API_KEY:}

@@ -251,6 +251,8 @@ public class DeviceEnforcement {
         d.clearStop();
         d.setTrustedUntil(null);
         d.setPinGraceUntil(null);
+        // A removed phone that comes back must prove the SIM again.
+        d.setOtpVerifiedAt(null);
         devices.save(d);
         cutOff(d, now);
         events.record(SecurityEventType.DEVICE_REVOKED, actor.type(), actor.id(), d.getMsisdn(), d,
@@ -277,6 +279,7 @@ public class DeviceEnforcement {
         d.setTrustedUntil(null);
         d.setBoundAt(null);
         d.setCoolingUntil(null);
+        d.setOtpVerifiedAt(null);
         d.setPinGraceUntil(null);
         d.setConsecutiveDeadChallenges(0);
         devices.save(d);
@@ -291,8 +294,22 @@ public class DeviceEnforcement {
 
     /**
      * Binds a PENDING_PIN device after the broker reports a successful login (§5.4):
-     * TRUSTED for 90 days (30 after a fraud flag). The first bind of a pair starts
-     * the 24-hour cooling period (§8.6) and tells the customer (§10).
+     * TRUSTED for 90 days (30 after a fraud flag).
+     *
+     * <p>What else happens depends on whether the phone has PROVED it holds the SIM
+     * (a verified sign-in OTP, {@link CustomerDevice#possessionVerified()}):
+     * <ul>
+     *   <li><b>Proved</b> — the pair's first bind starts the 24-hour cooling
+     *       period (§8.6) and tells the customer a new phone signed in (§10).</li>
+     *   <li><b>Not proved</b> — only watch mode answers TOKEN without a code, so
+     *       this trust is PROVISIONAL: no cooling and no notice (the phone is almost
+     *       always the customer's own, and every existing customer would otherwise
+     *       be told "a new phone signed in" the day the broker switches to DTX), and
+     *       {@code DeviceSignInService} asks it for one code once OTP is enforced.
+     *       Without that, every phone that signed in while DTX was only watching
+     *       — a stolen-PIN one included — would stay exempt for the whole trust
+     *       window after enforcement began.</li>
+     * </ul>
      *
      * @return true when this was the pair's first bind
      */
@@ -302,18 +319,26 @@ public class DeviceEnforcement {
         DeviceSecurityProperties.Trust trust = properties.getTrust();
         int days = profile != null && profile.fraudFlagged() ? trust.getFraudFlagDays() : trust.getDays();
         boolean first = d.getBoundAt() == null;
+        boolean proved = d.possessionVerified();
+        // A phone first bound provisionally and confirmed later is NOT announced when
+        // the code arrives: it has been the customer's phone all along, and doing so
+        // would message every watch-mode customer on the day OTP is switched on.
+        boolean firstProved = first && proved;
         d.transition(DeviceState.TRUSTED, null, ActorType.BROKER.name(), now);
         d.setTrustedUntil(now.plusDays(days));
         d.setPinGraceUntil(null);
         d.setConsecutiveDeadChallenges(0);
         if (first) {
             d.setBoundAt(now);
+        }
+        if (firstProved) {
             d.setCoolingUntil(now.plus(trust.getCooling()));
         }
         devices.save(d);
         events.record(SecurityEventType.DEVICE_BOUND, ActorType.BROKER, null, d.getMsisdn(), d,
-                b -> b.reason(first ? "FIRST_BIND" : "REBIND"));
-        if (first) {
+                b -> b.reason(!proved ? (first ? "FIRST_BIND_PROVISIONAL" : "REBIND_PROVISIONAL")
+                        : first ? "FIRST_BIND" : "REBIND"));
+        if (firstProved) {
             publisher.publishEvent(new DeviceNotice(DeviceNotice.Type.NEW_DEVICE_BOUND, d.getMsisdn(), shortLabel(d),
                     now, null, null, profile == null ? null : profile.getPreferredChannel(), false));
         }

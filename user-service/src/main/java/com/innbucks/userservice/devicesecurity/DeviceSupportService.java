@@ -327,6 +327,7 @@ public class DeviceSupportService {
                 d.getPlatform(), d.getOsVersion(), d.getModel(), d.getManufacturer(), d.getAppVersion(),
                 d.getState().name(), d.getStateReason(), d.getBlockedAt(), d.getBlockedUntil(), d.getSupportRef(),
                 d.isUssdUnlockable(), d.getUnlockableAfter(), d.getTrustedUntil(), d.getBoundAt(), d.getCoolingUntil(),
+                d.getOtpVerifiedAt(),
                 d.getFirstSeenAt(), d.getLastSeenAt(), d.getLastSeenNear(), d.getLastIp(), d.getLastUnlockedAt(),
                 wideView, others, guidance(d, wide.orElse(null), others, now));
     }
@@ -344,6 +345,8 @@ public class DeviceSupportService {
             case TRUSTED -> (d.trustedAt(now) ? "Signed in normally; trusted until "
                     + messages.time(d.getTrustedUntil(), now, false) + ". Nothing to do."
                     : "Trust has expired; the next sign-in asks for a code. Nothing to do.")
+                    + (d.possessionVerified() ? "" : " Trusted while DTX was only watching: never confirmed with a "
+                            + "code, so it will be asked for one once codes are switched on.")
                     + (d.coolingAt(now) ? " New phone: lower limits until " + messages.time(d.getCoolingUntil(), now, false) + "." : "")
                     + sharedNote;
             case NEW -> "This phone tried to sign in but was never confirmed. If the customer doesn't recognise it, "
