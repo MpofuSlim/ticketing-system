@@ -68,12 +68,25 @@ public class PermissionResolver {
             }
             permissions.addAll(role.getPermissions());
         }
+        return effective(permissions);
+    }
 
-        // A permission that was granted before it was removed from the code
-        // catalog is dropped here rather than emitted. Emitting it would put a
-        // code in the token that nothing enforces — harmless today, but it would
-        // start granting access the moment someone reused the name for something
-        // else.
+    /**
+     * What a set of GRANTED codes actually authorizes — the same expansion
+     * {@link #resolve} applies, for callers that already hold the role rows (the
+     * no-escalation checks compare a role's grant with the caller's authority
+     * without a second query).
+     *
+     * <p>{@link PermissionCatalog#WILDCARD} expands to the whole concrete
+     * catalog. A permission that was granted before it was removed from the code
+     * catalog is dropped rather than emitted: emitting it would put a code in the
+     * token that nothing enforces — harmless today, but it would start granting
+     * access the moment someone reused the name for something else.
+     */
+    public static Set<String> effective(Collection<String> granted) {
+        if (granted == null || granted.isEmpty()) return Set.of();
+        if (granted.contains(PermissionCatalog.WILDCARD)) return PermissionCatalog.concrete();
+        Set<String> permissions = new LinkedHashSet<>(granted);
         permissions.retainAll(PermissionCatalog.concrete());
         return permissions;
     }

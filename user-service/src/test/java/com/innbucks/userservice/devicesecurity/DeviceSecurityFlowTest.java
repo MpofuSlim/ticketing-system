@@ -57,7 +57,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * DTX device security end to end, through the real HTTP stack, security chain
  * and schema: the contract's sign-in flow (§5, §13), the *569# unlock and block
  * menus (§9), Your devices and the in-session step-up (§5.5, §5.6), and the
- * call-centre console. Staging and the two message gateways are the only fakes.
+ * call-center console. Staging and the two message gateways are the only fakes.
  *
  * <p>Refusals are asserted with their EXACT status and errorCode — never
  * {@code is4xxClientError()} — so a Spring Security 401 can never pass for the
@@ -639,11 +639,11 @@ class DeviceSecurityFlowTest {
     }
 
     // =====================================================================================
-    // The call-centre console
+    // The call-center console
     // =====================================================================================
 
     @Test
-    @DisplayName("the call centre finds a caller by number or reference, blocks a lost phone, and it is audited")
+    @DisplayName("the call center finds a caller by number or reference, blocks a lost phone, and it is audited")
     void console_lookUpAndBlock() throws Exception {
         String msisdn = number();
         String install = UUID.randomUUID().toString();

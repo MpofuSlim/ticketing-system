@@ -48,11 +48,23 @@ import java.util.List;
 @Slf4j
 @Tag(name = "Admin - Roles & Permissions",
      description = "Create and manage roles as named bundles of permissions. Roles are data; the "
-             + "permissions they compose are defined in code and listed by GET /admin/permissions.")
+             + "permissions they compose are defined in code and listed by GET /admin/roles/permissions. "
+             + "Nobody can hand out more than they hold: codes added to a role must be held by the "
+             + "caller, and the codes that hand out authority (roles:write, users:roles:write) are "
+             + "reserved to SUPER_ADMIN.")
 @SecurityRequirement(name = "bearerAuth")
 public class RoleAdminController {
 
     private final RoleAdminService roleAdminService;
+
+    /** The 503 a role change answers when its required audit row cannot be written. */
+    static final String AUDIT_UNAVAILABLE_EXAMPLE = """
+            {
+              "code": "503 SERVICE_UNAVAILABLE",
+              "message": "We couldn't record this change, so it wasn't made. Try again.",
+              "data": { "errorCode": "audit_unavailable" }
+            }
+            """;
 
     @GetMapping
     @PreAuthorize("hasAuthority('" + PermissionCatalog.ROLES_READ + "')")
@@ -67,13 +79,24 @@ public class RoleAdminController {
                                       "message": "Roles retrieved",
                                       "data": [
                                         {
+                                          "name": "CALL_CENTER_AGENT",
+                                          "description": "Call-center agent: looks customers up and performs routine support actions.",
+                                          "builtin": true,
+                                          "permissions": ["device-security:manage", "device-security:read"],
+                                          "createdBy": "flyway:V43",
+                                          "createdAt": "2026-09-30T06:00:00Z",
+                                          "updatedAt": null,
+                                          "staffRole": true
+                                        },
+                                        {
                                           "name": "MERCHANT_ADMIN",
                                           "description": "Runs a loyalty merchant; manages that merchant's shops and rules.",
                                           "builtin": true,
                                           "permissions": ["shop-admins:write", "shop-staff:merchant:read", "shop-staff:password:reset", "shop-staff:read"],
                                           "createdBy": null,
                                           "createdAt": "2026-09-02T14:00:00Z",
-                                          "updatedAt": null
+                                          "updatedAt": null,
+                                          "staffRole": false
                                         },
                                         {
                                           "name": "REFUND_OFFICER",
@@ -82,7 +105,8 @@ public class RoleAdminController {
                                           "permissions": ["users:password:reset", "users:read"],
                                           "createdBy": "admin@innbucks.co.zw",
                                           "createdAt": "2026-09-02T14:31:00Z",
-                                          "updatedAt": null
+                                          "updatedAt": null,
+                                          "staffRole": true
                                         }
                                       ]
                                     }
@@ -90,7 +114,7 @@ public class RoleAdminController {
             @ApiResponse(responseCode = "403", description = "Caller lacks roles:read",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
-                                    { "code": "403 FORBIDDEN", "message": "You don't have permission to do that.", "data": null }
+                                    { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
                                     """)))
     })
     public ResponseEntity<ApiResult<List<RoleDTOs.RoleResponse>>> list() {
@@ -117,7 +141,8 @@ public class RoleAdminController {
                                         "permissions": ["users:password:reset", "users:read"],
                                         "createdBy": "admin@innbucks.co.zw",
                                         "createdAt": "2026-09-02T14:31:00Z",
-                                        "updatedAt": null
+                                        "updatedAt": null,
+                                        "staffRole": true
                                       }
                                     }
                                     """))),
@@ -141,13 +166,27 @@ public class RoleAdminController {
                     token carries its permissions.
 
                     Permissions cannot be invented here: every code must already appear in \
-                    `GET /admin/permissions`, because a permission is only real when a \
+                    `GET /admin/roles/permissions`, because a permission is only real when a \
                     `@PreAuthorize` somewhere names it. Granting a code nothing enforces would \
                     produce a role that looks capable and is not.
 
+                    **No escalation.** Every code must be one the CALLER holds, read from their \
+                    current roles (not their token) — `400 permission_not_assignable`, reason \
+                    `exceeds_your_authority`. The codes that hand out authority — `roles:write`, \
+                    `users:roles:write` (and the staff-administration codes, when they ship) — are \
+                    reserved to SUPER_ADMIN and never accepted, whoever asks: reason \
+                    `reserved_to_super_admin`. `data.codes` names every refused code with its reason.
+
                     The `*` wildcard is rejected — a role holding it would be equivalent to \
                     SUPER_ADMIN, which is the same escalation `PUT /admin/users/{id}/roles` refuses \
-                    when it blocks granting SUPER_ADMIN directly.""")
+                    when it blocks granting SUPER_ADMIN directly.
+
+                    **Reserved names:** `ADMIN` (never a platform role), a bare `CALL_CENTER` and any \
+                    `CALL_CENTRE…` spelling (the call-center roles are built in). The built-in names \
+                    themselves are taken (409).
+
+                    **Audited or not made:** if the `ROLE_CREATED` audit row cannot be written the \
+                    role is not created — `503 audit_unavailable`; retry later.""")
     @ApiResponses({
             @ApiResponse(responseCode = "201", description = "Role created",
                     content = @Content(mediaType = "application/json",
@@ -162,18 +201,47 @@ public class RoleAdminController {
                                         "permissions": ["users:password:reset", "users:read"],
                                         "createdBy": "admin@innbucks.co.zw",
                                         "createdAt": "2026-09-02T14:31:00Z",
-                                        "updatedAt": null
+                                        "updatedAt": null,
+                                        "staffRole": true
                                       }
                                     }
                                     """))),
             @ApiResponse(responseCode = "400",
-                    description = "Malformed name, no permissions, or a permission that does not exist",
+                    description = "Malformed or reserved name, no permissions, a permission that does not exist, "
+                            + "or one the caller may not grant",
                     content = @Content(mediaType = "application/json",
                             examples = {
+                                    @ExampleObject(name = "Reserved to SUPER_ADMIN", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "These permissions can't be granted here: roles:write (reserved to SUPER_ADMIN).",
+                                              "data": {
+                                                "errorCode": "permission_not_assignable",
+                                                "codes": { "roles:write": "reserved_to_super_admin" }
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Beyond the caller's own permissions", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "These permissions can't be granted here: device-security:fraud (grants more than you hold).",
+                                              "data": {
+                                                "errorCode": "permission_not_assignable",
+                                                "codes": { "device-security:fraud": "exceeds_your_authority" }
+                                              }
+                                            }
+                                            """),
                                     @ExampleObject(name = "Unknown permission", value = """
                                             {
                                               "code": "400 BAD_REQUEST",
-                                              "message": "Unknown permission(s): refunds:approve. Permissions are defined in code, not created through the API — list what exists with GET /admin/permissions.",
+                                              "message": "Unknown permission(s): refunds:approve. Permissions are defined in code, not created through the API — list what exists with GET /admin/roles/permissions.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Reserved name", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "The role name ADMIN is reserved: it has never been a platform role, so a role called that would read as authority it does not have. Use a built-in role (PRODUCT_OFFICER, PRODUCT_MANAGER, CALL_CENTER_AGENT, CALL_CENTER_SUPERVISOR, FRAUD_DESK) or choose another name.",
                                               "data": null
                                             }
                                             """),
@@ -183,23 +251,39 @@ public class RoleAdminController {
                                               "message": "Role name must be UPPER_SNAKE_CASE, 2-64 characters, starting with a letter (e.g. REFUND_OFFICER). Got: refund officer",
                                               "data": null
                                             }
+                                            """),
+                                    @ExampleObject(name = "Validation failed", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Validation failed",
+                                              "data": { "permissions": "permissions must contain at least one permission" }
+                                            }
                                             """)
                             })),
             @ApiResponse(responseCode = "403",
                     description = "Caller lacks roles:write, or tried to grant the '*' wildcard",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(name = "Wildcard refused", value = """
-                                    {
-                                      "code": "403 FORBIDDEN",
-                                      "message": "The '*' permission cannot be granted through this endpoint — it would make the role equivalent to SUPER_ADMIN. Grant the specific permissions the role needs instead.",
-                                      "data": null
-                                    }
-                                    """))),
+                            examples = {
+                                    @ExampleObject(name = "Wildcard refused", value = """
+                                            {
+                                              "code": "403 FORBIDDEN",
+                                              "message": "The '*' permission cannot be granted through this endpoint — it would make the role equivalent to SUPER_ADMIN. Grant the specific permissions the role needs instead.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Missing permission", value = """
+                                            { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
+                                            """)
+                            })),
             @ApiResponse(responseCode = "409", description = "A role with that name already exists",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     { "code": "409 CONFLICT", "message": "A role named REFUND_OFFICER already exists.", "data": null }
-                                    """)))
+                                    """))),
+            @ApiResponse(responseCode = "503", description = "The ROLE_CREATED audit row could not be written; "
+                    + "the role was not created",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = AUDIT_UNAVAILABLE_EXAMPLE)))
     })
     public ResponseEntity<ApiResult<RoleDTOs.RoleResponse>> create(
             @Valid @RequestBody RoleDTOs.CreateRoleRequest request,
@@ -225,8 +309,23 @@ public class RoleAdminController {
                     operation, and only a built-in's NAME is depended on by code. The one exception \
                     is SUPER_ADMIN, which must keep `*`.
 
-                    Holders do not see the change until their token is re-minted (next login or \
-                    `POST /auth/refresh`), the same latency the `roles` claim has always had.""")
+                    **No escalation.** Every code ADDED must be one the caller holds (read from their \
+                    current roles) and must not be reserved to SUPER_ADMIN (`roles:write`, \
+                    `users:roles:write`) — otherwise `400 permission_not_assignable` naming each code. \
+                    **An edit that only removes codes is never refused**, including on a role that \
+                    still holds a code reserved today.
+
+                    **When holders see it.** Removing a **PLATFORM** code (see `scope` on \
+                    `GET /admin/roles/permissions`) signs every holder of the role out at once: their \
+                    `tokenVersion` is bumped in one statement and published fleet-wide after commit, \
+                    so their next request answers `401 SESSION_SUPERSEDED` and they refresh or sign \
+                    in again. Removing only **TENANT** codes, or adding any, reaches holders when \
+                    their token is next minted (next `POST /auth/refresh` — at most the 15-minute \
+                    access-token lifetime), so trimming a business role does not sign every business \
+                    out at once.
+
+                    **Audited or not made:** if the `ROLE_PERMISSIONS_CHANGED` audit row cannot be \
+                    written, nothing changes — `503 audit_unavailable`.""")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Permissions replaced",
                     content = @Content(mediaType = "application/json",
@@ -241,34 +340,74 @@ public class RoleAdminController {
                                         "permissions": ["service-requests:read", "users:password:reset", "users:read"],
                                         "createdBy": "admin@innbucks.co.zw",
                                         "createdAt": "2026-09-02T14:31:00Z",
-                                        "updatedAt": "2026-09-02T15:02:00Z"
+                                        "updatedAt": "2026-09-02T15:02:00Z",
+                                        "staffRole": true
                                       }
                                     }
                                     """))),
-            @ApiResponse(responseCode = "400", description = "No permissions, or one that does not exist",
+            @ApiResponse(responseCode = "400",
+                    description = "No permissions, one that does not exist, or an added one the caller may not grant",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(value = """
-                                    {
-                                      "code": "400 BAD_REQUEST",
-                                      "message": "permissions must contain at least one permission. A role granting nothing is assignable but authorizes for nothing; list the available permissions with GET /admin/permissions.",
-                                      "data": null
-                                    }
-                                    """))),
+                            examples = {
+                                    @ExampleObject(name = "Reserved to SUPER_ADMIN", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "These permissions can't be granted here: users:roles:write (reserved to SUPER_ADMIN).",
+                                              "data": {
+                                                "errorCode": "permission_not_assignable",
+                                                "codes": { "users:roles:write": "reserved_to_super_admin" }
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Beyond the caller's own permissions", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "These permissions can't be granted here: service-requests:approve (grants more than you hold).",
+                                              "data": {
+                                                "errorCode": "permission_not_assignable",
+                                                "codes": { "service-requests:approve": "exceeds_your_authority" }
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Empty permission set", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Validation failed",
+                                              "data": { "permissions": "permissions must contain at least one permission" }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Only blank entries", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "permissions must contain at least one permission. A role granting nothing is assignable but authorizes for nothing; list the available permissions with GET /admin/roles/permissions.",
+                                              "data": null
+                                            }
+                                            """)
+                            })),
             @ApiResponse(responseCode = "403",
                     description = "Caller lacks roles:write, tried to grant '*', or tried to narrow SUPER_ADMIN",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(name = "SUPER_ADMIN narrowed", value = """
-                                    {
-                                      "code": "403 FORBIDDEN",
-                                      "message": "SUPER_ADMIN must keep the '*' permission — narrowing it would lock the platform out of its own role administration.",
-                                      "data": null
-                                    }
-                                    """))),
+                            examples = {
+                                    @ExampleObject(name = "SUPER_ADMIN narrowed", value = """
+                                            {
+                                              "code": "403 FORBIDDEN",
+                                              "message": "SUPER_ADMIN must keep the '*' permission — narrowing it would lock the platform out of its own role administration.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Missing permission", value = """
+                                            { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
+                                            """)
+                            })),
             @ApiResponse(responseCode = "404", description = "No such role",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     { "code": "404 NOT_FOUND", "message": "Role not found: REFUND_OFICER", "data": null }
-                                    """)))
+                                    """))),
+            @ApiResponse(responseCode = "503", description = "The ROLE_PERMISSIONS_CHANGED audit row could not be "
+                    + "written; nothing changed",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = AUDIT_UNAVAILABLE_EXAMPLE)))
     })
     public ResponseEntity<ApiResult<RoleDTOs.RoleResponse>> setPermissions(
             @PathVariable String name,
@@ -291,7 +430,10 @@ public class RoleAdminController {
                     Refused for a built-in role (code references those by name) and refused while any \
                     account still holds the role — a deleted role would leave its holders \
                     authenticating normally while silently losing everything it granted, with no \
-                    error to explain it. Reassign the holders first.""")
+                    error to explain it. Reassign the holders first.
+
+                    **Audited or not made:** if the `ROLE_DELETED` audit row cannot be written the \
+                    role is kept — `503 audit_unavailable`.""")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Role deleted",
                     content = @Content(mediaType = "application/json",
@@ -320,7 +462,11 @@ public class RoleAdminController {
                                       "message": "Role REFUND_OFFICER is still assigned to 3 account(s). Reassign them with PUT /admin/users/{id}/roles before deleting it.",
                                       "data": null
                                     }
-                                    """)))
+                                    """))),
+            @ApiResponse(responseCode = "503", description = "The ROLE_DELETED audit row could not be written; "
+                    + "the role was not deleted",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = AUDIT_UNAVAILABLE_EXAMPLE)))
     })
     public ResponseEntity<ApiResult<Void>> delete(
             @PathVariable String name,
@@ -351,7 +497,14 @@ public class RoleAdminController {
                     plus a deploy.
 
                     `*` appears here because SUPER_ADMIN holds it, but it cannot be granted to a \
-                    role you create.""")
+                    role you create.
+
+                    Each code carries its `scope` — `PLATFORM` (acts across every business: a role \
+                    holding one is a staff role, and removing one from a role signs its holders out \
+                    at once) or `TENANT` (acts inside the caller's own business) — and \
+                    `reservedToSuperAdmin`, true for the codes no role can be given through the API. \
+                    A role picker should grey out reserved codes and any code the signed-in \
+                    administrator does not hold (their `permissions` on the sign-in response).""")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Catalog listed",
                     content = @Content(mediaType = "application/json",
@@ -360,19 +513,19 @@ public class RoleAdminController {
                                       "code": "200 OK",
                                       "message": "Permissions retrieved",
                                       "data": [
-                                        { "code": "*", "description": "Every permission, including ones added by future releases. Reserved for SUPER_ADMIN." },
-                                        { "code": "users:read", "description": "List and read any user account" },
-                                        { "code": "users:merchants:read", "description": "List merchant and organizer accounts" },
-                                        { "code": "users:password:reset", "description": "Issue a temporary password for a user account" },
-                                        { "code": "roles:read", "description": "List roles and the available permission catalog" },
-                                        { "code": "roles:write", "description": "Create, edit and delete custom roles" }
+                                        { "code": "*", "description": "Every permission, including ones added by future releases. Reserved for SUPER_ADMIN.", "scope": "PLATFORM", "reservedToSuperAdmin": true },
+                                        { "code": "users:read", "description": "List and read any user account", "scope": "PLATFORM", "reservedToSuperAdmin": false },
+                                        { "code": "users:roles:write", "description": "Replace the role set on a user account", "scope": "PLATFORM", "reservedToSuperAdmin": true },
+                                        { "code": "roles:write", "description": "Create, edit and delete custom roles", "scope": "PLATFORM", "reservedToSuperAdmin": true },
+                                        { "code": "team-members:read", "description": "Read an event organizer's team members", "scope": "TENANT", "reservedToSuperAdmin": false },
+                                        { "code": "device-security:read", "description": "Look up a customer's phones, blocks, references and sign-in history", "scope": "PLATFORM", "reservedToSuperAdmin": false }
                                       ]
                                     }
                                     """))),
             @ApiResponse(responseCode = "403", description = "Caller lacks roles:read",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
-                                    { "code": "403 FORBIDDEN", "message": "You don't have permission to do that.", "data": null }
+                                    { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
                                     """)))
     })
     public ResponseEntity<ApiResult<List<RoleDTOs.PermissionResponse>>> permissions() {

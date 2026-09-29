@@ -44,7 +44,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * The call centre's and fraud desk's device-security console
+ * The call center's and fraud desk's device-security console
  * ({@code /admin/device-security}). Look a caller up by number or by the
  * reference on their screen, see each phone's state with a sentence telling the
  * agent what to do, and block, unlock, remove, reset or ban. Every change needs a
@@ -54,15 +54,16 @@ import java.util.UUID;
  * <p>Permissions: {@code device-security:read} (look up), {@code
  * device-security:manage} (block, unlock, remove, reset, cancel codes) and
  * {@code device-security:fraud} (bans, lifting fraud-desk bans, the fraud flag,
- * the same-handset view). SUPER_ADMIN holds all three through its wildcard; a
- * "Call Centre" or "Fraud Desk" role is composed at runtime with
- * {@code POST /admin/roles}.
+ * the same-handset view). SUPER_ADMIN holds all three through its wildcard; the
+ * built-in roles (V43) carry the rest: {@code CALL_CENTER_AGENT} and
+ * {@code CALL_CENTER_SUPERVISOR} hold read + manage, and {@code FRAUD_DESK} — an
+ * add-on held alongside one of them — holds read + fraud.
  */
 @RestController
 @RequestMapping("/admin/device-security")
 @RequiredArgsConstructor
 @Slf4j
-@Tag(name = "Admin - Device security (call centre)",
+@Tag(name = "Admin - Device security (call center)",
         description = "Customer-support tools for the DTX device registry: look up a caller's phones by number or "
                 + "reference, and block, unlock, remove, reset or ban a phone.")
 @SecurityRequirement(name = "bearerAuth")

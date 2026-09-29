@@ -81,8 +81,14 @@ class MfaAdminResetAuditActorTest {
         when(users.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
         when(bumper.bump(any(User.class))).thenReturn(8L);
 
+        // The reset needs the caller to hold everything the target holds, read
+        // from their live roles: the administrator here is the platform owner.
+        com.innbucks.userservice.repository.RoleRepository roles =
+                mock(com.innbucks.userservice.repository.RoleRepository.class);
+        com.innbucks.userservice.testsupport.BuiltInRoleRows.stub(roles);
+        com.innbucks.userservice.testsupport.BuiltInRoleRows.caller(users, ADMIN, User.Role.SUPER_ADMIN.name());
         MfaService mfaService = new MfaService(users, backupCodes, mock(PasswordEncoder.class),
-                new MfaProperties(), bumper);
+                new MfaProperties(), bumper, new com.innbucks.userservice.service.RoleGrantGuard(users, roles));
         ReflectionTestUtils.setField(mfaService, "auditService", audit);
         ReflectionTestUtils.setField(mfaService, "deviceTrustService", deviceTrust);
 

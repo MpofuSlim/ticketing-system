@@ -6,6 +6,6 @@ public enum ChallengeStatus {
     VERIFIED,
     /** Attempts used up. */
     DEAD,
-    /** Voided by a block, ban, removal or the call centre. */
+    /** Voided by a block, ban, removal or the call center. */
     VOID
 }

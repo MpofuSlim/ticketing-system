@@ -3,7 +3,7 @@ package com.innbucks.userservice.devicesecurity;
 import java.security.SecureRandom;
 
 /**
- * The reference a customer reads out to the call centre ("SEC-8F2KQ7"). Crockford
+ * The reference a customer reads out to the call center ("SEC-8F2KQ7"). Crockford
  * base32 without I, L, O and U, so it survives being read over a phone line; six
  * characters (~30 bits) so two live blocks never share one in practice. The
  * admin portal looks a block up by it.

@@ -111,6 +111,31 @@ public class TokenVersionBumper {
         return apply(user, next);
     }
 
+    /**
+     * Bumps every account holding {@code roleName}, in ONE atomic
+     * {@code UPDATE ... RETURNING}, and publishes each new version to the shared
+     * Redis after commit. For a role that just lost a PLATFORM permission: its
+     * holders' access tokens carry the old permission set, and every one of them
+     * must stop working at once rather than at expiry. Returns how many accounts
+     * were bumped.
+     *
+     * <p>Entities already loaded in this persistence context keep their old
+     * in-memory value; {@code token_version} is {@code updatable = false}, so no
+     * later save can write it back.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public int bumpAllHolding(String roleName) {
+        java.util.List<Object[]> rows = userRepository.incrementTokenVersionForRoleHolders(roleName);
+        for (Object[] row : rows) {
+            java.util.UUID userUuid = row[0] instanceof java.util.UUID u ? u
+                    : java.util.UUID.fromString(String.valueOf(row[0]));
+            long version = ((Number) row[1]).longValue();
+            tokenVersionPublisher.publishAfterCommit(userUuid, version);
+        }
+        log.info("token_version bumped for every holder of role={} count={}", roleName, rows.size());
+        return rows.size();
+    }
+
     private long apply(User user, long next) {
         user.setTokenVersion(next);
         tokenVersionPublisher.publishAfterCommit(user.getUserUuid(), next);

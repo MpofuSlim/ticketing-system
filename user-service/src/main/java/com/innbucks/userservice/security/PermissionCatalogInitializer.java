@@ -49,7 +49,7 @@ public class PermissionCatalogInitializer implements CommandLineRunner {
             if (existing == null) {
                 toWrite.add(Permission.builder().code(code).description(description).build());
             } else if (!description.equals(existing.getDescription())) {
-                // Descriptions are operator-facing text in GET /admin/permissions.
+                // Descriptions are operator-facing text in GET /admin/roles/permissions.
                 // Code owns them, so an edited description in the catalog should
                 // reach the table; the grant itself is untouched either way.
                 existing.setDescription(description);

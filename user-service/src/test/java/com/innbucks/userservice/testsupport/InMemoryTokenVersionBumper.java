@@ -50,6 +50,22 @@ public class InMemoryTokenVersionBumper extends TokenVersionBumper {
         return apply(user);
     }
 
+    /** Role names passed to {@link #bumpAllHolding}, in call order. */
+    public final java.util.List<String> bumpedRoles = new java.util.ArrayList<>();
+    /** What {@link #bumpAllHolding} reports as the number of holders bumped. */
+    public int holdersPerRole = 0;
+
+    /**
+     * No database here to find the holders in: records the role and returns
+     * {@link #holdersPerRole}. {@code PlatformPermissionRemovalBumpsHoldersIT}
+     * proves the real statement against Postgres.
+     */
+    @Override
+    public int bumpAllHolding(String roleName) {
+        bumpedRoles.add(roleName);
+        return holdersPerRole;
+    }
+
     private long apply(User user) {
         long next = user.getTokenVersion() + 1;
         user.setTokenVersion(next);

@@ -1418,6 +1418,9 @@ public class AuthService implements ApplicationEventPublisherAware {
                 .refreshToken(refreshToken)
                 .email(user.getEmail())
                 .roles(roleNames)
+                // The list exactly as minted into the token's perms claim, so a
+                // client gates its menus without decoding the JWT.
+                .permissions(List.copyOf(permissions))
                 .defaultServices(bundles)
                 .mfaRequired(false)
                 .mustChangePassword(user.isMustChangePassword())

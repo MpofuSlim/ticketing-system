@@ -2,6 +2,7 @@ package com.innbucks.userservice.security;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -28,7 +29,7 @@ import java.util.Set;
  * {@code permissions} (V35) mirrors this class. {@link PermissionCatalogInitializer}
  * upserts every constant below at boot, so a release that adds a permission here
  * needs no migration of its own. The table exists so {@code role_permissions} can
- * carry a foreign key and so {@code GET /admin/permissions} can tell an operator
+ * carry a foreign key and so {@code GET /admin/roles/permissions} can tell an operator
  * what is available to compose with.
  *
  * <p><b>When you add a permission here you must also grant it to whichever
@@ -38,6 +39,12 @@ import java.util.Set;
  * the platform owner picks up new permissions automatically. Enumerating them
  * for SUPER_ADMIN instead would silently lock the owner out of every endpoint
  * added after the enumeration.
+ *
+ * <p><b>Every entry declares a {@link Scope}</b> ({@code PLATFORM} or
+ * {@code TENANT}), as a required argument — see the enum for what each means and
+ * what reads it. A new code that hands out authority itself (the power to edit
+ * roles, assign them, or administer staff) also belongs in
+ * {@link #WILDCARD_RESERVED}, which keeps it out of every role but SUPER_ADMIN's.
  */
 public final class PermissionCatalog {
 
@@ -76,9 +83,9 @@ public final class PermissionCatalog {
     public static final String ORGANIZATIONS_READ = "organizations:read";
 
     /**
-     * DTX device security (V40) — the call centre's and fraud desk's tools.
+     * DTX device security (V40) — the call center's and fraud desk's tools.
      * Three tiers on purpose: an agent who can look a caller up need not be able
-     * to unlock their phone, and the call centre must not be able to lift a
+     * to unlock their phone, and the call center must not be able to lift a
      * fraud-desk ban on a caller's say-so.
      */
     public static final String DEVICE_SECURITY_READ = "device-security:read";
@@ -86,45 +93,126 @@ public final class PermissionCatalog {
     public static final String DEVICE_SECURITY_FRAUD = "device-security:fraud";
 
     /**
-     * Every permission this service defines, in declaration order, mapped to the
-     * description an operator sees in {@code GET /admin/permissions}. Ordered
-     * (LinkedHashMap) so the listing groups related codes together rather than
-     * arriving in hash order.
+     * Who a permission's authority reaches — the half of a permission's meaning
+     * the no-escalation and staff rules read.
+     *
+     * <ul>
+     *   <li>{@link #PLATFORM}: acts across every business on the platform (any
+     *       user account, every role, every organization, any customer's phone).
+     *       Holding one makes a role a STAFF role ({@link StaffRoles}), and taking
+     *       one away from a role ends its holders' sessions at once
+     *       ({@code RoleAdminService.setPermissions}).</li>
+     *   <li>{@link #TENANT}: acts only inside the caller's own business — its
+     *       team members, its shops, its shop staff. The handlers scope every
+     *       call to the caller's own organizer, merchant or shop.</li>
+     * </ul>
+     *
+     * <p>A <b>required</b> argument of {@link #entry}, so no permission can be
+     * added without someone deciding which it is. There is deliberately no
+     * default: a forgotten scope would silently read as whichever the default
+     * was, and one of the two is always the dangerous answer.
+     */
+    public enum Scope { PLATFORM, TENANT }
+
+    /** One catalog row: the code, the text an operator reads, and its {@link Scope}. */
+    public record Entry(String code, String description, Scope scope) {
+        public Entry {
+            if (code == null || code.isBlank()) throw new IllegalArgumentException("code is required");
+            if (description == null || description.isBlank()) {
+                throw new IllegalArgumentException("description is required for " + code);
+            }
+            if (scope == null) throw new IllegalArgumentException("scope is required for " + code);
+        }
+    }
+
+    private static Entry entry(String code, String description, Scope scope) {
+        return new Entry(code, description, scope);
+    }
+
+    /**
+     * Every permission this service defines, in declaration order, with its
+     * {@link Scope}. Ordered (LinkedHashMap) so the listing groups related codes
+     * together rather than arriving in hash order.
      *
      * <p>{@link #WILDCARD} is included: it is a grantable permission (that is how
      * SUPER_ADMIN holds it) and an operator building a role needs to see it
      * exists. {@link #concrete()} is the set to expand it to.
      */
+    public static final Map<String, Entry> ENTRIES;
+
+    /**
+     * {@link #ENTRIES} as code → description — the shape
+     * {@code GET /admin/roles/permissions} and {@link PermissionCatalogInitializer}
+     * read.
+     */
     public static final Map<String, String> ALL;
 
     static {
-        Map<String, String> all = new LinkedHashMap<>();
-        all.put(WILDCARD, "Every permission, including ones added by future releases. Reserved for SUPER_ADMIN.");
-        all.put(USERS_READ, "List and read any user account");
-        all.put(USERS_MERCHANTS_READ, "List merchant and organizer accounts");
-        all.put(USERS_ACTIVATION_WRITE, "Activate or deactivate a user account");
-        all.put(USERS_ROLES_WRITE, "Replace the role set on a user account");
-        all.put(USERS_MFA_RESET, "Reset a user's MFA enrolment");
-        all.put(USERS_PASSWORD_RESET, "Issue a temporary password for a user account");
-        all.put(ROLES_READ, "List roles and the available permission catalog");
-        all.put(ROLES_WRITE, "Create, edit and delete custom roles");
-        all.put(SERVICE_REQUESTS_READ, "List submitted service-bundle requests");
-        all.put(SERVICE_REQUESTS_APPROVE, "Approve a service-bundle request");
-        all.put(TEAM_MEMBERS_READ, "Read an event organizer's team members");
-        all.put(TEAM_MEMBERS_WRITE, "Create an event organizer team member");
-        all.put(TEAM_MEMBERS_MANAGE, "Enable, delete, reset or re-scope a team member");
-        all.put(SHOP_ADMINS_WRITE, "Create a shop admin under a loyalty merchant");
-        all.put(SHOP_USERS_WRITE, "Create shop POS users, individually or by CSV upload");
-        all.put(SHOP_STAFF_READ, "Read the shop staff of your own shop or merchant");
-        all.put(SHOP_STAFF_MERCHANT_READ, "Read shop staff across any shop of a merchant");
-        all.put(SHOP_STAFF_PASSWORD_RESET, "Issue a temporary password for a shop staff account");
-        all.put(ORGANIZATIONS_READ, "List every organization on the platform");
-        all.put(DEVICE_SECURITY_READ, "Look up a customer's phones, blocks, references and sign-in history");
-        all.put(DEVICE_SECURITY_MANAGE, "Block, unlock, remove or reset a customer's phone, and cancel open codes");
-        all.put(DEVICE_SECURITY_FRAUD, "Ban a phone for fraud (including every account on it), lift such bans, "
-                + "and fraud-flag a customer");
-        ALL = Collections.unmodifiableMap(all);
+        Map<String, Entry> all = new LinkedHashMap<>();
+        for (Entry e : List.of(
+                entry(WILDCARD, "Every permission, including ones added by future releases. Reserved for SUPER_ADMIN.",
+                        Scope.PLATFORM),
+                entry(USERS_READ, "List and read any user account", Scope.PLATFORM),
+                entry(USERS_MERCHANTS_READ, "List merchant and organizer accounts", Scope.PLATFORM),
+                entry(USERS_ACTIVATION_WRITE, "Activate or deactivate a user account", Scope.PLATFORM),
+                entry(USERS_ROLES_WRITE, "Replace the role set on a user account", Scope.PLATFORM),
+                entry(USERS_MFA_RESET, "Reset a user's MFA enrolment", Scope.PLATFORM),
+                entry(USERS_PASSWORD_RESET, "Issue a temporary password for a user account", Scope.PLATFORM),
+                entry(ROLES_READ, "List roles and the available permission catalog", Scope.PLATFORM),
+                entry(ROLES_WRITE, "Create, edit and delete custom roles", Scope.PLATFORM),
+                entry(SERVICE_REQUESTS_READ, "List submitted service-bundle requests", Scope.PLATFORM),
+                entry(SERVICE_REQUESTS_APPROVE, "Approve a service-bundle request", Scope.PLATFORM),
+                entry(TEAM_MEMBERS_READ, "Read an event organizer's team members", Scope.TENANT),
+                entry(TEAM_MEMBERS_WRITE, "Create an event organizer team member", Scope.TENANT),
+                entry(TEAM_MEMBERS_MANAGE, "Enable, delete, reset or re-scope a team member", Scope.TENANT),
+                entry(SHOP_ADMINS_WRITE, "Create a shop admin under a loyalty merchant", Scope.TENANT),
+                entry(SHOP_USERS_WRITE, "Create shop POS users, individually or by CSV upload", Scope.TENANT),
+                entry(SHOP_STAFF_READ, "Read the shop staff of your own shop or merchant", Scope.TENANT),
+                entry(SHOP_STAFF_MERCHANT_READ, "Read shop staff across any shop of a merchant", Scope.TENANT),
+                entry(SHOP_STAFF_PASSWORD_RESET, "Issue a temporary password for a shop staff account",
+                        Scope.TENANT),
+                entry(ORGANIZATIONS_READ, "List every organization on the platform", Scope.PLATFORM),
+                entry(DEVICE_SECURITY_READ,
+                        "Look up a customer's phones, blocks, references and sign-in history", Scope.PLATFORM),
+                entry(DEVICE_SECURITY_MANAGE,
+                        "Block, unlock, remove or reset a customer's phone, and cancel open codes", Scope.PLATFORM),
+                entry(DEVICE_SECURITY_FRAUD, "Ban a phone for fraud (including every account on it), lift such bans, "
+                        + "and fraud-flag a customer", Scope.PLATFORM))) {
+            if (all.put(e.code(), e) != null) {
+                throw new IllegalStateException("Duplicate permission code in the catalog: " + e.code());
+            }
+        }
+        ENTRIES = Collections.unmodifiableMap(all);
+
+        Map<String, String> descriptions = new LinkedHashMap<>();
+        all.forEach((code, e) -> descriptions.put(code, e.description()));
+        ALL = Collections.unmodifiableMap(descriptions);
     }
+
+    /**
+     * Codes only {@link #WILDCARD} may hold. They can NEVER be granted through the
+     * API — not to a custom role, not to a built-in, not even by SUPER_ADMIN —
+     * because each is the power to hand out authority itself:
+     *
+     * <ul>
+     *   <li>{@code roles:write} — edit any role, including one you hold, so a
+     *       holder could add every other permission to their own role;</li>
+     *   <li>{@code users:roles:write} — put any role on any account, including
+     *       your own;</li>
+     *   <li>{@code staff:read}, {@code staff:create}, {@code staff:manage},
+     *       {@code organizations:manage} — staff administration and suspending a
+     *       business, which stay with SUPER_ADMIN until the owner decides
+     *       otherwise. Listed before the endpoints that enforce them exist, so
+     *       they are unreachable through the roles API from the release that
+     *       adds them.</li>
+     * </ul>
+     *
+     * SUPER_ADMIN holds them through its wildcard. Only a reviewed migration can
+     * grant one to a built-in role, and none does.
+     */
+    public static final Set<String> WILDCARD_RESERVED = Set.of(
+            ROLES_WRITE, USERS_ROLES_WRITE,
+            "staff:read", "staff:create", "staff:manage", "organizations:manage");
 
     /** Every real permission — {@link #ALL} minus the wildcard. What {@code *} expands to. */
     public static Set<String> concrete() {
@@ -135,6 +223,23 @@ public final class PermissionCatalog {
 
     public static boolean isKnown(String code) {
         return code != null && ALL.containsKey(code);
+    }
+
+    /**
+     * The scope of a code. A code the catalog does not define — a stale
+     * {@code role_permissions} row for a permission since removed from the code,
+     * or anything else unexpected — classifies as {@link Scope#PLATFORM}: the
+     * answer that refuses more, so an unknown code can never be what lets a role
+     * slip out of the staff rules or skip a session bump.
+     */
+    public static Scope scopeOf(String code) {
+        Entry e = code == null ? null : ENTRIES.get(code);
+        return e == null ? Scope.PLATFORM : e.scope();
+    }
+
+    /** True for a code only the wildcard may hold — see {@link #WILDCARD_RESERVED}. */
+    public static boolean isReservedToWildcard(String code) {
+        return code != null && WILDCARD_RESERVED.contains(code);
     }
 
     private PermissionCatalog() {}

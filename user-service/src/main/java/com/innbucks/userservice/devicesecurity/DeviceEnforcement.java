@@ -89,7 +89,7 @@ public class DeviceEnforcement {
     /**
      * Places the next step of the ladder (15 min → 1 h → 24 h over 30 days). The
      * Nth block inside the window becomes a FRAUD_SUSPECTED ban instead, when bans
-     * are enforced. {@code explicitDuration} is for the call centre; an integrity
+     * are enforced. {@code explicitDuration} is for the call center; an integrity
      * hold has no end time at all.
      */
     @Transactional

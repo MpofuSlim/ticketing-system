@@ -106,7 +106,7 @@ public class User {
      * {@code PermissionResolver} degrades an unresolvable name to "grants
      * nothing" and logs it.
      *
-     * <p>{@link Role} survives as a constants holder for the nine built-ins so
+     * <p>{@link Role} survives as a constants holder for the built-ins so
      * code can keep saying {@code Role.SUPER_ADMIN} instead of a bare literal —
      * see {@link #hasRole(Role)}.
      */
@@ -270,7 +270,7 @@ public class User {
     private UUID createdByOrganizerUuid;
 
     /**
-     * Convenience overload for the nine built-in roles, so call sites keep
+     * Convenience overload for the built-in roles, so call sites keep
      * reading {@code hasRole(Role.SUPER_ADMIN)} rather than a bare string
      * literal — a typo in an enum constant fails to compile, a typo in a literal
      * silently never matches.
@@ -324,14 +324,16 @@ public class User {
     }
 
     /**
-     * The nine BUILT-IN roles.
+     * The BUILT-IN roles: the nine V35 seeded, plus the three call-center and
+     * fraud-desk roles V43 seeded.
      *
      * <p>Since V35 this is no longer the closed set of roles the platform can
      * have — roles live in the {@code roles} table and an operator creates more
      * through {@code POST /admin/roles}. What this enum still is: the names that
      * <em>code</em> references directly, so they can be written as constants
      * instead of literals and a typo fails the build. Every constant here has a
-     * matching {@code builtin = true} row seeded by V35, and
+     * matching {@code builtin = true} row seeded by a migration (V35 or V43;
+     * {@code BuiltInRoleSeedTest} pins it), and
      * {@code RoleAdminService} refuses to delete or rename those rows precisely
      * because this enum (and {@code Services.BUNDLE_ROLES}, and
      * {@code DataInitializer}) still names them.
@@ -375,6 +377,23 @@ public class User {
         // SHOP_ADMIN and operate the POS at that shop.
         SHOP_ADMIN,
         SHOP_USER,
-        CUSTOMER
+        CUSTOMER,
+        // Customer support (V43). Platform staff like PRODUCT_*: not scoped to a
+        // business, MFA-required (any non-CUSTOMER role makes a system user),
+        // and NAMED staff roles (StaffRoles.NAMED), so assigning one needs the
+        // caller to hold it or the wildcard. Constants because StaffRoles names
+        // them. Their V43 grants are the device-security permissions — the only
+        // support permissions enforced so far; the support console adds more.
+        //
+        // Deliberately NOT in booking/event's PLATFORM_STAFF_ROLES, and never to
+        // be named in a hasRole(): an agent reaches customer data only through
+        // user-service endpoints that check a permission.
+        CALL_CENTER_AGENT,
+        // Same grants as the agent today; diverges as supervisor-only support
+        // actions (refunds, reversals, dispute decisions) land.
+        CALL_CENTER_SUPERVISOR,
+        // An ADD-ON role, held together with an agent or supervisor role: bans,
+        // fraud holds and lifting them (device-security:fraud).
+        FRAUD_DESK
     }
 }

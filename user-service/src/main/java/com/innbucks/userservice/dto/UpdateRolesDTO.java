@@ -34,13 +34,21 @@ public class UpdateRolesDTO {
             arraySchema = @Schema(
                     description = """
                             Complete role set for the account. Every value must name a role that \
-                            exists — list them with `GET /admin/roles`. The nine built-in roles are:
+                            exists — list them with `GET /admin/roles`. Every role ADDED must grant only \
+                            what the caller holds, and a platform staff built-in (PRODUCT_*, \
+                            CALL_CENTER_*, FRAUD_DESK) can only be given by someone who holds it or by \
+                            SUPER_ADMIN (400 `role_not_assignable`). The built-in roles are:
 
                             * `SUPER_ADMIN` — platform owner. Seeded once from `BOOTSTRAP_ADMIN_PASSWORD` \
                             and **never grantable or revocable through this endpoint** (403 either way).
                             * `PRODUCT_OFFICER` — internal platform staff. Not scoped to a tenant, merchant \
-                            or shop, and grants no service bundle. Assignable here with no prerequisites.
+                            or shop, and grants no service bundle.
                             * `PRODUCT_MANAGER` — internal platform staff, same shape as `PRODUCT_OFFICER`.
+                            * `CALL_CENTER_AGENT` — customer support: looks customers up and performs \
+                            routine support actions.
+                            * `CALL_CENTER_SUPERVISOR` — customer-support supervisor; the agent's grants for now.
+                            * `FRAUD_DESK` — add-on held with an agent or supervisor role: bans, fraud holds \
+                            and lifting them.
                             * `EVENT_ORGANIZER` — runs ticketed events; owns events, invoices and team members.
                             * `TEAM_MEMBER` — gate staff / scanner operator working for one EVENT_ORGANIZER. \
                             Requires the account to already be stamped with its parent organizer, which only \

@@ -31,7 +31,21 @@ class RoleAdminServiceTest {
 
     private final RoleRepository roles = mock(RoleRepository.class);
     private final AuditService audit = mock(AuditService.class);
-    private final RoleAdminService service = new RoleAdminService(roles, audit);
+    private final com.innbucks.userservice.repository.UserRepository users =
+            mock(com.innbucks.userservice.repository.UserRepository.class);
+    private final com.innbucks.userservice.testsupport.InMemoryTokenVersionBumper bumper =
+            new com.innbucks.userservice.testsupport.InMemoryTokenVersionBumper(null);
+    private final RoleAdminService service;
+
+    {
+        // Every case here acts as the platform owner, so the no-escalation rules
+        // never refuse (RoleEditNoEscalationTest covers them); the reserved-code
+        // rule still applies to SUPER_ADMIN (PermissionNotAssignableTest).
+        com.innbucks.userservice.testsupport.BuiltInRoleRows.stub(roles);
+        com.innbucks.userservice.testsupport.BuiltInRoleRows.caller(users, "admin@x.co", "SUPER_ADMIN");
+        com.innbucks.userservice.testsupport.BuiltInRoleRows.caller(users, "admin@innbucks.co.zw", "SUPER_ADMIN");
+        service = new RoleAdminService(roles, audit, new RoleGrantGuard(users, roles), bumper);
+    }
 
     private static Role builtin(String name, String... permissions) {
         return Role.builder().name(name).description(name).builtin(true)
@@ -169,7 +183,7 @@ class RoleAdminServiceTest {
         service.setPermissions("REFUND_OFFICER", List.of("users:read"), "admin@x.co", AuditContext.none());
 
         verify(roles, never()).save(any());
-        verify(audit, never()).recordSuccess(any(), anyString(), anyString(), anyString(),
+        verify(audit, never()).recordRequired(any(), anyString(), anyString(), anyString(),
                 anyString(), any(), any());
     }
 

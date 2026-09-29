@@ -246,6 +246,21 @@ groups:
           description: "{{ $value | humanize }} audit chain links failed to recompute in the last hour. A row was deleted/reordered/truncated from the append-only log, or the audit.hmac-secret rotated without re-chaining. Investigate against the row_hmac (content) signal and the DB write log."
           runbook: "prometheus/slo.md#auditchainbroken"
 
+      # A09: an audit_events row could not be written. mode=best_effort — the
+      # action (a login, a logout, an MFA step) went ahead UNRECORDED; the audit
+      # path deliberately never breaks it. mode=required — a change to who can
+      # do what (role grant, role create/edit/delete) was REFUSED with 503
+      # audit_unavailable because it may not happen unrecorded. Expected 0.
+      - alert: AuditWriteFailed
+        expr: sum by (mode) (increase(security_audit_write_failed_total[15m])) > 0
+        for: 0m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "user-service could not write audit_events rows ({{ $labels.mode }})"
+          description: "{{ $value | humanize }} audit rows failed to write in the last 15m (mode={{ $labels.mode }}). best_effort: actions went ahead unrecorded; required: role changes were refused with 503 audit_unavailable."
+          runbook: "prometheus/slo.md#auditwritefailed"
+
       # A07 / CWE-613: user-service could not mirror a token_version bump into
       # the shared Redis. Postgres (and user-service's own JwtFilter) already
       # hold the new version, but every OTHER service fails open on a Redis

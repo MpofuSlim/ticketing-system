@@ -165,6 +165,7 @@ public class AuthController {
                                                 "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIrMjYzNzcxMjM0NTY3Iiwicm9sZXMiOlsiQ1VTVE9NRVIiXSwic2VydmljZXMiOltdLCJ0aWVyIjoyLCJ2ZXJpZmllZCI6ZmFsc2UsInBob25lTnVtYmVyIjoiKzI2Mzc3MTIzNDU2NyIsImZpcnN0TmFtZSI6IkphbmUiLCJsYXN0TmFtZSI6IkRvZSIsImlhdCI6MTcxNTY2NTYwMCwiZXhwIjoxNzE1NzUyMDAwfQ.access-signature",
                                                 "refreshToken": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIrMjYzNzcxMjM0NTY3IiwidHlwZSI6InJlZnJlc2giLCJpYXQiOjE3MTU2NjU2MDAsImV4cCI6MTcxNjI3MDQwMH0.refresh-signature",
                                                 "roles": ["CUSTOMER"],
+                                                "permissions": [],
                                                 "defaultServices": [],
                                                 "mfaRequired": false,
                                                 "tier": 2,
@@ -181,6 +182,7 @@ public class AuthController {
                                                 "refreshToken": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhbGljZUBpbm5idWNrcy5jby56dyIsInR5cGUiOiJyZWZyZXNoIiwiaWF0IjoxNzE1NjY1NjAwLCJleHAiOjE3MTYyNzA0MDB9.refresh-signature",
                                                 "email": "alice@innbucks.co.zw",
                                                 "roles": ["EVENT_ORGANIZER"],
+                                                "permissions": ["team-members:read", "team-members:write", "team-members:manage"],
                                                 "defaultServices": ["ticketing"],
                                                 "mfaRequired": false,
                                                 "tier": 4,
@@ -294,7 +296,8 @@ public class AuthController {
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     { "code": "200 OK", "message": "Login successful",
-                                      "data": { "token": "eyJ...", "refreshToken": "eyJ...", "roles": ["SUPER_ADMIN"] } }
+                                      "data": { "token": "eyJ...", "refreshToken": "eyJ...", "roles": ["CALL_CENTER_AGENT"],
+                                                "permissions": ["device-security:read", "device-security:manage"] } }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
                     description = "Wrong code, or an mfaToken that is expired, already spent, ended by a newer " +
@@ -414,6 +417,7 @@ public class AuthController {
                                     { "code": "200 OK", "message": "MFA enabled",
                                       "data": { "token": "eyJ...", "refreshToken": "eyJ...",
                                                 "backupCodes": ["X4Q7-K9F2-A3B1-M8H6", "..."],
+                                                "permissions": [],
                                                 "organizationId": "7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f",
                                                 "organizationRole": "ADMIN",
                                                 "organizationProducts": ["loyalty", "marketplace"] } }
@@ -574,6 +578,7 @@ public class AuthController {
                                         "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIrMjYzNzcxMjM0NTY3Iiwicm9sZXMiOlsiQ1VTVE9NRVIiXSwic2VydmljZXMiOltdLCJ0aWVyIjoyLCJ2ZXJpZmllZCI6ZmFsc2UsInBob25lTnVtYmVyIjoiKzI2Mzc3MTIzNDU2NyIsImZpcnN0TmFtZSI6IkphbmUiLCJsYXN0TmFtZSI6IkRvZSIsImlhdCI6MTcxNTY2OTIwMCwiZXhwIjoxNzE1NzU1NjAwfQ.access-signature",
                                         "refreshToken": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIrMjYzNzcxMjM0NTY3IiwidHlwZSI6InJlZnJlc2giLCJpYXQiOjE3MTU2NjkyMDAsImV4cCI6MTcxNjI3NDAwMH0.refresh-signature",
                                         "roles": ["CUSTOMER"],
+                                        "permissions": [],
                                         "defaultServices": [],
                                         "mfaRequired": false,
                                         "tier": 2,
@@ -697,6 +702,7 @@ public class AuthController {
                                         "refreshToken": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJydWRvQGNoaWt3YW5oYS10cmFkZXJzLmNvLnp3IiwidHlwZSI6InJlZnJlc2gifQ.refresh-signature",
                                         "email": "rudo@chikwanha-traders.co.zw",
                                         "roles": ["MERCHANT_ADMIN"],
+                                        "permissions": ["shop-admins:write", "shop-staff:read", "shop-staff:merchant:read", "shop-staff:password:reset"],
                                         "defaultServices": ["marketplace"],
                                         "mfaRequired": false,
                                         "mustChangePassword": false,
@@ -1335,6 +1341,7 @@ public class AuthController {
                                         "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIrMjYzNzcxMjM0NTY3Iiwicm9sZXMiOlsiQ1VTVE9NRVIiXSwidXNlclV1aWQiOiI2Zjk2MTlmZi04Yjg2LTQwMTEtYjQyZC0wMGMwNGZjOTY0ZmYiLCJwaG9uZU51bWJlciI6IisyNjM3NzEyMzQ1NjciLCJ0aWVyIjoxLCJ2ZXJpZmllZCI6ZmFsc2V9.access-signature",
                                         "refreshToken": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIrMjYzNzcxMjM0NTY3IiwidHlwZSI6InJlZnJlc2gifQ.refresh-signature",
                                         "roles": ["CUSTOMER"],
+                                        "permissions": [],
                                         "defaultServices": [],
                                         "mfaRequired": false,
                                         "tier": 1,
@@ -1409,6 +1416,12 @@ public class AuthController {
                     deliberate, so the endpoint can't be used to discover which numbers/emails have accounts.
                     A code is actually sent only when the identifier belongs to an existing user.
 
+                    **Staff reset by email only.** For an account holding a staff role (a platform staff
+                    built-in such as `PRODUCT_MANAGER` or `CALL_CENTER_AGENT`, or any role holding a
+                    platform-wide permission) a request by `phoneNumber` sends nothing — same 200. A phone
+                    on a staff account is a takeover path (a SIM swap, or a number left on a legacy
+                    account), so the console's reset screen should ask staff for their email.
+
                     **Rate limit:** shares the OTP quota — at most 3 codes per identifier per 10-minute
                     window, then a 30-minute lockout (HTTP 429).
                     """)
@@ -1452,6 +1465,9 @@ public class AuthController {
 
                     The confirm-match is checked BEFORE the OTP is consumed, so a typo in `confirmPassword`
                     lets the user retry with the same code.
+
+                    **Staff reset by email only:** by `phoneNumber`, an account holding a staff role always
+                    gets `400 Invalid or expired code`, whatever code is sent.
                     """)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",

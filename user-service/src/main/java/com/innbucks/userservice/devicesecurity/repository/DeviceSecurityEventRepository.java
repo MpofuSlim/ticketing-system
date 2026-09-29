@@ -21,7 +21,7 @@ public interface DeviceSecurityEventRepository extends JpaRepository<DeviceSecur
 
     List<DeviceSecurityEvent> findBySupportRefOrderByOccurredAtAscIdAsc(String supportRef);
 
-    /** The ladder's count: automatic temporary blocks on this pair (a call-centre hold is excluded by reason). */
+    /** The ladder's count: automatic temporary blocks on this pair (a call-center hold is excluded by reason). */
     long countByMsisdnAndInstallIdHashAndEventTypeAndReasonNotAndOccurredAtAfter(
             String msisdn, String installIdHash, String eventType, String excludedReason, LocalDateTime since);
 

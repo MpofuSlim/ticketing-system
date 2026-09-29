@@ -68,6 +68,12 @@ public class MfaService {
      * standing is exactly the gap it exists to close.
      */
     private final TokenVersionBumper tokenVersionBumper;
+    /**
+     * An admin reset needs the caller to hold everything the target holds — a
+     * narrower administrator must not be able to strip a broader one's second
+     * factor. Required: a missing guard must fail the wiring, not the check.
+     */
+    private final RoleGrantGuard roleGrantGuard;
 
     // Trusted-device collaborator. Field-injected (optional) rather than a
     // constructor param so the existing MfaServiceTest construction site doesn't
@@ -117,12 +123,14 @@ public class MfaService {
                       MfaBackupCodeRepository backupCodeRepository,
                       PasswordEncoder passwordEncoder,
                       MfaProperties properties,
-                      TokenVersionBumper tokenVersionBumper) {
+                      TokenVersionBumper tokenVersionBumper,
+                      RoleGrantGuard roleGrantGuard) {
         this.userRepository = userRepository;
         this.backupCodeRepository = backupCodeRepository;
         this.passwordEncoder = passwordEncoder;
         this.properties = properties;
         this.tokenVersionBumper = tokenVersionBumper;
+        this.roleGrantGuard = roleGrantGuard;
         DefaultCodeVerifier verifier = new DefaultCodeVerifier(codeGenerator, new SystemTimeProvider());
         verifier.setAllowedTimePeriodDiscrepancy(TIME_DISCREPANCY_STEPS);
         this.codeVerifier = verifier;
@@ -274,6 +282,11 @@ public class MfaService {
      *       factor is a takeover step, not a recovery; that account is managed
      *       through {@code BOOTSTRAP_ADMIN_PASSWORD} only, the same rule
      *       {@code setActive} and {@code setRoles} already apply.</li>
+     *   <li><b>Refuses a target holding a permission the caller does not</b> —
+     *       403 {@code target_not_manageable} ({@code reason:
+     *       exceeds_your_authority}), read from the caller's live roles. Resetting
+     *       someone's 2FA opens their account to whoever holds their password, so
+     *       a narrower administrator must not be able to do it to a broader one.</li>
      *   <li><b>Takes effect immediately.</b> Bumps {@code tokenVersion}
      *       (published after commit), so every access token AND every pending
      *       mfaToken the account holds dies now: "must re-enrol on next login"
@@ -293,8 +306,10 @@ public class MfaService {
         if (user.hasRole(User.Role.SUPER_ADMIN)) {
             log.warn("MFA admin reset refused on SUPER_ADMIN target userId={} by={}",
                     userId, adminEmail == null ? "system" : adminEmail);
-            throw com.innbucks.userservice.exception.StaffPolicyException.targetNotManageable("super_admin");
+            throw com.innbucks.userservice.exception.StaffPolicyException.targetNotManageable(
+                    com.innbucks.userservice.exception.StaffPolicyException.REASON_SUPER_ADMIN);
         }
+        roleGrantGuard.requireMayManage(roleGrantGuard.resolveCaller(adminEmail), user);
         user.setMfaEnabled(false);
         user.setMfaSecret(null);
         userRepository.save(user);

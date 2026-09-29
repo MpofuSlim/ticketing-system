@@ -151,6 +151,22 @@ public interface UserRepository extends JpaRepository<User, Long> {
             + "RETURNING token_version", nativeQuery = true)
     Long incrementTokenVersionIfCurrent(@Param("id") Long id, @Param("expected") long expected);
 
+    /**
+     * Bump EVERY holder of a role in one statement — a role losing a PLATFORM
+     * permission ({@code RoleAdminService.setPermissions}). One {@code UPDATE}
+     * rather than a loop of per-user bumps, so the whole population moves
+     * atomically with the permission edit. Returns one {@code [user_uuid,
+     * token_version]} row per account bumped (possibly none).
+     *
+     * <p>{@code user_roles} has no foreign key to {@code roles}, so this matches
+     * on the string: an account holding the name is a holder whether or not the
+     * row predates the role.
+     */
+    @Query(value = "UPDATE users SET token_version = token_version + 1 "
+            + "WHERE id IN (SELECT ur.user_id FROM user_roles ur WHERE ur.role = :role) "
+            + "RETURNING user_uuid, token_version", nativeQuery = true)
+    List<Object[]> incrementTokenVersionForRoleHolders(@Param("role") String role);
+
     /** Deactivate and bump in one statement — AccountSessionRevoker's first step. */
     @Query(value = "UPDATE users SET active = FALSE, token_version = token_version + 1 WHERE id = :id "
             + "RETURNING token_version", nativeQuery = true)

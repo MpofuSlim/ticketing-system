@@ -54,7 +54,9 @@ public class Role {
     private String description;
 
     /**
-     * True for the nine roles that shipped as the {@code User.Role} enum.
+     * True for the roles named by the {@code User.Role} enum — the nine V35
+     * seeded plus the three call-center / fraud-desk roles V43 seeded. Only a
+     * migration creates one; {@code POST /admin/roles} always writes false.
      *
      * <p>Built-ins cannot be deleted or renamed: code references them by literal
      * name (in {@code @PreAuthorize}, in {@code Services.BUNDLE_ROLES}, in

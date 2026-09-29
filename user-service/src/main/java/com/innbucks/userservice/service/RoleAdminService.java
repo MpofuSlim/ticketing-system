@@ -23,10 +23,18 @@ import java.util.regex.Pattern;
 /**
  * Create, edit and delete roles (V35).
  *
- * <p>Every write here is audited: a role change is a change to who can do what,
- * which is exactly the class of event {@code audit_events} exists to make
+ * <p>Every write here is audited, and the audit is REQUIRED
+ * ({@link AuditService#recordRequired}): a role change is a change to who can do
+ * what, which is exactly the class of event {@code audit_events} exists to make
  * tamper-evident. Granting yourself a permission and quietly ungranting it is
- * otherwise invisible.
+ * otherwise invisible — so a change whose audit row cannot be written is not
+ * made ({@code 503 audit_unavailable}).
+ *
+ * <p>No-escalation ({@link RoleGrantGuard}): a code ADDED to a role must be one
+ * the caller holds, and never one reserved to the wildcard
+ * ({@link PermissionCatalog#WILDCARD_RESERVED}); an edit that only removes codes
+ * is never refused. Removing a PLATFORM code signs every holder out at once
+ * (see {@link #setPermissions}).
  */
 @Slf4j
 @Service
@@ -46,8 +54,29 @@ public class RoleAdminService {
      */
     private static final Pattern VALID_NAME = Pattern.compile("^[A-Z][A-Z0-9_]{1,63}$");
 
+    /**
+     * Names no custom role may take. {@code ADMIN} was never a platform role (V3
+     * rewrote the legacy rows to SUPER_ADMIN, and no check anywhere names it), so
+     * a role called that would read as authority it does not have; a bare
+     * {@code CALL_CENTER} and any {@code CALL_CENTRE…} spelling would sit beside
+     * the built-in call-center roles and be picked by mistake. The built-in
+     * names themselves are taken by their rows (409).
+     */
+    static boolean isReservedName(String normalized) {
+        return "ADMIN".equals(normalized)
+                || "CALL_CENTER".equals(normalized)
+                || normalized.startsWith("CALL_CENTRE");
+    }
+
     private final RoleRepository roleRepository;
     private final AuditService auditService;
+    /** No-escalation on what a role may be given ({@link RoleGrantGuard}). */
+    private final RoleGrantGuard roleGrantGuard;
+    /**
+     * Ends the sessions of every holder of a role that loses a PLATFORM
+     * permission — the one writer of {@code token_version}.
+     */
+    private final TokenVersionBumper tokenVersionBumper;
 
     @Transactional(readOnly = true)
     public List<Role> list() {
@@ -76,12 +105,17 @@ public class RoleAdminService {
                     "Role name must be UPPER_SNAKE_CASE, 2-64 characters, starting with a letter "
                             + "(e.g. REFUND_OFFICER). Got: " + name);
         }
+        if (isReservedName(normalized)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, reservedNameMessage(normalized));
+        }
         if (roleRepository.existsById(normalized)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "A role named " + normalized + " already exists.");
         }
 
-        Set<String> granted = validatePermissions(permissions);
+        Set<String> granted = validatePermissions(permissions, Set.of());
+        // Every code on a new role is an ADDED code.
+        roleGrantGuard.requireMayGrant(roleGrantGuard.resolveCaller(adminEmail), granted);
 
         Role role = Role.builder()
                 .name(normalized)
@@ -91,24 +125,56 @@ public class RoleAdminService {
                 .permissions(granted)
                 .build();
         Role saved = roleRepository.save(role);
+        // Flushed BEFORE the required audit, so any constraint failure surfaces
+        // here — never after an audit row describing it has committed.
+        roleRepository.flush();
 
         log.info("Role created name={} permissions={} by={}",
                 normalized, granted, adminEmail == null ? "system" : adminEmail);
+        // Last statement: a grant that cannot be recorded is not made.
         audit(AuditEventType.ROLE_CREATED, saved, adminEmail, auditContext,
                 Map.of("permissions", List.copyOf(granted)));
         return saved;
+    }
+
+    private static String reservedNameMessage(String normalized) {
+        if ("ADMIN".equals(normalized)) {
+            return "The role name ADMIN is reserved: it has never been a platform role, so a role called that "
+                    + "would read as authority it does not have. Use a built-in role (PRODUCT_OFFICER, "
+                    + "PRODUCT_MANAGER, CALL_CENTER_AGENT, CALL_CENTER_SUPERVISOR, FRAUD_DESK) or choose "
+                    + "another name.";
+        }
+        return "The role name " + normalized + " is reserved: the call-center roles are built in and spelled "
+                + "CALL_CENTER (CALL_CENTER_AGENT, CALL_CENTER_SUPERVISOR, with FRAUD_DESK as an add-on). "
+                + "Assign those, or choose another name.";
     }
 
     /**
      * Replace a role's permission set. Allowed on built-in roles too — editing
      * what {@code MERCHANT_ADMIN} can do is a legitimate and expected operation,
      * and it is only the NAME of a built-in that code depends on.
+     *
+     * <p><b>Added codes</b> must each be held by the caller and never be reserved
+     * to the wildcard ({@link RoleGrantGuard#requireMayGrant}). <b>An edit that
+     * only removes codes is never refused</b> — taking authority away must always
+     * be possible, including from a role an earlier release let hold a code that
+     * is reserved today.
+     *
+     * <p><b>Removing a PLATFORM code signs every holder out at once</b>: one
+     * atomic {@code token_version} bump across everyone holding the role, each
+     * new version published to the shared Redis after commit. Staff populations
+     * are small, and a support agent who loses {@code device-security:manage}
+     * must not keep using it for the rest of their access token's life.
+     * <b>Removing only TENANT codes does not bump</b>: the change reaches each
+     * holder at their next refresh (at most the access-token lifetime, 15
+     * minutes), so trimming what every MERCHANT_ADMIN can do does not sign out
+     * every business on the platform at once.
      */
     @Transactional
     public Role setPermissions(String name, Collection<String> permissions,
                                String adminEmail, AuditContext auditContext) {
         Role role = get(name);
-        Set<String> granted = validatePermissions(permissions);
+        Set<String> granted = validatePermissions(permissions, role.getPermissions());
 
         // Refusing to strip the wildcard off SUPER_ADMIN is the same guard
         // UserAdminService applies to the account itself: SUPER_ADMIN is the
@@ -128,17 +194,38 @@ public class RoleAdminService {
             return role;
         }
 
+        Set<String> added = new LinkedHashSet<>(granted);
+        added.removeAll(previous);
+        Set<String> removed = new LinkedHashSet<>(previous);
+        removed.removeAll(granted);
+        if (!added.isEmpty()) {
+            roleGrantGuard.requireMayGrant(roleGrantGuard.resolveCaller(adminEmail), added);
+        }
+
         // Mutate in place: `permissions` is an @ElementCollection and Hibernate
         // tracks the instance it loaded, so swapping the reference would be lost.
         role.getPermissions().clear();
         role.getPermissions().addAll(granted);
         Role saved = roleRepository.save(role);
+        // Flushed BEFORE the required audit, so any constraint failure surfaces
+        // here — never after an audit row describing it has committed.
+        roleRepository.flush();
 
-        log.info("Role permissions changed name={} previous={} new={} by={}",
-                role.getName(), previous, granted, adminEmail == null ? "system" : adminEmail);
-        audit(AuditEventType.ROLE_PERMISSIONS_CHANGED, saved, adminEmail, auditContext,
-                Map.of("previousPermissions", previous.stream().sorted().toList(),
-                        "newPermissions", granted.stream().sorted().toList()));
+        // A stale code (no longer in the catalog) classifies as PLATFORM, so
+        // removing one bumps too — the answer that fails closed.
+        boolean platformRemoved = removed.stream()
+                .anyMatch(code -> PermissionCatalog.scopeOf(code) == PermissionCatalog.Scope.PLATFORM);
+        int holdersSignedOut = platformRemoved ? tokenVersionBumper.bumpAllHolding(role.getName()) : 0;
+
+        log.info("Role permissions changed name={} previous={} new={} holdersSignedOut={} by={}",
+                role.getName(), previous, granted, holdersSignedOut, adminEmail == null ? "system" : adminEmail);
+        Map<String, Object> detail = new java.util.LinkedHashMap<>();
+        detail.put("previousPermissions", previous.stream().sorted().toList());
+        detail.put("newPermissions", granted.stream().sorted().toList());
+        detail.put("platformPermissionRemoved", platformRemoved);
+        detail.put("holdersSignedOut", holdersSignedOut);
+        // Last statement: a change that cannot be recorded is not made.
+        audit(AuditEventType.ROLE_PERMISSIONS_CHANGED, saved, adminEmail, auditContext, detail);
         return saved;
     }
 
@@ -166,7 +253,9 @@ public class RoleAdminService {
         }
 
         roleRepository.delete(role);
+        roleRepository.flush();
         log.info("Role deleted name={} by={}", role.getName(), adminEmail == null ? "system" : adminEmail);
+        // Last statement: a deletion that cannot be recorded is not made.
         audit(AuditEventType.ROLE_DELETED, role, adminEmail, auditContext,
                 Map.of("permissions", role.getPermissions().stream().sorted().toList()));
     }
@@ -180,8 +269,13 @@ public class RoleAdminService {
      * keeps its row — see {@code PermissionCatalogInitializer}). Validating
      * against the table would let an operator grant a code nothing checks any
      * more, producing a role that reads as capable and is not.
+     *
+     * <p>A code the role ALREADY holds is not re-validated against the catalog:
+     * keeping a stale grant is harmless (the resolver drops it), and refusing it
+     * would refuse an edit that only removes something — which must always be
+     * possible.
      */
-    private Set<String> validatePermissions(Collection<String> permissions) {
+    private Set<String> validatePermissions(Collection<String> permissions, Collection<String> alreadyHeld) {
         Set<String> granted = new LinkedHashSet<>();
         if (permissions != null) {
             for (String permission : permissions) {
@@ -194,18 +288,25 @@ public class RoleAdminService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "permissions must contain at least one permission. A role granting nothing is "
                             + "assignable but authorizes for nothing; list the available permissions "
-                            + "with GET /admin/permissions.");
+                            + "with GET /admin/roles/permissions.");
         }
 
         Set<String> unknown = new LinkedHashSet<>();
         for (String permission : granted) {
-            if (!PermissionCatalog.isKnown(permission)) unknown.add(permission);
+            // A code reserved to the wildcard is left to RoleGrantGuard, which
+            // refuses it as reserved whether or not this release defines it yet
+            // (staff:* and organizations:manage are reserved before any endpoint
+            // enforces them) — one answer for it, whoever asks.
+            if (!PermissionCatalog.isKnown(permission) && !alreadyHeld.contains(permission)
+                    && !PermissionCatalog.isReservedToWildcard(permission)) {
+                unknown.add(permission);
+            }
         }
         if (!unknown.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Unknown permission(s): " + String.join(", ", unknown)
                             + ". Permissions are defined in code, not created through the API — "
-                            + "list what exists with GET /admin/permissions.");
+                            + "list what exists with GET /admin/roles/permissions.");
         }
 
         // The wildcard is SUPER_ADMIN's, seeded by V35. Letting it be granted
@@ -225,11 +326,16 @@ public class RoleAdminService {
         return name == null ? "" : name.trim().toUpperCase(Locale.ROOT);
     }
 
+    /**
+     * REQUIRED audit ({@link AuditService#recordRequired}): throws
+     * {@code AuditUnavailableException} (503) when the row cannot be written, so
+     * the role change rolls back with it. Always the caller's last statement.
+     */
     private void audit(AuditEventType type, Role role, String adminEmail,
                        AuditContext auditContext, Map<String, Object> detail) {
         Map<String, Object> payload = new java.util.LinkedHashMap<>(detail);
         payload.put("role", role.getName());
-        auditService.recordSuccess(
+        auditService.recordRequired(
                 type,
                 adminEmail == null ? "system" : adminEmail,
                 adminEmail == null ? AuditService.ACTOR_TYPE_SYSTEM : AuditService.ACTOR_TYPE_USER,

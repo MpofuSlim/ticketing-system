@@ -206,6 +206,25 @@ rotation).
    log / OTel spans for that window, pull the DB write log to see who deleted
    it, and escalate to a security incident.
 
+### `AuditWriteFailed`
+
+**Trigger:** `security_audit_write_failed_total` moved — user-service could not
+append a row to `audit_events` (the REQUIRES_NEW write threw: a database
+outage, a lock timeout on `audit_chain_head`, a constraint violation).
+
+- `mode="best_effort"`: the action went ahead **unrecorded**. Logins, logouts,
+  MFA steps and most admin actions are deliberately never blocked by the audit
+  path. Grep user-service for `AUDIT_WRITE_FAILED` for the event type and actor,
+  and reconstruct the gap from the gateway access log / OTel spans.
+- `mode="required"`: a change to who can do what — `USER_ROLES_CHANGED`,
+  `ROLE_CREATED`, `ROLE_PERMISSIONS_CHANGED`, `ROLE_DELETED` — was **refused**
+  with `503 audit_unavailable` and rolled back, because it may not happen
+  unrecorded. Nothing to reconcile; the administrator retries once the audit
+  path is healthy. A sustained run means role administration is down.
+
+In both cases treat the cause as a database incident first (connectivity, pool
+exhaustion, `audit_chain_head` lock contention).
+
 ### `TokenVersionPublishFailing`
 
 **Trigger:** `user_tokenver_publish_failed_total` moved — user-service bumped a

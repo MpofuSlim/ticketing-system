@@ -48,7 +48,15 @@ class MfaServiceTest {
         props.setIssuer("InnBucks");
         props.setBackupCodeCount(10);
         tokenVersionBumper = mock(TokenVersionBumper.class);
-        mfaService = new MfaService(userRepository, backupCodeRepository, passwordEncoder, props, tokenVersionBumper);
+        // The admin-reset caller check reads live roles; a SUPER_ADMIN acts in
+        // every case here (RoleGrantNoEscalationTest covers the refusals).
+        com.innbucks.userservice.repository.RoleRepository roleRepository =
+                mock(com.innbucks.userservice.repository.RoleRepository.class);
+        com.innbucks.userservice.testsupport.BuiltInRoleRows.stub(roleRepository);
+        com.innbucks.userservice.testsupport.BuiltInRoleRows.caller(userRepository, "admin@innbucks.co.zw",
+                User.Role.SUPER_ADMIN.name());
+        mfaService = new MfaService(userRepository, backupCodeRepository, passwordEncoder, props, tokenVersionBumper,
+                new RoleGrantGuard(userRepository, roleRepository));
         when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 

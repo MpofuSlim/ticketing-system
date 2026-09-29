@@ -116,6 +116,22 @@ public class SecurityMetrics {
         mfaFailure.increment();
     }
 
+    /**
+     * An audit row that could not be written. {@code mode=best_effort}: the
+     * action went ahead unrecorded (a login, a logout — the audit path must not
+     * break them); {@code mode=required}: the action was REFUSED with
+     * {@code 503 audit_unavailable} because it may not happen unrecorded (a role
+     * grant or edit). Either is worth a look; alert {@code AuditWriteFailed}.
+     */
+    public void auditWriteFailed(String eventType, String mode) {
+        Counter.builder("security.audit.write_failed")
+                .description("audit_events rows that could not be written, by event type and mode")
+                .tag("type", eventType == null ? "unknown" : eventType)
+                .tag("mode", mode == null ? "unknown" : mode)
+                .register(registry)
+                .increment();
+    }
+
     /** Called by the audit-integrity verifier for each row that fails HMAC checking. */
     public void auditIntegrityBroken(long count) {
         if (count > 0) auditIntegrityBroken.increment(count);

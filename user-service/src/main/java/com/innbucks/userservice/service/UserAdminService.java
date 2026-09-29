@@ -73,6 +73,11 @@ public class UserAdminService {
      * between a typo and an account that authenticates but authorizes nowhere.
      */
     private final com.innbucks.userservice.repository.RoleRepository roleRepository;
+    /**
+     * No-escalation: what the caller may add, remove, deactivate
+     * ({@link RoleGrantGuard}).
+     */
+    private final RoleGrantGuard roleGrantGuard;
 
     /**
      * Backward-compatible overload used by unit tests / callers that don't have
@@ -145,6 +150,15 @@ public class UserAdminService {
             user.setMustChangePassword(true);
             user.setApproved(true);
             log.info("User approved, temporary password assigned userId={}", id);
+        }
+
+        // Switching off a STAFF-role holder needs the caller to hold everything
+        // the target holds: otherwise a narrower administrator could lock out a
+        // broader one (a support agent with users:activation:write switching off
+        // the product manager who supervises them). Business accounts are not
+        // gated here — their authority reaches one business, not the platform.
+        if (!active && roleGrantGuard.holdsStaffRole(user)) {
+            roleGrantGuard.requireMayManage(roleGrantGuard.resolveCaller(adminEmail), user);
         }
 
         // Deactivation ends every session at once: active=false and the
@@ -262,7 +276,18 @@ public class UserAdminService {
     }
 
     /**
-     * Replace a user's entire role set (SUPER_ADMIN-only, {@code PUT /admin/users/{id}/roles}).
+     * Replace a user's entire role set ({@code PUT /admin/users/{id}/roles},
+     * {@code users:roles:write} — a code only the wildcard may hold, so in
+     * practice SUPER_ADMIN; see {@code PermissionCatalog.WILDCARD_RESERVED}).
+     *
+     * <p><b>No-escalation</b> ({@link RoleGrantGuard}), on top of the checks
+     * below: every role ADDED must grant only permissions the caller holds, and a
+     * NAMED staff role (PRODUCT_*, CALL_CENTER_*, FRAUD_DESK) also needs the
+     * caller to hold it or the wildcard (400 {@code role_not_assignable}); any
+     * role REMOVED needs the caller to hold everything the account holds now
+     * (403 {@code target_not_manageable}), so a narrower administrator cannot
+     * strip a broader one. The caller's authority is read live, never from their
+     * token.
      *
      * <p><b>Replace, not merge.</b> The submitted set becomes the account's
      * complete role set. A merge endpoint can only ever add privilege, so
@@ -378,6 +403,20 @@ public class UserAdminService {
             return user;
         }
 
+        // No-escalation. Removal first: whether the caller may touch this
+        // account at all is the more fundamental answer.
+        Set<String> added = new LinkedHashSet<>(requested);
+        added.removeAll(previous);
+        Set<String> removed = new LinkedHashSet<>(previous);
+        removed.removeAll(requested);
+        RoleGrantGuard.Caller caller = roleGrantGuard.resolveCaller(adminEmail);
+        if (!removed.isEmpty()) {
+            roleGrantGuard.requireMayManage(caller, user);
+        }
+        if (!added.isEmpty()) {
+            roleGrantGuard.requireMayAssign(caller, roleRepository.findAllByNameIn(added));
+        }
+
         // Mutate the mapped collection in place rather than swapping the
         // reference: `roles` is an @ElementCollection, and Hibernate tracks the
         // instance it loaded.
@@ -388,12 +427,17 @@ public class UserAdminService {
         // Postgres and every downstream service rejecting still-valid tokens.
         tokenVersionBumper.bump(user);
         User saved = userRepository.save(user);
+        // Flushed BEFORE the required audit below, so any constraint failure
+        // surfaces here — never after an audit row describing it has committed.
+        userRepository.flush();
 
         log.info("Roles changed userId={} from={} to={} newTokenVersion={} by={}",
                 id, previous, requested, saved.getTokenVersion(),
                 adminEmail == null ? "system" : adminEmail);
 
-        auditService.recordSuccess(
+        // REQUIRED and last: a role change that cannot be recorded is not made
+        // (503 audit_unavailable rolls this transaction back).
+        auditService.recordRequired(
                 AuditEventType.USER_ROLES_CHANGED,
                 adminEmail == null ? "system" : adminEmail,
                 adminEmail == null ? AuditService.ACTOR_TYPE_SYSTEM : AuditService.ACTOR_TYPE_USER,

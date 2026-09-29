@@ -83,6 +83,14 @@ public class AuditService {
     private final TransactionTemplate transactionTemplate;
     private final SecretKeySpec hmacKey;
 
+    /**
+     * {@code security.audit.write_failed} — alerted ({@code AuditWriteFailed}).
+     * Field-injected and optional so the plain unit tests that construct this
+     * class directly need no registry; null there means the counter is skipped.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.innbucks.userservice.config.SecurityMetrics securityMetrics;
+
     public AuditService(AuditEventRepository repository,
                         AuditChainHeadRepository chainHeadRepository,
                         ObjectMapper objectMapper,
@@ -115,6 +123,77 @@ public class AuditService {
                        String failureReason,
                        Map<String, Object> metadata,
                        AuditContext context) {
+        AuditEvent event = seal(type, outcome, actorId, actorType, targetId, targetType,
+                failureReason, metadata, context);
+        try {
+            transactionTemplate.execute(status -> appendChained(event));
+        } catch (RuntimeException ex) {
+            // Don't propagate: a broken audit path must not break login.
+            // Operators reading logs will see this marker and can pivot
+            // to gateway access logs / OTel for reconstruction — and the
+            // security.audit.write_failed counter pages them that it happened.
+            log.error("AUDIT_WRITE_FAILED type={} outcome={} actorId={} reason={}",
+                    type.name(), outcome, actorId, ex.getMessage(), ex);
+            writeFailed(type, "best_effort");
+        }
+    }
+
+    /**
+     * Persist one SUCCESS row that the change it records cannot go ahead without
+     * — the fail-CLOSED twin of {@link #recordSuccess}.
+     *
+     * <p>For the changes to who can do what ({@code USER_ROLES_CHANGED},
+     * {@code ROLE_CREATED}, {@code ROLE_PERMISSIONS_CHANGED},
+     * {@code ROLE_DELETED}): once roles are data, the audit chain is the only
+     * record of who could do what and when, so a grant nobody can reconstruct is
+     * worse than a grant refused. Same REQUIRES_NEW write as {@link #record}, but
+     * a failure throws {@link com.innbucks.userservice.exception.AuditUnavailableException}
+     * ({@code 503 audit_unavailable}) instead of being swallowed, and the
+     * caller's transaction rolls back with it.
+     *
+     * <p><b>Call it as the transaction's LAST statement</b> (after flushing the
+     * change). The row commits in its own transaction, so anything that could
+     * still fail after it — and roll the change back — would leave a row
+     * describing a change that never happened; putting it last shrinks that
+     * window to the outer commit itself.
+     */
+    public void recordRequired(AuditEventType type,
+                               String actorId,
+                               String actorType,
+                               String targetId,
+                               String targetType,
+                               Map<String, Object> metadata,
+                               AuditContext context) {
+        AuditEvent event = seal(type, OUTCOME_SUCCESS, actorId, actorType, targetId, targetType,
+                null, metadata, context);
+        try {
+            transactionTemplate.execute(status -> appendChained(event));
+        } catch (RuntimeException ex) {
+            log.error("AUDIT_WRITE_FAILED (required — the change is refused) type={} actorId={} reason={}",
+                    type.name(), actorId, ex.getMessage(), ex);
+            writeFailed(type, "required");
+            throw new com.innbucks.userservice.exception.AuditUnavailableException(ex);
+        }
+    }
+
+    private void writeFailed(AuditEventType type, String mode) {
+        if (securityMetrics == null) return;
+        try {
+            securityMetrics.auditWriteFailed(type.name(), mode);
+        } catch (RuntimeException ignored) {
+            // a metrics failure must never change the audit outcome
+        }
+    }
+
+    private AuditEvent seal(AuditEventType type,
+                            String outcome,
+                            String actorId,
+                            String actorType,
+                            String targetId,
+                            String targetType,
+                            String failureReason,
+                            Map<String, Object> metadata,
+                            AuditContext context) {
         AuditEvent event = AuditEvent.builder()
                 .occurredAt(Instant.now())
                 .eventType(type.name())
@@ -132,15 +211,7 @@ public class AuditService {
         // Tamper-evidence: seal the row with an HMAC over its immutable fields
         // before it is persisted (OWASP A09). See computeHmac / AuditIntegrityVerifier.
         event.setRowHmac(computeHmac(event));
-        try {
-            transactionTemplate.execute(status -> appendChained(event));
-        } catch (RuntimeException ex) {
-            // Don't propagate: a broken audit path must not break login.
-            // Operators reading logs will see this marker and can pivot
-            // to gateway access logs / OTel for reconstruction.
-            log.error("AUDIT_WRITE_FAILED type={} outcome={} actorId={} reason={}",
-                    type.name(), outcome, actorId, ex.getMessage(), ex);
-        }
+        return event;
     }
 
     /**
