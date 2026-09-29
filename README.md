@@ -2,14 +2,14 @@
 
 A microservices-based online ticketing platform built with Spring Boot 4 and
 Spring Cloud Gateway. Each service owns its own database; services find each
-other through a Eureka registry and communicate over REST.
+other by Kubernetes Service name and communicate over REST.
 
 ## Services
 
 | Service            | Port | Responsibility                                                              |
 |--------------------|------|-----------------------------------------------------------------------------|
 | `api-gateway`      | 8080 | Public entry point. Routing, CORS, Redis-backed rate limiting.              |
-| `discovery-server` | 8761 | Netflix Eureka registry. Every service registers here and resolves siblings by name. |
+| `discovery-server` | 8761 | **Being retired.** Netflix Eureka registry, still running in the cell only for `loyalty-service` and `marketplace-service` until they switch to Service DNS. |
 | `user-service`     | 8081 | Auth: registration, login, JWT issuance, OTP, token revocation; admin & shop-staff users. |
 | `event-service`    | 8082 | Event catalogue and tenant-scoped event admin.                              |
 | `seat-service`     | 8083 | Seat inventory, categories, optimistic-locked holds.                        |
@@ -154,23 +154,29 @@ side-effect.
 > event-consumer use case lands, reintroduce a broker deliberately with actual
 > consumers rather than a publish-only bus.
 
-## Service discovery (Eureka)
+## Service discovery (Kubernetes Service DNS)
 
-The fleet uses **client-side service discovery**. `discovery-server` is a
-standalone Netflix Eureka registry (port 8761); every other service registers
-on boot and resolves its siblings **by name**, never by a hardcoded host:port:
+Services resolve their siblings **by name**, never by a hardcoded host:port,
+and the name is the sibling's Kubernetes `Service`:
 
-- Gateway routes target `lb://<service-name>` (resolved via Spring Cloud
-  LoadBalancer).
-- `booking-service` uses `@FeignClient(name = "...")` with no `url`.
-- `payment`/`seat`/`loyalty`/`user`/`event` call `http://<service-name>` through
-  a `@LoadBalanced` `RestClient`/`RestTemplate`.
+- Gateway routes target `lb://<service-name>`, `booking-service` uses
+  `@FeignClient(name = "...")` with no `url`, and `payment`/`seat`/`user`/`event`
+  call `http://<service-name>` through a `@LoadBalanced` `RestClient`.
+- Spring Cloud LoadBalancer resolves each name through a static map at the end
+  of every service's `application.yaml`
+  (`spring.cloud.discovery.client.simple.instances`), pointing at
+  `http://<name>:<port>` — the k8s Service, which routes only to ready pods and
+  balances across replicas. A `local` profile maps the same names to
+  `localhost`. `FleetServiceMapTest` keeps every copy identical and every port
+  equal to its k8s Service.
+- The Eureka registry is being retired: it only mapped each name to the same
+  Service name. Per-request balancing across replicas and in-cluster mTLS are
+  planned via the Linkerd service mesh, with no change to this map.
 
 The deliberately non-discovery clients are the external payment/notification
 providers (InnBucks, ZimSwitch, the WhatsApp gateway) — plain `RestClient`s
-with explicit URLs, since they are not in our registry. Tests disable
-discovery via `spring.cloud.discovery.enabled: false` in the
-`test`/`it` profiles.
+with explicit URLs. Tests disable discovery via
+`spring.cloud.discovery.enabled: false` in the `test`/`it` profiles.
 
 ## CI/CD
 
