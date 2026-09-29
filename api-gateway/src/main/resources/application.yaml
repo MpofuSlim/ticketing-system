@@ -155,10 +155,55 @@ spring:
                     # Fail-SAFE: forgot-password sends SMS OTP — keep throttling if Redis is down.
                     rate-limiter: "#{@resilientRedisRateLimiter}"
 
+            # DTX device security, app-facing: the device check in front of
+            # staging's /auth/client-service, its OTP send/verify, Your devices
+            # and the in-session step-up. It sends real OTPs, so it must not ride
+            # the limiter-free /auth/** catch-all. Every call arrives FROM THE
+            # BROKER (a Firebase function), so the IP this key resolver sees is the
+            # broker's egress — this bucket is a whole-fleet brake, sized for all
+            # customers together, not a per-customer limit. The per-number,
+            # per-device and per-address OTP ceilings live in user-service
+            # (DeviceOtpService), keyed on the x-forwarded-for the broker forwards.
+            # Fail-SAFE: an OTP surface must keep throttling when Redis is down.
+            # MUST precede the /auth/** catch-all below.
+            - id: auth-device-security-route
+              uri: lb://user-service
+              predicates:
+                - Path=/auth/client-service,/auth/client-service/**,/auth/devices,/auth/devices/**,/auth/device/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${DEVICE_SECURITY_RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${DEVICE_SECURITY_RATE_LIMIT_BURST_CAPACITY:200}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@preAuthIpKeyResolver}"
+                    rate-limiter: "#{@resilientRedisRateLimiter}"
+
             - id: user-auth-route
               uri: lb://user-service
               predicates:
                 - Path=/auth/**
+
+            # DTX device security, partner calls: the broker's login results and
+            # ticket redemption, and the *569# USSD service's unlock/block menu.
+            # Edge-REACHABLE on purpose — both callers live outside the cluster —
+            # and authenticated by each partner's own x-api-key inside
+            # user-service (PartnerKeyAuthorizer; SecurityConfig permits the path so
+            # the controller's check is the one that runs). IP-keyed and fail-safe
+            # for the loyalty-partner-registration reason: a shared-key surface
+            # whose limiter is the only brake on guessing the key.
+            - id: device-security-partner-route
+              uri: lb://user-service
+              predicates:
+                - Path=/device-security/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${DEVICE_SECURITY_PARTNER_RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${DEVICE_SECURITY_PARTNER_RATE_LIMIT_BURST_CAPACITY:200}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@preAuthIpKeyResolver}"
+                    rate-limiter: "#{@resilientRedisRateLimiter}"
 
             - id: cells-lookup-route
               uri: lb://user-service

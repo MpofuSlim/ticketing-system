@@ -225,3 +225,37 @@ steps; the verifier logs `AUDIT_CHAIN_BROKEN` from payment-service, and the
 metric is `payment_audit_chain_broken_total`. Cross-check
 `PaymentAuditIntegrityBroken`: a chain break with no content-tamper alert
 points at deletion specifically.
+
+### `DeviceSecurityFraudDeskSignal`
+
+**Trigger:** `device_security_fraud_desk_alerts_total{kind}` moved in 15m. Kinds:
+`otp_velocity` (a number crossed 5 OTP challenges an hour / 20 a day — someone is
+working that number, or bombing it), `sim_without_pin` (a correct OTP followed by
+wrong PINs until staging locked the PIN — the SIM is in someone else's hands),
+`otp_relay` (a code typed on a different phone than the one that asked for it).
+
+**Action:** grep user-service logs for `FRAUD_DESK_ALERT` to get the masked number
+and device id, then open `GET /admin/device-security/customers/{msisdn}`. The
+phone is usually already paused (TEMP_BLOCKED) when blocks are enforced; decide
+whether to ban it (`POST .../devices/{id}/ban`, FRAUD_SUSPECTED) and whether to
+call the customer. In watch mode nothing was blocked — the signal is the only record.
+
+### `DeviceSecurityPartnerKeyProbing`
+
+**Trigger:** the broker or the *569# USSD service is presenting a missing or wrong
+`x-api-key` on `/auth/client-service/**` or `/device-security/**`.
+
+**Action:** check the `DEVICE_SECURITY_PARTNER_KEY_FAILURE` rows in `audit_events`
+(path, presented key LENGTH, IP). A single IP with the right key length = a
+partner running a stale key after a rotation; roll it. Many IPs or odd lengths =
+probing; the edge limiter (`device-security-partner-route`) is holding, but confirm
+the keys have not leaked and rotate if unsure.
+
+### `DeviceSecurityNotificationsUndelivered`
+
+**Trigger:** security notices (new phone bound, paused, blocked, unlocked,
+removed, PIN set) failed on SMS and WhatsApp alike.
+
+**Action:** treat as an SMS-gateway plus WhatsApp-gateway incident (see the OTP
+delivery path). Nothing is retried: the decision log and the admin console remain
+the record of what happened to each phone.

@@ -651,6 +651,68 @@ no further change and cannot tell how the customer proved themselves.
   over the public key. Until then the endpoint stays off and the super app has no
   path to any `CUSTOMER`-gated endpoint — that is the documented state, not a bug.
 
+## DTX device security — the phone is checked before staging's PIN login (user-service V40)
+
+`devicesecurity/` implements the InnBucks 2.0 app contract *"Device Registration,
+Fraud Detection and Sign-In Through DTX"* (v2.1). **DTX is this fleet**
+(`dtx.innbucks.co.zw/foundry`): the super app calls `POST /auth/client-service`
+(through the broker) BEFORE staging's user login, DTX decides TOKEN /
+OTP_REQUIRED / TEMP_BLOCKED / BANNED, and only a TOKEN carries staging's
+client-service token plus a single-use RS256 `loginTicket`. DTX is the ONLY
+holder of the staging client-service credential. The *569# USSD service unlocks
+and blocks phones on `/device-security/ussd/**`; the call centre works it from
+`/admin/device-security/**`.
+
+- **The PIN never reaches DTX.** It goes app → broker → staging only. A correct
+  OTP moves a phone to PENDING_PIN; it becomes TRUSTED only when the broker
+  reports a successful login for that ticket (`/device-security/broker/login-result`).
+  A PENDING_PIN phone keeps a 10-minute grace (`trust.pending-pin-grace`) so a
+  mistyped PIN costs a retry, not another SMS — staging's own lock-out stays the
+  authority on wrong PINs; a correct OTP followed by LOCKED blocks the DEVICE.
+- **The install id is never stored or returned raw.** It is the device identity
+  until a hardware id ships, so leaking a trusted phone's install id would let
+  anyone present it. Rows hold its SHA-256; every endpoint names a phone by the
+  opaque `publicId` (`deviceId`). Don't add the install id to any response.
+- **Keyed by MSISDN, not `users.id`**: most super-app customers have no users row
+  when DTX first sees them. `/auth/devices` resolves the number from the caller's
+  fleet session (the `/auth/exchange` token), never from the request.
+- **`/auth/devices` and `/auth/device/**` are filtered by `JwtFilter`** despite
+  living under `/auth` (the send-money precedent). The blanket `/auth` skip would
+  leave them anonymous and every call would 401. `DeviceSecurityFlowTest` drives
+  them with a REAL minted JWT for exactly this reason — injecting an
+  Authentication would hide the bug. `JwtFilterTest` pins the paths.
+- **Partner endpoints are edge-REACHABLE, key-authenticated.** `/device-security/**`
+  is permitAll in `SecurityConfig` and checked in the controller by
+  `PartnerKeyAuthorizer` (broker key ≠ USSD key); the gateway gives it an IP-keyed,
+  fail-safe route. It is NOT `/users/internal/**` — both callers live outside
+  the cluster. Keys are checked BEFORE bean validation (`RequestValidation`), so
+  an unauthenticated caller never gets field-level detail, and a switched-off
+  cell answers 404 before either.
+- **Transaction shape**: decide in one short transaction, then fetch staging's
+  token OUTSIDE it; an OTP send commits the new code, delivers, and reverts on
+  failure — a hung gateway must never hold a pooled connection. A refusal that
+  must still commit (a wrong OTP spends an attempt) is returned from the
+  transaction and thrown after. `DeviceOtpService.open` is
+  `noRollbackFor = OtpCeilingException` — without it the caught ceiling marked
+  the caller's transaction rollback-only and the VELOCITY block it placed died
+  with an `UnexpectedRollbackException`.
+- **Two logs, on purpose.** Every decision (incl. every ~15-min silent renewal)
+  goes to `device_security_events` (12 months, not chained — the audit chain's
+  head lock would serialise sign-ins). State changes a PERSON makes (support,
+  USSD) also go on the tamper-evident `audit_events` chain (`DEVICE_SECURITY_*`).
+- **Rollout is config** (`DEVICE_SECURITY_*`): off = 404; on with all
+  `ENFORCE_*` false = watch mode (log `evaluated_decision`, answer TOKEN); then
+  OTP, then BLOCKS, then BANS. A block/ban verdict whose family is not yet
+  enforced degrades to an OTP when OTP is. Staff/USSD actions are always enforced.
+- **Permissions**: `device-security:read` / `:manage` / `:fraud`. Lifting a
+  SHARED_DEVICE / CONFIRMED_FRAUD / SIM_SWAP / device-wide ban needs `:fraud` —
+  checked in the service too, so the call centre cannot undo the fraud desk on a
+  caller's say-so. Compose "Call Centre" / "Fraud Desk" roles at runtime.
+- **SMS copy**: the gateway rejects `*`, so SMS says "star 569 hash" and writes
+  times as `14.30`; WhatsApp gets `*569#`. `DeviceSecurityMessagesTest` asserts
+  every SMS template round-trips `SmsTextSanitizer` unchanged and every message
+  is one line with no link.
+
 ## Platform staff means one role set — use it
 
 `AuthenticatedCaller.PLATFORM_STAFF_ROLES` (`SUPER_ADMIN`, `PRODUCT_OFFICER`,

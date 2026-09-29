@@ -115,6 +115,69 @@ auth:
     # worth at most this long, and only once (jti replay guard).
     max-ttl-seconds: ${AUTH_FEDERATION_MAX_TTL_SECONDS:300}
 
+# DTX device security ("Device Registration, Fraud Detection and Sign-In Through
+# DTX", the InnBucks 2.0 app contract v2.1). DTX checks the super app's device
+# before staging's /auth/client-service and is the ONLY holder of that
+# credential. Off by default (every endpoint 404s). On with every enforce flag
+# false is WATCH MODE: all decisions are logged, everyone gets TOKEN. Roll out
+# per the contract's §14: otp, then blocks, then bans. Enabled with a blank
+# credential = 503 / 401 on the affected calls plus a HALF-PROVISIONED boot ERROR
+# (DeviceSecurityProvisioningCheck). Secrets belong in the host's gitignored
+# cell.<iso>.local.env, never in the committed cell file.
+device-security:
+  enabled: ${DEVICE_SECURITY_ENABLED:false}
+  # true on every cell that serves real customers: integrity "unavailable" is a
+  # risk signal there, and the fixed test OTP is refused whatever it says below.
+  production: ${DEVICE_SECURITY_PRODUCTION:true}
+  enforce:
+    otp: ${DEVICE_SECURITY_ENFORCE_OTP:false}
+    blocks: ${DEVICE_SECURITY_ENFORCE_BLOCKS:false}
+    bans: ${DEVICE_SECURITY_ENFORCE_BANS:false}
+  # x-api-key the broker presents (every app-facing and broker call), and the
+  # one the *569# USSD service presents. Distinct values: openssl rand -base64 48
+  broker-api-key: ${DEVICE_SECURITY_BROKER_API_KEY:}
+  ussd-api-key: ${DEVICE_SECURITY_USSD_API_KEY:}
+  # Quoted in support-only messages ("call InnBucks support on ..."). Blank = no number.
+  support-phone: ${DEVICE_SECURITY_SUPPORT_PHONE:}
+  staging:
+    base-url: ${DEVICE_SECURITY_STAGING_URL:https://staging.innbucks.co.zw}
+    api-key: ${DEVICE_SECURITY_STAGING_API_KEY:}
+    username: ${DEVICE_SECURITY_STAGING_USERNAME:}
+    password: ${DEVICE_SECURITY_STAGING_PASSWORD:}
+    connect-timeout-ms: ${DEVICE_SECURITY_STAGING_CONNECT_TIMEOUT_MS:3000}
+    read-timeout-ms: ${DEVICE_SECURITY_STAGING_READ_TIMEOUT_MS:15000}
+    fallback-token-ttl: ${DEVICE_SECURITY_STAGING_TOKEN_TTL:PT10M}
+  ticket:
+    # RSA PKCS#8 PEM (-----BEGIN PRIVATE KEY-----); \n-escaped is fine. The broker
+    # gets the public half from GET /device-security/broker/jwks.json.
+    private-key: ${DEVICE_SECURITY_TICKET_PRIVATE_KEY:}
+    key-id: ${DEVICE_SECURITY_TICKET_KEY_ID:dtx-ticket-1}
+    issuer: ${DEVICE_SECURITY_TICKET_ISSUER:innbucks-dtx}
+    audience: ${DEVICE_SECURITY_TICKET_AUDIENCE:innbucks-broker}
+    ttl: ${DEVICE_SECURITY_TICKET_TTL:PT2M}
+  otp:
+    per-number-hourly: ${DEVICE_SECURITY_OTP_PER_NUMBER_HOURLY:5}
+    per-number-daily: ${DEVICE_SECURITY_OTP_PER_NUMBER_DAILY:20}
+    per-device-hourly: ${DEVICE_SECURITY_OTP_PER_DEVICE_HOURLY:5}
+    per-device-daily: ${DEVICE_SECURITY_OTP_PER_DEVICE_DAILY:20}
+    per-ip-hourly: ${DEVICE_SECURITY_OTP_PER_IP_HOURLY:30}
+    default-channel: ${DEVICE_SECURITY_OTP_DEFAULT_CHANNEL:WHATSAPP}
+  # Staging only: allow-listed numbers get this fixed code and no message
+  # (contract §11, §14.1). Refused whenever production=true.
+  test-otp:
+    enabled: ${DEVICE_SECURITY_TEST_OTP_ENABLED:false}
+    code: ${DEVICE_SECURITY_TEST_OTP_CODE:}
+    numbers: ${DEVICE_SECURITY_TEST_OTP_NUMBERS:}
+  trust:
+    days: ${DEVICE_SECURITY_TRUST_DAYS:90}
+    fraud-flag-days: ${DEVICE_SECURITY_TRUST_FRAUD_FLAG_DAYS:30}
+    cooling: ${DEVICE_SECURITY_COOLING:PT24H}
+    pending-pin-grace: ${DEVICE_SECURITY_PENDING_PIN_GRACE:PT10M}
+    max-trusted-devices: ${DEVICE_SECURITY_MAX_TRUSTED_DEVICES:3}
+    max-customers-per-device: ${DEVICE_SECURITY_MAX_CUSTOMERS_PER_DEVICE:2}
+  risk:
+    block-score: ${DEVICE_SECURITY_RISK_BLOCK_SCORE:90}
+
 loyalty-service:
   base-url: http://loyalty-service
   connect-timeout-ms: ${LOYALTY_SERVICE_CONNECT_TIMEOUT_MS:2000}

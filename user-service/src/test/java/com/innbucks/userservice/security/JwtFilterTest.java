@@ -149,6 +149,23 @@ class JwtFilterTest {
     }
 
     @Test
+    void shouldNotFilter_processesTheDeviceSecurityCustomerPaths() {
+        // Your devices and the in-session step-up live under /auth but are
+        // @PreAuthorize(CUSTOMER): skipped, their token would never be read and
+        // every call would 401 as anonymous.
+        for (String path : new String[]{"/auth/devices", "/auth/devices/0f8d2c3a-5b6e-4f71-8a9b-0c1d2e3f4a5b",
+                "/auth/device/challenge", "/auth/device/challenge/verify"}) {
+            assertFalse(filter.shouldNotFilter(new MockHttpServletRequest("GET", path)), "expected filter for " + path);
+        }
+        // The broker's sign-in step stays on the blanket /auth skip, and the partner
+        // endpoints are skipped too: none of them carries a fleet session.
+        assertTrue(filter.shouldNotFilter(new MockHttpServletRequest("POST", "/auth/client-service")));
+        assertTrue(filter.shouldNotFilter(new MockHttpServletRequest("POST", "/device-security/ussd/devices/unlock")));
+        // ...but the call-centre console under /admin is a normal JWT surface.
+        assertFalse(filter.shouldNotFilter(new MockHttpServletRequest("GET", "/admin/device-security/devices")));
+    }
+
+    @Test
     void shouldNotFilter_returnsFalseForBusinessPaths() {
         MockHttpServletRequest req = new MockHttpServletRequest("GET", "/agents/me");
         assertFalse(filter.shouldNotFilter(req));

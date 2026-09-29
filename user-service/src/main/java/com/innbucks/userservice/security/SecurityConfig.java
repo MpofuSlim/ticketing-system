@@ -49,6 +49,16 @@ public class SecurityConfig {
                         // so it's only reachable pod-to-pod. Must precede the
                         // catch-all authenticated() rule below.
                         .requestMatchers("/users/internal/**").permitAll()
+                        // DTX device security's partner endpoints: the broker's
+                        // login results / ticket redemption and the *569# USSD
+                        // service. Authenticated by each partner's own x-api-key,
+                        // checked inside the controller (PartnerKeyAuthorizer) —
+                        // NOT a user JWT, so Spring Security must let them through
+                        // or every call 401s before the key is even read. Unlike
+                        // /users/internal/** these are edge-REACHABLE on purpose:
+                        // both callers live outside the cluster (gateway route
+                        // device-security-partner-route, IP-limited, fail-safe).
+                        .requestMatchers("/device-security/**").permitAll()
                         // Public auth endpoints
                         .requestMatchers("/auth/**").permitAll()
                         // Public cell-lookup (step 7 — the mobile app calls

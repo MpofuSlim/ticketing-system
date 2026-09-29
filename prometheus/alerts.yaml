@@ -260,6 +260,41 @@ groups:
           description: "{{ $value | humanize }} 401 responses/sec cluster-wide over 5m (sustained 10m). Baseline is near-zero once clients refresh correctly."
           runbook: "prometheus/slo.md#auth401spike"
 
+      # DTX device security (user-service). Fraud-desk signals: OTP velocity on
+      # one number (SMS bombing / someone working a number), a correct OTP
+      # followed by a PIN lock-out (SIM without PIN), and a code typed on a
+      # different phone than asked for it (OTP relay). Each is a person to look
+      # at, not a rate to tolerate.
+      - alert: DeviceSecurityFraudDeskSignal
+        expr: sum by (kind) (increase(device_security_fraud_desk_alerts_total[15m])) > 0
+        for: 0m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "DTX fraud-desk signal: {{ $labels.kind }}"
+          description: "{{ $value | humanize }} {{ $labels.kind }} signal(s) in 15m. Look the number up in /admin/device-security (events show which phone and why)."
+          runbook: "prometheus/slo.md#devicesecurityfrauddesksignal"
+
+      - alert: DeviceSecurityPartnerKeyProbing
+        expr: sum by (partner) (rate(device_security_partner_key_failures_total[5m])) > 0
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "Wrong/missing x-api-key on DTX {{ $labels.partner }} endpoints"
+          description: "{{ $value | humanize }}/sec rejected {{ $labels.partner }} calls over 5m. Expected 0 — a rotated key not rolled out, or someone probing /device-security/**."
+          runbook: "prometheus/slo.md#devicesecuritypartnerkeyprobing"
+
+      - alert: DeviceSecurityNotificationsUndelivered
+        expr: sum(increase(device_security_notifications_total{outcome="undelivered"}[15m])) > 5
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "DTX security messages failing on SMS AND WhatsApp"
+          description: "{{ $value | humanize }} block/unlock/new-phone messages undelivered on every channel in 15m — customers are not being told what happened to their phones."
+          runbook: "prometheus/slo.md#devicesecuritynotificationsundelivered"
+
   # A09 — payment money-movement integrity. Fed by payment-service PaymentMetrics
   # (payment.* counters, exported as payment_*_total). These were emitted but had
   # NO alert rule, so a customer-debited-without-tickets drip or a settlement
