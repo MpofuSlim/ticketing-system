@@ -14,6 +14,17 @@ package com.innbucks.common.email;
  * falls back to a CSS-drawn four-dot roundel + wordmark so the header is still
  * branded without a hosted asset.
  *
+ * <p><b>The header row is brand NAVY, not white.</b> The hosted logo asset
+ * ({@code NOTIFY_LOGO_URL}) is the dark-ground lockup: its "InnBucks" and
+ * "MicroBank Limited" lettering is WHITE, so on the white header this shell
+ * used to draw, only the four coloured dots were visible (seen in Gmail on
+ * staging, 2026-09-29). The navy is set twice on the header cell — as the
+ * {@code bgcolor} attribute, which Outlook honours, and as an inline
+ * {@code background}, which Gmail honours — and is the same {@link #NAVY} the
+ * footer uses, so the shell reads as navy top and bottom around a white body.
+ * The CSS fallback lockup sits on that same navy, so its lettering is light
+ * to match the hosted asset.
+ *
  * <p>The caller's body is plain text (the same string the plain-text path
  * sends), so it is HTML-escaped here and its blank-line-separated paragraphs
  * become {@code <p>} blocks — no HTML is ever taken from the message content,
@@ -26,6 +37,8 @@ public final class BrandedEmailRenderer {
 
     private static final String NAVY = "#0c2545";
     private static final String TEAL = "#17a98c";
+    /** Light slate that reads on {@link #NAVY} — the footer's body text colour. */
+    private static final String ON_NAVY_MUTED = "#b9c6d8";
 
     /**
      * Render {@code plainBody} into a full branded HTML document.
@@ -52,8 +65,10 @@ public final class BrandedEmailRenderer {
             + "<table role=\"presentation\" width=\"600\" cellpadding=\"0\" cellspacing=\"0\" "
             +   "style=\"width:600px;max-width:100%;background:#ffffff;border-radius:12px;overflow:hidden;"
             +   "font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;\">"
-            // header
-            + "<tr><td style=\"padding:26px 34px 20px;\">" + logo + "</td></tr>"
+            // header — navy, because the hosted logo's lettering is white (see
+            // class javadoc). bgcolor for Outlook, inline background for Gmail.
+            + "<tr><td bgcolor=\"" + NAVY + "\" style=\"background:" + NAVY + ";padding:26px 34px 20px;\">"
+            +   logo + "</td></tr>"
             // accent bar
             + "<tr><td style=\"font-size:0;line-height:0;\">"
             +   "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\"><tr>"
@@ -85,10 +100,11 @@ public final class BrandedEmailRenderer {
 
     /**
      * CSS/table-drawn brand lockup — the four-dot roundel + "InnBucks" wordmark
-     * + "MicroBank Limited" tagline, all in solid brand colours. Used as the
-     * header when no hosted logo URL is set: it renders crisply in every client
-     * with no image to load (or wash out), unlike a hosted PNG that can proxy
-     * faintly on a white ground.
+     * + "MicroBank Limited" tagline. Used as the header when no hosted logo URL
+     * is set: it renders crisply in every client with no image to load (or wash
+     * out). It sits on the NAVY header cell, so — like the hosted dark-ground
+     * logo — the wordmark is white and the tagline a light slate; the four dots
+     * keep their brand colours.
      */
     private static String cssRoundel() {
         String dot = "width:16px;height:16px;border-radius:50%;font-size:0;line-height:0;"
@@ -102,9 +118,9 @@ public final class BrandedEmailRenderer {
             +   "<tr><td style=\"background:" + TEAL + ";" + dot + "\"></td>"
             +     "<td style=\"background:#e11b22;" + dot + "\"></td></tr></table></td>"
             + "<td style=\"vertical-align:middle;" + face + "\">"
-            +   "<div style=\"font-size:28px;font-weight:800;color:" + NAVY + ";letter-spacing:-.5px;"
+            +   "<div style=\"font-size:28px;font-weight:800;color:#ffffff;letter-spacing:-.5px;"
             +     "line-height:1;\">InnBucks</div>"
-            +   "<div style=\"font-size:12px;font-weight:600;color:#5d6b7b;letter-spacing:.4px;"
+            +   "<div style=\"font-size:12px;font-weight:600;color:" + ON_NAVY_MUTED + ";letter-spacing:.4px;"
             +     "margin-top:3px;\">MicroBank Limited</div>"
             + "</td></tr></table>";
     }

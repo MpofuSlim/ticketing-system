@@ -8,7 +8,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  * Pins the branded-HTML rendering contract (see {@link BrandedEmailRenderer}):
  * the body is HTML-escaped (no injection), blank-line paragraphs become
  * {@code <p>}, the footer + disclaimer are always present, and the logo is an
- * {@code <img>} when a URL is given / a CSS fallback when it isn't.
+ * {@code <img>} when a URL is given / a CSS fallback when it isn't — either
+ * way inside a NAVY header cell, because the hosted logo's lettering is white.
  */
 class BrandedEmailRendererTest {
 
@@ -65,5 +66,66 @@ class BrandedEmailRendererTest {
         String html = BrandedEmailRenderer.render("s", "b", "https://x/a\"onerror=alert(1)");
         assertThat(html).doesNotContain("\"onerror=alert(1)");
         assertThat(html).contains("&quot;onerror=alert(1)");
+    }
+
+    // The hosted logo (NOTIFY_LOGO_URL) is the dark-ground lockup with WHITE
+    // lettering; on a white header only its four dots were visible (Gmail,
+    // staging, 2026-09-29). The header cell must therefore be navy — bgcolor
+    // for Outlook, inline background for Gmail — and wrap the logo.
+    private static final String NAVY_HEADER_TD =
+            "<td bgcolor=\"#0c2545\" style=\"background:#0c2545;padding:26px 34px 20px;\">";
+
+    @Test
+    void headerCellIsNavy_bothAsBgcolorAndInlineStyle_andWrapsTheHostedLogo() {
+        String html = BrandedEmailRenderer.render("s", "body", "https://cdn.innbucks.co.zw/logo.png");
+
+        int header = html.indexOf(NAVY_HEADER_TD);
+        int img = html.indexOf("<img src=\"https://cdn.innbucks.co.zw/logo.png\"");
+        assertThat(header).as("navy header cell present").isGreaterThanOrEqualTo(0);
+        assertThat(img).as("logo img present").isGreaterThan(header);
+        // The logo is the header cell's content — nothing closes the cell before it.
+        assertThat(html.substring(header + NAVY_HEADER_TD.length(), img)).doesNotContain("</td>");
+        // The body stays white and the footer stays navy.
+        assertThat(html).contains("background:#ffffff;border-radius:12px");
+        assertThat(html).contains("<td style=\"background:#0c2545;padding:26px 34px;");
+    }
+
+    @Test
+    void headerCellIsNavy_alsoForTheCssFallbackLockup() {
+        String html = BrandedEmailRenderer.render("s", "body", null);
+
+        int header = html.indexOf(NAVY_HEADER_TD);
+        int wordmark = html.indexOf(">InnBucks<");
+        assertThat(header).isGreaterThanOrEqualTo(0);
+        assertThat(wordmark).isGreaterThan(header);
+    }
+
+    @Test
+    void fallbackLockupLetteringIsLightSoItReadsOnNavy() {
+        String html = BrandedEmailRenderer.render("s", "body", "  ");
+
+        // Wordmark white, tagline the footer's light slate — never the old navy
+        // / grey that assumed a white header.
+        assertThat(html).containsPattern("color:#ffffff;[^\"]*\">InnBucks</div>");
+        assertThat(html).containsPattern("color:#b9c6d8;[^\"]*\">MicroBank Limited</div>");
+        assertThat(html).doesNotContain("color:#5d6b7b");
+        assertThat(html).doesNotContainPattern("color:#0c2545;[^\"]*\">InnBucks</div>");
+        // The four brand dots keep their colours.
+        assertThat(html).contains("background:#f5b71c;width:16px");
+        assertThat(html).contains("background:#7a2e8f;width:16px");
+        assertThat(html).contains("background:#17a98c;width:16px");
+        assertThat(html).contains("background:#e11b22;width:16px");
+    }
+
+    @Test
+    void logoUrlIsStillAttributeEscapedInsideTheNavyHeader() {
+        String html = BrandedEmailRenderer.render("s", "b", "https://x/a\"onerror=alert(1)&b=<c>");
+
+        int header = html.indexOf(NAVY_HEADER_TD);
+        int img = html.indexOf("<img src=\"https://x/a&quot;onerror=alert(1)&amp;b=&lt;c&gt;\"");
+        assertThat(header).isGreaterThanOrEqualTo(0);
+        assertThat(img).isGreaterThan(header);
+        assertThat(html).doesNotContain("\"onerror=alert(1)");
+        assertThat(html).doesNotContain("<c>");
     }
 }
