@@ -174,18 +174,23 @@ twice. Check each one first:
       - **booking-service** and **seat-service**: jobs carry ShedLock.
       - **event-service** `EventExpiryScheduler`: no lock, but documented
         idempotent (`WHERE active = true`) and safe on multiple replicas.
-      - **payment-service — NOT safe to replicate yet.** `PaymentResolutionJob`
-        (the code / card / EcoCash pollers and the reconciliation scan),
-        `SettlementReconciliationJob` and `AuditIntegrityVerifier` have no
-        lock. Two replicas would poll the same payment rows concurrently, and
-        the ZimSwitch final-status read is one-shot and throttled upstream to
-        two per checkout per minute (CLAUDE.md, card rail) — a race there can
-        consume the one read and park the row. Add ShedLock (or per-row claim
-        with `SKIP LOCKED`) **before** payment-service goes past 1 replica.
-      - **user-service**: the jobs in `TokenRevocationService`, `OtpService`,
-        `RefreshTokenService`, `LoginRateLimiter` and `AuditIntegrityVerifier`
-        have no lock; they look like housekeeping sweeps, but confirm each is
-        idempotent before replicating.
+      - **payment-service**: every job carries ShedLock, over a
+        `KeepAliveLockProvider` so a slow pass (100 rows at a 20s InnBucks read
+        timeout) keeps its lock for as long as it runs, while a crashed holder
+        frees it within 2 minutes. `SchedulerLockTest` fails the build on a new
+        `@Scheduled` method without a lock, a duplicate lock name, or a
+        `lockAtMostFor` under 30s (the keep-alive refuses those at runtime).
+        The customer's instant check and the EcoCash notify webhook still run
+        the same resolvers concurrently with the poller — that was already
+        true on one replica, and the per-row money rules handle it.
+      - **user-service**: no locks, deliberately. `TokenRevocationService`,
+        `OtpService`, `RefreshTokenService` and `DeviceSecurityRetentionJob`
+        are bulk `DELETE … WHERE <expiry> < now` sweeps — a second replica's
+        run deletes nothing. `LoginRateLimiter.purgeFallbackWindows` clears
+        each pod's OWN in-memory map and must run on every replica; locking
+        it would let the other replicas' maps grow unbounded during a Redis
+        outage. `AuditIntegrityVerifier` is read-only (a double run is a
+        doubled log line).
       Any new `@Scheduled` job needs a lock or a documented reason it is
       idempotent.
 - [ ] **In-memory state**: user-service's `LoginRateLimiter` falls back to an

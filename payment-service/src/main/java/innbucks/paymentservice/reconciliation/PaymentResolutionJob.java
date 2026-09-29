@@ -13,6 +13,7 @@ import innbucks.paymentservice.service.CodePaymentResolutionService;
 import innbucks.paymentservice.service.PaymentRecordService;
 import innbucks.paymentservice.service.ZimswitchCardPaymentService;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -76,6 +77,11 @@ import java.util.List;
  *       loudest page this service owns (refund via the Merchant API is manual:
  *       real-time reversals are NOT available for code-based transactions).</li>
  * </ul>
+ *
+ * <p>Each sweep carries a {@code @SchedulerLock}, so with several replicas only
+ * one runs it per tick (see {@code SchedulerLockConfig}). {@code lockAtLeastFor}
+ * is about half the interval: it stops a second replica starting the same
+ * sweep the moment the first finishes, without slowing the cadence.
  */
 @Component
 @Slf4j
@@ -136,6 +142,7 @@ public class PaymentResolutionJob {
      * app and this poll is what turns that into a confirmed booking.
      */
     @Scheduled(fixedDelayString = "${payment-service.code-poll.interval:PT20S}")
+    @SchedulerLock(name = "PaymentResolutionJob.pollCodePayments", lockAtMostFor = "PT2M", lockAtLeastFor = "PT10S")
     public void pollCodePayments() {
         // Rail-scoped: card rows are resolved by pollCardPayments below —
         // their open state is opaque to the InnBucks code-inquiry endpoint.
@@ -223,6 +230,7 @@ public class PaymentResolutionJob {
      * answer that frees the slot.
      */
     @Scheduled(fixedDelayString = "${payment-service.card-poll.interval:PT30S}")
+    @SchedulerLock(name = "PaymentResolutionJob.pollCardPayments", lockAtMostFor = "PT2M", lockAtLeastFor = "PT15S")
     public void pollCardPayments() {
         List<Payment> open = paymentRepository.findByStatusAndPaymentRail(
                 PaymentStatus.TOKEN_ISSUED, PaymentRail.ZIMSWITCH_CARD, PageRequest.of(0, batchSize));
@@ -259,6 +267,7 @@ public class PaymentResolutionJob {
      * row.
      */
     @Scheduled(fixedDelayString = "${payment-service.ecocash-poll.interval:PT20S}")
+    @SchedulerLock(name = "PaymentResolutionJob.pollEcocashPayments", lockAtMostFor = "PT2M", lockAtLeastFor = "PT10S")
     public void pollEcocashPayments() {
         List<Payment> open = paymentRepository.findByStatusAndPaymentRail(
                 PaymentStatus.TOKEN_ISSUED, PaymentRail.ECOCASH, PageRequest.of(0, batchSize));
@@ -284,6 +293,7 @@ public class PaymentResolutionJob {
 
     /** Code-payment ledger sweeps (stale watch + unconfirmed self-heal). */
     @Scheduled(fixedDelayString = "${payment-service.reconciliation.scan-interval:PT1M}")
+    @SchedulerLock(name = "PaymentResolutionJob.scanPayments", lockAtMostFor = "PT2M", lockAtLeastFor = "PT30S")
     public void scanPayments() {
         sweepStalePayments();
         retryUnconfirmedOrders();

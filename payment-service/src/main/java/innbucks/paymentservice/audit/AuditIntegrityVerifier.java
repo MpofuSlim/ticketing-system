@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -70,6 +71,9 @@ public class AuditIntegrityVerifier {
                          int chainOk, int chainBroken) {}
 
     @Scheduled(cron = "${audit.integrity.verify-cron:0 30 3 * * *}")
+    // Read-only, so a double run is only wasted work and a doubled log line —
+    // locked anyway so every scheduled job in this service has one rule.
+    @SchedulerLock(name = "AuditIntegrityVerifier.scheduledVerify", lockAtMostFor = "PT10M", lockAtLeastFor = "PT5M")
     public void scheduledVerify() {
         Result r = verifyRecent();
         if (r.tampered() > 0 || r.chainBroken() > 0) {
