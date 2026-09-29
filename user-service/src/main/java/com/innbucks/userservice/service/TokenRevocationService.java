@@ -1,8 +1,11 @@
 package com.innbucks.userservice.service;
 
 import com.innbucks.userservice.entity.RevokedToken;
+import com.innbucks.userservice.exception.AccountInactiveException;
+import com.innbucks.userservice.exception.SessionSupersededException;
 import com.innbucks.userservice.repository.RevokedTokenRepository;
 import com.innbucks.userservice.repository.UserRepository;
+import com.innbucks.userservice.repository.UserTokenState;
 import com.innbucks.userservice.security.JwtUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -80,17 +83,54 @@ public class TokenRevocationService {
     }
 
     /**
-     * True when the JWT's {@code tokenVersion} claim matches the user's
-     * current {@code users.token_version} value (single-active-session
-     * gate). Returns false on a stale token AND on a token whose subject
-     * doesn't resolve to a user — the latter is treated as "session ended"
-     * rather than "user not found" so the filter response stays uniform.
+     * What an access token's session looks like against the LIVE account.
+     * {@link #INACTIVE} wins over {@link #SUPERSEDED}: a deactivation also bumps
+     * the version, and "deactivated" is the answer the client can act on.
+     */
+    public enum SessionState {
+        /** Version matches and the account is active — the request may proceed. */
+        CURRENT,
+        /** A later bump (login elsewhere, logout, role/password change) ended this session, or the subject is gone. */
+        SUPERSEDED,
+        /** The account has been deactivated. */
+        INACTIVE
+    }
+
+    /**
+     * One projected read of {@code (token_version, active)} for the token's
+     * subject — JwtFilter's per-request gate. Before {@code active} was read
+     * here, a deactivated account's access token kept working in user-service
+     * for the rest of its TTL whenever the version had not been bumped.
+     * An unresolvable subject is {@link SessionState#SUPERSEDED}, so the filter
+     * response stays uniform ("session ended") rather than "user not found".
      */
     @Transactional(readOnly = true)
-    public boolean isTokenVersionCurrent(String subject, long tokenVersion) {
-        if (subject == null || subject.isBlank()) return false;
-        Optional<Long> current = userRepository.findTokenVersionBySubject(subject);
-        return current.map(v -> v == tokenVersion).orElse(false);
+    public SessionState sessionState(String subject, long tokenVersion) {
+        if (subject == null || subject.isBlank()) return SessionState.SUPERSEDED;
+        Optional<UserTokenState> state = userRepository.findTokenStateBySubject(subject);
+        if (state.isEmpty()) return SessionState.SUPERSEDED;
+        if (!state.get().isActive()) return SessionState.INACTIVE;
+        return state.get().version() == tokenVersion ? SessionState.CURRENT : SessionState.SUPERSEDED;
+    }
+
+    /**
+     * {@link #sessionState} as a gate, for the {@code /auth/**} handlers that
+     * authenticate the caller from their own Bearer header
+     * ({@code /auth/change-password}, {@code /auth/mfa/disable}). {@code JwtFilter}
+     * skips {@code /auth}, so without this a deactivated account's unexpired
+     * access token — or one a newer login had superseded — could still change
+     * the password or switch MFA off.
+     *
+     * @throws AccountInactiveException    (401 {@code account_inactive}) for a deactivated account
+     * @throws SessionSupersededException  (401 {@code session_superseded}) for an ended session
+     */
+    @Transactional(readOnly = true)
+    public void requireCurrentSession(String subject, long tokenVersion) {
+        switch (sessionState(subject, tokenVersion)) {
+            case INACTIVE -> throw new AccountInactiveException();
+            case SUPERSEDED -> throw new SessionSupersededException();
+            case CURRENT -> { }
+        }
     }
 
     @Scheduled(fixedDelayString = "PT1H")

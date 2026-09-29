@@ -126,6 +126,8 @@ class MerchantIdClaimTest {
                 mock(AuditService.class));
         ReflectionTestUtils.setField(svc, "maxFailedLoginAttempts", 5);
         ReflectionTestUtils.setField(svc, "lockoutDurationMinutes", 15);
+        ReflectionTestUtils.setField(svc, "tokenVersionBumper",
+                new com.innbucks.userservice.testsupport.InMemoryTokenVersionBumper(null));
 
         LoginRequestDTO req = new LoginRequestDTO();
         req.setIdentifier(user.getEmail());

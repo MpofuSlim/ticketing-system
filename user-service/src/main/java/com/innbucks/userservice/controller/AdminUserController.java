@@ -48,23 +48,84 @@ public class AdminUserController {
     @PreAuthorize("hasAuthority('" + PermissionCatalog.USERS_MFA_RESET + "')")
     @Operation(summary = "Reset a user's 2FA (lost authenticator + lost backup codes)",
             description = """
-                    Wipes the target's TOTP secret + all unused backup codes, leaving them in the
-                    "must enrol" state. On their next login the policy will redirect them to
-                    `/auth/mfa/enroll/start`. SUPER_ADMIN only — this is the recovery path when both
-                    the authenticator app and the printed backup codes are lost.
+                    Wipes the target's TOTP secret + all unused backup codes and every "remember this
+                    device" trust, leaving them in the "must enrol" state. On their next login the policy
+                    will redirect them to `/auth/mfa/enroll/start`. This is the recovery path when both the
+                    authenticator app and the printed backup codes are lost.
+
+                    **Takes effect immediately:** the account's session epoch (`tokenVersion`) is bumped,
+                    so every access token it holds — in user-service at once, and in every other service as
+                    soon as the shared Redis entry is published after commit — and any half-finished 2FA
+                    sign-in are ended. Refresh tokens survive, but a refresh by an account whose role
+                    requires 2FA is refused (`403 mfa_enrollment_required`) until they re-enrol.
+
+                    **Audit:** recorded as `MFA_ADMIN_RESET` with the calling administrator as the actor and
+                    the user as the target. The optional `note` (at most 500 characters) is stored on that
+                    row only — it is never sent to the user. The body may be omitted entirely.
+
+                    **Refuses a SUPER_ADMIN target** with `403 target_not_manageable` (`reason:
+                    super_admin`): the platform-owner account is managed only through
+                    `BOOTSTRAP_ADMIN_PASSWORD`.
+
+                    Requires the `users:mfa:reset` permission.
                     """)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
-                    description = "MFA reset",
+                    description = "MFA reset; the user's sessions have ended",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     { "code": "200 OK", "message": "MFA reset", "data": null }
                                     """))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Caller is not SUPER_ADMIN"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "User not found")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "The note is longer than 500 characters",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Note too long", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "Validation failed",
+                                      "data": { "note": "note must be 500 characters or fewer" }
+                                    }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
+                    description = "Missing, expired or ended bearer token",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "401 UNAUTHORIZED", "message": "Invalid token", "data": null }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "The caller lacks `users:mfa:reset`, or the target is the SUPER_ADMIN account",
+                    content = @Content(mediaType = "application/json",
+                            examples = {
+                                    @ExampleObject(name = "Target is SUPER_ADMIN", value = """
+                                            {
+                                              "code": "403 FORBIDDEN",
+                                              "message": "You can't change this account.",
+                                              "data": { "errorCode": "target_not_manageable", "reason": "super_admin" }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Missing permission", value = """
+                                            { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
+                                            """)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "No user with that id",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "404 NOT_FOUND", "message": "User not found: 999", "data": null }
+                                    """)))
     })
-    public ResponseEntity<ApiResult<Void>> resetMfa(@PathVariable Long id) {
-        mfaService.adminReset(id);
+    public ResponseEntity<ApiResult<Void>> resetMfa(
+            @PathVariable Long id,
+            @Valid @RequestBody(required = false) com.innbucks.userservice.dto.AdminMfaResetRequestDTO request,
+            Authentication authentication,
+            HttpServletRequest httpRequest) {
+        // Authentication is non-null here — @PreAuthorize already enforced the
+        // permission. Its name (the admin's email) is the audit ACTOR; the user
+        // being reset is the TARGET.
+        AuditContext auditContext = new AuditContext(clientIp(httpRequest),
+                httpRequest.getHeader("User-Agent"));
+        mfaService.adminReset(id, authentication.getName(),
+                request == null ? null : request.getNote(), auditContext);
         return ResponseEntity.ok(ApiResult.ok("MFA reset", null));
     }
 
@@ -295,42 +356,91 @@ public class AdminUserController {
                     "login, and the password is delivered to the user over email/SMS/WhatsApp. Subsequent " +
                     "deactivate/reactivate toggles never reset the password. If the delivery fails, re-issue " +
                     "the password via `POST /admin/users/{id}/reset-temp-password`.\n\n" +
+                    "**Deactivating (`active: false`) signs the user out everywhere, at once.** In the same " +
+                    "transaction the account's session epoch (`tokenVersion`) is bumped, every refresh token " +
+                    "is revoked, \"remember this device\" trust is cleared and any live password-reset code " +
+                    "is deleted (and no new one can be requested while the account is off). Their next request " +
+                    "to user-service is refused with `401 ACCOUNT_DEACTIVATED`; " +
+                    "other services refuse the old access token as soon as the new version is published to " +
+                    "the shared Redis after commit (if that publish fails they fall back to the access-token " +
+                    "expiry). `/auth/refresh`, `/auth/organization-context` and any half-finished 2FA sign-in " +
+                    "answer `401 account_inactive`. Re-activating does not restore any of it: it bumps the " +
+                    "session epoch again and revokes any refresh token and device trust still on file (an " +
+                    "account deactivated before deactivation ended sessions may still hold some), so the user " +
+                    "signs in again from a clean slate.\n\n" +
                     "**Refuses to act on a SUPER_ADMIN target** — disabling the platform-owner account would " +
                     "lock the platform out of itself, and reactivating it requires a SUPER_ADMIN, so no caller " +
                     "is ever permitted to toggle it. The SUPER_ADMIN's `active` state is fixed at seed time " +
                     "(BOOTSTRAP_ADMIN_PASSWORD).\n\n" +
-                    "Requires **SUPER_ADMIN** role."
+                    "Requires the `users:activation:write` permission."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200", description = "Active status updated",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(value = """
-                                    {
-                                      "code": "200 OK",
-                                      "message": "User activated",
-                                      "data": {
-                                        "id": 1,
-                                        "firstName": "Alice",
-                                        "lastName": "Moyo",
-                                        "email": "alice@innbucks.co.zw",
-                                        "roles": ["EVENT_ORGANIZER"],
-                                        "active": true,
-                                        "createdAt": "2026-01-15T10:30:00"
-                                      }
-                                    }
-                                    """))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "User not found"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
-                    description = "Caller is not a SUPER_ADMIN, OR target IS a SUPER_ADMIN (always protected)",
+                            examples = {
+                                    @ExampleObject(name = "Activated", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "User activated",
+                                              "data": {
+                                                "id": 1,
+                                                "firstName": "Alice",
+                                                "lastName": "Moyo",
+                                                "email": "alice@innbucks.co.zw",
+                                                "roles": ["EVENT_ORGANIZER"],
+                                                "active": true,
+                                                "createdAt": "2026-01-15T12:30:00+02:00"
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Deactivated (signed out everywhere)", value = """
+                                            {
+                                              "code": "200 OK",
+                                              "message": "User deactivated",
+                                              "data": {
+                                                "id": 1,
+                                                "firstName": "Alice",
+                                                "lastName": "Moyo",
+                                                "email": "alice@innbucks.co.zw",
+                                                "roles": ["EVENT_ORGANIZER"],
+                                                "active": false,
+                                                "createdAt": "2026-01-15T12:30:00+02:00"
+                                              }
+                                            }
+                                            """)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
+                    description = "`active` missing from the body",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(value = """
                                     {
-                                      "code": "403 FORBIDDEN",
-                                      "message": "The SUPER_ADMIN account cannot be activated or deactivated.",
-                                      "data": null
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "Validation failed",
+                                      "data": { "active": "active field is required" }
                                     }
-                                    """)))
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
+                    description = "No user with that id",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "404 NOT_FOUND", "message": "User not found: 999", "data": null }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "Caller lacks `users:activation:write`, OR the target IS a SUPER_ADMIN (always protected)",
+                    content = @Content(mediaType = "application/json",
+                            examples = {
+                                    @ExampleObject(name = "Target is SUPER_ADMIN", value = """
+                                            {
+                                              "code": "403 FORBIDDEN",
+                                              "message": "The SUPER_ADMIN account cannot be activated or deactivated.",
+                                              "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Missing permission", value = """
+                                            { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
+                                            """)
+                            }))
     })
     public ResponseEntity<ApiResult<UserResponseDTO>> updateActiveStatus(
             @PathVariable Long id,

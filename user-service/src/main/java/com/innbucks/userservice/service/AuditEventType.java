@@ -57,6 +57,14 @@ public enum AuditEventType {
      * that gained privilege without ever passing a second factor.
      */
     AUTH_REFRESH_MFA_REQUIRED,
+    /**
+     * /auth/refresh or /auth/organization-context refused because the account
+     * has been DEACTIVATED. Every refresh family the account still held is
+     * revoked as a side effect. Not theft — the token is genuine — so it is
+     * recorded here rather than as {@link #AUTH_REFRESH_REUSE_DETECTED}, which
+     * would page the token-reuse alert for every deactivated user.
+     */
+    AUTH_REFRESH_ACCOUNT_INACTIVE,
     /** /auth/logout — explicit user-initiated session termination. */
     AUTH_LOGOUT,
     /** /auth/change-password completed. */

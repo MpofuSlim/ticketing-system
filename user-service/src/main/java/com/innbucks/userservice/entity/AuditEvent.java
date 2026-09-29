@@ -34,13 +34,20 @@ public class AuditEvent {
     @Column(name = "event_type", nullable = false, length = 64)
     private String eventType;
 
-    @Column(name = "actor_id", length = 64)
+    /**
+     * The acting principal — an administrator's EMAIL on every admin action, so
+     * sized for the longest legal address (RFC 5321: 254). At the old 64 a
+     * longer address made the insert fail, and the audit write is fail-open, so
+     * the row was silently lost. Widened by V42; keep the two in step.
+     */
+    @Column(name = "actor_id", length = 254)
     private String actorId;
 
     @Column(name = "actor_type", length = 32)
     private String actorType;
 
-    @Column(name = "target_id", length = 64)
+    /** Same width as {@link #actorId} (V42): some rows record an offered identifier here. */
+    @Column(name = "target_id", length = 254)
     private String targetId;
 
     @Column(name = "target_type", length = 32)

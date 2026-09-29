@@ -46,7 +46,8 @@ class PasswordResetServiceTest {
         eventPublisher = mock(org.springframework.context.ApplicationEventPublisher.class);
         tokenVersionPublisher = mock(TokenVersionPublisher.class);
         service = new PasswordResetService(otpService, userRepository, passwordEncoder,
-                refreshTokenRepository, auditService, eventPublisher, tokenVersionPublisher);
+                refreshTokenRepository, auditService, eventPublisher,
+                new com.innbucks.userservice.testsupport.InMemoryTokenVersionBumper(tokenVersionPublisher));
     }
 
     // ---- requestReset --------------------------------------------------------
@@ -83,6 +84,26 @@ class PasswordResetServiceTest {
     }
 
     @Test
+    void requestReset_deactivatedAccount_isSilentNoOp() {
+        // A reset set while the account is off would be live the moment it was
+        // reactivated — a password planted for later. Same 200 as an unknown
+        // identifier, so the account's state is not revealed.
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Optional.of(
+                User.builder().id(7L).email(EMAIL).approved(true).active(false).build()));
+        service.requestReset(null, EMAIL);
+        verifyNoInteractions(otpService);
+    }
+
+    @Test
+    void requestReset_registrationPendingApproval_isUnchanged() {
+        // Inactive but never approved is not "deactivated": the flow is as before.
+        when(userRepository.findByPhoneNumber(PHONE)).thenReturn(Optional.of(
+                User.builder().id(8L).phoneNumber(PHONE).approved(false).active(false).build()));
+        service.requestReset(PHONE, null);
+        verify(otpService).sendPasswordResetOtpToPhone(PHONE);
+    }
+
+    @Test
     void requestReset_neitherProvided_throws() {
         assertThatThrownBy(() -> service.requestReset(null, "  "))
                 .isInstanceOf(AuthService.PasswordChangeException.class)
@@ -114,6 +135,25 @@ class PasswordResetServiceTest {
     }
 
     @Test
+    void resetPassword_deactivatedAccount_isTheWrongCodeAnswer_andChangesNothing() {
+        // Closes the race where a code sent just as the account was deactivated
+        // survives the deactivation's code sweep: refused before the code is
+        // looked at, with the same message as a wrong code.
+        when(userRepository.findByPhoneNumber(PHONE)).thenReturn(Optional.of(
+                User.builder().id(9L).phoneNumber(PHONE).approved(true).active(false).build()));
+        when(otpService.verifyPasswordResetOtp(PHONE, "123456")).thenReturn(true);
+
+        assertThatThrownBy(() -> service.resetPassword(PHONE, null, "123456",
+                "newpass12", "newpass12", AuditContext.none()))
+                .isInstanceOf(AuthService.PasswordChangeException.class)
+                .hasMessage("Invalid or expired code");
+        verify(otpService, never()).verifyPasswordResetOtp(any(), any());
+        verify(userRepository, never()).save(any());
+        verify(refreshTokenRepository, never()).revokeAllForUser(any(), any());
+        verifyNoInteractions(tokenVersionPublisher, auditService, eventPublisher);
+    }
+
+    @Test
     void resetPassword_phonePath_success_setsPassword_revokes_bumps_unlocks() {
         UUID uuid = UUID.randomUUID();
         User user = User.builder()
@@ -137,7 +177,7 @@ class PasswordResetServiceTest {
                 any(), any(), any(), any(), any(), any());
         // A07 / CWE-613: the bumped version is mirrored to the shared Redis under
         // the SAME userUuid the JWT carries, so downstream honours the reset.
-        verify(tokenVersionPublisher).publish(uuid, 3L);
+        verify(tokenVersionPublisher).publishAfterCommit(uuid, 3L);
     }
 
     @Test

@@ -35,6 +35,7 @@ class MfaServiceTest {
     private UserRepository userRepository;
     private MfaBackupCodeRepository backupCodeRepository;
     private PasswordEncoder passwordEncoder;
+    private TokenVersionBumper tokenVersionBumper;
     private MfaService mfaService;
 
     @BeforeEach
@@ -46,7 +47,8 @@ class MfaServiceTest {
         MfaProperties props = new MfaProperties();
         props.setIssuer("InnBucks");
         props.setBackupCodeCount(10);
-        mfaService = new MfaService(userRepository, backupCodeRepository, passwordEncoder, props);
+        tokenVersionBumper = mock(TokenVersionBumper.class);
+        mfaService = new MfaService(userRepository, backupCodeRepository, passwordEncoder, props, tokenVersionBumper);
         when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 
@@ -218,11 +220,13 @@ class MfaServiceTest {
         u.setMfaSecret("ABC");
         when(userRepository.findById(13L)).thenReturn(Optional.of(u));
 
-        mfaService.adminReset(13L);
+        mfaService.adminReset(13L, "admin@innbucks.co.zw", null, AuditContext.none());
 
         assertThat(u.isMfaEnabled()).isFalse();
         assertThat(u.getMfaSecret()).isNull();
         verify(backupCodeRepository).deleteAllForUser(13L);
+        // …and ends the account's sessions and pending 2FA challenges at once.
+        verify(tokenVersionBumper).bump(u);
     }
 
     // ---- device-trust revocation on disable / reset -------------------------
@@ -255,8 +259,40 @@ class MfaServiceTest {
         u.setMfaSecret("ABC");
         when(userRepository.findById(21L)).thenReturn(Optional.of(u));
 
-        mfaService.adminReset(21L);
+        mfaService.adminReset(21L, "admin@innbucks.co.zw", null, AuditContext.none());
 
         verify(trust).clearTrustForUser(21L);
+    }
+
+    // ---- admin-reset note: cleaned in the service, whoever calls it ---------
+
+    @Test
+    void cleanNote_stripsMarkup_andControlAndBidiCharacters() {
+        // The note lands in audit metadata the console renders: no markup, no
+        // forged extra lines, no right-to-left override reordering what a
+        // reviewer reads.
+        assertThat(MfaService.cleanNote("  <b>Lost phone</b>\nverified\u0000 by\u202E callback  "))
+                .isEqualTo("Lost phone verified by callback");
+    }
+
+    @Test
+    void cleanNote_anEntityCannotSmuggleAnInvisibleCharacterBackIn() {
+        assertThat(MfaService.cleanNote("Lost &#x202E;phone &amp; SIM")).isEqualTo("Lost phone & SIM");
+    }
+
+    @Test
+    void cleanNote_isCappedAt500_evenWhenTheEdgeCheckIsBypassed() {
+        String capped = MfaService.cleanNote("x".repeat(700));
+        assertThat(capped).hasSize(MfaService.MAX_NOTE_LENGTH);
+        // A surrogate pair straddling the cut is dropped whole, never halved.
+        String emoji = "\uD83D\uDE00";
+        String straddling = MfaService.cleanNote("y".repeat(499) + emoji + "z");
+        assertThat(straddling).isEqualTo("y".repeat(499));
+    }
+
+    @Test
+    void cleanNote_blankAfterCleaning_isNoNote() {
+        assertThat(MfaService.cleanNote(null)).isNull();
+        assertThat(MfaService.cleanNote(" <i></i>\t\n ")).isNull();
     }
 }

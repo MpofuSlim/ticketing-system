@@ -246,6 +246,22 @@ groups:
           description: "{{ $value | humanize }} audit chain links failed to recompute in the last hour. A row was deleted/reordered/truncated from the append-only log, or the audit.hmac-secret rotated without re-chaining. Investigate against the row_hmac (content) signal and the DB write log."
           runbook: "prometheus/slo.md#auditchainbroken"
 
+      # A07 / CWE-613: user-service could not mirror a token_version bump into
+      # the shared Redis. Postgres (and user-service's own JwtFilter) already
+      # hold the new version, but every OTHER service fails open on a Redis
+      # miss — so until the publish lands, a deactivated, demoted or
+      # password-reset account's existing access tokens keep working downstream
+      # for up to the access-token TTL. Expected 0.
+      - alert: TokenVersionPublishFailing
+        expr: increase(user_tokenver_publish_failed_total[15m]) > 0
+        for: 0m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "user-service can't publish session revocations to Redis"
+          description: "{{ $value | humanize }} token-version publishes failed in 15m. Downstream services keep accepting ended sessions until each access token expires."
+          runbook: "prometheus/slo.md#tokenversionpublishfailing"
+
       # A09: sustained invalid-token (401) volume at the services (the gateway
       # doesn't verify JWTs — downstream services do, so 401s originate there).
       # A steady rate is a broken client or a token-brute-force sweep; the

@@ -73,8 +73,18 @@ class UserAdminServiceTest {
                         .toList();
             });
         }
+        final TokenVersionBumper bumper =
+                new com.innbucks.userservice.testsupport.InMemoryTokenVersionBumper(tokenVersions);
+        // Deactivation ends every session through the real revoker; its
+        // collaborators are mocked so the tests can prove each step ran.
+        final com.innbucks.userservice.repository.RefreshTokenRepository refreshTokens =
+                mock(com.innbucks.userservice.repository.RefreshTokenRepository.class);
+        final DeviceTrustService deviceTrust = mock(DeviceTrustService.class);
+        final com.innbucks.userservice.repository.OtpRepository otps =
+                mock(com.innbucks.userservice.repository.OtpRepository.class);
+        final AccountSessionRevoker revoker = new AccountSessionRevoker(bumper, refreshTokens, deviceTrust, otps);
         final UserAdminService service = new UserAdminService(
-                userRepo, encoder, audit, publisher, tenantProfiles, tokenVersions, roleRepo);
+                userRepo, encoder, audit, publisher, tenantProfiles, bumper, revoker, roleRepo);
     }
 
     /** Capture the plaintext handed to encode() — it's the generated temp password. */
@@ -212,6 +222,54 @@ class UserAdminServiceTest {
         verifyNoInteractions(f.publisher);
     }
 
+    @Test
+    void reactivation_sweepsLeftoverSessions_beforeTheAccountComesBack() {
+        // An account deactivated before deactivation ended sessions still holds
+        // live refresh families and device trust; switching it back on used to
+        // hand them straight back. The sweep bumps, revokes and clears first.
+        Fixture f = new Fixture();
+        UUID uuid = UUID.randomUUID();
+        User user = User.builder().id(12L).userUuid(uuid).email("tariro.moyo@innbucks.co.zw")
+                .phoneNumber("+263771234567").password("user-chosen")
+                .active(false).approved(true).tokenVersion(3L).build();
+        when(f.userRepo.findById(12L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(f.refreshTokens.revokeAllForUser(eq(12L), any())).thenReturn(2);
+
+        User result = f.service.setActive(12L, true, "admin@innbucks.co.zw", AuditContext.none());
+
+        assertTrue(result.isActive());
+        assertEquals(4L, result.getTokenVersion());
+        verify(f.tokenVersions).publishAfterCommit(uuid, 4L);
+        verify(f.refreshTokens).revokeAllForUser(eq(12L), any());
+        verify(f.deviceTrust).clearTrustForUser(12L);
+        verify(f.otps).deleteByPhoneNumber("tariro.moyo@innbucks.co.zw");
+        verify(f.audit).recordSuccess(
+                eq(AuditEventType.USER_ACTIVATED),
+                eq("admin@innbucks.co.zw"), eq(AuditService.ACTOR_TYPE_USER),
+                eq("12"), eq(AuditService.TARGET_TYPE_USER),
+                argThat(metadata -> Long.valueOf(4L).equals(metadata.get("tokenVersion"))
+                        && Integer.valueOf(2).equals(metadata.get("refreshTokensRevoked"))),
+                eq(AuditContext.none()));
+    }
+
+    @Test
+    void firstApproval_sweepsNothing() {
+        // A never-approved account has never held a session; the sweep is for
+        // REactivation only.
+        Fixture f = new Fixture();
+        User user = User.builder().id(13L).email("new@acme.co.zw").password("placeholder")
+                .active(false).approved(false).tokenVersion(0L).build();
+        when(f.userRepo.findById(13L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(f.encoder.encode(anyString())).thenReturn("encoded-temp");
+
+        f.service.setActive(13L, true);
+
+        assertEquals(0L, user.getTokenVersion());
+        verifyNoInteractions(f.refreshTokens, f.deviceTrust, f.tokenVersions);
+    }
+
     // -- markCredentialDelivered (callback for the listener) ------------------
 
     @Test
@@ -298,6 +356,51 @@ class UserAdminServiceTest {
         verify(f.encoder, never()).encode(any());
         // Deactivation publishes the async notice; the password is untouched.
         verify(f.publisher).publishEvent(any(UserDeactivatedEvent.class));
+    }
+
+    @Test
+    void deactivation_endsEverySession_atOnce() {
+        // PUT /admin/users/{id}/active false used to flip `active` and nothing
+        // else: the person kept every access token and could refresh forever.
+        Fixture f = new Fixture();
+        UUID uuid = UUID.randomUUID();
+        User user = User.builder().id(31L).userUuid(uuid).email("tariro.moyo@innbucks.co.zw")
+                .phoneNumber("+263771234567").active(true).approved(true).password("pw")
+                .tokenVersion(6L).build();
+        when(f.userRepo.findById(31L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(f.refreshTokens.revokeAllForUser(eq(31L), any())).thenReturn(2);
+        when(f.otps.deleteByPhoneNumber("tariro.moyo@innbucks.co.zw")).thenReturn(1);
+
+        User result = f.service.setActive(31L, false, "admin@innbucks.co.zw", AuditContext.none());
+
+        assertFalse(result.isActive());
+        assertEquals(7L, result.getTokenVersion(), "every access token and pending mfaToken dies");
+        verify(f.tokenVersions).publishAfterCommit(uuid, 7L);
+        verify(f.refreshTokens).revokeAllForUser(eq(31L), any());
+        verify(f.deviceTrust).clearTrustForUser(31L);
+        verify(f.otps).deleteByPhoneNumber("tariro.moyo@innbucks.co.zw");
+        verify(f.otps).deleteByPhoneNumber("+263771234567");
+        verify(f.audit).recordSuccess(
+                eq(AuditEventType.USER_DEACTIVATED),
+                eq("admin@innbucks.co.zw"), eq(AuditService.ACTOR_TYPE_USER),
+                eq("31"), eq(AuditService.TARGET_TYPE_USER),
+                argThat(metadata -> Long.valueOf(7L).equals(metadata.get("tokenVersion"))
+                        && Integer.valueOf(2).equals(metadata.get("refreshTokensRevoked"))
+                        && Integer.valueOf(1).equals(metadata.get("resetCodesDeleted"))),
+                eq(AuditContext.none()));
+    }
+
+    @Test
+    void deactivation_ofAnAlreadyInactiveAccount_isANoOp() {
+        Fixture f = new Fixture();
+        User user = User.builder().id(33L).active(false).approved(true).password("pw").tokenVersion(4L).build();
+        when(f.userRepo.findById(33L)).thenReturn(Optional.of(user));
+
+        f.service.setActive(33L, false, "admin@innbucks.co.zw", AuditContext.none());
+
+        assertEquals(4L, user.getTokenVersion());
+        verifyNoInteractions(f.refreshTokens, f.deviceTrust, f.otps, f.tokenVersions);
     }
 
     // -- Reset temp password (admin recovery) --------------------------------
@@ -528,7 +631,7 @@ class UserAdminServiceTest {
         // Without the bump the demoted user's existing JWT would keep asserting
         // MERCHANT_ADMIN until it expired.
         assertEquals(8, result.getTokenVersion());
-        verify(f.tokenVersions).publish(user.getUserUuid(), 8L);
+        verify(f.tokenVersions).publishAfterCommit(user.getUserUuid(), 8L);
     }
 
     @Test

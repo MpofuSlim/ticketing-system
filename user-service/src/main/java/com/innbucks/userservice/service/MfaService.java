@@ -62,6 +62,12 @@ public class MfaService {
     private final MfaBackupCodeRepository backupCodeRepository;
     private final PasswordEncoder passwordEncoder;
     private final MfaProperties properties;
+    /**
+     * Ends the target's sessions on an admin reset. Required: an admin reset
+     * that leaves the old sessions — and any half-finished MFA challenge —
+     * standing is exactly the gap it exists to close.
+     */
+    private final TokenVersionBumper tokenVersionBumper;
 
     // Trusted-device collaborator. Field-injected (optional) rather than a
     // constructor param so the existing MfaServiceTest construction site doesn't
@@ -110,11 +116,13 @@ public class MfaService {
     public MfaService(UserRepository userRepository,
                       MfaBackupCodeRepository backupCodeRepository,
                       PasswordEncoder passwordEncoder,
-                      MfaProperties properties) {
+                      MfaProperties properties,
+                      TokenVersionBumper tokenVersionBumper) {
         this.userRepository = userRepository;
         this.backupCodeRepository = backupCodeRepository;
         this.passwordEncoder = passwordEncoder;
         this.properties = properties;
+        this.tokenVersionBumper = tokenVersionBumper;
         DefaultCodeVerifier verifier = new DefaultCodeVerifier(codeGenerator, new SystemTimeProvider());
         verifier.setAllowedTimePeriodDiscrepancy(TIME_DISCREPANCY_STEPS);
         this.codeVerifier = verifier;
@@ -256,18 +264,102 @@ public class MfaService {
         audit(AuditEventType.MFA_DISABLED, userId);
     }
 
-    /** SUPER_ADMIN recovery: wipe a user's MFA so they can re-enrol on next login. */
+    /**
+     * Administrator recovery ({@code POST /admin/users/{id}/mfa/reset}): wipe a
+     * user's second factor so they re-enrol on their next sign-in.
+     *
+     * <ul>
+     *   <li><b>Refuses a SUPER_ADMIN target</b> — 403 {@code target_not_manageable}
+     *       ({@code reason: super_admin}). Stripping the platform owner's second
+     *       factor is a takeover step, not a recovery; that account is managed
+     *       through {@code BOOTSTRAP_ADMIN_PASSWORD} only, the same rule
+     *       {@code setActive} and {@code setRoles} already apply.</li>
+     *   <li><b>Takes effect immediately.</b> Bumps {@code tokenVersion}
+     *       (published after commit), so every access token AND every pending
+     *       mfaToken the account holds dies now: "must re-enrol on next login"
+     *       used to be dodgeable by any session that was already open.</li>
+     *   <li><b>Audited as the ADMIN acting on the USER.</b> The row used to name
+     *       the target as its own actor, so the log could not say who reset
+     *       whose 2FA. {@code note} is the operator's optional reason.</li>
+     * </ul>
+     *
+     * @param adminEmail the acting administrator ({@code authentication.getName()})
+     * @param note       optional free text; cleaned by {@link #cleanNote} here, whatever the
+     *                   caller validated
+     */
     @Transactional
-    public void adminReset(Long userId) {
+    public void adminReset(Long userId, String adminEmail, String note, AuditContext auditContext) {
         User user = loadUser(userId);
+        if (user.hasRole(User.Role.SUPER_ADMIN)) {
+            log.warn("MFA admin reset refused on SUPER_ADMIN target userId={} by={}",
+                    userId, adminEmail == null ? "system" : adminEmail);
+            throw com.innbucks.userservice.exception.StaffPolicyException.targetNotManageable("super_admin");
+        }
         user.setMfaEnabled(false);
         user.setMfaSecret(null);
         userRepository.save(user);
         backupCodeRepository.deleteAllForUser(userId);
         clearDeviceTrust(userId);
-        log.info("MFA reset by admin userId={}", userId);
+        long newVersion = tokenVersionBumper.bump(user);
+        log.info("MFA reset by admin userId={} by={} newTokenVersion={}",
+                userId, adminEmail == null ? "system" : adminEmail, newVersion);
         publishSecurityAlert(user, com.innbucks.userservice.event.AccountSecurityAlertEvent.Type.MFA_DISABLED);
-        audit(AuditEventType.MFA_ADMIN_RESET, userId);
+        if (auditService != null) {
+            java.util.Map<String, Object> metadata = new java.util.LinkedHashMap<>();
+            metadata.put("targetEmail", user.getEmail() == null ? "" : user.getEmail());
+            metadata.put("tokenVersion", newVersion);
+            String cleanNote = cleanNote(note);
+            if (cleanNote != null) {
+                metadata.put("note", cleanNote);
+            }
+            auditService.recordSuccess(AuditEventType.MFA_ADMIN_RESET,
+                    adminEmail == null ? "system" : adminEmail,
+                    adminEmail == null ? AuditService.ACTOR_TYPE_SYSTEM : AuditService.ACTOR_TYPE_USER,
+                    String.valueOf(userId), AuditService.TARGET_TYPE_USER,
+                    metadata,
+                    auditContext == null ? AuditContext.none() : auditContext);
+        }
+    }
+
+    /** Longest admin-reset note kept — the same bound {@code AdminMfaResetRequestDTO} validates at the edge. */
+    static final int MAX_NOTE_LENGTH = 500;
+
+    /**
+     * The admin-reset note as it may be written into the audit metadata: markup
+     * stripped ({@link com.innbucks.userservice.util.HtmlSanitizer#stripAll} — the
+     * audit log is rendered in the console), control and invisible formatting
+     * characters (line breaks, NUL, bidi overrides) replaced by spaces so a note
+     * cannot forge extra lines in a log view or reorder what a reviewer reads,
+     * trimmed, and capped at {@link #MAX_NOTE_LENGTH}. The HTTP edge already
+     * refuses an over-long note with a 400; this is the service's own bound, for
+     * every other caller. Blank after cleaning means no note.
+     */
+    static String cleanNote(String note) {
+        if (note == null) {
+            return null;
+        }
+        // Before AND after the markup strip: before, because the HTML parser
+        // rewrites some control characters rather than dropping them; after,
+        // because decoding an entity (&#x202E;) can produce one.
+        String cleaned = invisiblesToSpace(com.innbucks.userservice.util.HtmlSanitizer.stripAll(
+                invisiblesToSpace(note)))
+                .replaceAll(" {2,}", " ")
+                .strip();
+        if (cleaned.isEmpty()) {
+            return null;
+        }
+        if (cleaned.length() > MAX_NOTE_LENGTH) {
+            int end = MAX_NOTE_LENGTH;
+            if (Character.isHighSurrogate(cleaned.charAt(end - 1))) {
+                end--; // never cut a character in half
+            }
+            cleaned = cleaned.substring(0, end).strip();
+        }
+        return cleaned;
+    }
+
+    private static String invisiblesToSpace(String text) {
+        return text.replaceAll("[\\p{Cc}\\p{Cf}]+", " ");
     }
 
     /**

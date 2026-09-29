@@ -14,8 +14,19 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.UUID;
 
+/*
+ * @DynamicUpdate: an entity save writes only the columns that changed. Without
+ * it Hibernate rewrote EVERY column from the snapshot the entity was loaded
+ * with, so any writer holding a stale copy (loaded before a concurrent change
+ * committed) silently put the old values back — a password reset or an admin
+ * edit racing a deactivation wrote active = true straight back, reviving the
+ * account the deactivation had just switched off. token_version is protected
+ * separately (updatable = false, below); this closes the same hole for every
+ * other column.
+ */
 @Entity
 @Table(name = "users")
+@org.hibernate.annotations.DynamicUpdate
 @EntityListeners(AuditingEntityListener.class)
 @Data
 @NoArgsConstructor
@@ -184,7 +195,17 @@ public class User {
     // so a second login on any device immediately invalidates the first
     // device's tokens inside user-service (and within 15 min everywhere
     // else, once the access token's natural TTL elapses).
-    @Column(name = "token_version", nullable = false)
+    //
+    // updatable = false, deliberately: the column is ONLY ever advanced by the
+    // atomic `UPDATE ... SET token_version = token_version + 1 ... RETURNING`
+    // statements in UserRepository, issued through
+    // com.innbucks.userservice.service.TokenVersionBumper. The old
+    // read-modify-write (setTokenVersion(v + 1) then save) lost bumps when two
+    // writers raced, and a stale save wrote the pre-deactivation version
+    // straight back, reviving the sessions the deactivation had just ended.
+    // With the column excluded from entity UPDATEs, no save can move it at all.
+    // TokenVersionBumpSitesTest fails on any other writer in src/main.
+    @Column(name = "token_version", nullable = false, updatable = false)
     @Builder.Default
     private long tokenVersion = 0;
 

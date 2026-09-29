@@ -115,8 +115,20 @@ public class JwtFilter extends OncePerRequestFilter {
             // is a distinct error code from INVALID_TOKEN / TOKEN_REVOKED so
             // the FE can decide whether to redirect to login vs offer a
             // refresh.
+            //
+            // The same single read also carries users.active, so a DEACTIVATED
+            // account is refused on its very next request — not merely once the
+            // access token expires. ACCOUNT_DEACTIVATED is its own code so the FE
+            // can say why instead of offering a refresh that will also be refused.
             long claimedVersion = jwtUtil.extractTokenVersion(token);
-            if (!tokenRevocationService.isTokenVersionCurrent(email, claimedVersion)) {
+            TokenRevocationService.SessionState session =
+                    tokenRevocationService.sessionState(email, claimedVersion);
+            if (session == TokenRevocationService.SessionState.INACTIVE) {
+                writeUnauthorized(response, "ACCOUNT_DEACTIVATED",
+                        "This account has been deactivated");
+                return;
+            }
+            if (session != TokenRevocationService.SessionState.CURRENT) {
                 writeUnauthorized(response, "SESSION_SUPERSEDED",
                         "This session has been ended by a newer login");
                 return;

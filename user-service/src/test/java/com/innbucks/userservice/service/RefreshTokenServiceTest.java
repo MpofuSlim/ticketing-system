@@ -239,4 +239,89 @@ class RefreshTokenServiceTest {
         RefreshTokenService.Rotation r = service.rotate(first, "any-device-id");
         assertNotNull(r.refreshToken());
     }
+
+    // ---- deactivated accounts (1a) -----------------------------------------
+
+    private void stubRevokeAllForUser() {
+        when(repo.revokeAllForUser(any(Long.class), any(Instant.class))).thenAnswer(inv -> {
+            Long userId = inv.getArgument(0);
+            Instant now = inv.getArgument(1);
+            int n = 0;
+            for (RefreshToken row : store.values()) {
+                if (userId.equals(row.getUserId()) && row.getRevokedAt() == null) {
+                    row.setRevokedAt(now);
+                    n++;
+                }
+            }
+            return n;
+        });
+    }
+
+    @Test
+    void rotate_refusesADeactivatedAccount_401_andRevokesEverythingItHolds() {
+        // /auth/refresh never read `active`: a deactivated person could refresh
+        // into fresh sessions for the life of the chain.
+        User alice = aliceWithId(40L);
+        String first = service.issueNewFamily(alice, "dev-1");
+        String other = service.issueNewFamily(alice, "dev-2");
+        stubRevokeAllForUser();
+        alice.setActive(false);
+        int rowsBefore = store.size();
+
+        assertThrows(com.innbucks.userservice.exception.AccountInactiveException.class,
+                () -> service.rotate(first, "dev-1"));
+
+        // No successor minted, and EVERY family the account held is now dead —
+        // including the one on the other device that never tried to refresh.
+        assertEquals(rowsBefore, store.size());
+        assertTrue(store.values().stream().allMatch(r -> r.getRevokedAt() != null));
+        assertThrows(com.innbucks.userservice.exception.AccountInactiveException.class,
+                () -> service.rotate(other, "dev-2"));
+    }
+
+    @Test
+    void rotate_deactivatedCheckRunsBEFOREReplayDetection_soItIsNeverReportedAsTheft() {
+        // Deactivation revokes every family, so the next refresh presents a
+        // revoked row. Checked after replay detection it would read as "reuse
+        // detected" — a false theft signal, the token-reuse alert, and a 400 —
+        // instead of the 401 account_inactive the client can act on.
+        User alice = aliceWithId(41L);
+        String first = service.issueNewFamily(alice, null);
+        stubRevokeAllForUser();
+        store.values().forEach(r -> r.setRevokedAt(Instant.now()));   // what the deactivation did
+        alice.setActive(false);
+
+        assertThrows(com.innbucks.userservice.exception.AccountInactiveException.class,
+                () -> service.rotate(first, null));
+        verify(repo, never()).revokeFamily(any(UUID.class), any(Instant.class));
+    }
+
+    @Test
+    void rotateInto_organizationSwitch_refusesADeactivatedAccount_too() {
+        // /auth/organization-context authenticates with the refresh token and
+        // rotates it, so it must refuse exactly as /auth/refresh does.
+        User alice = aliceWithId(42L);
+        String first = service.issueNewFamily(alice, null);
+        stubRevokeAllForUser();
+        alice.setActive(false);
+
+        assertThrows(com.innbucks.userservice.exception.AccountInactiveException.class,
+                () -> service.rotateInto(first, null, UUID.randomUUID()));
+        assertTrue(store.values().stream().allMatch(r -> r.getRevokedAt() != null));
+    }
+
+    @Test
+    void theRevocationOnRefusalCommits_despiteTheThrow() throws Exception {
+        // Without noRollbackFor, Spring would roll back the revocation the
+        // refusal performs, and a pre-deactivation family would stay live.
+        for (String name : List.of("rotate", "rotateInto")) {
+            java.lang.reflect.Method m = java.util.Arrays.stream(RefreshTokenService.class.getMethods())
+                    .filter(x -> x.getName().equals(name)).findFirst().orElseThrow();
+            org.springframework.transaction.annotation.Transactional tx =
+                    m.getAnnotation(org.springframework.transaction.annotation.Transactional.class);
+            assertNotNull(tx, name);
+            assertTrue(List.of(tx.noRollbackFor()).contains(
+                    com.innbucks.userservice.exception.AccountInactiveException.class), name);
+        }
+    }
 }
