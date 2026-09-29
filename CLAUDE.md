@@ -1073,7 +1073,12 @@ called-out reason, not a silent revert.**
   Lombok work on any JDK; `<release>` (not `-source`/`-target`) makes bytecode
   genuinely target-compatible. If you DO want to adopt a newer JDK, move
   `ci.yml`'s `java-version` and `<java.version>` in the same PR as the base
-  images, so tests run on what production runs.
+  images, so tests run on what production runs. **It recurred** (#621-#626:
+  six images moved 21 -> 24, a non-LTS JDK past end of support whose frozen
+  Alpine 3.22 base failed the Trivy gate on 27 OS CVEs; reverted in #630), so
+  `dependabot.yml` now **ignores `eclipse-temurin` semver-major bumps** on
+  every Docker entry. Remove that ignore in the same PR that moves the JDK —
+  and move to an LTS.
 - **`.trivyignore` is a governed waiver list** — every entry needs an owner +
   reason + review-date comment (rules are in the file). Prefer fixing/upgrading
   over waiving; the root `pom.xml` carries the CVE version-overrides.
