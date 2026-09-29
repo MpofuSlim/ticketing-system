@@ -2,7 +2,7 @@
 # Build from repo root:
 #     docker build -f seat-service/Dockerfile -t ticketing-seat-service .
 
-FROM eclipse-temurin:24-jdk-alpine AS builder
+FROM eclipse-temurin:21-jdk-alpine AS builder
 WORKDIR /workspace
 
 COPY .mvn .mvn
@@ -25,7 +25,7 @@ COPY seat-service/src seat-service/src
 RUN ./mvnw -B -pl seat-service -am -DskipTests package spring-boot:repackage \
     && cp seat-service/target/seat-service-*.jar /workspace/app.jar
 
-FROM eclipse-temurin:24-jre-alpine AS runtime
+FROM eclipse-temurin:21-jre-alpine AS runtime
 # Refresh the apk index, then force each security-relevant package to a PINNED
 # MINIMUM version. The floor is what makes this work: a bare `apk upgrade <pkg>`
 # is a constant RUN string, so buildx replays the CACHED layer and the upgrade
