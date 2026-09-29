@@ -2,7 +2,7 @@
 # Build from repo root:
 #     docker build -f api-gateway/Dockerfile -t ticketing-api-gateway .
 
-FROM eclipse-temurin:21-jdk-alpine AS builder
+FROM eclipse-temurin:24-jdk-alpine AS builder
 WORKDIR /workspace
 
 COPY .mvn .mvn
@@ -25,7 +25,7 @@ COPY api-gateway/src api-gateway/src
 RUN ./mvnw -B -pl api-gateway -am -DskipTests package spring-boot:repackage \
     && cp api-gateway/target/api-gateway-*.jar /workspace/app.jar
 
-FROM eclipse-temurin:21-jre-alpine AS runtime
+FROM eclipse-temurin:24-jre-alpine AS runtime
 # Refresh the apk index, then force each security-relevant package to a PINNED
 # MINIMUM version. The floor is what makes this work: a bare `apk upgrade <pkg>`
 # is a constant RUN string, so buildx replays the CACHED layer and the upgrade

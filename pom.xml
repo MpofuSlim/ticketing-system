@@ -83,7 +83,7 @@
              httpclient5 declares both artifacts explicitly rather than via a
              BOM, so both are pinned below. Drop on the next Boot/httpclient5
              upgrade once the transitive version reaches 5.4.3. -->
-        <httpcore5.version>5.4.3</httpcore5.version>
+        <httpcore5.version>5.4.4</httpcore5.version>
         <spring.cloud.version>2025.1.3</spring.cloud.version>
         <springdoc.version>3.1.1</springdoc.version>
         <testcontainers.version>1.21.3</testcontainers.version>
@@ -102,7 +102,7 @@
              OTel tracer so issues deep-link to Tempo/Jaeger traces, and the
              logback appender auto-promotes ERROR-level log events to Sentry
              with the active MDC (traceId/spanId/correlationId) attached. -->
-        <sentry.version>8.57.0</sentry.version>
+        <sentry.version>8.58.0</sentry.version>
         <!-- Jsoup: allowlist HTML sanitization for user-supplied free text
              (OWASP A03 / stored-XSS defense). Standalone jar, no transitive
              deps, JDK 21 compatible. Used on write paths in event/loyalty/user
