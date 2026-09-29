@@ -46,7 +46,8 @@ class PasswordResetServiceTest {
         eventPublisher = mock(org.springframework.context.ApplicationEventPublisher.class);
         tokenVersionPublisher = mock(TokenVersionPublisher.class);
         service = new PasswordResetService(otpService, userRepository, passwordEncoder,
-                refreshTokenRepository, auditService, eventPublisher, tokenVersionPublisher);
+                refreshTokenRepository, auditService, eventPublisher,
+                new com.innbucks.userservice.testsupport.InMemoryTokenVersionBumper(tokenVersionPublisher));
     }
 
     // ---- requestReset --------------------------------------------------------
@@ -137,7 +138,7 @@ class PasswordResetServiceTest {
                 any(), any(), any(), any(), any(), any());
         // A07 / CWE-613: the bumped version is mirrored to the shared Redis under
         // the SAME userUuid the JWT carries, so downstream honours the reset.
-        verify(tokenVersionPublisher).publish(uuid, 3L);
+        verify(tokenVersionPublisher).publishAfterCommit(uuid, 3L);
     }
 
     @Test

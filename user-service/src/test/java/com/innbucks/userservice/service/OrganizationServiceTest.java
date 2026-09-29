@@ -44,6 +44,7 @@ class OrganizationServiceTest {
     private UserRepository userRepo;
     private AuditService audit;
     private TokenVersionPublisher tokenVersions;
+    private TokenVersionBumper bumper;
     private OrganizationService service;
 
     private final Map<UUID, Organization> orgs = new HashMap<>();
@@ -59,6 +60,7 @@ class OrganizationServiceTest {
         userRepo = mock(UserRepository.class);
         audit = mock(AuditService.class);
         tokenVersions = mock(TokenVersionPublisher.class);
+        bumper = new com.innbucks.userservice.testsupport.InMemoryTokenVersionBumper(tokenVersions);
 
         when(orgRepo.save(any(Organization.class))).thenAnswer(i -> {
             Organization o = i.getArgument(0);
@@ -131,7 +133,7 @@ class OrganizationServiceTest {
                 .toList());
         when(userRepo.save(any(User.class))).thenAnswer(i -> i.getArgument(0));
 
-        service = new OrganizationService(orgRepo, memberRepo, productRepo, userRepo, audit, tokenVersions);
+        service = new OrganizationService(orgRepo, memberRepo, productRepo, userRepo, audit, bumper);
     }
 
     // ---- fixtures -------------------------------------------------------------
@@ -425,7 +427,7 @@ class OrganizationServiceTest {
 
             assertThat(roleOf(o, staff)).isEqualTo(OrganizationMember.Role.ADMIN);
             assertThat(staff.getTokenVersion()).isEqualTo(4L);
-            verify(tokenVersions).publish(staff.getUserUuid(), 4L);
+            verify(tokenVersions).publishAfterCommit(staff.getUserUuid(), 4L);
         }
 
         @Test
@@ -456,7 +458,7 @@ class OrganizationServiceTest {
             service.removeMember(admin, o.getId(), staff.getUserUuid());
 
             assertThat(roleOf(o, staff)).isNull();
-            verify(tokenVersions).publish(staff.getUserUuid(), 4L);
+            verify(tokenVersions).publishAfterCommit(staff.getUserUuid(), 4L);
         }
 
         @Test

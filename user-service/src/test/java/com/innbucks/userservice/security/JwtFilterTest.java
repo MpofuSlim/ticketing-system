@@ -32,7 +32,8 @@ class JwtFilterTest {
         // Default to "version is current" so tests that don't care about the
         // single-session gate don't have to stub it — the dedicated test
         // for SESSION_SUPERSEDED overrides this to false.
-        when(tokenRevocationService.isTokenVersionCurrent(anyString(), anyLong())).thenReturn(true);
+        when(tokenRevocationService.sessionState(anyString(), anyLong()))
+                .thenReturn(com.innbucks.userservice.service.TokenRevocationService.SessionState.CURRENT);
         // CellAffinityChecker no-op mock — these tests cover the auth / session
         // paths, not cell routing (CellAffinityCheckerTest does that). Default
         // doNothing() means every token looks like a local-cell token.
@@ -180,7 +181,8 @@ class JwtFilterTest {
         // would keep working in user-service after the customer logged in
         // on a new device.
         String token = jwtUtil.generateToken("u@example.com", "CUSTOMER", 2, false);
-        when(tokenRevocationService.isTokenVersionCurrent(anyString(), anyLong())).thenReturn(false);
+        when(tokenRevocationService.sessionState(anyString(), anyLong()))
+                .thenReturn(com.innbucks.userservice.service.TokenRevocationService.SessionState.SUPERSEDED);
 
         MockHttpServletRequest req = new MockHttpServletRequest("GET", "/agents/me");
         req.addHeader("Authorization", "Bearer " + token);
@@ -193,6 +195,29 @@ class JwtFilterTest {
         assertEquals(401, res.getStatus());
         assertTrue(res.getContentAsString().contains("SESSION_SUPERSEDED"),
                 "response must surface SESSION_SUPERSEDED so FE can distinguish from INVALID_TOKEN / TOKEN_REVOKED");
+        verify(chain, never()).doFilter(req, res);
+    }
+
+    @Test
+    void deactivatedAccount_returns401AccountDeactivated_onTheVeryNextRequest() throws Exception {
+        // Deactivation must bite at once, not when the access token expires:
+        // the same per-request read that checks the session epoch now carries
+        // users.active. Distinct code so the FE can say why rather than offer
+        // a refresh that will also be refused.
+        String token = jwtUtil.generateToken("u@example.com", "CUSTOMER", 2, false);
+        when(tokenRevocationService.sessionState(anyString(), anyLong()))
+                .thenReturn(com.innbucks.userservice.service.TokenRevocationService.SessionState.INACTIVE);
+
+        MockHttpServletRequest req = new MockHttpServletRequest("GET", "/agents/me");
+        req.addHeader("Authorization", "Bearer " + token);
+        MockHttpServletResponse res = new MockHttpServletResponse();
+        FilterChain chain = mock(FilterChain.class);
+
+        filter.doFilterInternal(req, res, chain);
+
+        assertNull(SecurityContextHolder.getContext().getAuthentication());
+        assertEquals(401, res.getStatus());
+        assertTrue(res.getContentAsString().contains("\"code\":\"ACCOUNT_DEACTIVATED\""));
         verify(chain, never()).doFilter(req, res);
     }
 

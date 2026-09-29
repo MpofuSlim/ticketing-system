@@ -94,25 +94,78 @@ public interface UserRepository extends JpaRepository<User, Long> {
     List<User> findByActiveAndAnyRole(@Param("active") boolean active, @Param("roles") Collection<String> roles);
 
     /**
-     * Project-only lookup for the token_version column. JwtFilter calls this
-     * on every authenticated request to validate the JWT's session epoch
-     * against the current DB value — fetching the column directly avoids
-     * loading the whole {@link User} entity (with its eager
-     * {@code roles} and {@code defaultServices} collections) just to read
-     * one number. Returns empty when the subject doesn't resolve to a user,
+     * Project-only lookup of {@code (token_version, active)} for a token
+     * subject. JwtFilter calls this on every authenticated request to validate
+     * the JWT's session epoch against the current DB value AND to refuse a
+     * deactivated account at once — not merely once its access token expires.
+     * Selecting the two columns directly avoids loading the whole {@link User}
+     * entity (with its eager {@code roles} and {@code defaultServices}
+     * collections) just to read them. Empty when the subject doesn't resolve,
      * which JwtFilter treats the same as a stale token.
      */
-    @Query("SELECT u.tokenVersion FROM User u WHERE u.email = :subject OR u.phoneNumber = :subject")
-    Optional<Long> findTokenVersionBySubject(@Param("subject") String subject);
+    @Query("SELECT new com.innbucks.userservice.repository.UserTokenState(u.tokenVersion, u.active) "
+            + "FROM User u WHERE u.email = :subject OR u.phoneNumber = :subject")
+    Optional<UserTokenState> findTokenStateBySubject(@Param("subject") String subject);
+
+    /** The same projection by primary key — the mfaToken's subject is the user id. */
+    @Query("SELECT new com.innbucks.userservice.repository.UserTokenState(u.tokenVersion, u.active) "
+            + "FROM User u WHERE u.id = :id")
+    Optional<UserTokenState> findTokenStateById(@Param("id") Long id);
+
+    // ------------------------------------------------------------------
+    // token_version writers. The ONLY statements in the codebase that move
+    // users.token_version (the entity column is updatable = false). Each is a
+    // single atomic `UPDATE ... RETURNING`, so two concurrent writers can never
+    // both read v and both write v+1: Postgres serialises them on the row lock
+    // and the second re-evaluates its WHERE against the first one's committed
+    // row. Call them through TokenVersionBumper, never directly — it keeps the
+    // in-memory entity in step and publishes the new value after commit.
+    //
+    // Not @Modifying: a native UPDATE ... RETURNING yields a result set, so it
+    // is executed as a single-result query. Each returns null when no row
+    // matched (unknown id, or the guard in the WHERE clause failed).
+    // ------------------------------------------------------------------
+
+    /** Unconditional bump. */
+    @Query(value = "UPDATE users SET token_version = token_version + 1 WHERE id = :id "
+            + "RETURNING token_version", nativeQuery = true)
+    Long incrementTokenVersion(@Param("id") Long id);
+
+    /**
+     * Bump only while the account is still active. The password step of a
+     * login uses this, so a login that races a deactivation either commits its
+     * bump FIRST (and the deactivation then bumps past it) or finds the
+     * committed {@code active = false} and matches nothing.
+     */
+    @Query(value = "UPDATE users SET token_version = token_version + 1 WHERE id = :id AND active = TRUE "
+            + "RETURNING token_version", nativeQuery = true)
+    Long incrementTokenVersionIfActive(@Param("id") Long id);
+
+    /**
+     * Compare-and-set bump: only when the version is still {@code expected} and
+     * the account still active. This is what SPENDS an mfaToken — of two
+     * concurrent verifies presenting the same token, exactly one matches.
+     */
+    @Query(value = "UPDATE users SET token_version = token_version + 1 "
+            + "WHERE id = :id AND token_version = :expected AND active = TRUE "
+            + "RETURNING token_version", nativeQuery = true)
+    Long incrementTokenVersionIfCurrent(@Param("id") Long id, @Param("expected") long expected);
+
+    /** Deactivate and bump in one statement — AccountSessionRevoker's first step. */
+    @Query(value = "UPDATE users SET active = FALSE, token_version = token_version + 1 WHERE id = :id "
+            + "RETURNING token_version", nativeQuery = true)
+    Long deactivateAndIncrementTokenVersion(@Param("id") Long id);
 
     /**
      * Stamp {@code credential_delivered_at} and nothing else.
      *
      * <p>Deliberately a targeted UPDATE rather than a
      * {@code findById} → setter → {@code save} round-trip. That round-trip is a
-     * read-modify-write, and {@link User} carries no {@code @DynamicUpdate}, so
-     * the {@code save} emits a full-column UPDATE built from whatever the entity
-     * was loaded with — {@code password}, {@code roles}, {@code active} and all.
+     * read-modify-write: before {@link User} gained {@code @DynamicUpdate} the
+     * {@code save} emitted a full-column UPDATE built from whatever the entity
+     * was loaded with — {@code password}, {@code roles}, {@code active} and all —
+     * and even now a stale snapshot of any column the round-trip touches would
+     * be written back.
      * Its only caller is {@code CredentialDeliveryListener}, which is
      * {@code @Async} + {@code AFTER_COMMIT}: it reads on a background thread
      * some time after the activation transaction committed, so any write to

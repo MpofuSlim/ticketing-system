@@ -194,6 +194,20 @@ public class GlobalExceptionHandler {
                 .body(ApiResult.of(HttpStatus.FORBIDDEN, ex.getMessage(), data));
     }
 
+    // A refresh, organization switch or MFA step for a DEACTIVATED account.
+    // 401, not 400: the credential itself is genuine, but it no longer admits
+    // anyone — the FE drops its stored tokens and goes to sign-in. Must sit
+    // above the RuntimeException catch-all, which would demote it to a vague
+    // 400 that invites a retry. Message is a typed constant — safe to passthrough.
+    @ExceptionHandler(AccountInactiveException.class)
+    public ResponseEntity<ApiResult<Map<String, String>>> handleAccountInactive(AccountInactiveException ex) {
+        log.info("Session refused — account is deactivated");
+        Map<String, String> data = new LinkedHashMap<>();
+        data.put("errorCode", "account_inactive");
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(ApiResult.of(HttpStatus.UNAUTHORIZED, ex.getMessage(), data));
+    }
+
     // Change-password validation failures. Without this handler every distinct
     // reason (wrong current password, same-as-old, expired token) collapsed into
     // the generic catch-all below ("We couldn't process your request") and the
@@ -248,6 +262,22 @@ public class GlobalExceptionHandler {
                 ex.getStatus().value(), ex.getErrorCode());
         Map<String, String> data = new LinkedHashMap<>();
         data.put("errorCode", ex.getErrorCode());
+        return ResponseEntity.status(ex.getStatus())
+                .body(ApiResult.of(ex.getStatus(), ex.getMessage(), data));
+    }
+
+    /**
+     * Refusals of an administrative action on an account (e.g. 403
+     * {@code target_not_manageable}). Same envelope as the organization
+     * refusals: a stable errorCode plus any extra detail such as {@code reason}.
+     */
+    @ExceptionHandler(StaffPolicyException.class)
+    public ResponseEntity<ApiResult<Map<String, Object>>> handleStaffPolicy(StaffPolicyException ex) {
+        log.info("Account administration refused status={} errorCode={} detail={}",
+                ex.getStatus().value(), ex.getErrorCode(), ex.getExtra());
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("errorCode", ex.getErrorCode());
+        data.putAll(ex.getExtra());
         return ResponseEntity.status(ex.getStatus())
                 .body(ApiResult.of(ex.getStatus(), ex.getMessage(), data));
     }

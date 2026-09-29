@@ -12,7 +12,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
@@ -47,7 +46,7 @@ import static org.mockito.Mockito.when;
  *   <li>Only an EVENT_ORGANIZER may manage team members.</li>
  *   <li>A team member is owned by exactly one organizer — the one whose
  *       JWT created them. Cross-organizer reads/writes return 404.</li>
- *   <li>Disable is soft (active=false + tokenVersion++ + refresh-token revoke),
+ *   <li>Disable is soft (active=false + tokenVersion++ + refresh-token revoke, via AccountSessionRevoker),
  *       never a DELETE — the audit FK on booking_items must never orphan.</li>
  *   <li>Enable / disable are idempotent.</li>
  * </ol>
@@ -64,11 +63,20 @@ class TeamMemberServiceTest {
     @Mock private PasswordEncoder passwordEncoder;
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private com.innbucks.userservice.security.TokenVersionPublisher tokenVersionPublisher;
+    @Mock private DeviceTrustService deviceTrustService;
+    @Mock private com.innbucks.userservice.repository.OtpRepository otpRepository;
 
-    @InjectMocks private TeamMemberService service;
+    private TeamMemberService service;
 
     @BeforeEach
     void setUp() {
+        // Disable ends sessions through the real AccountSessionRevoker (the same
+        // path as an admin deactivation); its collaborators are the mocks above.
+        AccountSessionRevoker revoker = new AccountSessionRevoker(
+                new com.innbucks.userservice.testsupport.InMemoryTokenVersionBumper(tokenVersionPublisher),
+                refreshTokenRepository, deviceTrustService, otpRepository);
+        service = new TeamMemberService(userRepository, assignmentRepository, passwordEncoder,
+                eventPublisher, revoker);
         ReflectionTestUtils.setField(service, "deploymentCountry", "ZW");
         ReflectionTestUtils.setField(service, "bootstrapAdminEmail",
                 com.innbucks.userservice.util.BootstrapAdminEmail.DEFAULT_ADDRESS);
@@ -306,7 +314,12 @@ class TeamMemberServiceTest {
         // A07 / CWE-613: the bumped version is mirrored to the shared Redis under
         // the member's own userUuid (== their JWT userUuid claim) so downstream
         // rejects their outstanding tokens immediately.
-        verify(tokenVersionPublisher).publish(memberUuid, versionBefore + 1);
+        verify(tokenVersionPublisher).publishAfterCommit(memberUuid, versionBefore + 1);
+        // Same teardown as an admin deactivation: no remembered device and no
+        // live reset code survives to be used after a re-enable.
+        verify(deviceTrustService).clearTrustForUser(99L);
+        verify(otpRepository).deleteByPhoneNumber("tariro@harare-arena.co.zw");
+        verify(otpRepository).deleteByPhoneNumber("+263773456789");
     }
 
     @Test
@@ -326,7 +339,7 @@ class TeamMemberServiceTest {
         verify(userRepository, never()).save(any());
         verify(refreshTokenRepository, never()).revokeAllForUser(anyLong(), any(Instant.class));
         // No bump -> nothing published to the shared Redis.
-        verify(tokenVersionPublisher, never()).publish(any(), anyLong());
+        verify(tokenVersionPublisher, never()).publishAfterCommit(any(), anyLong());
     }
 
     @Test

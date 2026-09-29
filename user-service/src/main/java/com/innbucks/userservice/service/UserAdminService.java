@@ -54,13 +54,17 @@ public class UserAdminService {
     private final ApplicationEventPublisher eventPublisher;
     private final com.innbucks.userservice.repository.TenantProfileRepository tenantProfiles;
     /**
-     * Cross-service session-supersession publisher (OWASP A07 / CWE-613), needed
-     * by {@link #setRoles} so a demotion takes effect fleet-wide immediately.
-     * AuthService field-injects this one instead, purely so its many test
-     * construction sites don't widen; this class has a single construction site,
-     * so a plain constructor dependency is both clearer and easier to assert on.
+     * The atomic {@code token_version} bump (and its after-commit Redis publish),
+     * needed by {@link #setRoles} so a demotion takes effect fleet-wide
+     * immediately.
      */
-    private final com.innbucks.userservice.security.TokenVersionPublisher tokenVersionPublisher;
+    private final TokenVersionBumper tokenVersionBumper;
+    /**
+     * Ends every session of an account being deactivated — see
+     * {@link AccountSessionRevoker}. Before it, deactivation only flipped
+     * {@code active}, and the person kept every open session.
+     */
+    private final AccountSessionRevoker accountSessionRevoker;
     /**
      * Validates the role names {@link #setRoles} is asked to assign. Needed as of
      * V35: roles used to deserialize to the {@code User.Role} enum, so Jackson
@@ -73,8 +77,11 @@ public class UserAdminService {
     /**
      * Backward-compatible overload used by unit tests / callers that don't have
      * an HTTP request context. The caller's identity is recorded as "SYSTEM"
-     * and the audit row carries no IP / user-agent.
+     * and the audit row carries no IP / user-agent. Transactional itself: the
+     * delegation is a self-invocation that bypasses the Spring proxy, and a
+     * deactivation must end its sessions in the same transaction as the flip.
      */
+    @Transactional
     public User setActive(Long id, boolean active) {
         return setActive(id, active, null, AuditContext.none());
     }
@@ -140,11 +147,20 @@ public class UserAdminService {
             log.info("User approved, temporary password assigned userId={}", id);
         }
 
-        user.setActive(active);
+        // Deactivation ends every session at once: active=false and the
+        // token_version bump land in ONE atomic UPDATE, every refresh family is
+        // revoked, device trust and live reset codes are cleared, and the new
+        // version reaches the shared Redis after commit. See AccountSessionRevoker.
+        AccountSessionRevoker.Revocation revocation = null;
+        if (active) {
+            user.setActive(true);
+        } else {
+            revocation = accountSessionRevoker.revokeAll(user, "admin_deactivation");
+        }
         User saved = userRepository.save(user);
         log.info("User {} userId={}", active ? "activated" : "deactivated", id);
 
-        recordAudit(saved, firstApproval, active, adminEmail, auditContext);
+        recordAudit(saved, firstApproval, active, adminEmail, auditContext, revocation);
 
         if (firstApproval) {
             publishCredentialDelivery(saved, tempPassword,
@@ -172,9 +188,9 @@ public class UserAdminService {
      * <p>The write is a targeted single-column UPDATE, NOT a load-mutate-save.
      * Because this runs on a background thread an unbounded time after the
      * activation committed, a read-modify-write here races every other writer
-     * of the row: {@link User} has no {@code @DynamicUpdate}, so {@code save}
-     * would rewrite every column from a snapshot that may already be stale, and
-     * a password change or admin edit made in that window would be silently
+     * of the row: before {@link User} gained {@code @DynamicUpdate}, {@code save}
+     * rewrote every column from a snapshot that may already be stale, and a
+     * password change or admin edit made in that window was silently
      * reverted. This surfaced as a flaky {@code AuthControllerIT} failure — the
      * test set a known password right after approval and the listener put the
      * random temp password back underneath it, so login 400'd on credentials
@@ -359,12 +375,11 @@ public class UserAdminService {
         // instance it loaded.
         current.clear();
         current.addAll(requested);
-        user.setTokenVersion(user.getTokenVersion() + 1);
+        // Atomic bump. The Redis publish is registered for AFTER COMMIT — it used
+        // to run inside this transaction, so a rollback here left Redis ahead of
+        // Postgres and every downstream service rejecting still-valid tokens.
+        tokenVersionBumper.bump(user);
         User saved = userRepository.save(user);
-
-        // Best-effort, never throws — Postgres stays the source of truth and
-        // user-service's own JwtFilter reads token_version from it directly.
-        tokenVersionPublisher.publish(saved.getUserUuid(), saved.getTokenVersion());
 
         log.info("Roles changed userId={} from={} to={} newTokenVersion={} by={}",
                 id, previous, requested, saved.getTokenVersion(),
@@ -392,7 +407,8 @@ public class UserAdminService {
      * {@code AUDIT_WRITE_FAILED} marker.
      */
     private void recordAudit(User target, boolean firstApproval, boolean active,
-                             String adminEmail, AuditContext auditContext) {
+                             String adminEmail, AuditContext auditContext,
+                             AccountSessionRevoker.Revocation revocation) {
         AuditEventType type = firstApproval
                 ? AuditEventType.USER_APPROVED
                 : (active ? AuditEventType.USER_ACTIVATED : AuditEventType.USER_DEACTIVATED);
@@ -402,14 +418,22 @@ public class UserAdminService {
         String actorType = adminEmail == null
                 ? AuditService.ACTOR_TYPE_SYSTEM
                 : AuditService.ACTOR_TYPE_USER;
+        Map<String, Object> metadata = new java.util.LinkedHashMap<>();
+        metadata.put("targetEmail", target.getEmail() == null ? "" : target.getEmail());
+        metadata.put("active", active);
+        metadata.put("mustChangePassword", target.isMustChangePassword());
+        if (revocation != null) {
+            // What the deactivation actually ended, so "were they signed out?"
+            // is answerable from the audit row alone.
+            metadata.put("tokenVersion", revocation.tokenVersion());
+            metadata.put("refreshTokensRevoked", revocation.refreshTokensRevoked());
+            metadata.put("resetCodesDeleted", revocation.resetCodesDeleted());
+        }
         auditService.recordSuccess(
                 type,
                 actorId, actorType,
                 String.valueOf(target.getId()), AuditService.TARGET_TYPE_USER,
-                Map.of(
-                        "targetEmail", target.getEmail() == null ? "" : target.getEmail(),
-                        "active", active,
-                        "mustChangePassword", target.isMustChangePassword()),
+                metadata,
                 auditContext == null ? AuditContext.none() : auditContext);
     }
 

@@ -2,6 +2,7 @@ package com.innbucks.userservice.service;
 
 import com.innbucks.userservice.entity.RefreshToken;
 import com.innbucks.userservice.entity.User;
+import com.innbucks.userservice.exception.AccountInactiveException;
 import com.innbucks.userservice.repository.RefreshTokenRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.security.JwtUtil;
@@ -123,8 +124,9 @@ public class RefreshTokenService {
     // noRollbackFor: ReuseDetectedException is part of the security contract —
     // when we detect token replay we WANT the side-effect (revokeFamily) to
     // commit. Without this, Spring would roll back the family-revocation
-    // UPDATE and an attacker could keep replaying the stolen token.
-    @Transactional(noRollbackFor = ReuseDetectedException.class)
+    // UPDATE and an attacker could keep replaying the stolen token. Same for
+    // AccountInactiveException: the revocation it performs must survive the throw.
+    @Transactional(noRollbackFor = {ReuseDetectedException.class, AccountInactiveException.class})
     public Rotation rotate(String rawToken, String deviceId) {
         return rotate(rawToken, deviceId, null, false);
     }
@@ -136,7 +138,7 @@ public class RefreshTokenService {
      * throws with the presented token still valid. A phone-proof session can
      * never be moved into an organization.
      */
-    @Transactional(noRollbackFor = ReuseDetectedException.class)
+    @Transactional(noRollbackFor = {ReuseDetectedException.class, AccountInactiveException.class})
     public Rotation rotateInto(String rawToken, String deviceId, UUID organizationId) {
         return rotate(rawToken, deviceId, organizationId, true);
     }
@@ -152,6 +154,23 @@ public class RefreshTokenService {
         String hash = sha256(rawToken);
         RefreshToken row = refreshTokenRepository.findByTokenHash(hash)
                 .orElseThrow(() -> new RuntimeException("Refresh token not recognised"));
+
+        User user = userRepository.findById(row.getUserId())
+                .orElseThrow(() -> new RuntimeException("User not found"));
+
+        // A deactivated account never continues a session — checked FIRST, ahead
+        // of replay detection. Deactivation revokes every family, so a check
+        // placed after the replay branch would answer every deactivated user's
+        // next refresh with "reuse detected": the wrong message, a false theft
+        // signal in the audit log and the token-reuse alert, and a 400 where the
+        // client needs a 401. Revokes whatever the account still holds (a
+        // pre-1a deactivation left families live) and commits despite the throw.
+        if (!user.isActive()) {
+            int killed = refreshTokenRepository.revokeAllForUser(user.getId(), Instant.now());
+            log.warn("Refresh refused — account deactivated userId={} familyId={} rowsRevoked={}",
+                    user.getId(), row.getFamilyId(), killed);
+            throw new AccountInactiveException();
+        }
 
         if (row.getRevokedAt() != null) {
             // Replay of an already-rotated token — treat as theft.
@@ -178,9 +197,6 @@ public class RefreshTokenService {
         if (row.getExpiresAt().isBefore(Instant.now())) {
             throw new RuntimeException("Refresh token expired");
         }
-
-        User user = userRepository.findById(row.getUserId())
-                .orElseThrow(() -> new RuntimeException("User not found"));
 
         // Preserve the device binding through the rotation chain. A
         // family stays bound to whatever device its first token was

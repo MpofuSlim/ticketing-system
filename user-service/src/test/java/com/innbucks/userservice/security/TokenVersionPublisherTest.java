@@ -94,4 +94,72 @@ class TokenVersionPublisherTest {
                 eq("1"),
                 eq(Duration.ofDays(30)));
     }
+
+    // ---- publish AFTER COMMIT (1a) ------------------------------------------
+
+    @Test
+    void publishAfterCommit_waitsForTheCommit() {
+        UUID uuid = UUID.randomUUID();
+        org.springframework.transaction.support.TransactionSynchronizationManager.initSynchronization();
+        try {
+            publisher.publishAfterCommit(uuid, 9L);
+
+            // Nothing reaches Redis while the transaction is still open…
+            verify(ops, never()).set(any(), any(), any(Duration.class));
+            java.util.List<org.springframework.transaction.support.TransactionSynchronization> syncs =
+                    org.springframework.transaction.support.TransactionSynchronizationManager.getSynchronizations();
+            org.junit.jupiter.api.Assertions.assertEquals(1, syncs.size());
+
+            // …and the version lands the moment it commits.
+            syncs.forEach(org.springframework.transaction.support.TransactionSynchronization::afterCommit);
+            verify(ops).set(eq(TokenVersionPublisher.SHARED_TOKEN_VERSION_PREFIX + uuid), eq("9"),
+                    eq(Duration.ofMillis(REFRESH_TTL_MS)));
+        } finally {
+            org.springframework.transaction.support.TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    @Test
+    void publishAfterCommit_aRolledBackBumpPublishesNothing() {
+        // setRoles used to publish INSIDE its transaction, so a rollback left
+        // Redis ahead of Postgres and every downstream service rejecting tokens
+        // user-service still accepted.
+        org.springframework.transaction.support.TransactionSynchronizationManager.initSynchronization();
+        try {
+            publisher.publishAfterCommit(UUID.randomUUID(), 9L);
+            org.springframework.transaction.support.TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(sync -> sync.afterCompletion(
+                            org.springframework.transaction.support.TransactionSynchronization.STATUS_ROLLED_BACK));
+        } finally {
+            org.springframework.transaction.support.TransactionSynchronizationManager.clearSynchronization();
+        }
+        verify(ops, never()).set(any(), any(), any(Duration.class));
+    }
+
+    @Test
+    void publishAfterCommit_withNoTransaction_publishesImmediately() {
+        UUID uuid = UUID.randomUUID();
+
+        publisher.publishAfterCommit(uuid, 2L);
+
+        verify(ops).set(eq(TokenVersionPublisher.SHARED_TOKEN_VERSION_PREFIX + uuid), eq("2"),
+                any(Duration.class));
+    }
+
+    @Test
+    void aFailedPublish_isCounted_forTheAlert() {
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        ReflectionTestUtils.setField(publisher, "meterRegistry", registry);
+        doThrow(new RedisConnectionFailureException("down"))
+                .when(ops).set(any(), any(), any(Duration.class));
+
+        publisher.publish(UUID.randomUUID(), 3L);
+        publisher.publishAfterCommit(UUID.randomUUID(), 4L);
+
+        org.junit.jupiter.api.Assertions.assertEquals(2.0,
+                registry.counter(TokenVersionPublisher.PUBLISH_FAILED_METRIC).count());
+        org.junit.jupiter.api.Assertions.assertEquals("user.tokenver.publish_failed",
+                TokenVersionPublisher.PUBLISH_FAILED_METRIC);
+    }
 }

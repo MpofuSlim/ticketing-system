@@ -339,8 +339,61 @@ here are the shape of the key and the hole it opened one level up:
   documented "must re-enrol on next login": a live session could previously
   ride refresh straight past it.
   (The class javadoc's aside that "role mutation does not bump
-  `tokenVersion`" is inaccurate — it does, at `UserAdminService:362`. The
+  `tokenVersion`" is inaccurate — it does, in `UserAdminService.setRoles`. The
   hole it describes is real regardless, because the refresh ROW survives.)
+
+## Deactivation ends sessions at once; `token_version` is written atomically (user-service, V42)
+
+**`PUT /admin/users/{id}/active` with `false` (and the organizer's team-member
+disable) signs the person out everywhere, immediately, through
+`AccountSessionRevoker.revokeAll`.** Before it, deactivation flipped `active`
+and nothing else: no version bump, no Redis publish, no refresh revocation, and
+`/auth/refresh` never read `active`, so a deactivated person kept every session
+for the life of the refresh chain. In the caller's transaction it now: sets
+`active = false` and bumps `token_version` in ONE `UPDATE ... RETURNING`,
+revokes every refresh family, clears device trust, and deletes the live
+reset-OTP rows for the account's email and phone (so nothing is planted for
+after a reactivation). Loyalty's phone-keyed `LRT-` chains are NOT reached —
+documented, not fixed.
+
+- **Every session path refuses an inactive account:** refresh rotation (which
+  also serves `/auth/organization-context`) — checked BEFORE replay detection,
+  because deactivation revokes every family and a later check would answer
+  "reuse detected" (a false theft alarm and a 400) instead of `401
+  account_inactive`; the MFA step and enrolment (`MfaTokenService.verify`); the
+  mint chokepoint `AuthService.buildResponse` (the backstop no path can skip);
+  and `JwtFilter`, whose one per-request read is now `(token_version, active)`
+  (`401 ACCOUNT_DEACTIVATED`).
+- **The mfaToken is bound to `token_version`** (`tv` claim) and refused unless it
+  equals the live version; a successful verify SPENDS it with a
+  compare-and-set bump (`bumpIfCurrent`) before minting. So any bump in between
+  (deactivation, role or password change, admin MFA reset, a newer login) kills
+  pending challenges, and a token can never mint twice. Removing either half
+  reopens the hole. A token with no `tv` is refused like a stale one.
+- **`token_version` has exactly one writer: `TokenVersionBumper`.** Every bump
+  is an atomic `UPDATE users SET token_version = token_version + 1 ...
+  RETURNING` and the entity column is `updatable = false`, so a stale entity
+  save can no longer write an old version back (a login racing a deactivation
+  used to revive its sessions). `User` is now also `@DynamicUpdate`, so a stale
+  save of an UNRELATED column (a password reset racing a deactivation) no longer
+  writes `active = true` back either. The password step's
+  bump is conditional on `active = true` in the same statement, so that race
+  now either refuses the login or is bumped past. `TokenVersionBumpSitesTest`
+  fails the build on a `setTokenVersion` anywhere else in `src/main`.
+- **The Redis publish happens AFTER COMMIT** (`TokenVersionPublisher
+  .publishAfterCommit`). `setRoles` used to publish inside its transaction, so a
+  rollback left Redis ahead of Postgres. A failed publish increments
+  `user.tokenver.publish_failed` (alert `TokenVersionPublishFailing`); other
+  services then fail open until each access token expires.
+- **`POST /admin/users/{id}/mfa/reset`** records the ADMIN as actor and the user
+  as target (it used to name the target as its own actor), takes an optional
+  `{"note"}` (≤ 500, audit row only), bumps `token_version`, and refuses a
+  SUPER_ADMIN target with `403 target_not_manageable` (`StaffPolicyException`).
+- **V42 widens `audit_events.actor_id`/`target_id` to `VARCHAR(254)`** — an admin
+  email over 64 characters used to fail the audit insert silently (the write is
+  fail-open). Metadata-only in Postgres, so every `row_hmac`/`chain_hmac` still
+  verifies; `SET LOCAL lock_timeout` makes it fail fast rather than queue
+  behind live audit writers.
 
 ## Bookings carry WHO is coming (booking-service V22)
 

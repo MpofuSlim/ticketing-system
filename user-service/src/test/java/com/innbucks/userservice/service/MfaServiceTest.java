@@ -35,6 +35,7 @@ class MfaServiceTest {
     private UserRepository userRepository;
     private MfaBackupCodeRepository backupCodeRepository;
     private PasswordEncoder passwordEncoder;
+    private TokenVersionBumper tokenVersionBumper;
     private MfaService mfaService;
 
     @BeforeEach
@@ -46,7 +47,8 @@ class MfaServiceTest {
         MfaProperties props = new MfaProperties();
         props.setIssuer("InnBucks");
         props.setBackupCodeCount(10);
-        mfaService = new MfaService(userRepository, backupCodeRepository, passwordEncoder, props);
+        tokenVersionBumper = mock(TokenVersionBumper.class);
+        mfaService = new MfaService(userRepository, backupCodeRepository, passwordEncoder, props, tokenVersionBumper);
         when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
     }
 
@@ -218,11 +220,13 @@ class MfaServiceTest {
         u.setMfaSecret("ABC");
         when(userRepository.findById(13L)).thenReturn(Optional.of(u));
 
-        mfaService.adminReset(13L);
+        mfaService.adminReset(13L, "admin@innbucks.co.zw", null, AuditContext.none());
 
         assertThat(u.isMfaEnabled()).isFalse();
         assertThat(u.getMfaSecret()).isNull();
         verify(backupCodeRepository).deleteAllForUser(13L);
+        // …and ends the account's sessions and pending 2FA challenges at once.
+        verify(tokenVersionBumper).bump(u);
     }
 
     // ---- device-trust revocation on disable / reset -------------------------
@@ -255,7 +259,7 @@ class MfaServiceTest {
         u.setMfaSecret("ABC");
         when(userRepository.findById(21L)).thenReturn(Optional.of(u));
 
-        mfaService.adminReset(21L);
+        mfaService.adminReset(21L, "admin@innbucks.co.zw", null, AuditContext.none());
 
         verify(trust).clearTrustForUser(21L);
     }

@@ -5,11 +5,9 @@ import com.innbucks.userservice.dto.UserResponseDTO;
 import com.innbucks.userservice.entity.TeamMemberEventAssignment;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.event.CredentialDeliveryRequested;
-import com.innbucks.userservice.repository.RefreshTokenRepository;
 import com.innbucks.userservice.repository.TeamMemberEventAssignmentRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.security.AuthenticatedCaller;
-import com.innbucks.userservice.security.TokenVersionPublisher;
 import com.innbucks.userservice.util.BootstrapAdminEmail;
 import com.innbucks.userservice.util.HtmlSanitizer;
 import com.innbucks.userservice.util.MsisdnValidator;
@@ -27,7 +25,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.time.Instant;
 import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -43,11 +40,13 @@ import java.util.UUID;
  * the same {@code organizerUuid} so booking-service can authorize ticket
  * scans without a cross-service lookup.
  *
- * <p>Disable semantics: soft-delete only — the row stays for audit. We
- * flip {@link User#isActive()} to false (locks them out of login) and bump
- * {@link User#getTokenVersion()} (invalidates every still-live access
- * token instantly); refresh-token families are revoked in the same write
- * so the disabled member can't refresh into a fresh session.
+ * <p>Disable semantics: soft-delete only — the row stays for audit. Disable
+ * goes through {@link AccountSessionRevoker}, the same path as an admin
+ * deactivation: {@link User#isActive()} flips to false and
+ * {@link User#getTokenVersion()} is bumped in one atomic UPDATE (every
+ * still-live access token dies instantly), and refresh-token families are
+ * revoked in the same transaction so the disabled member can't refresh into a
+ * fresh session.
  */
 @Service
 @RequiredArgsConstructor
@@ -55,11 +54,16 @@ import java.util.UUID;
 public class TeamMemberService {
 
     private final UserRepository userRepository;
-    private final RefreshTokenRepository refreshTokenRepository;
     private final TeamMemberEventAssignmentRepository assignmentRepository;
     private final PasswordEncoder passwordEncoder;
     private final ApplicationEventPublisher eventPublisher;
-    private final TokenVersionPublisher tokenVersionPublisher;
+    /**
+     * Disable is a deactivation, so it ends sessions exactly as an admin
+     * deactivation does: atomic active=false + token_version bump, every refresh
+     * family revoked, device trust and live reset codes cleared, the new version
+     * published to Redis after commit.
+     */
+    private final AccountSessionRevoker accountSessionRevoker;
 
     // A09 audit coverage for the team-member disable action. Field-injected
     // (required=false) so tests constructing this service don't widen; null =>
@@ -190,20 +194,15 @@ public class TeamMemberService {
             // Already disabled — return current state, nothing to do.
             return UserResponseDTO.from(member);
         }
-        member.setActive(false);
-        // Bump the session epoch so every outstanding access token the
-        // member holds is rejected by JwtFilter on its next call —
-        // immediate revoke instead of waiting out the natural TTL.
-        member.setTokenVersion(member.getTokenVersion() + 1);
+        // One call ends everything the member holds: active=false and the
+        // token_version bump in a single atomic UPDATE (every outstanding access
+        // token rejected by JwtFilter on its next call, and fleet-wide once the
+        // after-commit Redis publish lands), every refresh family revoked so they
+        // can't /auth/refresh back in, device trust and live reset codes cleared.
+        AccountSessionRevoker.Revocation revocation =
+                accountSessionRevoker.revokeAll(member, "team_member_disabled");
         userRepository.save(member);
-        // Mirror the bumped version into the shared Redis so downstream services
-        // reject the disabled member's outstanding access tokens immediately
-        // (A07 / CWE-613), not just user-service's JwtFilter. Same userUuid the
-        // member's JWT carries; best-effort (never throws, no-ops on null uuid).
-        tokenVersionPublisher.publish(member.getUserUuid(), member.getTokenVersion());
-        // Revoke every still-live refresh token so they can't /auth/refresh
-        // back into a fresh access token.
-        int revokedFamilies = refreshTokenRepository.revokeAllForUser(member.getId(), Instant.now());
+        int revokedFamilies = revocation.refreshTokensRevoked();
         log.info("Disabled TEAM_MEMBER userUuid={} by={} revokedRefreshFamilies={}",
                 member.getUserUuid(), callerLogTag(), revokedFamilies);
         if (auditService != null) {

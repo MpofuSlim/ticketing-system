@@ -92,4 +92,45 @@ class TokenRevocationServiceTest {
         verify(revokedTokenRepository).save(any());
         verify(ops, times(0)).set(any(), any(), any(Duration.class));
     }
+
+    // ---- session state: token_version AND active, one read (1a) ------------
+
+    private void live(String subject, long version, boolean active) {
+        when(userRepository.findTokenStateBySubject(subject)).thenReturn(
+                java.util.Optional.of(new com.innbucks.userservice.repository.UserTokenState(version, active)));
+    }
+
+    @Test
+    void sessionState_currentWhenVersionMatchesAndActive() {
+        live("alice@example.com", 4L, true);
+        org.junit.jupiter.api.Assertions.assertEquals(TokenRevocationService.SessionState.CURRENT,
+                service.sessionState("alice@example.com", 4L));
+        org.junit.jupiter.api.Assertions.assertTrue(service.isTokenVersionCurrent("alice@example.com", 4L));
+    }
+
+    @Test
+    void sessionState_supersededWhenVersionMoved() {
+        live("alice@example.com", 5L, true);
+        org.junit.jupiter.api.Assertions.assertEquals(TokenRevocationService.SessionState.SUPERSEDED,
+                service.sessionState("alice@example.com", 4L));
+    }
+
+    @Test
+    void sessionState_inactiveWinsEvenWhenTheVersionStillMatches() {
+        // A deactivation that (for whatever reason) did not bump — e.g. one made
+        // before this release — must still end the session in user-service.
+        live("alice@example.com", 4L, false);
+        org.junit.jupiter.api.Assertions.assertEquals(TokenRevocationService.SessionState.INACTIVE,
+                service.sessionState("alice@example.com", 4L));
+        org.junit.jupiter.api.Assertions.assertFalse(service.isTokenVersionCurrent("alice@example.com", 4L));
+    }
+
+    @Test
+    void sessionState_unknownOrBlankSubject_isSuperseded() {
+        when(userRepository.findTokenStateBySubject("ghost@example.com")).thenReturn(java.util.Optional.empty());
+        org.junit.jupiter.api.Assertions.assertEquals(TokenRevocationService.SessionState.SUPERSEDED,
+                service.sessionState("ghost@example.com", 1L));
+        org.junit.jupiter.api.Assertions.assertEquals(TokenRevocationService.SessionState.SUPERSEDED,
+                service.sessionState(" ", 1L));
+    }
 }

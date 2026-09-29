@@ -55,7 +55,8 @@ class JwtFilterPermissionBackfillTest {
 
         TokenRevocationService revocation = mock(TokenRevocationService.class);
         when(revocation.isRevoked(anyString())).thenReturn(false);
-        when(revocation.isTokenVersionCurrent(anyString(), anyLong())).thenReturn(true);
+        when(revocation.sessionState(anyString(), anyLong()))
+                .thenReturn(TokenRevocationService.SessionState.CURRENT);
 
         roleRepository = mock(RoleRepository.class);
         when(roleRepository.findAllByNameIn(any())).thenAnswer(inv -> {

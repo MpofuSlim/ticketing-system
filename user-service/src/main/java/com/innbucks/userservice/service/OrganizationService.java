@@ -11,7 +11,6 @@ import com.innbucks.userservice.repository.OrganizationProductRepository;
 import com.innbucks.userservice.repository.OrganizationRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.security.OrgScope;
-import com.innbucks.userservice.security.TokenVersionPublisher;
 import com.innbucks.userservice.util.HtmlSanitizer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -62,7 +61,7 @@ public class OrganizationService {
     private final OrganizationProductRepository products;
     private final UserRepository users;
     private final AuditService auditService;
-    private final TokenVersionPublisher tokenVersions;
+    private final TokenVersionBumper tokenVersions;
 
     // ----------------------------------------------------------------------
     // Creation
@@ -614,9 +613,8 @@ public class OrganizationService {
      * same lever {@code UserAdminService.setRoles} pulls for a role change.
      */
     private void endSessionsOf(User person) {
-        person.setTokenVersion(person.getTokenVersion() + 1);
-        User saved = users.save(person);
-        tokenVersions.publish(saved.getUserUuid(), saved.getTokenVersion());
+        // Atomic bump; published to the shared Redis after commit.
+        tokenVersions.bump(person);
     }
 
     private User resolveAccount(String email) {

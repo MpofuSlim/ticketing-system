@@ -5,6 +5,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Duration;
 import java.util.UUID;
@@ -18,10 +20,10 @@ import java.util.UUID;
  * <p>user-service owns {@code users.token_version} in Postgres and its own
  * {@link JwtFilter} already compares a token's {@code tokenVersion} claim
  * against that column. Downstream services can't see our Postgres — they read
- * this Redis entry instead. Every path that bumps {@code token_version}
- * (re-login single-active-session, change-password, forgot-password reset,
- * team-member disable) calls {@link #publish(UUID, long)} right after the DB
- * write so the shared view stays in lock-step.
+ * this Redis entry instead. Every path that bumps {@code token_version} does so
+ * through {@code TokenVersionBumper}, which calls
+ * {@link #publishAfterCommit(UUID, long)} so the shared view only ever carries
+ * a version Postgres has committed.
  *
  * <p><b>Contract (must match the downstream read side exactly):</b>
  * <pre>auth:tokenver:&lt;userUuid&gt; -&gt; "&lt;token_version&gt;"</pre>
@@ -56,7 +58,22 @@ public class TokenVersionPublisher {
      *  zero/negative expiry, which would throw and drop the publish. */
     private static final Duration FALLBACK_TTL = Duration.ofDays(30);
 
+    /**
+     * Counter name for a publish Redis refused. Alerted: while it is climbing,
+     * downstream services keep accepting access tokens user-service has already
+     * ended (until each expires, at most the access-token TTL).
+     */
+    public static final String PUBLISH_FAILED_METRIC = "user.tokenver.publish_failed";
+
     private final StringRedisTemplate redis;
+
+    /**
+     * Field-injected (optional) so the existing single-argument construction in
+     * {@code TokenVersionPublisherTest} still compiles; null there means the
+     * failure is logged but not counted.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private io.micrometer.core.instrument.MeterRegistry meterRegistry;
 
     /**
      * Entry TTL, reusing the refresh-token lifetime (milliseconds) so any
@@ -95,6 +112,48 @@ public class TokenVersionPublisher {
             // access-token TTL as a backstop until Redis recovers.
             log.warn("Failed to publish token version to shared Redis key={} version={}; "
                     + "downstream relies on access-token TTL until Redis recovers", key, version, ex);
+            countFailure();
+        }
+    }
+
+    /**
+     * Publish {@code userUuid -> version} once the surrounding transaction has
+     * COMMITTED — the only way a bump site should publish.
+     *
+     * <p>Publishing inside the transaction (what {@code setRoles} used to do)
+     * lets Redis get ahead of Postgres: if the transaction then rolls back, every
+     * downstream service rejects the user's still-valid tokens while
+     * user-service accepts them. After commit, the published value is always one
+     * Postgres actually holds, and a rolled-back bump publishes nothing.
+     *
+     * <p>With no transaction synchronization active (a plain unit test, or a
+     * caller outside any transaction) there is nothing to wait for, so it
+     * publishes immediately. Same fail-open contract as {@link #publish}.
+     */
+    public void publishAfterCommit(UUID userUuid, long version) {
+        if (userUuid == null) {
+            return;
+        }
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            publish(userUuid, version);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                publish(userUuid, version);
+            }
+        });
+    }
+
+    private void countFailure() {
+        if (meterRegistry == null) {
+            return;
+        }
+        try {
+            meterRegistry.counter(PUBLISH_FAILED_METRIC).increment();
+        } catch (RuntimeException ignored) {
+            // A metrics failure must never become a publish failure.
         }
     }
 }

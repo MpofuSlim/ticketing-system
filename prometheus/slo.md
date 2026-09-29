@@ -206,6 +206,22 @@ rotation).
    log / OTel spans for that window, pull the DB write log to see who deleted
    it, and escalate to a security incident.
 
+### `TokenVersionPublishFailing`
+
+**Trigger:** `user_tokenver_publish_failed_total` moved — user-service bumped a
+`users.token_version` (deactivation, role change, password change or reset,
+logout, MFA reset) but could not write `auth:tokenver:<userUuid>` to the shared
+Redis. The publish runs after the database commit, so Postgres and
+user-service's own JwtFilter are already correct; the gap is every OTHER
+service, which fails open on a Redis miss and keeps accepting the ended
+session's access token until it expires (at most the access-token TTL).
+
+**Action:** treat as a Redis incident (connectivity, auth, memory). Grep
+user-service for `Failed to publish token version` to see which users were
+affected; nothing is retried, so if a specific deactivation must bite
+downstream before the TTL runs out, `SET auth:tokenver:<userUuid>
+<current token_version>` by hand once Redis is back.
+
 ### `PaymentAuditIntegrityBroken`
 
 Same as `AuditIntegrityBroken` above, but on **payment-service**'s
