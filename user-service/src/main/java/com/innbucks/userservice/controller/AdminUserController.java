@@ -359,12 +359,15 @@ public class AdminUserController {
                     "**Deactivating (`active: false`) signs the user out everywhere, at once.** In the same " +
                     "transaction the account's session epoch (`tokenVersion`) is bumped, every refresh token " +
                     "is revoked, \"remember this device\" trust is cleared and any live password-reset code " +
-                    "is deleted. Their next request to user-service is refused with `401 ACCOUNT_DEACTIVATED`; " +
+                    "is deleted (and no new one can be requested while the account is off). Their next request " +
+                    "to user-service is refused with `401 ACCOUNT_DEACTIVATED`; " +
                     "other services refuse the old access token as soon as the new version is published to " +
                     "the shared Redis after commit (if that publish fails they fall back to the access-token " +
                     "expiry). `/auth/refresh`, `/auth/organization-context` and any half-finished 2FA sign-in " +
-                    "answer `401 account_inactive`. Re-activating does not restore any of it — the user signs " +
-                    "in again.\n\n" +
+                    "answer `401 account_inactive`. Re-activating does not restore any of it: it bumps the " +
+                    "session epoch again and revokes any refresh token and device trust still on file (an " +
+                    "account deactivated before deactivation ended sessions may still hold some), so the user " +
+                    "signs in again from a clean slate.\n\n" +
                     "**Refuses to act on a SUPER_ADMIN target** — disabling the platform-owner account would " +
                     "lock the platform out of itself, and reactivating it requires a SUPER_ADMIN, so no caller " +
                     "is ever permitted to toggle it. The SUPER_ADMIN's `active` state is fixed at seed time " +
@@ -387,7 +390,7 @@ public class AdminUserController {
                                                 "email": "alice@innbucks.co.zw",
                                                 "roles": ["EVENT_ORGANIZER"],
                                                 "active": true,
-                                                "createdAt": "2026-01-15T10:30:00"
+                                                "createdAt": "2026-01-15T12:30:00+02:00"
                                               }
                                             }
                                             """),
@@ -402,7 +405,7 @@ public class AdminUserController {
                                                 "email": "alice@innbucks.co.zw",
                                                 "roles": ["EVENT_ORGANIZER"],
                                                 "active": false,
-                                                "createdAt": "2026-01-15T10:30:00"
+                                                "createdAt": "2026-01-15T12:30:00+02:00"
                                               }
                                             }
                                             """)

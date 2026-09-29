@@ -284,7 +284,8 @@ public class MfaService {
      * </ul>
      *
      * @param adminEmail the acting administrator ({@code authentication.getName()})
-     * @param note       optional free text, at most 500 characters (validated at the edge)
+     * @param note       optional free text; cleaned by {@link #cleanNote} here, whatever the
+     *                   caller validated
      */
     @Transactional
     public void adminReset(Long userId, String adminEmail, String note, AuditContext auditContext) {
@@ -307,8 +308,9 @@ public class MfaService {
             java.util.Map<String, Object> metadata = new java.util.LinkedHashMap<>();
             metadata.put("targetEmail", user.getEmail() == null ? "" : user.getEmail());
             metadata.put("tokenVersion", newVersion);
-            if (note != null && !note.isBlank()) {
-                metadata.put("note", note.trim());
+            String cleanNote = cleanNote(note);
+            if (cleanNote != null) {
+                metadata.put("note", cleanNote);
             }
             auditService.recordSuccess(AuditEventType.MFA_ADMIN_RESET,
                     adminEmail == null ? "system" : adminEmail,
@@ -317,6 +319,47 @@ public class MfaService {
                     metadata,
                     auditContext == null ? AuditContext.none() : auditContext);
         }
+    }
+
+    /** Longest admin-reset note kept — the same bound {@code AdminMfaResetRequestDTO} validates at the edge. */
+    static final int MAX_NOTE_LENGTH = 500;
+
+    /**
+     * The admin-reset note as it may be written into the audit metadata: markup
+     * stripped ({@link com.innbucks.userservice.util.HtmlSanitizer#stripAll} — the
+     * audit log is rendered in the console), control and invisible formatting
+     * characters (line breaks, NUL, bidi overrides) replaced by spaces so a note
+     * cannot forge extra lines in a log view or reorder what a reviewer reads,
+     * trimmed, and capped at {@link #MAX_NOTE_LENGTH}. The HTTP edge already
+     * refuses an over-long note with a 400; this is the service's own bound, for
+     * every other caller. Blank after cleaning means no note.
+     */
+    static String cleanNote(String note) {
+        if (note == null) {
+            return null;
+        }
+        // Before AND after the markup strip: before, because the HTML parser
+        // rewrites some control characters rather than dropping them; after,
+        // because decoding an entity (&#x202E;) can produce one.
+        String cleaned = invisiblesToSpace(com.innbucks.userservice.util.HtmlSanitizer.stripAll(
+                invisiblesToSpace(note)))
+                .replaceAll(" {2,}", " ")
+                .strip();
+        if (cleaned.isEmpty()) {
+            return null;
+        }
+        if (cleaned.length() > MAX_NOTE_LENGTH) {
+            int end = MAX_NOTE_LENGTH;
+            if (Character.isHighSurrogate(cleaned.charAt(end - 1))) {
+                end--; // never cut a character in half
+            }
+            cleaned = cleaned.substring(0, end).strip();
+        }
+        return cleaned;
+    }
+
+    private static String invisiblesToSpace(String text) {
+        return text.replaceAll("[\\p{Cc}\\p{Cf}]+", " ");
     }
 
     /**

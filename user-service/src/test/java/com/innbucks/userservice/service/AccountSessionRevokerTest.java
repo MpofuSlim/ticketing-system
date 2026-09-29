@@ -80,6 +80,28 @@ class AccountSessionRevokerTest {
     }
 
     @Test
+    void sweepOnReactivation_endsLeftovers_withoutTouchingActive() {
+        // For an account deactivated before revokeAll existed: bump, revoke,
+        // clear — the caller flips `active` itself.
+        User user = staff();
+        user.setActive(false);
+        when(users.incrementTokenVersion(4812L)).thenReturn(12L);
+        when(refreshTokens.revokeAllForUser(eq(4812L), any(Instant.class))).thenReturn(2);
+
+        AccountSessionRevoker.Revocation r = revoker.sweepOnReactivation(user);
+
+        assertThat(user.isActive()).isFalse();
+        assertThat(user.getTokenVersion()).isEqualTo(12L);
+        verify(users, never()).deactivateAndIncrementTokenVersion(any());
+        verify(refreshTokens).revokeAllForUser(eq(4812L), any(Instant.class));
+        verify(deviceTrust).clearTrustForUser(4812L);
+        verify(otps).deleteByPhoneNumber("tariro.moyo@innbucks.co.zw");
+        verify(otps).deleteByPhoneNumber("+263771234567");
+        verify(publisher).publishAfterCommit(user.getUserUuid(), 12L);
+        assertThat(r).isEqualTo(new AccountSessionRevoker.Revocation(12L, 2, 0));
+    }
+
+    @Test
     void theVersionIsBumpedBeforeAnythingElse() {
         // The atomic UPDATE takes the row lock first, so a login racing the
         // deactivation is serialised behind it from the very first statement.
@@ -114,5 +136,10 @@ class AccountSessionRevokerTest {
                 .getAnnotation(Transactional.class);
         assertThat(tx).isNotNull();
         assertThat(tx.propagation()).isEqualTo(Propagation.MANDATORY);
+        Transactional sweep = AccountSessionRevoker.class
+                .getMethod("sweepOnReactivation", User.class)
+                .getAnnotation(Transactional.class);
+        assertThat(sweep).isNotNull();
+        assertThat(sweep.propagation()).isEqualTo(Propagation.MANDATORY);
     }
 }

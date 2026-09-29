@@ -343,7 +343,7 @@ class TeamMemberServiceTest {
     }
 
     @Test
-    void enable_flipsActiveBackToTrueWithoutRevokingTokens() {
+    void enable_flipsActiveBackToTrue_fromACleanSlate() {
         UUID organizerUuid = UUID.randomUUID();
         UUID memberUuid = UUID.randomUUID();
         User member = teamMember(memberUuid, organizerUuid);
@@ -356,12 +356,17 @@ class TeamMemberServiceTest {
         UserResponseDTO result = service.enableTeamMember(memberUuid);
 
         assertThat(result.isActive()).isTrue();
-        // Re-enable does NOT bump tokenVersion or touch refresh tokens —
-        // the member has to log in fresh because disable already invalidated
-        // every prior session; we're not also throwing away NEW sessions
-        // they haven't started yet.
-        assertThat(member.getTokenVersion()).isEqualTo(versionBefore);
-        verify(refreshTokenRepository, never()).revokeAllForUser(anyLong(), any(Instant.class));
+        // Re-enable sweeps before the account comes back: bump, revoke every
+        // refresh family, clear device trust. This used to be skipped on the
+        // reasoning that disable had already ended every session — true for
+        // THIS path, but not for a member switched off through
+        // PUT /admin/users/{id}/active before that path revoked anything, whose
+        // families would come straight back. Nothing legitimate is lost: no
+        // session can be started while the account is inactive.
+        assertThat(member.getTokenVersion()).isEqualTo(versionBefore + 1);
+        verify(refreshTokenRepository).revokeAllForUser(eq(member.getId()), any(Instant.class));
+        verify(deviceTrustService).clearTrustForUser(member.getId());
+        verify(tokenVersionPublisher).publishAfterCommit(member.getUserUuid(), versionBefore + 1);
     }
 
     @Test

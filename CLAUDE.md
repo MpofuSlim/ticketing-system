@@ -352,9 +352,21 @@ and nothing else: no version bump, no Redis publish, no refresh revocation, and
 for the life of the refresh chain. In the caller's transaction it now: sets
 `active = false` and bumps `token_version` in ONE `UPDATE ... RETURNING`,
 revokes every refresh family, clears device trust, and deletes the live
-reset-OTP rows for the account's email and phone (so nothing is planted for
-after a reactivation). Loyalty's phone-keyed `LRT-` chains are NOT reached —
-documented, not fixed.
+reset-OTP rows for the account's email and phone (so a code requested BEFORE
+the deactivation cannot set a password for after a reactivation; one cannot be
+requested DURING it — `PasswordResetService` treats `approved && !active` like
+an unknown account, and `resetPassword` answers it "Invalid or expired code").
+**Reactivation sweeps the same way** (`sweepOnReactivation`: bump, revoke,
+clear — both `PUT active true` on an approved account and the organizer's
+team-member re-enable), because an account deactivated before this release
+still holds live families that switching it back on would return.
+
+**Scope limit — loyalty is NOT reached.** A customer deactivated here keeps any
+loyalty-phone-keyed `LRT-` chain, and `POST /auth/otp/verify` still mints a
+fresh `loyalty-otp` session (and still promotes the phone in loyalty) for that
+customer's phone: the token is roles-empty and fleet-inert, and whether a
+user-service deactivation should switch loyalty off is loyalty's decision
+(it has its own INACTIVE/BLOCKED states). Documented, not fixed.
 
 - **Every session path refuses an inactive account:** refresh rotation (which
   also serves `/auth/organization-context`) — checked BEFORE replay detection,
@@ -363,13 +375,26 @@ documented, not fixed.
   account_inactive`; the MFA step and enrolment (`MfaTokenService.verify`); the
   mint chokepoint `AuthService.buildResponse` (the backstop no path can skip);
   and `JwtFilter`, whose one per-request read is now `(token_version, active)`
-  (`401 ACCOUNT_DEACTIVATED`).
+  (`401 ACCOUNT_DEACTIVATED`). **`JwtFilter` skips `/auth`**, so the two `/auth`
+  handlers that authenticate from their own Bearer header —
+  `/auth/change-password` and `/auth/mfa/disable` — apply the same gate
+  themselves (`TokenRevocationService.requireCurrentSession`: `401
+  account_inactive` / `401 session_superseded`). A new such handler must too.
 - **The mfaToken is bound to `token_version`** (`tv` claim) and refused unless it
-  equals the live version; a successful verify SPENDS it with a
-  compare-and-set bump (`bumpIfCurrent`) before minting. So any bump in between
-  (deactivation, role or password change, admin MFA reset, a newer login) kills
-  pending challenges, and a token can never mint twice. Removing either half
-  reopens the hole. A token with no `tv` is refused like a stale one.
+  equals the live version; a successful step SPENDS the PRESENTED token with a
+  compare-and-set bump on its own `tv` (`bumpIfCurrent`) before minting. So any
+  bump in between (deactivation, role or password change, admin MFA reset, a
+  newer login) kills pending challenges, and a token can never mint twice.
+  Removing either half reopens the hole. A token with no `tv` is refused like a
+  stale one. **Enrolment spends the ENROLLMENT token itself**
+  (`AuthService.completeEnrollmentAndSignIn`: spend, enrol, mint — one
+  transaction that rolls back on any refusal); it used to commit the enrolment
+  and then mint a fresh login token at whatever version the row held, so the
+  presented token was never spent and a double submit could sign in twice. A
+  lost compare-and-set is `MfaTokenSpentException`, in the login step's
+  `rollbackFor` (the more specific rule beats the `noRollbackFor` on its parent)
+  so it cannot burn the backup code the code check just consumed —
+  `MfaStepRollbackRulesTest`.
 - **`token_version` has exactly one writer: `TokenVersionBumper`.** Every bump
   is an atomic `UPDATE users SET token_version = token_version + 1 ...
   RETURNING` and the entity column is `updatable = false`, so a stale entity
@@ -382,13 +407,22 @@ documented, not fixed.
   fails the build on a `setTokenVersion` anywhere else in `src/main`.
 - **The Redis publish happens AFTER COMMIT** (`TokenVersionPublisher
   .publishAfterCommit`). `setRoles` used to publish inside its transaction, so a
-  rollback left Redis ahead of Postgres. A failed publish increments
-  `user.tokenver.publish_failed` (alert `TokenVersionPublishFailing`); other
-  services then fail open until each access token expires.
+  rollback left Redis ahead of Postgres. **And it never moves Redis backwards**:
+  two bumps' after-commit callbacks can land in either order (a login's v+1
+  after a deactivation's v+2 would re-admit the login's token downstream), so
+  the write is a Lua compare-and-set that keeps the higher value
+  (`TokenVersionPublisherRedisIT`). After restoring user-service's database to
+  an earlier point, delete `auth:tokenver:*`. A failed publish increments
+  `user.tokenver.publish_failed` — registered at 0 at startup, because
+  `increase()` cannot see a series' first sample (alert
+  `TokenVersionPublishFailing`); other services then fail open until each
+  access token expires.
 - **`POST /admin/users/{id}/mfa/reset`** records the ADMIN as actor and the user
   as target (it used to name the target as its own actor), takes an optional
-  `{"note"}` (≤ 500, audit row only), bumps `token_version`, and refuses a
-  SUPER_ADMIN target with `403 target_not_manageable` (`StaffPolicyException`).
+  `{"note"}` (≤ 500 at the edge; `MfaService.cleanNote` strips markup and
+  control/bidi characters and caps it again for any other caller; audit row
+  only), bumps `token_version`, and refuses a SUPER_ADMIN target with `403
+  target_not_manageable` (`StaffPolicyException`).
 - **V42 widens `audit_events.actor_id`/`target_id` to `VARCHAR(254)`** — an admin
   email over 64 characters used to fail the audit insert silently (the write is
   fail-open). Metadata-only in Postgres, so every `row_hmac`/`chain_hmac` still

@@ -53,23 +53,42 @@ public class PasswordResetService {
     @Value("${innbucks.country:ZW}")
     private String deploymentCountry = "ZW";
 
-    /** Step 1 — send the reset OTP to whichever channel the identifier names. Silent no-op for unknown users. */
+    /**
+     * Step 1 — send the reset OTP to whichever channel the identifier names.
+     * Silent no-op for unknown users, and for DEACTIVATED ones: a reset set
+     * while the account is off would be live the moment an administrator
+     * switched it back on — a password planted for after the reactivation,
+     * chosen by whoever held the phone or mailbox at the time. The caller sees
+     * the same 200 either way, so the account's state is not revealed.
+     */
     @Transactional
     public void requestReset(String phoneNumber, String email) {
         Identifier id = resolveIdentifier(phoneNumber, email);
-        if (id.email()) {
-            if (userRepository.findByEmail(id.value()).isPresent()) {
-                otpService.sendPasswordResetOtpToEmail(id.value());
-            } else {
-                log.info("Password-reset requested for unknown email — no-op");
-            }
-        } else {
-            if (userRepository.findByPhoneNumber(id.value()).isPresent()) {
-                otpService.sendPasswordResetOtpToPhone(id.value());
-            } else {
-                log.info("Password-reset requested for unknown phone — no-op");
-            }
+        Optional<User> user = id.email()
+                ? userRepository.findByEmail(id.value())
+                : userRepository.findByPhoneNumber(id.value());
+        if (user.isEmpty()) {
+            log.info("Password-reset requested for unknown {} — no-op", id.email() ? "email" : "phone");
+            return;
         }
+        if (deactivated(user.get())) {
+            log.info("Password-reset requested for a deactivated account userId={} — no-op", user.get().getId());
+            return;
+        }
+        if (id.email()) {
+            otpService.sendPasswordResetOtpToEmail(id.value());
+        } else {
+            otpService.sendPasswordResetOtpToPhone(id.value());
+        }
+    }
+
+    /**
+     * Approved but switched off by an administrator. A registration still
+     * pending approval is also inactive, but not deactivated — its reset flow
+     * is unchanged (the approval replaces the password anyway).
+     */
+    private static boolean deactivated(User user) {
+        return user.isApproved() && !user.isActive();
     }
 
     /** Step 2 — verify OTP + set the new password. */
@@ -83,12 +102,23 @@ public class PasswordResetService {
         }
         Identifier id = resolveIdentifier(phoneNumber, email);
 
+        // A deactivated account gets the wrong-code answer, before the code is
+        // even looked at: no status is revealed, and no password set now can be
+        // waiting for a reactivation. (No code can have been sent since the
+        // deactivation — requestReset is a no-op for it — and the deactivation
+        // deleted any sent before; this closes the race between the two.)
+        Optional<User> target = id.email()
+                ? userRepository.findByEmail(id.value())
+                : userRepository.findByPhoneNumber(id.value());
+        if (target.isPresent() && deactivated(target.get())) {
+            log.info("Password reset refused for a deactivated account userId={}", target.get().getId());
+            throw new AuthService.PasswordChangeException("Invalid or expired code");
+        }
+
         if (!otpService.verifyPasswordResetOtp(id.value(), otp)) {
             throw new AuthService.PasswordChangeException("Invalid or expired code");
         }
-        User user = (id.email()
-                ? userRepository.findByEmail(id.value())
-                : userRepository.findByPhoneNumber(id.value()))
+        User user = target
                 // The OTP only exists for a resolved user, so this is a defensive guard.
                 .orElseThrow(() -> new AuthService.PasswordChangeException("Account not found"));
 

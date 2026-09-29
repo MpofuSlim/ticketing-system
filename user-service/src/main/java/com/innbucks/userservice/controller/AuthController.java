@@ -400,6 +400,11 @@ public class AuthController {
                     (the FE handles them exactly like a normal login response) PLUS a one-time list of 10
                     single-use backup codes. **The backup codes are shown ONCE — the FE must prompt the
                     user to save them.**
+
+                    The `mfaToken` is spent by a success: submitting it again (a double tap, a retried
+                    request) answers `400 mfaToken is invalid or expired`, and only the first response
+                    carries a session. A wrong code changes nothing — nothing is enrolled and the same
+                    `mfaToken` works for the next attempt.
                     """)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
@@ -442,17 +447,13 @@ public class AuthController {
             HttpServletRequest httpRequest,
             @Valid @RequestBody MfaVerifyRequestDTO request,
             @RequestHeader(value = "X-Device-Id", required = false) String deviceId) {
-        Long userId = mfaTokenService.verify(request.getMfaToken(),
-                com.innbucks.userservice.security.MfaTokenService.Purpose.ENROLLMENT);
-        java.util.List<String> backupCodes = mfaService.completeEnrollment(userId, request.getCode());
-        // Synthesise a step-1-completed mfaToken so we can reuse the same code
-        // path that mints real tokens for an MFA-required login.
-        String reusableLoginToken = mfaTokenService.issue(userId,
-                com.innbucks.userservice.security.MfaTokenService.Purpose.LOGIN_MFA);
-        AuthResponseDTO authResponse = authService.completeLoginWithMfa(
-                reusableLoginToken, request.getCode(), deviceId, auditContext(httpRequest));
+        // One transaction that spends the PRESENTED enrolment token (its own `tv`),
+        // enrols, and mints — so a double submit cannot end in two sessions and a
+        // refusal enrols nothing. See AuthService.completeEnrollmentAndSignIn.
+        AuthService.EnrollmentSignIn signedIn = authService.completeEnrollmentAndSignIn(
+                request.getMfaToken(), request.getCode(), deviceId, auditContext(httpRequest));
         return ResponseEntity.ok(ApiResult.ok("MFA enabled",
-                MfaEnrollCompleteResponseDTO.from(authResponse, backupCodes)));
+                MfaEnrollCompleteResponseDTO.from(signedIn.session(), signedIn.backupCodes())));
     }
 
     @PostMapping("/mfa/disable")
@@ -464,10 +465,45 @@ public class AuthController {
                     it; an admin must use `/admin/users/{id}/mfa/reset` instead.
                     """)
     @ApiResponses({
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "MFA disabled"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Wrong code"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "MFA disabled",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "200 OK", "message": "MFA disabled", "data": null }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Wrong code",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "400 BAD_REQUEST", "message": "That code didn't match. MFA was not disabled.", "data": null }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
+                    description = "No Bearer token, a deactivated account, or a session a later sign-in, "
+                            + "sign-out or account change has ended",
+                    content = @Content(mediaType = "application/json",
+                            examples = {
+                                    @ExampleObject(name = "Missing Bearer token", value = """
+                                            { "code": "401 UNAUTHORIZED", "message": "Missing Bearer token", "data": null }
+                                            """),
+                                    @ExampleObject(name = "Account deactivated", value = """
+                                            {
+                                              "code": "401 UNAUTHORIZED",
+                                              "message": "This account has been deactivated. Contact your administrator to restore access.",
+                                              "data": { "errorCode": "account_inactive" }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Session ended", value = """
+                                            {
+                                              "code": "401 UNAUTHORIZED",
+                                              "message": "This session has ended. Please sign in again.",
+                                              "data": { "errorCode": "session_superseded" }
+                                            }
+                                            """)
+                            })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
-                    description = "Caller's role requires MFA — only an admin can reset")
+                    description = "Caller's role requires MFA — only an admin can reset",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "403 FORBIDDEN", "message": "Your role requires MFA. An administrator must reset it via /admin/users/{id}/mfa/reset.", "data": null }
+                                    """)))
     })
     public ResponseEntity<ApiResult<Void>> disableMfa(HttpServletRequest httpRequest,
                                                       @Valid @RequestBody MfaDisableRequestDTO request) {
@@ -478,6 +514,11 @@ public class AuthController {
         }
         String token = authHeader.substring(7);
         String subject = jwtUtil.extractEmail(token);
+        // JwtFilter skips /auth, so hold this Bearer token to the same
+        // (token_version, active) gate it applies everywhere else: a deactivated
+        // account (401 account_inactive) or an ended session (401
+        // session_superseded) must not be able to switch the second factor off.
+        tokenRevocationService.requireCurrentSession(subject, jwtUtil.extractTokenVersion(token));
         com.innbucks.userservice.entity.User caller = (subject != null && subject.contains("@")
                 ? userRepository.findByEmail(subject)
                 : userRepository.findByPhoneNumber(subject))
@@ -868,9 +909,42 @@ public class AuthController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
-                    description = "Validation failure, wrong current password, or new password matches the current one"),
+                    description = "Validation failure, wrong current password, or new password matches the current one",
+                    content = @Content(mediaType = "application/json",
+                            examples = {
+                                    @ExampleObject(name = "Wrong current password", value = """
+                                            { "code": "400 BAD_REQUEST", "message": "Current password does not match", "data": null }
+                                            """),
+                                    @ExampleObject(name = "Same as the current password", value = """
+                                            { "code": "400 BAD_REQUEST", "message": "New password must differ from current password", "data": null }
+                                            """),
+                                    @ExampleObject(name = "Expired or malformed token", value = """
+                                            { "code": "400 BAD_REQUEST", "message": "Invalid or expired token", "data": null }
+                                            """)
+                            })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
-                    description = "Missing or invalid bearer token")
+                    description = "No Bearer token, a deactivated account, or a session a later sign-in, "
+                            + "sign-out or account change has ended",
+                    content = @Content(mediaType = "application/json",
+                            examples = {
+                                    @ExampleObject(name = "Missing Bearer token", value = """
+                                            { "code": "401 UNAUTHORIZED", "message": "Missing Bearer token", "data": null }
+                                            """),
+                                    @ExampleObject(name = "Account deactivated", value = """
+                                            {
+                                              "code": "401 UNAUTHORIZED",
+                                              "message": "This account has been deactivated. Contact your administrator to restore access.",
+                                              "data": { "errorCode": "account_inactive" }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Session ended", value = """
+                                            {
+                                              "code": "401 UNAUTHORIZED",
+                                              "message": "This session has ended. Please sign in again.",
+                                              "data": { "errorCode": "session_superseded" }
+                                            }
+                                            """)
+                            }))
     })
     public ResponseEntity<ApiResult<Void>> changePassword(HttpServletRequest request,
                                                           @Valid @RequestBody ChangePasswordRequestDTO body) {

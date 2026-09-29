@@ -34,19 +34,33 @@ import java.time.Instant;
  *   <li>clears "remember this device" trust, so a reactivation does not
  *       inherit a standing 2FA bypass;</li>
  *   <li>deletes the live reset-OTP rows keyed by the account's email and phone,
- *       so no password can be planted now for use after a reactivation;</li>
+ *       so a code requested BEFORE the deactivation cannot set a password for
+ *       use after a reactivation (a code cannot be requested DURING it:
+ *       {@code PasswordResetService} treats a deactivated account like an
+ *       unknown one);</li>
  *   <li>after commit, publishes {@code auth:tokenver:<userUuid>} so every other
  *       service rejects the old access tokens immediately (a failed publish is
  *       counted as {@code user.tokenver.publish_failed}; those services then
  *       fail open until each token expires).</li>
  * </ol>
  *
+ * <p>{@link #sweepOnReactivation} runs the same sweep (minus the deactivation)
+ * when an account comes back. It changes nothing for an account deactivated
+ * through {@link #revokeAll} — there is nothing left to end — but accounts
+ * deactivated before this class existed still hold live refresh families,
+ * device trust and access tokens, which a reactivation would otherwise bring
+ * straight back.
+ *
  * <p>Auditing and the deactivation notice stay with the caller, which knows who
  * acted and why.
  *
  * <p><b>Not reached:</b> loyalty's phone-keyed {@code LRT-} refresh chains and
- * loyalty sessions. A customer deactivated here keeps those until they expire;
- * they carry no fleet authority beyond loyalty.
+ * loyalty sessions. A customer deactivated here keeps those until they expire,
+ * and {@code POST /auth/otp/verify} still mints a NEW {@code loyalty-otp}
+ * session (and promotes the phone in loyalty) for that customer's phone. They
+ * are roles-empty and carry no fleet authority beyond loyalty; whether a
+ * deactivation here should also switch loyalty off is loyalty's decision.
+ * Documented, not fixed.
  */
 @Slf4j
 @Component
@@ -71,11 +85,27 @@ public class AccountSessionRevoker {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public Revocation revokeAll(User user, String reason) {
-        long version = tokenVersionBumper.deactivateAndBump(user);
+        return endSessions(user, tokenVersionBumper.deactivateAndBump(user), reason);
+    }
+
+    /**
+     * Reactivation (an approved account going from inactive back to active):
+     * bump, revoke every refresh family, clear device trust and delete live reset
+     * codes, so the account starts from a clean slate — "re-activating does not
+     * restore any of it" holds whenever and however the account was deactivated.
+     * Nothing legitimate is lost: every session path refuses an inactive account,
+     * so none was minted while it was off.
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public Revocation sweepOnReactivation(User user) {
+        return endSessions(user, tokenVersionBumper.bump(user), "reactivation");
+    }
+
+    private Revocation endSessions(User user, long version, String reason) {
         int refreshRevoked = refreshTokenRepository.revokeAllForUser(user.getId(), Instant.now());
         deviceTrustService.clearTrustForUser(user.getId());
         int codesDeleted = deleteResetCodes(user);
-        log.info("Account deactivated and sessions revoked userId={} reason={} newTokenVersion={} "
+        log.info("Account sessions revoked userId={} reason={} newTokenVersion={} "
                         + "refreshTokensRevoked={} resetCodesDeleted={}",
                 user.getId(), reason, version, refreshRevoked, codesDeleted);
         return new Revocation(version, refreshRevoked, codesDeleted);

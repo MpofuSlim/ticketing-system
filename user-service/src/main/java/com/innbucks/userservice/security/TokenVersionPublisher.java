@@ -1,14 +1,20 @@
 package com.innbucks.userservice.security;
 
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -31,6 +37,21 @@ import java.util.UUID;
  * {@link UUID#toString()} value user-service stamps into the JWT
  * {@code userUuid} claim (see {@link JwtUtil#generateToken}), and the value is
  * the {@code token_version} as a decimal String.
+ *
+ * <p><b>Never moves backwards.</b> Each bump publishes from its own
+ * after-commit callback, so two bumps of one account can reach Redis in the
+ * opposite order to their commits: a login commits v+1, a deactivation commits
+ * v+2, and the login thread's write — delayed by Redis latency or a GC pause —
+ * lands last. A plain {@code SET} would then leave v+1 published, and every
+ * downstream service would accept the login's access token for a deactivated
+ * account until it expired. The write is therefore a server-side
+ * compare-and-set ({@link #PUBLISH_IF_NOT_OLDER_LUA}): it stores the value only
+ * when it is not lower than the one already there. Versions only ever grow in
+ * Postgres, so the highest value seen is always the live one — with one
+ * operational exception: after restoring user-service's database to an earlier
+ * point, delete {@code auth:tokenver:*}, or the restored (lower) versions can
+ * never replace the published ones and downstream refuses those users until
+ * their versions overtake.
  *
  * <p><b>Best-effort, fail-open</b> — mirrors {@link
  * com.innbucks.userservice.service.TokenRevocationService}'s shared-denylist
@@ -65,15 +86,49 @@ public class TokenVersionPublisher {
      */
     public static final String PUBLISH_FAILED_METRIC = "user.tokenver.publish_failed";
 
+    /**
+     * Write {@code ARGV[1]} to {@code KEYS[1]} with a {@code PX ARGV[2]} TTL
+     * unless the stored value is HIGHER; returns 1 when written, 0 when a newer
+     * version was already there. A missing or non-numeric stored value counts
+     * as -1 (always overwritten). An equal value is rewritten, which only
+     * refreshes the TTL. Atomic: Redis runs a script without interleaving.
+     */
+    static final String PUBLISH_IF_NOT_OLDER_LUA = """
+            local current = tonumber(redis.call('GET', KEYS[1]) or '') or -1
+            if tonumber(ARGV[1]) >= current then
+              redis.call('SET', KEYS[1], ARGV[1], 'PX', ARGV[2])
+              return 1
+            end
+            return 0
+            """;
+
+    private static final RedisScript<Long> PUBLISH_IF_NOT_OLDER =
+            new DefaultRedisScript<>(PUBLISH_IF_NOT_OLDER_LUA, Long.class);
+
     private final StringRedisTemplate redis;
 
     /**
-     * Field-injected (optional) so the existing single-argument construction in
-     * {@code TokenVersionPublisherTest} still compiles; null there means the
-     * failure is logged but not counted.
+     * Null when no registry is wired (the single-argument construction in
+     * {@code TokenVersionPublisherTest}): failures are then logged but not counted.
      */
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    private io.micrometer.core.instrument.MeterRegistry meterRegistry;
+    private Counter publishFailed;
+
+    /**
+     * Registers {@link #PUBLISH_FAILED_METRIC} at ZERO as soon as the registry
+     * is injected, not on the first failure. {@code increase()} cannot see a
+     * series' first sample, so a counter created by the failure it counts
+     * starts at 1 and the alert misses exactly the case it exists for — one
+     * failed publish after a pod start, i.e. one deactivation during a Redis
+     * blip. Same reason {@code SecurityMetrics} registers its alerted counters
+     * up front.
+     */
+    @Autowired(required = false)
+    void setMeterRegistry(MeterRegistry meterRegistry) {
+        this.publishFailed = meterRegistry == null ? null
+                : Counter.builder(PUBLISH_FAILED_METRIC)
+                        .description("token_version publishes the shared Redis refused")
+                        .register(meterRegistry);
+    }
 
     /**
      * Entry TTL, reusing the refresh-token lifetime (milliseconds) so any
@@ -86,6 +141,10 @@ public class TokenVersionPublisher {
 
     /**
      * Publish {@code userUuid -> version} to the shared Redis.
+     *
+     * <p>Never lowers the published value (see the class note): a version older
+     * than the one already there is dropped, which is how an out-of-order
+     * after-commit publish loses to the newer one.
      *
      * <p>No-op when {@code userUuid} is null: legacy tokens carry no
      * {@code userUuid} claim, so there's nothing downstream can key on —
@@ -105,7 +164,12 @@ public class TokenVersionPublisher {
         String key = SHARED_TOKEN_VERSION_PREFIX + userUuid;
         Duration ttl = refreshExpirationMs > 0 ? Duration.ofMillis(refreshExpirationMs) : FALLBACK_TTL;
         try {
-            redis.opsForValue().set(key, Long.toString(version), ttl);
+            Long written = redis.execute(PUBLISH_IF_NOT_OLDER, List.of(key),
+                    Long.toString(version), Long.toString(ttl.toMillis()));
+            if (written != null && written == 0L) {
+                // A newer bump already published — this callback arrived late.
+                log.info("Token version publish superseded by a newer one key={} version={}", key, version);
+            }
         } catch (RuntimeException ex) {
             // Fail open: Postgres (users.token_version) stays the source of truth
             // for user-service's own JwtFilter; downstream keeps the short
@@ -147,11 +211,11 @@ public class TokenVersionPublisher {
     }
 
     private void countFailure() {
-        if (meterRegistry == null) {
+        if (publishFailed == null) {
             return;
         }
         try {
-            meterRegistry.counter(PUBLISH_FAILED_METRIC).increment();
+            publishFailed.increment();
         } catch (RuntimeException ignored) {
             // A metrics failure must never become a publish failure.
         }

@@ -1083,6 +1083,37 @@ class AuthServiceTest {
     }
 
     @Test
+    void changePassword_isHeldToTheLiveSessionGate_beforeAnythingElse() {
+        // JwtFilter skips /auth, so change-password checks (token_version,
+        // active) itself: a deactivated account's unexpired token, or one a
+        // newer login ended, must not change the password — and is refused
+        // before the current password is checked, so it is no password oracle.
+        for (RuntimeException refusal : List.of(
+                new com.innbucks.userservice.exception.AccountInactiveException(),
+                new com.innbucks.userservice.exception.SessionSupersededException())) {
+            UserRepository userRepo = mock(UserRepository.class);
+            PasswordEncoder encoder = mock(PasswordEncoder.class);
+            JwtUtil jwt = mock(JwtUtil.class);
+            when(jwt.isTokenValid(anyString())).thenReturn(true);
+            when(jwt.extractEmail(anyString())).thenReturn("alice@x.co");
+            when(jwt.extractTokenVersion("the-access-token")).thenReturn(3L);
+            TokenRevocationService rev = mock(TokenRevocationService.class);
+            doThrow(refusal).when(rev).requireCurrentSession("alice@x.co", 3L);
+            RefreshTokenRepository refreshRepo = mock(RefreshTokenRepository.class);
+            AuthService svc = withLockoutConfig(new AuthService(userRepo, mock(TenantProfileRepository.class),
+                    mock(CustomerProfileRepository.class), encoder, jwt, rev,
+                    mock(RefreshTokenService.class), refreshRepo, mock(AuditService.class)));
+
+            RuntimeException thrown = assertThrows(RuntimeException.class, () -> svc.changePassword(
+                    "the-access-token", changeReq("current", "new-pw"), AuditContext.none()));
+
+            assertSame(refusal, thrown);
+            verifyNoInteractions(userRepo, encoder, refreshRepo);
+            verify(rev, never()).revoke(anyString());
+        }
+    }
+
+    @Test
     void changePassword_success_revokesCurrentTokenAndAllRefreshTokens_andBumpsVersion() {
         // The contract pinned here: on a successful password change the user is
         // FORCED to re-authenticate. Three things must happen, in addition to
@@ -1118,6 +1149,8 @@ class AuthServiceTest {
         svc.changePassword("the-access-token", changeReq("current", "new-pw"),
                 com.innbucks.userservice.service.AuditContext.none());
 
+        // (0) Held to the live-session gate JwtFilter would have applied.
+        verify(rev).requireCurrentSession(eq("alice@x.co"), anyLong());
         // (1) Hash + token-version rotation persisted
         assertEquals("hashed-new", user.getPassword());
         assertEquals(4L, user.getTokenVersion());
@@ -1499,7 +1532,136 @@ class AuthServiceTest {
                 com.innbucks.userservice.security.MfaTokenService.InvalidMfaTokenException.class,
                 () -> svc.completeLoginWithMfa("step1", "472938", null, false, AuditContext.none()));
         assertEquals("mfaToken is invalid or expired", ex.getMessage());
+        // Its own subtype: thrown AFTER the code check (which may have burned a
+        // backup code), so the step's transaction rolls back on it — pinned by
+        // MfaStepRollbackRulesTest.
+        assertInstanceOf(com.innbucks.userservice.security.MfaTokenService.MfaTokenSpentException.class, ex);
         verifyNoInteractions(refreshTokenService, jwt);
+    }
+
+    @Test
+    void completeEnrollmentAndSignIn_spendsTheENROLLMENTTokensOwnVersion_beforeEnrolling_thenMintsAtIt() {
+        // The token the client presented is the one spent: compare-and-set on
+        // ITS tv, before any side effect. It used to be verified, the enrolment
+        // committed, and a FRESH login token minted at whatever version the row
+        // then held — so the presented token was never spent and a double
+        // submit could end in two sessions.
+        UserRepository userRepo = mock(UserRepository.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        RefreshTokenService refreshTokenService = mock(RefreshTokenService.class);
+        TokenVersionPublisher publisher = mock(TokenVersionPublisher.class);
+
+        User user = mfaSystemUser();
+        user.setMfaEnabled(false);
+        user.setTokenVersion(5L);
+        user.setUserUuid(UUID.randomUUID());
+        when(userRepo.findById(55L)).thenReturn(Optional.of(user));
+        when(userRepo.incrementTokenVersionIfCurrent(55L, 5L)).thenReturn(6L);
+        when(refreshTokenService.issueNewFamily(any(), any())).thenReturn("refresh");
+        when(jwt.generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+                any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any())).thenReturn("tok");
+
+        com.innbucks.userservice.security.MfaTokenService tokenService =
+                mock(com.innbucks.userservice.security.MfaTokenService.class);
+        when(tokenService.verifySubject("enrol-token",
+                com.innbucks.userservice.security.MfaTokenService.Purpose.ENROLLMENT))
+                .thenReturn(new com.innbucks.userservice.security.MfaTokenService.Subject(55L, 5L));
+        MfaService mfaService = mock(MfaService.class);
+        List<String> codes = List.of("X4Q7-K9F2-A3B1-M8H6", "B2C3-D4E5-F6G7-H8J9");
+        when(mfaService.completeEnrollment(55L, "472938")).thenReturn(codes);
+
+        AuthService svc = withLockoutConfig(new AuthService(userRepo, mock(TenantProfileRepository.class),
+                mock(CustomerProfileRepository.class), mock(PasswordEncoder.class), jwt,
+                mock(TokenRevocationService.class), refreshTokenService,
+                mock(RefreshTokenRepository.class), mock(AuditService.class)));
+        org.springframework.test.util.ReflectionTestUtils.setField(svc, "tokenVersionBumper",
+                new TokenVersionBumper(userRepo, publisher));
+        wireMfa(svc, realMfaPolicy(), tokenService, mfaService, mock(DeviceTrustService.class));
+
+        AuthService.EnrollmentSignIn signedIn =
+                svc.completeEnrollmentAndSignIn("enrol-token", "472938", "dev-1", AuditContext.none());
+
+        assertEquals("tok", signedIn.session().getToken());
+        assertEquals(codes, signedIn.backupCodes());
+        org.mockito.InOrder order = inOrder(userRepo, mfaService, jwt);
+        order.verify(userRepo).incrementTokenVersionIfCurrent(55L, 5L);
+        order.verify(mfaService).completeEnrollment(55L, "472938");
+        ArgumentCaptor<Long> minted = ArgumentCaptor.forClass(Long.class);
+        order.verify(jwt).generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(), any(),
+                any(), any(), any(), minted.capture(), any(), any(), any(), anyBoolean(), any());
+        assertEquals(6L, minted.getValue(), "minted at the version the ENROLLMENT token's spend produced");
+        verify(publisher).publishAfterCommit(user.getUserUuid(), 6L);
+        // No second, synthetic login token — the presented one is what gets spent.
+        verify(tokenService, never()).issue(anyLong(), any());
+        verify(mfaService, never()).verifyForLogin(any(), any());
+    }
+
+    @Test
+    void completeEnrollmentAndSignIn_lostCompareAndSet_enrolsNothing_andMintsNothing() {
+        // A second submit of the same enrolment token (or a bump since the
+        // password step): refused BEFORE the enrolment runs, so no backup codes
+        // are minted or replaced and no session is issued.
+        UserRepository userRepo = mock(UserRepository.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        RefreshTokenService refreshTokenService = mock(RefreshTokenService.class);
+
+        User user = mfaSystemUser();
+        user.setMfaEnabled(false);
+        user.setTokenVersion(5L);
+        when(userRepo.findById(55L)).thenReturn(Optional.of(user));
+        when(userRepo.incrementTokenVersionIfCurrent(55L, 5L)).thenReturn(null);
+
+        com.innbucks.userservice.security.MfaTokenService tokenService =
+                mock(com.innbucks.userservice.security.MfaTokenService.class);
+        when(tokenService.verifySubject("enrol-token",
+                com.innbucks.userservice.security.MfaTokenService.Purpose.ENROLLMENT))
+                .thenReturn(new com.innbucks.userservice.security.MfaTokenService.Subject(55L, 5L));
+        MfaService mfaService = mock(MfaService.class);
+
+        AuthService svc = withLockoutConfig(new AuthService(userRepo, mock(TenantProfileRepository.class),
+                mock(CustomerProfileRepository.class), mock(PasswordEncoder.class), jwt,
+                mock(TokenRevocationService.class), refreshTokenService,
+                mock(RefreshTokenRepository.class), mock(AuditService.class)));
+        org.springframework.test.util.ReflectionTestUtils.setField(svc, "tokenVersionBumper",
+                new TokenVersionBumper(userRepo, mock(TokenVersionPublisher.class)));
+        wireMfa(svc, realMfaPolicy(), tokenService, mfaService, mock(DeviceTrustService.class));
+
+        com.innbucks.userservice.security.MfaTokenService.MfaTokenSpentException ex = assertThrows(
+                com.innbucks.userservice.security.MfaTokenService.MfaTokenSpentException.class,
+                () -> svc.completeEnrollmentAndSignIn("enrol-token", "472938", null, AuditContext.none()));
+        assertEquals("mfaToken is invalid or expired", ex.getMessage());
+        verify(mfaService, never()).completeEnrollment(anyLong(), any());
+        verifyNoInteractions(refreshTokenService, jwt);
+    }
+
+    @Test
+    void completeEnrollmentAndSignIn_whileMfaLocked_is423_andEnrolsNothing() {
+        // Enrolment always ended in the login step's lockout short-circuit;
+        // folding it into one transaction keeps that, and now refuses before
+        // the enrolment rather than after it had already committed.
+        UserRepository userRepo = mock(UserRepository.class);
+        User user = mfaSystemUser();
+        user.setMfaEnabled(false);
+        user.setMfaLockedUntil(java.time.Instant.now().plusSeconds(600));
+        when(userRepo.findById(55L)).thenReturn(Optional.of(user));
+
+        com.innbucks.userservice.security.MfaTokenService tokenService =
+                mock(com.innbucks.userservice.security.MfaTokenService.class);
+        when(tokenService.verifySubject("enrol-token",
+                com.innbucks.userservice.security.MfaTokenService.Purpose.ENROLLMENT))
+                .thenReturn(new com.innbucks.userservice.security.MfaTokenService.Subject(55L, 0L));
+        MfaService mfaService = mock(MfaService.class);
+
+        AuthService svc = withLockoutConfig(new AuthService(userRepo, mock(TenantProfileRepository.class),
+                mock(CustomerProfileRepository.class), mock(PasswordEncoder.class), mock(JwtUtil.class),
+                mock(TokenRevocationService.class), mock(RefreshTokenService.class),
+                mock(RefreshTokenRepository.class), mock(AuditService.class)));
+        wireMfa(svc, realMfaPolicy(), tokenService, mfaService, mock(DeviceTrustService.class));
+
+        assertThrows(AuthService.AccountLockedException.class,
+                () -> svc.completeEnrollmentAndSignIn("enrol-token", "472938", null, AuditContext.none()));
+        verify(mfaService, never()).completeEnrollment(anyLong(), any());
+        verify(userRepo, never()).incrementTokenVersionIfCurrent(anyLong(), anyLong());
     }
 
     @Test
@@ -1690,6 +1852,64 @@ class AuthServiceTest {
 
         assertThrows(AuthService.MfaEnrollmentRequiredException.class,
                 () -> svc.refresh("rt", null, AuditContext.none()));
+    }
+
+    /**
+     * A deactivated account's refresh is audited as what it is. RefreshTokenService
+     * checks `active` BEFORE replay detection and has already revoked every
+     * family; the audit must say AUTH_REFRESH_ACCOUNT_INACTIVE — never
+     * AUTH_REFRESH_REUSE_DETECTED, which reads as token theft and pages someone.
+     */
+    @Test
+    void refresh_forADeactivatedAccount_isAuditedAsInactive_neverAsReuse() {
+        RefreshTokenService refreshTokenService = mock(RefreshTokenService.class);
+        when(refreshTokenService.rotate("rt", "dev-1"))
+                .thenThrow(new com.innbucks.userservice.exception.AccountInactiveException());
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.extractEmail("rt")).thenReturn("tariro.moyo@innbucks.co.zw");
+        AuditService audit = mock(AuditService.class);
+        AuthService svc = withLockoutConfig(new AuthService(mock(UserRepository.class),
+                mock(TenantProfileRepository.class), mock(CustomerProfileRepository.class),
+                mock(PasswordEncoder.class), jwt, mock(TokenRevocationService.class),
+                refreshTokenService, mock(RefreshTokenRepository.class), audit));
+
+        assertThrows(com.innbucks.userservice.exception.AccountInactiveException.class,
+                () -> svc.refresh("rt", "dev-1", AuditContext.none()));
+
+        verify(audit).recordFailure(eq(AuditEventType.AUTH_REFRESH_ACCOUNT_INACTIVE),
+                eq("tariro.moyo@innbucks.co.zw"), eq(AuditService.ACTOR_TYPE_USER),
+                eq("tariro.moyo@innbucks.co.zw"), eq(AuditService.TARGET_TYPE_USER),
+                eq("account_inactive"), eq(java.util.Map.of("organizationSwitch", false)),
+                eq(AuditContext.none()));
+        verify(audit, never()).recordFailure(eq(AuditEventType.AUTH_REFRESH_REUSE_DETECTED),
+                any(), any(), any(), any(), any(), any(), any());
+    }
+
+    /** Same for the organization switch, which is a rotation too. */
+    @Test
+    void switchOrganization_forADeactivatedAccount_isAuditedAsInactive_neverAsReuse() {
+        RefreshTokenService refreshTokenService = mock(RefreshTokenService.class);
+        UUID org = UUID.randomUUID();
+        when(refreshTokenService.rotateInto("rt", "dev-1", org))
+                .thenThrow(new com.innbucks.userservice.exception.AccountInactiveException());
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.extractEmail("rt")).thenReturn("tariro.moyo@innbucks.co.zw");
+        AuditService audit = mock(AuditService.class);
+        AuthService svc = withLockoutConfig(new AuthService(mock(UserRepository.class),
+                mock(TenantProfileRepository.class), mock(CustomerProfileRepository.class),
+                mock(PasswordEncoder.class), jwt, mock(TokenRevocationService.class),
+                refreshTokenService, mock(RefreshTokenRepository.class), audit));
+
+        assertThrows(com.innbucks.userservice.exception.AccountInactiveException.class,
+                () -> svc.switchOrganization("rt", "dev-1", org, AuditContext.none()));
+
+        verify(audit).recordFailure(eq(AuditEventType.AUTH_REFRESH_ACCOUNT_INACTIVE),
+                eq("tariro.moyo@innbucks.co.zw"), eq(AuditService.ACTOR_TYPE_USER),
+                eq("tariro.moyo@innbucks.co.zw"), eq(AuditService.TARGET_TYPE_USER),
+                eq("account_inactive"), eq(java.util.Map.of("organizationSwitch", true)),
+                eq(AuditContext.none()));
+        verify(audit, never()).recordFailure(eq(AuditEventType.AUTH_REFRESH_REUSE_DETECTED),
+                any(), any(), any(), any(), any(), any(), any());
     }
 
     /** The same guard must not fire for the exempt role it was built around. */

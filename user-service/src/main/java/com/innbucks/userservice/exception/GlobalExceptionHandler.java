@@ -208,6 +208,19 @@ public class GlobalExceptionHandler {
                 .body(ApiResult.of(HttpStatus.UNAUTHORIZED, ex.getMessage(), data));
     }
 
+    // An access token from an ended session, presented to an /auth/** handler
+    // that authenticates from its own Bearer header (JwtFilter skips /auth). 401
+    // like JwtFilter's SESSION_SUPERSEDED; typed constant message — safe to pass
+    // through. Above the RuntimeException catch-all, which would make it a 400.
+    @ExceptionHandler(SessionSupersededException.class)
+    public ResponseEntity<ApiResult<Map<String, String>>> handleSessionSuperseded(SessionSupersededException ex) {
+        log.info("Request refused — the presented session has been superseded");
+        Map<String, String> data = new LinkedHashMap<>();
+        data.put("errorCode", "session_superseded");
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(ApiResult.of(HttpStatus.UNAUTHORIZED, ex.getMessage(), data));
+    }
+
     // Change-password validation failures. Without this handler every distinct
     // reason (wrong current password, same-as-old, expired token) collapsed into
     // the generic catch-all below ("We couldn't process your request") and the

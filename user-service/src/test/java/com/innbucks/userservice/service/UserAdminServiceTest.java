@@ -222,6 +222,54 @@ class UserAdminServiceTest {
         verifyNoInteractions(f.publisher);
     }
 
+    @Test
+    void reactivation_sweepsLeftoverSessions_beforeTheAccountComesBack() {
+        // An account deactivated before deactivation ended sessions still holds
+        // live refresh families and device trust; switching it back on used to
+        // hand them straight back. The sweep bumps, revokes and clears first.
+        Fixture f = new Fixture();
+        UUID uuid = UUID.randomUUID();
+        User user = User.builder().id(12L).userUuid(uuid).email("tariro.moyo@innbucks.co.zw")
+                .phoneNumber("+263771234567").password("user-chosen")
+                .active(false).approved(true).tokenVersion(3L).build();
+        when(f.userRepo.findById(12L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(f.refreshTokens.revokeAllForUser(eq(12L), any())).thenReturn(2);
+
+        User result = f.service.setActive(12L, true, "admin@innbucks.co.zw", AuditContext.none());
+
+        assertTrue(result.isActive());
+        assertEquals(4L, result.getTokenVersion());
+        verify(f.tokenVersions).publishAfterCommit(uuid, 4L);
+        verify(f.refreshTokens).revokeAllForUser(eq(12L), any());
+        verify(f.deviceTrust).clearTrustForUser(12L);
+        verify(f.otps).deleteByPhoneNumber("tariro.moyo@innbucks.co.zw");
+        verify(f.audit).recordSuccess(
+                eq(AuditEventType.USER_ACTIVATED),
+                eq("admin@innbucks.co.zw"), eq(AuditService.ACTOR_TYPE_USER),
+                eq("12"), eq(AuditService.TARGET_TYPE_USER),
+                argThat(metadata -> Long.valueOf(4L).equals(metadata.get("tokenVersion"))
+                        && Integer.valueOf(2).equals(metadata.get("refreshTokensRevoked"))),
+                eq(AuditContext.none()));
+    }
+
+    @Test
+    void firstApproval_sweepsNothing() {
+        // A never-approved account has never held a session; the sweep is for
+        // REactivation only.
+        Fixture f = new Fixture();
+        User user = User.builder().id(13L).email("new@acme.co.zw").password("placeholder")
+                .active(false).approved(false).tokenVersion(0L).build();
+        when(f.userRepo.findById(13L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(f.encoder.encode(anyString())).thenReturn("encoded-temp");
+
+        f.service.setActive(13L, true);
+
+        assertEquals(0L, user.getTokenVersion());
+        verifyNoInteractions(f.refreshTokens, f.deviceTrust, f.tokenVersions);
+    }
+
     // -- markCredentialDelivered (callback for the listener) ------------------
 
     @Test
@@ -341,20 +389,6 @@ class UserAdminServiceTest {
                         && Integer.valueOf(2).equals(metadata.get("refreshTokensRevoked"))
                         && Integer.valueOf(1).equals(metadata.get("resetCodesDeleted"))),
                 eq(AuditContext.none()));
-    }
-
-    @Test
-    void activation_revokesNothing() {
-        Fixture f = new Fixture();
-        User user = User.builder().id(32L).active(false).approved(true).password("pw").tokenVersion(4L).build();
-        when(f.userRepo.findById(32L)).thenReturn(Optional.of(user));
-        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
-
-        User result = f.service.setActive(32L, true, "admin@innbucks.co.zw", AuditContext.none());
-
-        assertTrue(result.isActive());
-        assertEquals(4L, result.getTokenVersion());
-        verifyNoInteractions(f.refreshTokens, f.deviceTrust, f.otps, f.tokenVersions);
     }
 
     @Test

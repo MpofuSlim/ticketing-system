@@ -39,9 +39,11 @@ import java.util.UUID;
  *       kills every pending MFA challenge. Before the claim, a token minted
  *       before a deactivation stayed good for its whole TTL, reusable across
  *       retries, and minted a session at whatever version was current.</li>
- *   <li>A successful verify bumps the version before minting
- *       ({@code AuthService.completeLoginWithMfa}), which SPENDS the token: it
- *       cannot be replayed to mint a second session.</li>
+ *   <li>A successful step bumps the version with a compare-and-set against the
+ *       token's OWN {@code tv} before minting ({@code AuthService.completeLoginWithMfa}
+ *       for a LOGIN_MFA token, {@code AuthService.completeEnrollmentAndSignIn}
+ *       for an ENROLLMENT token), which SPENDS the token: it cannot be replayed
+ *       to mint a second session.</li>
  * </ul>
  * A token with no {@code tv} (issued before this rule) is refused like a stale
  * one; the TTL is minutes, so that costs at most one re-login during rollout.
@@ -175,6 +177,24 @@ public class MfaTokenService {
     public static class InvalidMfaTokenException extends RuntimeException {
         public InvalidMfaTokenException(String message) {
             super(message);
+        }
+    }
+
+    /**
+     * The token verified, but the compare-and-set that spends it lost: a
+     * concurrent request presenting the same token spent it first, or a bump
+     * landed in between. Same 400 and message as any stale token — the client
+     * cannot tell, and need not.
+     *
+     * <p>Its own type because of WHEN it is thrown: after the code check, which
+     * may already have consumed a backup code. The MFA step's transaction
+     * commits on an {@link InvalidMfaTokenException} (thrown before any side
+     * effect) but must ROLL BACK on this one, so it is named in
+     * {@code rollbackFor} — the more specific rule wins.
+     */
+    public static class MfaTokenSpentException extends InvalidMfaTokenException {
+        public MfaTokenSpentException() {
+            super(INVALID_OR_EXPIRED);
         }
     }
 }

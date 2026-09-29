@@ -151,8 +151,16 @@ public class UserAdminService {
         // token_version bump land in ONE atomic UPDATE, every refresh family is
         // revoked, device trust and live reset codes are cleared, and the new
         // version reaches the shared Redis after commit. See AccountSessionRevoker.
+        //
+        // A REactivation (not the first approval) sweeps the same way before the
+        // account comes back: an account deactivated before that revocation
+        // existed still holds live refresh families and device trust, and would
+        // otherwise get them back the moment it is switched on again.
         AccountSessionRevoker.Revocation revocation = null;
         if (active) {
+            if (!firstApproval) {
+                revocation = accountSessionRevoker.sweepOnReactivation(user);
+            }
             user.setActive(true);
         } else {
             revocation = accountSessionRevoker.revokeAll(user, "admin_deactivation");

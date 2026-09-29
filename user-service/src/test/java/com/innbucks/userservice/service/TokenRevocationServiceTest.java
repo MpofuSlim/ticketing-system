@@ -105,7 +105,8 @@ class TokenRevocationServiceTest {
         live("alice@example.com", 4L, true);
         org.junit.jupiter.api.Assertions.assertEquals(TokenRevocationService.SessionState.CURRENT,
                 service.sessionState("alice@example.com", 4L));
-        org.junit.jupiter.api.Assertions.assertTrue(service.isTokenVersionCurrent("alice@example.com", 4L));
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(
+                () -> service.requireCurrentSession("alice@example.com", 4L));
     }
 
     @Test
@@ -113,6 +114,10 @@ class TokenRevocationServiceTest {
         live("alice@example.com", 5L, true);
         org.junit.jupiter.api.Assertions.assertEquals(TokenRevocationService.SessionState.SUPERSEDED,
                 service.sessionState("alice@example.com", 4L));
+        // The /auth handlers JwtFilter skips refuse it the same way: 401 session_superseded.
+        org.junit.jupiter.api.Assertions.assertThrows(
+                com.innbucks.userservice.exception.SessionSupersededException.class,
+                () -> service.requireCurrentSession("alice@example.com", 4L));
     }
 
     @Test
@@ -122,7 +127,9 @@ class TokenRevocationServiceTest {
         live("alice@example.com", 4L, false);
         org.junit.jupiter.api.Assertions.assertEquals(TokenRevocationService.SessionState.INACTIVE,
                 service.sessionState("alice@example.com", 4L));
-        org.junit.jupiter.api.Assertions.assertFalse(service.isTokenVersionCurrent("alice@example.com", 4L));
+        org.junit.jupiter.api.Assertions.assertThrows(
+                com.innbucks.userservice.exception.AccountInactiveException.class,
+                () -> service.requireCurrentSession("alice@example.com", 4L));
     }
 
     @Test
@@ -132,5 +139,8 @@ class TokenRevocationServiceTest {
                 service.sessionState("ghost@example.com", 1L));
         org.junit.jupiter.api.Assertions.assertEquals(TokenRevocationService.SessionState.SUPERSEDED,
                 service.sessionState(" ", 1L));
+        org.junit.jupiter.api.Assertions.assertThrows(
+                com.innbucks.userservice.exception.SessionSupersededException.class,
+                () -> service.requireCurrentSession(null, 1L));
     }
 }

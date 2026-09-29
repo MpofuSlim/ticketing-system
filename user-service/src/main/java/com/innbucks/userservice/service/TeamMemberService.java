@@ -221,6 +221,10 @@ public class TeamMemberService {
         if (member.isActive()) {
             return UserResponseDTO.from(member);
         }
+        // Back from a clean slate, same as a platform reactivation: an account
+        // switched off before deactivation ended every session (e.g. through
+        // PUT /admin/users/{id}/active) could otherwise get them back here.
+        accountSessionRevoker.sweepOnReactivation(member);
         member.setActive(true);
         userRepository.save(member);
         log.info("Re-enabled TEAM_MEMBER userUuid={} by={}",

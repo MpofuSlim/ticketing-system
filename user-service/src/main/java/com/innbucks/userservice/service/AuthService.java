@@ -8,6 +8,7 @@ import com.innbucks.userservice.util.HtmlSanitizer;
 import com.innbucks.userservice.util.MsisdnMasking;
 import com.innbucks.userservice.util.MsisdnValidator;
 import com.innbucks.userservice.security.JwtUtil;
+import com.innbucks.userservice.security.MfaTokenService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -695,26 +696,6 @@ public class AuthService implements ApplicationEventPublisherAware {
     }
 
     /**
-     * Backwards-compatible overload — completes a step-2 MFA login WITHOUT
-     * trusting the device. Preserves the 4-arg signature existing callers use
-     * ({@code /auth/mfa/enroll/complete} among them).
-     *
-     * <p>Carries its own {@code @Transactional}: it reaches the 5-arg method by
-     * self-invocation, which bypasses the Spring proxy, so without it the whole
-     * enrolment sign-in ran with NO transaction — every write auto-committing on
-     * its own, and the token-version spend (which must commit or roll back with
-     * the session it guards) impossible.
-     */
-    @Transactional(noRollbackFor = {InvalidCredentialsException.class,
-            MfaService.MfaException.class,
-            AccountLockedException.class,
-            com.innbucks.userservice.security.MfaTokenService.InvalidMfaTokenException.class})
-    public AuthResponseDTO completeLoginWithMfa(String mfaToken, String code, String deviceId,
-                                                AuditContext auditContext) {
-        return completeLoginWithMfa(mfaToken, code, deviceId, false, auditContext);
-    }
-
-    /**
      * Step 2 of an MFA-required login: verify the TOTP / backup code carried
      * with the step-1 mfaToken, and (if it matches) mint the real access +
      * refresh tokens via {@link #issueToken}. Same authorization model as the
@@ -725,26 +706,33 @@ public class AuthService implements ApplicationEventPublisherAware {
      * token (via {@link DeviceTrustService}), persists its hash against the
      * device, and returns the RAW token + expiry on the response so the client
      * can present it on future logins to skip the 2FA challenge.
+     *
+     * <p><b>Rollback rules.</b> A wrong code, a lockout and a bad token COMMIT
+     * (the strike counter and lockout stamp must survive the refusal). A LOST
+     * compare-and-set does not: {@link MfaTokenService.MfaTokenSpentException}
+     * is thrown after {@code verifyForLogin} may already have consumed a backup
+     * code, and that consumption must not outlive a refusal that minted nothing.
+     * It is the more specific rule, so it wins over the
+     * {@code InvalidMfaTokenException} it extends; {@code MfaStepRollbackRulesTest}
+     * pins both.
      */
     @Transactional(noRollbackFor = {InvalidCredentialsException.class,
             MfaService.MfaException.class,
             AccountLockedException.class,
-            com.innbucks.userservice.security.MfaTokenService.InvalidMfaTokenException.class})
+            MfaTokenService.InvalidMfaTokenException.class},
+            rollbackFor = MfaTokenService.MfaTokenSpentException.class)
     public AuthResponseDTO completeLoginWithMfa(String mfaToken, String code, String deviceId,
                                                 boolean rememberDevice, AuditContext auditContext) {
-        if (mfaPolicy == null || mfaTokenService == null || mfaService == null) {
-            // Misconfigured / unit-test path — fail closed.
-            throw new MfaService.MfaException("MFA is not available");
-        }
+        requireMfaWired();
         // Verify refuses a token for a DEACTIVATED account (401 account_inactive)
         // and one whose `tv` claim no longer equals the live token_version (the
         // existing invalid-mfaToken 400) — so a deactivation, role change,
         // password reset or admin MFA reset since step 1 ends this challenge.
-        com.innbucks.userservice.security.MfaTokenService.Subject subject = mfaTokenService.verifySubject(mfaToken,
-                com.innbucks.userservice.security.MfaTokenService.Purpose.LOGIN_MFA);
-        Long userId = subject.userId();
-        User user = userRepository.findById(userId)
+        MfaTokenService.Subject subject = mfaTokenService.verifySubject(mfaToken,
+                MfaTokenService.Purpose.LOGIN_MFA);
+        User user = userRepository.findById(subject.userId())
                 .orElseThrow(InvalidCredentialsException::new);
+        refuseWhileMfaLocked(user, auditContext);
 
         // A04/A07: MFA step-2 brute-force cap. The mfaToken is deliberately
         // reusable across FAILED retries (a mistyped code must NOT force a fresh
@@ -753,26 +741,10 @@ public class AuthService implements ApplicationEventPublisherAware {
         // mfa_failed_attempts / mfa_locked_until columns (V31) that the
         // password path does NOT reset — otherwise a password-holding attacker
         // could clear their strikes by re-authenticating. An active lockout
-        // short-circuits BEFORE the code check, so a fresh mfaToken can't
-        // reopen the window.
-        Instant now = Instant.now();
-        if (user.getMfaLockedUntil() != null && user.getMfaLockedUntil().isAfter(now)) {
-            auditService.recordFailure(
-                    AuditEventType.AUTH_LOGIN_REJECTED_LOCKED,
-                    String.valueOf(user.getId()), AuditService.ACTOR_TYPE_USER,
-                    String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
-                    "mfa_locked",
-                    java.util.Map.of("mfaLockedUntil", user.getMfaLockedUntil().toString(), "step", "mfa"),
-                    auditContext);
-            sec(m -> m.loginFailure("mfa_locked"));
-            throw new AccountLockedException(user.getMfaLockedUntil());
-        }
-        // Lockout window elapsed — clear it so this attempt starts a fresh count.
-        if (user.getMfaLockedUntil() != null) {
-            user.setMfaFailedAttempts(0);
-            user.setMfaLockedUntil(null);
-        }
+        // short-circuits BEFORE the code check (refuseWhileMfaLocked above), so
+        // a fresh mfaToken can't reopen the window.
         if (!mfaService.verifyForLogin(user, code)) {
+            Instant now = Instant.now();
             int attempts = user.getMfaFailedAttempts() + 1;
             user.setMfaFailedAttempts(attempts);
             boolean justLocked = false;
@@ -819,46 +791,18 @@ public class AuthService implements ApplicationEventPublisherAware {
             }
             throw new MfaService.MfaException("That code didn't match. Try the next one your app shows.");
         }
-        // Correct code — SPEND the mfaToken before anything is minted: bump
-        // token_version, but only if it is still the version the token is bound
-        // to and the account is still active (one atomic compare-and-set). Of two
-        // concurrent verifies presenting the same token exactly one gets here;
-        // the other, and any later replay, finds the version moved and gets the
-        // same invalid-mfaToken answer as a stale token. The password step
-        // already ended every other session, so this bump costs nothing else.
-        if (!bumper().bumpIfCurrent(user, subject.tokenVersion())) {
-            log.info("mfaToken already spent or superseded userId={}", user.getId());
-            sec(m -> m.loginFailure("mfa_token_spent"));
-            throw new com.innbucks.userservice.security.MfaTokenService.InvalidMfaTokenException(
-                    "mfaToken is invalid or expired");
-        }
-        // …and clear any accumulated MFA strikes / lockout so a later genuine
-        // typo run starts fresh.
-        if (user.getMfaFailedAttempts() != 0 || user.getMfaLockedUntil() != null) {
-            user.setMfaFailedAttempts(0);
-            user.setMfaLockedUntil(null);
-            userRepository.save(user);
-        }
+        // Correct code — SPEND the mfaToken before anything is minted.
+        spendMfaToken(user, subject.tokenVersion());
 
         // Mint device trust ONLY when the user opted in AND we can scope it to a
         // device. The raw token is surfaced once on the response below; only its
         // hash is persisted. deviceTrustService is null in plain unit tests — no
         // trust is minted there (matches pre-feature behaviour).
         DeviceTrustService.TrustGrant trustGrant = null;
-        boolean deviceTrusted = false;
         if (rememberDevice && deviceId != null && !deviceId.isBlank() && deviceTrustService != null) {
             trustGrant = deviceTrustService.trustDevice(user, deviceId);
-            deviceTrusted = true;
         }
-
-        auditService.recordSuccess(
-                AuditEventType.AUTH_LOGIN_SUCCESS,
-                String.valueOf(user.getId()), AuditService.ACTOR_TYPE_USER,
-                String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
-                java.util.Map.of("mfa", true, "deviceTrusted", deviceTrusted),
-                auditContext);
-
-        AuthResponseDTO response = issueToken(user, deviceId);
+        AuthResponseDTO response = finishMfaSignIn(user, deviceId, trustGrant != null, auditContext);
         if (trustGrant != null) {
             // Surface the RAW token once — the FE stores it and replays it via
             // X-Device-Trust-Token on future logins. We never persist the raw form.
@@ -866,6 +810,121 @@ public class AuthService implements ApplicationEventPublisherAware {
             response.setDeviceTrustExpiresAt(trustGrant.trustedUntil());
         }
         return response;
+    }
+
+    /** What {@link #completeEnrollmentAndSignIn} hands back: the new session and the once-only backup codes. */
+    public record EnrollmentSignIn(AuthResponseDTO session, List<String> backupCodes) {
+    }
+
+    /**
+     * {@code POST /auth/mfa/enroll/complete}: confirm the first authenticator
+     * code, enable 2FA, and sign in — as ONE transaction that spends the
+     * ENROLLMENT mfaToken itself.
+     *
+     * <p>It used to be three separate steps in the controller: verify the
+     * enrolment token, commit the enrolment (backup codes and all), then mint a
+     * FRESH login mfaToken bound to whatever {@code token_version} the row held
+     * by then and spend that. The token the client presented was never spent,
+     * so two submits of it could both pass the first check and each end in a
+     * session, and a bump landing between the steps (a role change, an admin
+     * MFA reset, a password reset) was silently absorbed. Now:
+     * <ol>
+     *   <li>the enrolment token's own {@code tv} is compare-and-set FIRST, before
+     *       any side effect — of two submits exactly one gets past it, and a
+     *       bump since {@code /auth/login} fails it;</li>
+     *   <li>then the enrolment runs in the same transaction; a wrong code rolls
+     *       the spend back with it, so the same token works for the retry the
+     *       error message invites;</li>
+     *   <li>then the session is minted at the spent version.</li>
+     * </ol>
+     * Everything rolls back on any failure: a refusal enrols nothing, writes no
+     * backup codes and mints nothing. (Unlike the login step there is no strike
+     * counter here to preserve — the enrolment has never had one — and the only
+     * write before the throw on a lockout is its audit row, which is written in
+     * its own transaction.)
+     */
+    @Transactional
+    public EnrollmentSignIn completeEnrollmentAndSignIn(String enrollmentMfaToken, String code, String deviceId,
+                                                        AuditContext auditContext) {
+        requireMfaWired();
+        MfaTokenService.Subject subject = mfaTokenService.verifySubject(enrollmentMfaToken,
+                MfaTokenService.Purpose.ENROLLMENT);
+        User user = userRepository.findById(subject.userId())
+                .orElseThrow(InvalidCredentialsException::new);
+        // Same short-circuit the login step applies before minting — enrolment
+        // always ended in that step until now, so an MFA-locked account was
+        // already refused here.
+        refuseWhileMfaLocked(user, auditContext);
+        spendMfaToken(user, subject.tokenVersion());
+        List<String> backupCodes = mfaService.completeEnrollment(user.getId(), code);
+        return new EnrollmentSignIn(finishMfaSignIn(user, deviceId, false, auditContext), backupCodes);
+    }
+
+    private void requireMfaWired() {
+        if (mfaPolicy == null || mfaTokenService == null || mfaService == null) {
+            // Misconfigured / unit-test path — fail closed.
+            throw new MfaService.MfaException("MFA is not available");
+        }
+    }
+
+    /**
+     * 423 while the account's MFA step is locked out; clears an elapsed lockout
+     * so this attempt starts a fresh count.
+     */
+    private void refuseWhileMfaLocked(User user, AuditContext auditContext) {
+        Instant now = Instant.now();
+        if (user.getMfaLockedUntil() != null && user.getMfaLockedUntil().isAfter(now)) {
+            auditService.recordFailure(
+                    AuditEventType.AUTH_LOGIN_REJECTED_LOCKED,
+                    String.valueOf(user.getId()), AuditService.ACTOR_TYPE_USER,
+                    String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
+                    "mfa_locked",
+                    java.util.Map.of("mfaLockedUntil", user.getMfaLockedUntil().toString(), "step", "mfa"),
+                    auditContext);
+            sec(m -> m.loginFailure("mfa_locked"));
+            throw new AccountLockedException(user.getMfaLockedUntil());
+        }
+        // Lockout window elapsed — clear it so this attempt starts a fresh count.
+        if (user.getMfaLockedUntil() != null) {
+            user.setMfaFailedAttempts(0);
+            user.setMfaLockedUntil(null);
+        }
+    }
+
+    /**
+     * SPEND an mfaToken: bump token_version, but only if it is still the version
+     * the token is bound to and the account is still active (one atomic
+     * compare-and-set). Of two concurrent requests presenting the same token
+     * exactly one gets past this; the other, and any later replay, finds the
+     * version moved and gets the same invalid-mfaToken answer as a stale token.
+     * The password step already ended every other session, so this bump costs
+     * nothing else.
+     */
+    private void spendMfaToken(User user, long boundVersion) {
+        if (!bumper().bumpIfCurrent(user, boundVersion)) {
+            log.info("mfaToken already spent or superseded userId={}", user.getId());
+            sec(m -> m.loginFailure("mfa_token_spent"));
+            throw new MfaTokenService.MfaTokenSpentException();
+        }
+    }
+
+    /** After a spent mfaToken: clear MFA strikes, audit the sign-in, mint. */
+    private AuthResponseDTO finishMfaSignIn(User user, String deviceId, boolean deviceTrusted,
+                                            AuditContext auditContext) {
+        // Clear any accumulated MFA strikes / lockout so a later genuine typo
+        // run starts fresh.
+        if (user.getMfaFailedAttempts() != 0 || user.getMfaLockedUntil() != null) {
+            user.setMfaFailedAttempts(0);
+            user.setMfaLockedUntil(null);
+            userRepository.save(user);
+        }
+        auditService.recordSuccess(
+                AuditEventType.AUTH_LOGIN_SUCCESS,
+                String.valueOf(user.getId()), AuditService.ACTOR_TYPE_USER,
+                String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
+                java.util.Map.of("mfa", true, "deviceTrusted", deviceTrusted),
+                auditContext);
+        return issueToken(user, deviceId);
     }
 
     /**
@@ -890,6 +949,13 @@ public class AuthService implements ApplicationEventPublisherAware {
         if (subject == null || subject.isBlank()) {
             throw new PasswordChangeException("Token has no subject");
         }
+        // JwtFilter skips /auth, so this handler's Bearer token has not been held
+        // to the (token_version, active) gate every other endpoint applies: a
+        // deactivated account's unexpired token (401 account_inactive), or one a
+        // newer login / logout / role change ended (401 session_superseded),
+        // must not change the password. Checked before the current password is,
+        // so a refused session is not a password oracle either.
+        tokenRevocationService.requireCurrentSession(subject, jwtUtil.extractTokenVersion(token));
         User user = (subject.contains("@")
                 ? userRepository.findByEmail(subject)
                 : userRepository.findByPhoneNumber(subject))

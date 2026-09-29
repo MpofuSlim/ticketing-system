@@ -1,6 +1,8 @@
 package com.innbucks.userservice.service;
 
 import com.innbucks.userservice.entity.RevokedToken;
+import com.innbucks.userservice.exception.AccountInactiveException;
+import com.innbucks.userservice.exception.SessionSupersededException;
 import com.innbucks.userservice.repository.RevokedTokenRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.repository.UserTokenState;
@@ -112,13 +114,23 @@ public class TokenRevocationService {
     }
 
     /**
-     * True when the JWT's {@code tokenVersion} claim matches the user's
-     * current {@code users.token_version} value AND the account is active.
-     * Kept for callers that only need a yes/no; see {@link #sessionState}.
+     * {@link #sessionState} as a gate, for the {@code /auth/**} handlers that
+     * authenticate the caller from their own Bearer header
+     * ({@code /auth/change-password}, {@code /auth/mfa/disable}). {@code JwtFilter}
+     * skips {@code /auth}, so without this a deactivated account's unexpired
+     * access token — or one a newer login had superseded — could still change
+     * the password or switch MFA off.
+     *
+     * @throws AccountInactiveException    (401 {@code account_inactive}) for a deactivated account
+     * @throws SessionSupersededException  (401 {@code session_superseded}) for an ended session
      */
     @Transactional(readOnly = true)
-    public boolean isTokenVersionCurrent(String subject, long tokenVersion) {
-        return sessionState(subject, tokenVersion) == SessionState.CURRENT;
+    public void requireCurrentSession(String subject, long tokenVersion) {
+        switch (sessionState(subject, tokenVersion)) {
+            case INACTIVE -> throw new AccountInactiveException();
+            case SUPERSEDED -> throw new SessionSupersededException();
+            case CURRENT -> { }
+        }
     }
 
     @Scheduled(fixedDelayString = "PT1H")

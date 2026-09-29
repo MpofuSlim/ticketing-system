@@ -263,4 +263,36 @@ class MfaServiceTest {
 
         verify(trust).clearTrustForUser(21L);
     }
+
+    // ---- admin-reset note: cleaned in the service, whoever calls it ---------
+
+    @Test
+    void cleanNote_stripsMarkup_andControlAndBidiCharacters() {
+        // The note lands in audit metadata the console renders: no markup, no
+        // forged extra lines, no right-to-left override reordering what a
+        // reviewer reads.
+        assertThat(MfaService.cleanNote("  <b>Lost phone</b>\nverified\u0000 by\u202E callback  "))
+                .isEqualTo("Lost phone verified by callback");
+    }
+
+    @Test
+    void cleanNote_anEntityCannotSmuggleAnInvisibleCharacterBackIn() {
+        assertThat(MfaService.cleanNote("Lost &#x202E;phone &amp; SIM")).isEqualTo("Lost phone & SIM");
+    }
+
+    @Test
+    void cleanNote_isCappedAt500_evenWhenTheEdgeCheckIsBypassed() {
+        String capped = MfaService.cleanNote("x".repeat(700));
+        assertThat(capped).hasSize(MfaService.MAX_NOTE_LENGTH);
+        // A surrogate pair straddling the cut is dropped whole, never halved.
+        String emoji = "\uD83D\uDE00";
+        String straddling = MfaService.cleanNote("y".repeat(499) + emoji + "z");
+        assertThat(straddling).isEqualTo("y".repeat(499));
+    }
+
+    @Test
+    void cleanNote_blankAfterCleaning_isNoNote() {
+        assertThat(MfaService.cleanNote(null)).isNull();
+        assertThat(MfaService.cleanNote(" <i></i>\t\n ")).isNull();
+    }
 }

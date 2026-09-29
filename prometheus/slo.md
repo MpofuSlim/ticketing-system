@@ -222,6 +222,14 @@ affected; nothing is retried, so if a specific deactivation must bite
 downstream before the TTL runs out, `SET auth:tokenver:<userUuid>
 <current token_version>` by hand once Redis is back.
 
+The publish only ever RAISES the stored value (a Lua compare-and-set, so two
+bumps whose after-commit writes land out of order cannot move it backwards). The
+one time that bites: after restoring user-service's Postgres to an earlier
+point, the published values can be higher than the restored ones, and
+downstream would refuse those users' fresh tokens until their versions overtake.
+Delete the keys as part of any such restore:
+`redis-cli --scan --pattern 'auth:tokenver:*' | xargs -r -n 500 redis-cli DEL`.
+
 ### `PaymentAuditIntegrityBroken`
 
 Same as `AuditIntegrityBroken` above, but on **payment-service**'s
