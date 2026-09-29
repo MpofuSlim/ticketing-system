@@ -12,6 +12,7 @@ import innbucks.paymentservice.entity.ReconRun;
 import innbucks.paymentservice.repository.PaymentRepository;
 import innbucks.paymentservice.repository.ReconRunRepository;
 import lombok.extern.slf4j.Slf4j;
+import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -90,6 +91,11 @@ public class SettlementReconciliationJob {
 
     /** Nightly run over YESTERDAY (UTC). Cron overridable per environment. */
     @Scheduled(cron = "${payment-service.recon.cron:0 30 2 * * *}", zone = "UTC")
+    // A cron fires on EVERY replica at the same second, so lockAtLeastFor must
+    // outlast any clock skew between pods: a run faster than the skew would
+    // otherwise release the lock before the slower pod asks for it, and the
+    // day would be reconciled (and its run row written) twice.
+    @SchedulerLock(name = "SettlementReconciliationJob.nightly", lockAtMostFor = "PT10M", lockAtLeastFor = "PT5M")
     public void nightly() {
         runFor(LocalDate.now(ZoneOffset.UTC).minusDays(1));
     }

@@ -6,8 +6,9 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 /**
  * Enables {@link org.springframework.scheduling.annotation.Scheduled @Scheduled}
  * processing across the service. Required for
- * {@link innbucks.paymentservice.reconciliation.ReconciliationJob} and any
- * future periodic task. Spring Boot does not auto-enable this — the
+ * {@link innbucks.paymentservice.reconciliation.PaymentResolutionJob} — the
+ * payment confirmation path — and every other periodic task; each one also
+ * carries a {@code @SchedulerLock} (see {@link SchedulerLockConfig}). Spring Boot does not auto-enable this — the
  * annotation is opt-in.
  */
 @Configuration

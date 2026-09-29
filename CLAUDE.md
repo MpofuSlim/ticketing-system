@@ -141,6 +141,18 @@ below) — with no change to this map, because callers keep using the same
 Service names. Do not reintroduce a registry or client-side pod discovery to
 get per-request balancing; the mesh is where that lives.
 
+**Replicas also need every `@Scheduled` job to be safe on N pods at once** —
+the full per-service checklist is `deploy/k8s/LINKERD_RUNBOOK.md` §8. The rule:
+a job either carries `@SchedulerLock` or has a written reason it is
+idempotent. payment-service locks all six of its jobs over a
+`KeepAliveLockProvider` (a slow resolution pass keeps its lock for as long as
+it runs; a dead holder frees it within `lockAtMostFor`), and
+`SchedulerLockTest` fails the build on an unlocked `@Scheduled` method, a
+duplicate lock name or a `lockAtMostFor` under 30s — the keep-alive throws on
+those at LOCK time, every tick, so the sweep would silently never run. Never
+lock a job that tends per-pod memory (`LoginRateLimiter.purgeFallbackWindows`):
+it has to run on every replica.
+
 So **do not** reintroduce explicit `http://host:port` inter-service URLs in
 code or `*_SERVICE_URL` / `*_SERVICE_URI` env vars — the map is the one place
 addresses live. The only deliberately non-discovery clients are the external

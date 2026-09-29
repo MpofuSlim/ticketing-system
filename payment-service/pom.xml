@@ -176,6 +176,24 @@
             <artifactId>httpclient5</artifactId>
         </dependency>
 
+        <!-- ShedLock: leader-elects every @Scheduled job, so running more than
+             one replica never runs a sweep twice at once. Two replicas polling
+             the same payment rows would double every upstream status read —
+             and a ZimSwitch final-status read is ONE-SHOT and throttled to two
+             per checkout per minute (CLAUDE.md, card rail). Same versions as
+             booking-service and seat-service; the lock row lives in the
+             shedlock table (V15) and shares the existing Hikari pool. -->
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-spring</artifactId>
+            <version>7.10.1</version>
+        </dependency>
+        <dependency>
+            <groupId>net.javacrumbs.shedlock</groupId>
+            <artifactId>shedlock-provider-jdbc-template</artifactId>
+            <version>7.10.1</version>
+        </dependency>
+
         <!-- Caffeine backs Spring Cloud LoadBalancer's service-instance cache
              (better eviction than the default map). Auto-detected on the
              classpath; no config needed. -->
