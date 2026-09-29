@@ -162,8 +162,10 @@ into version-controlled config.**
 
 booking-service and seat-service are **stateless** (coordination is via the
 Postgres unique index + Redis idempotency), so they scale horizontally cleanly.
-The gateway resolves replicas via Eureka + Spring Cloud LoadBalancer
-automatically — no gateway change needed to add instances.
+The gateway reaches replicas through the booking-service Kubernetes `Service`,
+which routes only to ready pods — no gateway change needed to add instances.
+That balancing is per connection, so with keep-alive pools it is uneven; the
+planned Linkerd mesh balances per request (see CLAUDE.md, Service discovery).
 
 - Each additional booking-service replica adds **~300 req/s** of clean capacity,
   **provided** the Postgres connection budget (§4.1) is solved first — otherwise

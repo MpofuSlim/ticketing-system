@@ -56,9 +56,11 @@ When adding a route:
   shape) — except for `/auth/**`-style public endpoints that intentionally
   skip the rate limiter.
 - Use the `lb://<service-name>` URI pattern for the `uri:` (e.g.
-  `lb://user-service`). The gateway resolves it from the Eureka registry via
-  Spring Cloud LoadBalancer. The old `${SERVICE_URI:http://localhost:PORT}`
-  env-var pattern was removed in the service-discovery migration.
+  `lb://user-service`). Spring Cloud LoadBalancer resolves it through the
+  static discovery map (see [Service discovery](#service-discovery--kubernetes-service-dns-eureka-retired)).
+  A NEW service also needs one line in that map in every service, or its
+  `lb://` route is a "No servers available" 503 — `FleetServiceMapTest` fails
+  the build first.
 
 ## Internal endpoints — three files must agree
 
@@ -86,25 +88,75 @@ Test assertions for these endpoints should use `.isBadRequest()` or
 silently passes for a Spring-Security 401 even when the controller never
 ran. That's how #145's test missed the SecurityConfig gap in local dev.
 
-## Service discovery (Eureka)
+## Service discovery — Kubernetes Service DNS (Eureka retired)
 
-The fleet uses client-side service discovery. The `discovery-server` module is
-a standalone Netflix Eureka registry (port 8761); every other service is a
-Eureka **client** and resolves siblings **by name**, not by hardcoded URL:
+**A sibling is found by its Kubernetes Service name, and the mapping from name
+to address is a static block in every service's `application.yaml`.** The
+Eureka registry (`discovery-server`) added nothing on k8s: every service
+registered under its own Service name (`EUREKA_INSTANCE_HOSTNAME=<svc>`), so
+Eureka answered "where is `event-service`?" with `event-service:8082` — the
+name k8s DNS already resolves — while costing two JVMs, a password in every
+pod's env, an image to patch (its FreeMarker CVE red-lined Release), and a
+registry-fetch window after every restart. k8s Services also drop an unready
+pod the moment its readiness probe fails, where Eureka took up to ~90s.
 
-- The gateway routes target `lb://<service-name>`.
-- `booking-service`'s `@FeignClient(name = "...")` clients carry no `url`.
-- The `RestClient` / `RestTemplate` callers in payment/seat/loyalty/user/event
-  use a `@LoadBalanced` builder (see `LoadBalancedRestClientConfig` /
-  `HttpClientConfig`) and call `http://<service-name>`.
+How it is wired — **callers are unchanged**, only the resolver moved:
 
-So **do not** reintroduce explicit `http://host:port` inter-service URLs or
-`*_SERVICE_URL` / `*_SERVICE_URI` env vars. The only deliberately non-discovery
-clients are the external payment/notification providers (InnBucks, ZimSwitch,
-the WhatsApp gateway), which are not in our registry — they keep a plain
-`RestClient` + explicit URL. Tests disable discovery via
+- The gateway routes still target `lb://<service-name>`; booking-service's
+  `@FeignClient(name = "...")` clients still carry no `url`; the `@LoadBalanced`
+  `RestClient`s (`LoadBalancedRestClientConfig` / `HttpClientConfig`) still call
+  `http://<service-name>`. Spring Cloud LoadBalancer resolves every one of them.
+- The resolver is Spring Cloud's static `SimpleDiscoveryClient` (and its
+  reactive twin for the gateway), fed by
+  `spring.cloud.discovery.client.simple.instances.<name>[0].uri =
+  http://<name>:<port>` — a separate YAML document at the END of every
+  service's `application.yaml`. A second document under the `local` profile
+  maps the same names to `localhost` for running jars directly.
+- `spring-cloud-starter-loadbalancer` **and Apache `httpclient5`** are declared
+  explicitly in each pom; both used to arrive only transitively through
+  `eureka-client`. The second one is the trap: Spring Boot picks the request
+  factory for every `RestClient`/`RestTemplate` that does not set one from
+  what is on the classpath, so losing `httpclient5` silently moved the
+  notification clients (and anything else on the default) onto the JDK
+  `HttpClient`, which negotiates HTTP/2 — their WireMock contract tests failed
+  with `RST_STREAM`. Removing a dependency is not config-only: diff the
+  runtime `dependency:list` against master before calling it that.
+- **The map is identical in every service and each port equals its k8s
+  Service port.** `FleetServiceMapTest` (api-gateway) enforces both, plus: every
+  `lb://` route and every `http://<x>-service` address in main code has an
+  entry, no service configures Eureka, and the YAML binds into the real
+  `SimpleDiscoveryClient`. It exists because each of those failures is silent
+  until the call is made in the cell (503 "No servers available", or
+  connection refused).
+- **Adding a service** = its k8s `Service`, plus one line in every copy of the
+  map (and the gateway route). Replicas need nothing: the Service balances
+  across ready pods.
+
+**Multiple replicas and the mesh.** A ClusterIP Service balances per
+CONNECTION (kube-proxy, L4), and pooled keep-alive connections stick to one
+pod, so with several replicas the load is uneven. The planned answer is
+**Linkerd**: its proxy balances per REQUEST across ready pods, adds retries,
+and gives in-cluster mTLS (closing the A02 "In-cluster TLS/mTLS" deferral
+below) — with no change to this map, because callers keep using the same
+Service names. Do not reintroduce a registry or client-side pod discovery to
+get per-request balancing; the mesh is where that lives.
+
+So **do not** reintroduce explicit `http://host:port` inter-service URLs in
+code or `*_SERVICE_URL` / `*_SERVICE_URI` env vars — the map is the one place
+addresses live. The only deliberately non-discovery clients are the external
+payment/notification providers (InnBucks, ZimSwitch, the WhatsApp gateway),
+which keep a plain `RestClient` + explicit URL. Tests disable discovery via
 `spring.cloud.discovery.enabled: false` in the `test` / `it` profiles; keep
-that when adding a new service so `@SpringBootTest` doesn't try to register.
+that in a new service's test profiles.
+
+**Transition state (remove this paragraph when done):** the six ticketing
+services and the gateway are off Eureka. `discovery-server` still runs in the
+cell (`02-discovery.yaml`, `EUREKA_*` in the cell env) only for
+`loyalty-service` (InnRewards) and `marketplace-service` (market-place) until
+their repos make the same switch; then it is deleted — module,
+`02-discovery.yaml`, their `EUREKA_*` env in `04-services.yaml`, the cell
+`EUREKA_*` keys, and its Release matrix entry. Deleting it earlier breaks
+their outbound calls, which still resolve through it.
 
 ## External-service contract tests (WireMock)
 

@@ -155,9 +155,13 @@ auto-applied change.
 
 ## Notes / gotchas
 
-- **Service discovery**: each JVM service sets `EUREKA_INSTANCE_HOSTNAME=<svc>`
-  + `EUREKA_PREFER_IP_ADDRESS=false` and has a matching `Service`, so the gateway
-  resolves `lb://<svc>` → `<svc>:<port>` → pod.
+- **Service discovery**: every JVM service has a matching `Service`, and each
+  service's `application.yaml` maps `<svc>` → `http://<svc>:<port>` (Spring's
+  static discovery client), so the gateway resolves `lb://<svc>` →
+  `<svc>:<port>` → a ready pod. A Service's name and port are therefore part of
+  the contract: `FleetServiceMapTest` fails the build if they drift from the
+  map. `02-discovery.yaml` (Eureka) remains only for loyalty-service and
+  marketplace-service until they switch too, then it is deleted.
 - **Core banking**: there is no server-side core-banking provider. The Oradian
   integration was removed — the frontend talks to Veengu directly — so tier-2
   registration is a purely local state change and payment-service no longer

@@ -54,63 +54,6 @@ services:
       timeout: 3s
       retries: 20
 
-
-  discovery-server:
-    build:
-      context: .
-      dockerfile: discovery-server/Dockerfile
-    image: ghcr.io/${GHCR_OWNER:-mpofuslim}/discovery-server:${IMAGE_TAG:-dev}
-    container_name: innbucks-discovery-server
-    restart: unless-stopped
-    mem_limit: 512m
-    mem_reservation: 320m
-    environment:
-      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
-      INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
-      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
-      TRACING_ENABLED: ${TRACING_ENABLED:-false}
-      OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
-      EUREKA_INSTANCE_HOSTNAME: discovery-server
-      EUREKA_PEER_URL: ",http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server-2:8761/eureka/"
-      EUREKA_USERNAME: ${EUREKA_USERNAME:-eureka}
-      EUREKA_PASSWORD: ${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}
-    ports:
-      - "127.0.0.1:18761:8761"
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8761/actuator/health"]
-      interval: 10s
-      timeout: 3s
-      retries: 10
-      start_period: 30s
-
-  discovery-server-2:
-    build:
-      context: .
-      dockerfile: discovery-server/Dockerfile
-    image: ghcr.io/${GHCR_OWNER:-mpofuslim}/discovery-server:${IMAGE_TAG:-dev}
-    container_name: innbucks-discovery-server-2
-    restart: unless-stopped
-    mem_limit: 512m
-    mem_reservation: 320m
-    environment:
-      SPRING_PROFILES_ACTIVE: ${SPRING_PROFILES_ACTIVE:-prod,json}
-      INNBUCKS_COUNTRY: ${INNBUCKS_COUNTRY:?set INNBUCKS_COUNTRY (see deploy/cells/cell.example.env)}
-      JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
-      TRACING_ENABLED: ${TRACING_ENABLED:-false}
-      OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
-      EUREKA_INSTANCE_HOSTNAME: discovery-server-2
-      EUREKA_PEER_URL: ",http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/"
-      EUREKA_USERNAME: ${EUREKA_USERNAME:-eureka}
-      EUREKA_PASSWORD: ${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}
-    ports:
-      - "127.0.0.1:18762:8761"
-    healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8761/actuator/health"]
-      interval: 10s
-      timeout: 3s
-      retries: 10
-      start_period: 30s
-
   user-service:
     build:
       context: .
@@ -122,8 +65,6 @@ services:
     mem_limit: 768m
     mem_reservation: 512m
     depends_on:
-      discovery-server:
-        condition: service_healthy
       postgres:
         condition: service_healthy
     environment:
@@ -133,9 +74,6 @@ services:
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
       TRACING_ENABLED: ${TRACING_ENABLED:-false}
       OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
-      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/,http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD}@discovery-server-2:8761/eureka/
-      EUREKA_PREFER_IP_ADDRESS: "false"
-      EUREKA_INSTANCE_HOSTNAME: user-service
       DB_URL: jdbc:postgresql://postgres:5432/user_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
@@ -200,8 +138,6 @@ services:
     mem_limit: 640m
     mem_reservation: 448m
     depends_on:
-      discovery-server:
-        condition: service_healthy
       postgres:
         condition: service_healthy
     environment:
@@ -225,7 +161,6 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}
       JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (see .env.example)}
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
-      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/,http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD}@discovery-server-2:8761/eureka/
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
     ports:
       - "127.0.0.1:8082:8082"
@@ -246,8 +181,6 @@ services:
     mem_limit: 640m
     mem_reservation: 448m
     depends_on:
-      discovery-server:
-        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
@@ -258,7 +191,6 @@ services:
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
       TRACING_ENABLED: ${TRACING_ENABLED:-false}
       OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
-      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/,http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD}@discovery-server-2:8761/eureka/
       DB_URL: jdbc:postgresql://postgres:5432/seat_service
       DB_USERNAME: ${POSTGRES_USER:-postgres}
       DB_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (see .env.example)}
@@ -293,8 +225,6 @@ services:
     mem_limit: 768m
     mem_reservation: 512m
     depends_on:
-      discovery-server:
-        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
@@ -317,7 +247,6 @@ services:
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}
       IDEMPOTENCY_STORE: redis
-      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/,http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD}@discovery-server-2:8761/eureka/
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
       WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-http://localhost:8089}
       WHATSAPP_API_KEY: ${WHATSAPP_API_KEY:?set WHATSAPP_API_KEY in .env}
@@ -357,8 +286,6 @@ services:
     mem_limit: 768m
     mem_reservation: 512m
     depends_on:
-      discovery-server:
-        condition: service_healthy
       booking-service:
         condition: service_healthy
       postgres:
@@ -383,9 +310,6 @@ services:
       REDIS_PORT: "6379"
       REDIS_PASSWORD: ${REDIS_PASSWORD:?set REDIS_PASSWORD in .env (see .env.example)}
       IDEMPOTENCY_STORE: redis
-      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/,http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD}@discovery-server-2:8761/eureka/
-      EUREKA_PREFER_IP_ADDRESS: "false"
-      EUREKA_INSTANCE_HOSTNAME: payment-service
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:?set INTERNAL_API_TOKEN in .env}
       WHATSAPP_GATEWAY_URL: ${WHATSAPP_GATEWAY_URL:-http://localhost:8089}
       WHATSAPP_API_KEY: ${WHATSAPP_API_KEY:?set WHATSAPP_API_KEY in .env}
@@ -432,9 +356,9 @@ services:
   # loyalty-service was extracted to its own repository (MpofuSlim/InnRewards).
   # It is no longer built from this repo. To run it alongside this stack for
   # local cross-service work, clone InnRewards and `docker compose up` there (it
-  # publishes the same ghcr.io/mpofuslim/loyalty-service image and registers as
-  # `loyalty-service` on this stack's Eureka), or pull the published image
-  # directly. The gateway's /loyalty/** route resolves it by Eureka name.
+  # publishes the same ghcr.io/mpofuslim/loyalty-service image), or pull the
+  # published image directly. The gateway's /loyalty/** route resolves it by
+  # the name `loyalty-service`, port 8086, on the shared network.
 
   api-gateway:
     build:
@@ -447,8 +371,6 @@ services:
     mem_limit: 768m
     mem_reservation: 512m
     depends_on:
-      discovery-server:
-        condition: service_healthy
       redis:
         condition: service_healthy
     environment:
@@ -457,7 +379,6 @@ services:
       JAVA_TOOL_OPTIONS: ${JAVA_TOOL_OPTIONS:--XX:MaxRAMPercentage=70.0}
       TRACING_ENABLED: ${TRACING_ENABLED:-false}
       OTLP_ENDPOINT: ${OTLP_ENDPOINT:-http://localhost:4318/v1/traces}
-      EUREKA_SERVER_URL: http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD:?set EUREKA_PASSWORD in .env (see .env.example)}@discovery-server:8761/eureka/,http://${EUREKA_USERNAME:-eureka}:${EUREKA_PASSWORD}@discovery-server-2:8761/eureka/
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
       REDIS_HOST: redis
       REDIS_PORT: "6379"

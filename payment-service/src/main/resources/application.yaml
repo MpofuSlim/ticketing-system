@@ -57,7 +57,8 @@ loyalty-service:
 
 # Marketplace order surface (MarketplaceOrderClient → MarketplaceOrderGateway):
 # the second product on the InnBucks 2D-code rail. Resolved by name through
-# Eureka, same X-Internal-Token as the other internal S2S calls.
+# the discovery map at the end of this file, same X-Internal-Token as the
+# other internal S2S calls.
 marketplace-service:
   base-url: http://marketplace-service
   connect-timeout-ms: ${MARKETPLACE_SERVICE_CONNECT_TIMEOUT_MS:2000}
@@ -284,16 +285,6 @@ server:
     include-message: never
     include-binding-errors: never
 
-eureka:
-  client:
-    service-url:
-      defaultZone: ${EUREKA_SERVER_URL:http://localhost:8761/eureka/}
-  instance:
-    prefer-ip-address: ${EUREKA_PREFER_IP_ADDRESS:true}
-    hostname: ${EUREKA_INSTANCE_HOSTNAME:localhost}
-    instance-id: ${spring.application.name}:${random.uuid}
-
-
 # Static token the Prometheus scraper presents on X-Metrics-Token to read
 # /actuator/prometheus (see MetricsScrapeAuthFilter). Blank (the default)
 # fail-closes: the endpoint stays JWT-401 and scraping is off until the cell
@@ -390,3 +381,53 @@ app:
     # Must be an SES-verified identity for the region or SES rejects the send.
     from: ${MAIL_FROM:banking@innbucks.co.zw}
     sender-name: ${MAIL_SENDER_NAME:Foundry}
+
+---
+# Service discovery: Kubernetes Service DNS. Eureka is retired.
+#
+# Every sibling resolves to its k8s ClusterIP Service (deploy/k8s), which
+# already routes only to READY pods and balances across replicas, so the
+# lb://<name> gateway routes, @FeignClient(name = ...) clients and
+# @LoadBalanced RestClients keep their names and need no code change. When
+# the cell runs Linkerd, the same Service names get per-request balancing and
+# mTLS with no change here either.
+#
+# This map is IDENTICAL in every service's application.yaml, and each port
+# must equal that Service's port in deploy/k8s; FleetServiceMapTest
+# (api-gateway) fails the build on any drift, and on a lb:// route or
+# http://<name> call with no entry here. Add a service = one line in every
+# copy + its k8s Service.
+spring:
+  cloud:
+    discovery:
+      client:
+        simple:
+          instances:
+            user-service:        [{ uri: "http://user-service:8081" }]
+            event-service:       [{ uri: "http://event-service:8082" }]
+            seat-service:        [{ uri: "http://seat-service:8083" }]
+            booking-service:     [{ uri: "http://booking-service:8084" }]
+            payment-service:     [{ uri: "http://payment-service:8085" }]
+            loyalty-service:     [{ uri: "http://loyalty-service:8086" }]
+            marketplace-service: [{ uri: "http://marketplace-service:8087" }]
+
+---
+# Running the jars directly on one machine (no compose, no k8s): same names,
+# localhost. Activate with SPRING_PROFILES_ACTIVE=local (which
+# ProductionSecretsGuard already treats as a non-deployment profile).
+spring:
+  config:
+    activate:
+      on-profile: local
+  cloud:
+    discovery:
+      client:
+        simple:
+          instances:
+            user-service:        [{ uri: "http://localhost:8081" }]
+            event-service:       [{ uri: "http://localhost:8082" }]
+            seat-service:        [{ uri: "http://localhost:8083" }]
+            booking-service:     [{ uri: "http://localhost:8084" }]
+            payment-service:     [{ uri: "http://localhost:8085" }]
+            loyalty-service:     [{ uri: "http://localhost:8086" }]
+            marketplace-service: [{ uri: "http://localhost:8087" }]
