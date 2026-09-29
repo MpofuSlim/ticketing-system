@@ -130,6 +130,17 @@
                 <artifactId>bcprov-jdk18on</artifactId>
                 <version>1.86</version>
             </dependency>
+            <!-- freemarker 2.3.34 (transitive via spring-cloud-starter-netflix-
+                 eureka-server, which renders the Eureka dashboard with it) has
+                 CVE-2026-84939 (CRITICAL): path traversal via a malformed locale
+                 identifier. Only discovery-server ships it, and it failed the
+                 Release Trivy gate on every PR (2026-09-28) before any push.
+                 2.3.35 fixes it. Drop once Spring Cloud's BOM carries 2.3.35+. -->
+            <dependency>
+                <groupId>org.freemarker</groupId>
+                <artifactId>freemarker</artifactId>
+                <version>2.3.35</version>
+            </dependency>
             <!-- commons-fileupload 1.5 (transitive via Spring's multipart support)
                  has CVE-2025-48976 (HIGH): DoS via multipart form-data part-count
                  amplification. 1.6.0 fixes it. -->
@@ -177,6 +188,29 @@
                  WebFlux DNS resolver in user-service. Pin the BOM rather than
                  each artifact — Netty publishes a netty-bom that keeps every
                  netty-* artifact in lockstep, so we don't have to enumerate them. -->
+            <!-- Jackson: CVE-2026-68497 (HIGH, CPU DoS via unbounded numeric
+                 parsing) hits BOTH lines Boot 4 ships — Jackson 3
+                 (tools.jackson 3.1.5, fixed 3.1.6) and the Jackson 2 kept for
+                 jjwt / spring-boot-jackson2 (com.fasterxml 2.21.5, fixed
+                 2.21.6). Every service image carries both, so every one failed
+                 the Release Trivy gate (2026-09-29). Importing the two BOMs
+                 ahead of spring-boot-dependencies keeps every jackson-*
+                 artifact (core, databind, annotations, modules) in lockstep.
+                 Drop once Boot's BOM reaches these versions. -->
+            <dependency>
+                <groupId>tools.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>3.1.6</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>2.21.6</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
             <dependency>
                 <groupId>io.netty</groupId>
                 <artifactId>netty-bom</artifactId>
