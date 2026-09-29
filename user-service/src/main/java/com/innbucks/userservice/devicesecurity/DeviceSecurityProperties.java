@@ -17,7 +17,7 @@ import java.util.List;
  * logs every decision but answers TOKEN to everyone, so two weeks of logs show
  * how many real customers each rule would stop before anyone is stopped. Then
  * flip {@code otp}, then {@code blocks}, then {@code bans}. Blocks, bans and
- * unlocks a PERSON makes (call centre, fraud desk, the customer on *569#) are
+ * unlocks a PERSON makes (call center, fraud desk, the customer on *569#) are
  * always enforced — watch mode is for the automatic rules only.
  */
 @Data
@@ -40,7 +40,7 @@ public class DeviceSecurityProperties {
     /** Shared key the *569# USSD service presents as {@code x-api-key}. */
     private String ussdApiKey = "";
 
-    /** Call-centre number quoted in support-only messages. Blank = "InnBucks support". */
+    /** Call-center number quoted in support-only messages. Blank = "InnBucks support". */
     private String supportPhone = "";
 
     private Enforce enforce = new Enforce();
@@ -163,7 +163,7 @@ public class DeviceSecurityProperties {
         private int banOnBlockNumber = 4;
         /** OTP attempts used up on this many challenges in a row = a block. */
         private int deadChallengesInARow = 2;
-        /** Bounds on a call-centre temporary block. */
+        /** Bounds on a call-center temporary block. */
         private Duration supportMin = Duration.ofMinutes(15);
         private Duration supportMax = Duration.ofDays(7);
     }

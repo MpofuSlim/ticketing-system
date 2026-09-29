@@ -131,6 +131,26 @@ public abstract class SessionRevocationItSupport extends PostgresIntegrationTest
     protected static final String ADMIN_EMAIL =
             "platform.operations.administrator.for-session-revocation-tests@innbucks-operations.co.zw";
 
+    /**
+     * The administrator's own account. Deactivating a staff-role holder and
+     * resetting anyone's 2FA need the caller to hold everything the target
+     * holds, read from the caller's LIVE roles — so the acting administrator
+     * must exist, as the platform owner every one of these tests models.
+     */
+    @org.junit.jupiter.api.BeforeEach
+    void ensureAdministratorAccount() {
+        if (users.findByEmail(ADMIN_EMAIL).isEmpty()) {
+            users.save(User.builder()
+                    .firstName("Platform").lastName("Operations")
+                    .email(ADMIN_EMAIL)
+                    .phoneNumber(phone())
+                    .password(passwordEncoder.encode(PASSWORD))
+                    .roles(User.roleNames(User.Role.SUPER_ADMIN))
+                    .active(true).approved(true)
+                    .build());
+        }
+    }
+
     protected static UsernamePasswordAuthenticationToken admin() {
         return new UsernamePasswordAuthenticationToken(ADMIN_EMAIL, null,
                 List.of(new SimpleGrantedAuthority("users:activation:write"),

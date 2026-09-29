@@ -247,11 +247,18 @@ code change.** That asymmetry is the whole design, not an unfinished half of it:
 - A role is just a named bundle of permissions that already exist and are
   already enforced, so composing one is useful the instant it is saved.
 
-Concretely, when you add a permission: add the constant to `PermissionCatalog`,
-use it in the `@PreAuthorize`, and **grant it to the built-in roles that should
-hold it in a migration**. `PermissionCatalogInitializer` upserts the catalog
-into the `permissions` table at boot, so the permission itself needs no
-migration — only the grants do. **Never enumerate permissions for
+Concretely, when you add a permission: add the constant to `PermissionCatalog`
+as `entry(code, description, Scope)` — **the `Scope` (`PLATFORM` / `TENANT`) is a
+required argument, there is no default** — use it in the `@PreAuthorize`, and
+**grant it to the built-in roles that should hold it in a migration**.
+`PermissionCatalogInitializer` upserts the catalog into the `permissions` table
+at boot, so the permission itself needs no migration — only the grants do. **But
+the initializer runs AFTER Flyway**, so a migration that grants a code the table
+may not hold yet (any code added since V35 — the device-security ones, for
+example) must `INSERT INTO permissions … ON CONFLICT DO NOTHING` first, or the
+`role_permissions` foreign key fails the migration (V43 does this). The catalog
+listing is `GET /admin/roles/permissions` (it lives under `/admin/roles` so one
+gateway route covers the feature). **Never enumerate permissions for
 `SUPER_ADMIN`**: it holds the `*` wildcard, which `PermissionResolver` expands
 against the live catalog at token-mint time. Enumerating would silently lock the
 platform owner out of every endpoint added afterwards, presenting as a
@@ -260,7 +267,7 @@ mysterious 403 that reads like a bug in the new endpoint.
 Other load-bearing details:
 
 - **`User.roles` is `Set<String>`, not the `User.Role` enum.** The enum survives
-  as a constants holder for the nine built-ins, so code says
+  as a constants holder for the built-ins (V35's nine plus V43's three), so code says
   `Role.SUPER_ADMIN.name()` rather than a literal and a typo fails the build.
   `user_roles.role` was always `VARCHAR(255)` with no CHECK (V3; V22 dropped a
   stray one), so this needed no migration. Don't add a role constant to the enum
@@ -301,9 +308,113 @@ Other load-bearing details:
   never be deleted or renamed — code references them by literal name, so a
   rename would stop matching silently rather than fail loudly. Their permissions
   *are* editable; that is the supported way to change what a built-in can do.
-- `ROLE_CREATED` / `ROLE_PERMISSIONS_CHANGED` / `ROLE_DELETED` go through the
-  tamper-evident audit chain, because "who could do what, when" is no longer
-  answerable from the code once roles are data.
+- `ROLE_CREATED` / `ROLE_PERMISSIONS_CHANGED` / `ROLE_DELETED` — and
+  `USER_ROLES_CHANGED` — go through the tamper-evident audit chain, because "who
+  could do what, when" is no longer answerable from the code once roles are data.
+  **They are REQUIRED audits** (`AuditService.recordRequired`, V43's PR): if the
+  row cannot be written the change is refused with `503 audit_unavailable` and
+  rolls back. The call is the transaction's LAST statement, after a flush, so the
+  window in which a committed audit row can describe a rolled-back change is just
+  the outer commit. Every other audit stays best-effort (a login is never broken
+  by the audit path); every failure of either kind moves
+  `security.audit.write_failed{mode}` (alert `AuditWriteFailed`).
+
+### No escalation: nobody hands out more than they hold (user-service V43)
+
+**Before this, `users:roles:write` could put any role on anyone — the caller
+included — and `roles:write` could add any code to any role, including one the
+caller held.** The endpoint permission said who may administer roles; nothing
+bounded what they could hand out. `RoleGrantGuard` now does, and every rule
+reads the caller's **LIVE** authority (their current roles through
+`PermissionResolver`), never the token's `perms` — a token minted before a
+release that added a code would otherwise refuse the platform owner a code they
+hold. A caller that does not resolve to an active account is refused every
+grant and every target check outright — including a role or account carrying no
+permission, where "holds everything it holds" would be vacuously true.
+
+- **Scope is code.** `PLATFORM` = acts across every business (`users:*`,
+  `roles:*`, `service-requests:*`, `organizations:read`, `device-security:*`, and
+  every future `staff:*` / `support-*`); `TENANT` = inside the caller's own
+  business (`team-members:*`, `shop-*`). **A code the catalog does not define
+  classifies as PLATFORM** (fails closed) — a stale `role_permissions` row can
+  never be what lets a role out of the staff rules. `PermissionCatalogScopeTest`.
+- **Codes reserved to the wildcard** (`PermissionCatalog.WILDCARD_RESERVED`):
+  `roles:write`, `users:roles:write`, `staff:read`, `staff:create`, `staff:manage`,
+  `organizations:manage`. **Never grantable through the API — to any role, custom
+  or built-in, even by SUPER_ADMIN** (400 `permission_not_assignable`, reason
+  `reserved_to_super_admin`). SUPER_ADMIN holds them through `*`; only a reviewed
+  migration could grant one to a built-in, and none does. A role an earlier
+  release let hold one keeps it (the pre-deploy query flags them), and removing
+  codes is never refused on authority or reserved-code grounds (a role must still
+  keep at least one code — that is validation). **Such a legacy role can be put
+  on an account by SUPER_ADMIN only** (400 `role_not_assignable`,
+  `reserved_to_super_admin`) — otherwise its holders could spread `roles:write` /
+  `users:roles:write` through `PUT /admin/users/{id}/roles`. A new code that
+  hands out authority itself belongs in this set.
+- **A staff role** (`StaffRoles`) is one whose name is in `StaffRoles.NAMED`
+  (`SUPER_ADMIN`, `PRODUCT_OFFICER`, `PRODUCT_MANAGER`, `CALL_CENTER_AGENT`,
+  `CALL_CENTER_SUPERVISOR`, `FRAUD_DESK`), or that holds `*`, or any PLATFORM
+  code. The NAME half exists because booking and event grant cross-organizer
+  access by role name, so a NAMED role is staff even with its permissions
+  emptied; the permission half because a custom role is staff by what it can do.
+  The V35 business built-ins are not staff. `StaffRoleClassificationTest`.
+- **The rules:** adding a code to a role (create or edit) needs the caller to
+  hold it (`exceeds_your_authority`); adding a role to an account needs the
+  caller to hold everything it grants, and a NAMED role also needs the caller to
+  hold that role or `*` (400 `role_not_assignable`, `data.roles` = name → reason);
+  **removing** a role from an account, **deactivating a staff-role holder**, and
+  **resetting anyone's 2FA** need the caller to hold everything the target holds
+  AND every NAMED role it holds, or `*` (403 `target_not_manageable`, `reason:
+  exceeds_your_authority`). **The NAME half is load-bearing on both sides**:
+  `PRODUCT_MANAGER` resolves to one read-only code here while its authority is
+  its name in event and booking, so comparing codes alone let a custom role that
+  covered that one code strip, switch off or reset the 2FA of a product manager
+  it could never have appointed. Business accounts are not gated on deactivation
+  — their authority reaches one business. Only ADDED roles/codes are checked;
+  what an account or role already holds is not.
+- **The two sides are compared differently, on purpose.** The caller's
+  authority is what their roles EFFECTIVELY grant (a stale code grants them
+  nothing); what they hand out or act against is read as STORED, so a stale code
+  on a role or account counts as one the caller lacks and only `*` covers it.
+  Dropping unknown codes before the comparison would have been the one place an
+  unknown code failed open.
+- **Removing a PLATFORM code from a role signs every holder out at once** — one
+  atomic `UPDATE users … WHERE id IN (SELECT user_id FROM user_roles WHERE role =
+  :name) RETURNING …` through `TokenVersionBumper.bumpAllHolding` (still the one
+  writer of `token_version`), the new versions published after commit through
+  ONE synchronization, as pipelined `EVAL`s 500 per round trip
+  (`TokenVersionPublisher.publishAll`) — never one synchronous Redis call per
+  holder on the request thread. **It is sized by the ROLE's holders**: a PLATFORM
+  or stale code removed from `MERCHANT_ADMIN` signs every business out at once.
+  Above 500 holders it logs a WARN and counts `user.tokenver.bulk_bump.large`.
+  **Removing only TENANT codes does not bump**: the change reaches holders at
+  their next refresh (≤ 15 minutes), so trimming MERCHANT_ADMIN's shop codes does
+  not sign every business out. Adding codes never bumps (and `perms: []` tokens
+  pick an addition up on their next request).
+- **Reserved role names:** `ADMIN` (never a platform role — V3 rewrote it to
+  SUPER_ADMIN, nothing names it), a bare `CALL_CENTER`, and any `CALL_CENTRE…`
+  spelling are refused by `POST /admin/roles` (400). The spelling is `CALL_CENTER`
+  fleet-wide.
+- **The customer-support built-ins (V43):** `CALL_CENTER_AGENT` and
+  `CALL_CENTER_SUPERVISOR` hold `device-security:read` + `:manage`; `FRAUD_DESK`
+  (an add-on, held with one of them) holds `:read` + `:fraud`. **V43 FAILS rather
+  than adopt** a same-named `roles` row or orphan `user_roles` string — adopting
+  would merge an operator's grants into an undeletable built-in and hand
+  device-security authority to unchecked holders, at once for `perms: []`
+  tokens. A later grant migration must follow the same rule and only target
+  these built-ins. **Never add `CALL_CENTER_*` to booking/event
+  `PLATFORM_STAFF_ROLES`, and never name a support role in a `hasRole()`**:
+  support reaches customer data only through user-service endpoints that check a
+  permission.
+- **Staff reset their password by EMAIL only.** `PasswordResetService` makes both
+  phone steps no-ops (the generic 200 / "Invalid or expired code") for any
+  staff-role holder — a phone on a staff account is a takeover path.
+- **Every session-issuing response carries `permissions`** (the list exactly as
+  minted into `perms`, wildcard expanded) — login, 2FA step, refresh,
+  organization switch, exchange, enrolment-complete. Gate console screens on it,
+  not on role names. `AuthResponsePermissionsFieldTest`.
+- `ShopStaffService` / `TeamMemberService` service-layer built-in-role guards are
+  deliberately untouched by any of this.
 
 ## The gate-operator 2FA exemption, and the refresh hole it left open
 
@@ -759,7 +870,7 @@ Fraud Detection and Sign-In Through DTX"* (v2.1). **DTX is this fleet**
 OTP_REQUIRED / TEMP_BLOCKED / BANNED, and only a TOKEN carries staging's
 client-service token plus a single-use RS256 `loginTicket`. DTX is the ONLY
 holder of the staging client-service credential. The *569# USSD service unlocks
-and blocks phones on `/device-security/ussd/**`; the call centre works it from
+and blocks phones on `/device-security/ussd/**`; the call center works it from
 `/admin/device-security/**`.
 
 - **The PIN never reaches DTX.** It goes app → broker → staging only. A correct
@@ -817,8 +928,12 @@ and blocks phones on `/device-security/ussd/**`; the call centre works it from
   `watchModeTrust_isProvisional_untilACodeIsVerified`.
 - **Permissions**: `device-security:read` / `:manage` / `:fraud`. Lifting a
   SHARED_DEVICE / CONFIRMED_FRAUD / SIM_SWAP / device-wide ban needs `:fraud` —
-  checked in the service too, so the call centre cannot undo the fraud desk on a
-  caller's say-so. Compose "Call Centre" / "Fraud Desk" roles at runtime.
+  checked in the service too, so the call center cannot undo the fraud desk on a
+  caller's say-so. **Assign the built-in roles (V43)** — `CALL_CENTER_AGENT` /
+  `CALL_CENTER_SUPERVISOR` (read + manage) and the `FRAUD_DESK` add-on (read +
+  fraud). Do NOT compose same-named roles at runtime (the old advice): V43 fails
+  on a name collision rather than adopt one, and `ADMIN` / `CALL_CENTER` /
+  `CALL_CENTRE…` are reserved names.
 - **SMS copy**: the gateway rejects `*`, so SMS says "star 569 hash" and writes
   times as `14.30`; WhatsApp gets `*569#`. `DeviceSecurityMessagesTest` asserts
   every SMS template round-trips `SmsTextSanitizer` unchanged and every message

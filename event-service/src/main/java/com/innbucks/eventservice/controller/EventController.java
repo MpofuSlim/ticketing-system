@@ -1005,7 +1005,7 @@ public class EventController {
     @Operation(
             summary = "Create event",
             description = """
-                    Creates a new event for the authenticated **EVENT_ORGANIZER** or **ADMIN**.
+                    Creates a new event for the authenticated **EVENT_ORGANIZER** or **SUPER_ADMIN**.
 
                     The authenticated principal's `organizerUuid` JWT claim becomes the owning
                     `tenantUserUuid`, and the event's `country` is taken from the caller's JWT

@@ -34,6 +34,14 @@ import java.util.Optional;
  * {@link AuthService.PasswordChangeException} (mapped to 400) for a consistent
  * FE error shape. When both identifiers are supplied, email wins (system users
  * are email-first).
+ *
+ * <p><b>Staff reset by email only.</b> For an account holding a staff role
+ * ({@link com.innbucks.userservice.security.StaffRoles}) both steps are no-ops by
+ * PHONE — the request sends nothing, the consume step answers "Invalid or
+ * expired code" — with the same 200 / 400 an unknown number gets. A phone on a
+ * staff account is a takeover path: whoever holds the number (a SIM swap, or a
+ * squatter's phone left on a legacy account) could otherwise set the password of
+ * an account with platform-wide authority. The email reset is unchanged.
  */
 @Service
 @RequiredArgsConstructor
@@ -47,6 +55,8 @@ public class PasswordResetService {
     private final AuditService auditService;
     private final org.springframework.context.ApplicationEventPublisher eventPublisher;
     private final TokenVersionBumper tokenVersionBumper;
+    /** Tells whether an account holds a staff role — the phone-reset refusal. */
+    private final RoleGrantGuard roleGrantGuard;
 
     /** This cell's country pin — region hint for normalising a reset phone to
      *  E.164 so the OTP key and the user lookup match what registration stored. */
@@ -73,6 +83,11 @@ public class PasswordResetService {
         }
         if (deactivated(user.get())) {
             log.info("Password-reset requested for a deactivated account userId={} — no-op", user.get().getId());
+            return;
+        }
+        if (!id.email() && roleGrantGuard.holdsStaffRole(user.get())) {
+            log.info("Password-reset requested BY PHONE for a staff account userId={} — no-op (staff reset by email)",
+                    user.get().getId());
             return;
         }
         if (id.email()) {
@@ -112,6 +127,14 @@ public class PasswordResetService {
                 : userRepository.findByPhoneNumber(id.value());
         if (target.isPresent() && deactivated(target.get())) {
             log.info("Password reset refused for a deactivated account userId={}", target.get().getId());
+            throw new AuthService.PasswordChangeException("Invalid or expired code");
+        }
+        // A staff account never resets by phone — the same wrong-code answer,
+        // before the code is looked at. No reset code is ever sent to a staff
+        // phone (requestReset above), but OTP rows carry no purpose, so a code
+        // sent to the same number by another flow must not work here either.
+        if (target.isPresent() && !id.email() && roleGrantGuard.holdsStaffRole(target.get())) {
+            log.info("Password reset BY PHONE refused for a staff account userId={}", target.get().getId());
             throw new AuthService.PasswordChangeException("Invalid or expired code");
         }
 

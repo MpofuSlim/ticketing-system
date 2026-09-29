@@ -8,7 +8,7 @@ public enum ActorType {
     BROKER,
     /** The *569# USSD service, on behalf of the dialling customer. */
     USSD,
-    /** A call-centre or fraud-desk agent in the admin portal. */
+    /** A call-center or fraud-desk agent in the admin portal. */
     SUPPORT,
     /** The signed-in customer (Your devices, in-session step-up). */
     CUSTOMER,

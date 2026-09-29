@@ -16,7 +16,7 @@ public enum BanReason {
     CONFIRMED_FRAUD(false, true),
     /** The number's SIM was swapped recently. Support only. Reserved until the networks give us the signal. */
     SIM_SWAP(false, false),
-    /** The customer blocked it themselves (lost or stolen phone), on *569# or through the call centre. USSD-unlockable. */
+    /** The customer blocked it themselves (lost or stolen phone), on *569# or through the call center. USSD-unlockable. */
     CUSTOMER_REPORTED(true, false);
 
     private final boolean ussdUnlockable;

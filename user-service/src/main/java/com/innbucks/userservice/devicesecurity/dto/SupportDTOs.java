@@ -14,10 +14,10 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * Wire shapes of the call-centre / fraud-desk surface ({@code /admin/device-security}).
+ * Wire shapes of the call-center / fraud-desk surface ({@code /admin/device-security}).
  * Unlike the customer surface these show everything support needs to reason
  * about a phone — reasons, references, risk features — and every device carries
- * {@code agentGuidance}: a sentence the agent can act on, so a call-centre agent
+ * {@code agentGuidance}: a sentence the agent can act on, so a call-center agent
  * never has to interpret a state machine while the customer waits.
  */
 public final class SupportDTOs {

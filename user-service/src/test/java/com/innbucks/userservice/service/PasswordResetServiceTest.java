@@ -31,6 +31,7 @@ class PasswordResetServiceTest {
     private AuditService auditService;
     private org.springframework.context.ApplicationEventPublisher eventPublisher;
     private TokenVersionPublisher tokenVersionPublisher;
+    private com.innbucks.userservice.repository.RoleRepository roleRepository;
     private PasswordResetService service;
 
     private static final String PHONE = "+263771234567";
@@ -45,9 +46,13 @@ class PasswordResetServiceTest {
         auditService = mock(AuditService.class);
         eventPublisher = mock(org.springframework.context.ApplicationEventPublisher.class);
         tokenVersionPublisher = mock(TokenVersionPublisher.class);
+        // Staff-role classification for the phone-reset refusal reads role rows.
+        roleRepository = mock(com.innbucks.userservice.repository.RoleRepository.class);
+        com.innbucks.userservice.testsupport.BuiltInRoleRows.stub(roleRepository);
         service = new PasswordResetService(otpService, userRepository, passwordEncoder,
                 refreshTokenRepository, auditService, eventPublisher,
-                new com.innbucks.userservice.testsupport.InMemoryTokenVersionBumper(tokenVersionPublisher));
+                new com.innbucks.userservice.testsupport.InMemoryTokenVersionBumper(tokenVersionPublisher),
+                new RoleGrantGuard(userRepository, roleRepository));
     }
 
     // ---- requestReset --------------------------------------------------------

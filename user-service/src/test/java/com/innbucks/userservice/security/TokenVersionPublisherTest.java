@@ -210,4 +210,119 @@ class TokenVersionPublisherTest {
         org.junit.jupiter.api.Assertions.assertEquals("user.tokenver.publish_failed",
                 TokenVersionPublisher.PUBLISH_FAILED_METRIC);
     }
+
+    // ---- bulk publish (a role losing a PLATFORM code) -----------------------
+
+    /** Runs each pipelined callback against a mocked connection and records every EVAL it sends. */
+    @SuppressWarnings("unchecked")
+    private org.springframework.data.redis.connection.RedisScriptingCommands pipelineRecorder(int[] pipelines) {
+        org.springframework.data.redis.connection.RedisConnection connection =
+                mock(org.springframework.data.redis.connection.RedisConnection.class);
+        org.springframework.data.redis.connection.RedisScriptingCommands scripting =
+                mock(org.springframework.data.redis.connection.RedisScriptingCommands.class);
+        when(connection.scriptingCommands()).thenReturn(scripting);
+        when(redis.executePipelined(any(org.springframework.data.redis.core.RedisCallback.class)))
+                .thenAnswer(inv -> {
+                    pipelines[0]++;
+                    Object result = ((org.springframework.data.redis.core.RedisCallback<Object>) inv.getArgument(0))
+                            .doInRedis(connection);
+                    org.junit.jupiter.api.Assertions.assertNull(result, "a pipelined callback must return null");
+                    return List.of();
+                });
+        return scripting;
+    }
+
+    private static java.util.Map<UUID, Long> holders(int n) {
+        java.util.Map<UUID, Long> versions = new java.util.LinkedHashMap<>();
+        for (int i = 0; i < n; i++) versions.put(UUID.randomUUID(), 5L + i);
+        return versions;
+    }
+
+    @Test
+    void publishAll_pipelinesTheNeverLowerScript_oneRoundTripPerBatch() {
+        int[] pipelines = {0};
+        var scripting = pipelineRecorder(pipelines);
+        java.util.Map<UUID, Long> versions = holders(TokenVersionPublisher.PIPELINE_BATCH * 2 + 1);
+
+        publisher.publishAll(versions);
+
+        org.junit.jupiter.api.Assertions.assertEquals(3, pipelines[0], "1001 holders = three round trips");
+        verify(scripting, org.mockito.Mockito.times(versions.size())).eval(any(byte[].class),
+                eq(org.springframework.data.redis.connection.ReturnType.INTEGER), eq(1),
+                any(byte[].class), any(byte[].class), any(byte[].class));
+        // The exact wire contract for one of them: the same script, key, value and TTL as publish().
+        var first = versions.entrySet().iterator().next();
+        verify(scripting).eval(
+                eq(TokenVersionPublisher.PUBLISH_IF_NOT_OLDER_LUA.getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+                eq(org.springframework.data.redis.connection.ReturnType.INTEGER), eq(1),
+                eq((TokenVersionPublisher.SHARED_TOKEN_VERSION_PREFIX + first.getKey())
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+                eq(Long.toString(first.getValue()).getBytes(java.nio.charset.StandardCharsets.UTF_8)),
+                eq(Long.toString(REFRESH_TTL_MS).getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        verifyNothingPublished();
+    }
+
+    @Test
+    void publishAllAfterCommit_isOneSynchronization_andWaitsForTheCommit() {
+        int[] pipelines = {0};
+        pipelineRecorder(pipelines);
+        org.springframework.transaction.support.TransactionSynchronizationManager.initSynchronization();
+        try {
+            publisher.publishAllAfterCommit(holders(3));
+
+            org.junit.jupiter.api.Assertions.assertEquals(0, pipelines[0]);
+            var syncs = org.springframework.transaction.support.TransactionSynchronizationManager.getSynchronizations();
+            org.junit.jupiter.api.Assertions.assertEquals(1, syncs.size(), "one callback for the whole set");
+
+            syncs.forEach(org.springframework.transaction.support.TransactionSynchronization::afterCommit);
+            org.junit.jupiter.api.Assertions.assertEquals(1, pipelines[0]);
+        } finally {
+            org.springframework.transaction.support.TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    @Test
+    void publishAllAfterCommit_aRolledBackBumpPublishesNothing() {
+        int[] pipelines = {0};
+        pipelineRecorder(pipelines);
+        org.springframework.transaction.support.TransactionSynchronizationManager.initSynchronization();
+        try {
+            publisher.publishAllAfterCommit(holders(3));
+            org.springframework.transaction.support.TransactionSynchronizationManager.getSynchronizations()
+                    .forEach(sync -> sync.afterCompletion(
+                            org.springframework.transaction.support.TransactionSynchronization.STATUS_ROLLED_BACK));
+        } finally {
+            org.springframework.transaction.support.TransactionSynchronizationManager.clearSynchronization();
+        }
+        org.junit.jupiter.api.Assertions.assertEquals(0, pipelines[0]);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void publishAll_aFailedBatch_isCountedPerVersion_andNeverThrows() {
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        publisher.setMeterRegistry(registry);
+        when(redis.executePipelined(any(org.springframework.data.redis.core.RedisCallback.class)))
+                .thenThrow(new RedisConnectionFailureException("down"))
+                .thenReturn(List.of());
+
+        // Two batches: the first fails, the second still goes.
+        assertDoesNotThrow(() -> publisher.publishAll(holders(TokenVersionPublisher.PIPELINE_BATCH + 7)));
+
+        verify(redis, org.mockito.Mockito.times(2))
+                .executePipelined(any(org.springframework.data.redis.core.RedisCallback.class));
+        assertEquals((double) TokenVersionPublisher.PIPELINE_BATCH,
+                registry.counter(TokenVersionPublisher.PUBLISH_FAILED_METRIC).count());
+    }
+
+    @Test
+    void publishAll_skipsNullUuids_andAnEmptySetTouchesNothing() {
+        java.util.Map<UUID, Long> versions = new java.util.HashMap<>();
+        versions.put(null, 3L);
+        publisher.publishAll(versions);
+        publisher.publishAllAfterCommit(java.util.Map.of());
+
+        verifyNoInteractions(redis);
+    }
 }

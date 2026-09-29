@@ -15,6 +15,7 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -104,6 +105,73 @@ class TokenVersionBumperTest {
         assertThat(user.getTokenVersion()).isEqualTo(4L);
         verify(publisher).publishAfterCommit(user.getUserUuid(), 4L);
         verify(users, never()).incrementTokenVersion(anyLong());
+    }
+
+    @Test
+    void bumpAllHolding_publishesEveryReturnedHolder_afterCommit() {
+        UUID a = UUID.randomUUID();
+        UUID b = UUID.randomUUID();
+        // Postgres returns the uuid column as a UUID and the version as a BIGINT;
+        // both shapes are read from what the database RETURNED.
+        when(users.incrementTokenVersionForRoleHolders("CALL_CENTER_AGENT"))
+                .thenReturn(java.util.List.of(new Object[]{a, 9L}, new Object[]{b.toString(), 4}));
+
+        assertThat(bumper.bumpAllHolding("CALL_CENTER_AGENT")).isEqualTo(2);
+        // ONE after-commit hand-off for the whole set, in the order returned —
+        // not one synchronous publish per holder on the request thread.
+        java.util.Map<UUID, Long> expected = new java.util.LinkedHashMap<>();
+        expected.put(a, 9L);
+        expected.put(b, 4L);
+        verify(publisher).publishAllAfterCommit(expected);
+        verify(publisher, never()).publishAfterCommit(any(), anyLong());
+        verify(publisher, never()).publish(any(), anyLong());
+    }
+
+    @Test
+    void bumpAllHolding_withNoHolders_publishesNothing() {
+        when(users.incrementTokenVersionForRoleHolders("FRAUD_DESK")).thenReturn(java.util.List.of());
+
+        assertThat(bumper.bumpAllHolding("FRAUD_DESK")).isZero();
+        verify(publisher).publishAllAfterCommit(java.util.Map.of());
+        verify(publisher, never()).publishAfterCommit(any(), anyLong());
+    }
+
+    @Test
+    void bumpAllHolding_aboveTheThreshold_isCountedForOperators() {
+        io.micrometer.core.instrument.simple.SimpleMeterRegistry registry =
+                new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        bumper.setMeterRegistry(registry);
+        io.micrometer.core.instrument.Counter large =
+                registry.find(TokenVersionBumper.LARGE_BULK_BUMP_METRIC).counter();
+        assertThat(large).as("registered at zero before the first large bump").isNotNull();
+        assertThat(large.count()).isZero();
+
+        java.util.List<Object[]> atThreshold = new java.util.ArrayList<>();
+        for (int i = 0; i < TokenVersionBumper.LARGE_BULK_BUMP_THRESHOLD; i++) {
+            atThreshold.add(new Object[]{UUID.randomUUID(), 2L});
+        }
+        when(users.incrementTokenVersionForRoleHolders("CALL_CENTER_AGENT")).thenReturn(atThreshold);
+        bumper.bumpAllHolding("CALL_CENTER_AGENT");
+        assertThat(large.count()).isZero();
+
+        java.util.List<Object[]> above = new java.util.ArrayList<>(atThreshold);
+        above.add(new Object[]{UUID.randomUUID(), 2L});
+        when(users.incrementTokenVersionForRoleHolders("MERCHANT_ADMIN")).thenReturn(above);
+        assertThat(bumper.bumpAllHolding("MERCHANT_ADMIN")).isEqualTo(TokenVersionBumper.LARGE_BULK_BUMP_THRESHOLD + 1);
+        assertThat(large.count()).isEqualTo(1.0);
+    }
+
+    @Test
+    void theRoleHolderBumpIsOneStatementOverUserRoles() {
+        Method m = Arrays.stream(UserRepository.class.getDeclaredMethods())
+                .filter(x -> x.getName().equals("incrementTokenVersionForRoleHolders")).findFirst().orElseThrow();
+        String sql = m.getAnnotation(Query.class).value();
+        // Matches holders by the user_roles STRING (no FK to roles), and returns
+        // the key every other service reads with the value to publish.
+        assertThat(m.getAnnotation(Query.class).nativeQuery()).isTrue();
+        assertThat(sql).contains("token_version = token_version + 1")
+                .contains("SELECT ur.user_id FROM user_roles ur WHERE ur.role = :role")
+                .contains("RETURNING user_uuid, token_version");
     }
 
     @Test

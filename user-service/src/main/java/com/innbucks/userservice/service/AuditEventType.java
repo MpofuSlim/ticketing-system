@@ -219,7 +219,7 @@ public enum AuditEventType {
 
     /**
      * DTX device security (V40). Only the state changes a PERSON makes land on
-     * the chain — the call centre or fraud desk in the admin portal, or the
+     * the chain — the call center or fraud desk in the admin portal, or the
      * customer on *569# — because those are the ones an auditor must be able
      * to trust after the fact ("who unlocked this phone the day before the
      * fraud?"). The high-volume automatic decisions are in

@@ -129,4 +129,27 @@ class TokenVersionPublisherRedisIT {
 
         assertThat(redis.opsForValue().get(key(uuid))).isEqualTo("3");
     }
+
+    @Test
+    void theBulkPublish_pipelinesTheSameNeverLowerScript_acrossBatches() {
+        // A role losing a PLATFORM code publishes every holder at once, in
+        // pipelined batches. Same script: a key already holding a NEWER version
+        // (a concurrent login published after the bulk bump read its value) is
+        // left alone, every other key is written with the refresh-lifetime TTL.
+        java.util.Map<UUID, Long> versions = new java.util.LinkedHashMap<>();
+        for (int i = 0; i < TokenVersionPublisher.PIPELINE_BATCH + 3; i++) {
+            versions.put(UUID.randomUUID(), 4L);
+        }
+        UUID newer = versions.keySet().iterator().next();
+        redis.opsForValue().set(key(newer), "9");
+
+        publisher.publishAll(versions);
+
+        assertThat(redis.opsForValue().get(key(newer))).isEqualTo("9");
+        versions.keySet().stream().filter(u -> !u.equals(newer)).forEach(u -> {
+            assertThat(redis.opsForValue().get(key(u))).isEqualTo("4");
+        });
+        UUID last = new java.util.ArrayList<>(versions.keySet()).get(versions.size() - 1);
+        assertThat(redis.getExpire(key(last), TimeUnit.MILLISECONDS)).isPositive().isLessThanOrEqualTo(TTL_MS);
+    }
 }

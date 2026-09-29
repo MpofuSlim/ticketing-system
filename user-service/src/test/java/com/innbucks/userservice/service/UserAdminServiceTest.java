@@ -59,20 +59,19 @@ class UserAdminServiceTest {
         final com.innbucks.userservice.security.TokenVersionPublisher tokenVersions =
                 mock(com.innbucks.userservice.security.TokenVersionPublisher.class);
         // setRoles validates every requested name against the roles table
-        // (V35). Stubbed to resolve any built-in name, so these tests keep
-        // asserting the SUPER_ADMIN / scope guards rather than the new
-        // existence check — RoleAdminServiceTest covers that separately.
+        // (V35). Stubbed with the built-in rows as the migrations seed them, so
+        // these tests keep asserting the SUPER_ADMIN / scope guards rather than
+        // the existence check — RoleAdminServiceTest covers that separately.
         final com.innbucks.userservice.repository.RoleRepository roleRepo =
                 mock(com.innbucks.userservice.repository.RoleRepository.class);
         {
-            when(roleRepo.findAllByNameIn(any())).thenAnswer(inv -> {
-                java.util.Collection<String> names = inv.getArgument(0);
-                return names.stream()
-                        .map(n -> com.innbucks.userservice.entity.Role.builder()
-                                .name(n).description(n).builtin(true).build())
-                        .toList();
-            });
+            com.innbucks.userservice.testsupport.BuiltInRoleRows.stub(roleRepo);
+            // The administrator every case acts as is the platform owner, so the
+            // no-escalation rules (NamedRoleAssignmentTest, RoleRemovalAuthorityTest) never refuse here.
+            com.innbucks.userservice.testsupport.BuiltInRoleRows.caller(userRepo, "admin@innbucks.co.zw",
+                    User.Role.SUPER_ADMIN.name());
         }
+        final RoleGrantGuard guard = new RoleGrantGuard(userRepo, roleRepo);
         final TokenVersionBumper bumper =
                 new com.innbucks.userservice.testsupport.InMemoryTokenVersionBumper(tokenVersions);
         // Deactivation ends every session through the real revoker; its
@@ -84,7 +83,7 @@ class UserAdminServiceTest {
                 mock(com.innbucks.userservice.repository.OtpRepository.class);
         final AccountSessionRevoker revoker = new AccountSessionRevoker(bumper, refreshTokens, deviceTrust, otps);
         final UserAdminService service = new UserAdminService(
-                userRepo, encoder, audit, publisher, tenantProfiles, bumper, revoker, roleRepo);
+                userRepo, encoder, audit, publisher, tenantProfiles, bumper, revoker, roleRepo, guard);
     }
 
     /** Capture the plaintext handed to encode() — it's the generated temp password. */
@@ -646,7 +645,8 @@ class UserAdminServiceTest {
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> meta = ArgumentCaptor.forClass(Map.class);
-        verify(f.audit).recordSuccess(
+        // REQUIRED audit: a role change that cannot be recorded is not made.
+        verify(f.audit).recordRequired(
                 eq(AuditEventType.USER_ROLES_CHANGED),
                 eq("admin@innbucks.co.zw"), eq(AuditService.ACTOR_TYPE_USER),
                 eq("52"), eq(AuditService.TARGET_TYPE_USER),

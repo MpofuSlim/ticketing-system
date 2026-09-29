@@ -6,6 +6,9 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.connection.RedisScriptingCommands;
+import org.springframework.data.redis.connection.ReturnType;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -13,8 +16,11 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 /**
@@ -105,6 +111,15 @@ public class TokenVersionPublisher {
     private static final RedisScript<Long> PUBLISH_IF_NOT_OLDER =
             new DefaultRedisScript<>(PUBLISH_IF_NOT_OLDER_LUA, Long.class);
 
+    private static final byte[] PUBLISH_IF_NOT_OLDER_BYTES =
+            PUBLISH_IF_NOT_OLDER_LUA.getBytes(StandardCharsets.UTF_8);
+
+    /**
+     * How many versions {@link #publishAll} sends in one pipelined round trip.
+     * Bounds both the reply buffer and the blast radius of one failed batch.
+     */
+    static final int PIPELINE_BATCH = 500;
+
     private final StringRedisTemplate redis;
 
     /**
@@ -162,7 +177,7 @@ public class TokenVersionPublisher {
         // the same string put in the JWT userUuid claim, so the downstream lookup
         // key lines up exactly.
         String key = SHARED_TOKEN_VERSION_PREFIX + userUuid;
-        Duration ttl = refreshExpirationMs > 0 ? Duration.ofMillis(refreshExpirationMs) : FALLBACK_TTL;
+        Duration ttl = ttl();
         try {
             Long written = redis.execute(PUBLISH_IF_NOT_OLDER, List.of(key),
                     Long.toString(version), Long.toString(ttl.toMillis()));
@@ -210,12 +225,90 @@ public class TokenVersionPublisher {
         });
     }
 
+    /**
+     * Publish many versions at once — the bulk sign-out when a role loses a
+     * PLATFORM permission, which can reach every holder of the role.
+     *
+     * <p>Same never-lower script and key contract as {@link #publish}, sent as
+     * {@code EVAL}s pipelined {@link #PIPELINE_BATCH} at a time: one round trip
+     * per batch instead of one per holder. Publishing a large role's holders one
+     * synchronous call at a time ran on the request thread after the change had
+     * committed, so a big enough role could time the response out at the gateway
+     * with the change already made. {@code EVAL} rather than the
+     * {@code EVALSHA}-with-fallback {@link #publish} uses, because a pipeline
+     * only reports a {@code NOSCRIPT} after the batch is sent, too late to fall
+     * back.
+     *
+     * <p>Never throws. A batch Redis refuses is logged and counts every version
+     * in it on {@link #PUBLISH_FAILED_METRIC}; the other batches still go.
+     * Entries with a null uuid are skipped, as in {@link #publish}.
+     */
+    public void publishAll(Map<UUID, Long> versions) {
+        List<Map.Entry<UUID, Long>> entries = new ArrayList<>();
+        for (Map.Entry<UUID, Long> e : versions.entrySet()) {
+            if (e.getKey() != null && e.getValue() != null) entries.add(e);
+        }
+        if (entries.isEmpty()) {
+            return;
+        }
+        byte[] ttlMs = Long.toString(ttl().toMillis()).getBytes(StandardCharsets.UTF_8);
+        for (int from = 0; from < entries.size(); from += PIPELINE_BATCH) {
+            List<Map.Entry<UUID, Long>> batch = entries.subList(from, Math.min(from + PIPELINE_BATCH, entries.size()));
+            try {
+                redis.executePipelined((RedisCallback<Object>) connection -> {
+                    RedisScriptingCommands scripting = connection.scriptingCommands();
+                    for (Map.Entry<UUID, Long> e : batch) {
+                        scripting.eval(PUBLISH_IF_NOT_OLDER_BYTES, ReturnType.INTEGER, 1,
+                                (SHARED_TOKEN_VERSION_PREFIX + e.getKey()).getBytes(StandardCharsets.UTF_8),
+                                Long.toString(e.getValue()).getBytes(StandardCharsets.UTF_8),
+                                ttlMs);
+                    }
+                    return null;
+                });
+            } catch (RuntimeException ex) {
+                log.warn("Failed to publish a batch of {} token versions to shared Redis; downstream relies on "
+                        + "access-token TTL for those accounts until Redis recovers", batch.size(), ex);
+                countFailure(batch.size());
+            }
+        }
+    }
+
+    /**
+     * {@link #publishAll} once the surrounding transaction has COMMITTED — one
+     * synchronization for the whole set, not one per account. Publishes at once
+     * when no synchronization is active, like {@link #publishAfterCommit}.
+     */
+    public void publishAllAfterCommit(Map<UUID, Long> versions) {
+        if (versions == null || versions.isEmpty()) {
+            return;
+        }
+        Map<UUID, Long> snapshot = new java.util.LinkedHashMap<>(versions);
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            publishAll(snapshot);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                publishAll(snapshot);
+            }
+        });
+    }
+
+    private Duration ttl() {
+        return refreshExpirationMs > 0 ? Duration.ofMillis(refreshExpirationMs) : FALLBACK_TTL;
+    }
+
     private void countFailure() {
+        countFailure(1);
+    }
+
+    private void countFailure(int versions) {
         if (publishFailed == null) {
             return;
         }
         try {
-            publishFailed.increment();
+            publishFailed.increment(versions);
         } catch (RuntimeException ignored) {
             // A metrics failure must never become a publish failure.
         }

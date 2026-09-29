@@ -386,7 +386,7 @@ public class DeviceOtpService {
         return challenges.voidOpenForDevice(device.getId(), now());
     }
 
-    /** Kills every open challenge for a number (call centre: "I got a code I didn't ask for"). */
+    /** Kills every open challenge for a number (call center: "I got a code I didn't ask for"). */
     @Transactional
     public int voidForNumber(String msisdn) {
         LocalDateTime now = now();

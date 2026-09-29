@@ -33,6 +33,11 @@ public class MfaEnrollCompleteResponseDTO {
             example = "[\"X4Q7-K9F2-A3B1-M8H6\", \"...\"]")
     private List<String> backupCodes;
 
+    @Schema(description = "The permission codes the access token carries (its `perms` claim) — the same "
+            + "list as `permissions` on the login response, resolved from the account's roles at mint time.",
+            example = "[\"device-security:read\", \"device-security:manage\"]", nullable = true)
+    private List<String> permissions;
+
     @Schema(description = "The organization this session acts for — same as `organizationId` on the "
             + "login response. Absent when the account belongs to none, or to several and none is chosen.",
             example = "7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f", nullable = true)
@@ -60,13 +65,14 @@ public class MfaEnrollCompleteResponseDTO {
     /**
      * The enrolment response for a freshly issued session. Enrolment is where
      * every staff account's FIRST sign-in ends, so it must carry the same
-     * organization scope as a login or refresh response — without it the
-     * client learns neither which business the session acts for nor that it
-     * must pick one.
+     * permissions and organization scope as a login or refresh response —
+     * without them the client learns neither what the session may do, which
+     * business it acts for, nor that it must pick one.
      */
     public static MfaEnrollCompleteResponseDTO from(AuthResponseDTO session, List<String> backupCodes) {
         MfaEnrollCompleteResponseDTO dto = new MfaEnrollCompleteResponseDTO(
                 session.getToken(), session.getRefreshToken(), backupCodes);
+        dto.setPermissions(session.getPermissions());
         dto.setOrganizationId(session.getOrganizationId());
         dto.setOrganizationRole(session.getOrganizationRole());
         dto.setOrganizationProducts(session.getOrganizationProducts());

@@ -47,17 +47,17 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * The call centre's and fraud desk's tools ({@code /admin/device-security}):
+ * The call center's and fraud desk's tools ({@code /admin/device-security}):
  * find a customer's phones by number or by the reference they read out, see
  * why a phone is stopped and what to do about it, and block, unlock, remove,
  * reset or ban — with every change sealed on the audit chain under the agent's
  * identity and the customer told by SMS/WhatsApp.
  *
  * <p>Two tiers of authority, enforced here as well as by {@code @PreAuthorize}:
- * {@code device-security:manage} covers the everyday call-centre actions; lifting
+ * {@code device-security:manage} covers the everyday call-center actions; lifting
  * a ban that only the fraud desk may lift (SHARED_DEVICE, CONFIRMED_FRAUD,
  * SIM_SWAP, or any device-wide ban) additionally needs
- * {@code device-security:fraud} — otherwise the call centre could undo the fraud
+ * {@code device-security:fraud} — otherwise the call center could undo the fraud
  * desk's decision on a caller's say-so, which is exactly the social-engineering
  * path a fraudster would take.
  */

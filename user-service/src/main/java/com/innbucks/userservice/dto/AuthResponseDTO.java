@@ -33,6 +33,19 @@ public class AuthResponseDTO {
             example = "[\"EVENT_ORGANIZER\"]")
     private List<String> roles;
 
+    @Schema(description = "What this session may do in user-service: the permission codes the access token "
+            + "carries (its `perms` claim), resolved from `roles` at the moment the token was minted — the "
+            + "wildcard is always expanded, so the list is concrete codes such as `users:read`. Present on "
+            + "every response that issues a session (login, 2FA step, refresh, organization switch, exchange); "
+            + "absent when no token is issued (`mfaRequired` / `mfaEnrollmentRequired`). Gate console screens "
+            + "on this rather than on role names: a custom role can grant any of these, and a built-in's "
+            + "permissions can be edited. It changes only when a new token is minted — call "
+            + "`POST /auth/refresh` to see a change made since sign-in. Empty for an account whose roles grant "
+            + "nothing here (a CUSTOMER).",
+            example = "[\"device-security:read\", \"device-security:manage\"]",
+            nullable = true)
+    private List<String> permissions;
+
     @Schema(description = "Default services this user is enrolled in (ticketing, loyalty).",
             example = "[\"ticketing\"]",
             nullable = true)

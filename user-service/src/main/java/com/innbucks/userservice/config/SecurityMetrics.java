@@ -31,6 +31,13 @@ public class SecurityMetrics {
     private final Counter mfaFailure;
     private final Counter auditIntegrityBroken;
     private final Counter auditChainBroken;
+    private final Counter auditWriteFailedBestEffort;
+    private final Counter auditWriteFailedRequired;
+
+    /** {@code mode} of {@code security.audit.write_failed}: the action went ahead unrecorded. */
+    public static final String AUDIT_MODE_BEST_EFFORT = "best_effort";
+    /** {@code mode} of {@code security.audit.write_failed}: the action was refused (503). */
+    public static final String AUDIT_MODE_REQUIRED = "required";
 
     public SecurityMetrics(MeterRegistry registry) {
         this.registry = registry;
@@ -61,6 +68,23 @@ public class SecurityMetrics {
         this.auditChainBroken = Counter.builder("security.audit.chain.broken")
                 .description("audit_events chain links that failed to recompute (deletion/reorder signal)")
                 .baseUnit("rows")
+                .register(registry);
+        // Alerted (AuditWriteFailed on increase()), so BOTH series exist at 0
+        // from boot: increase() cannot see a series' first sample, and a
+        // counter created by the failure it counts starts at 1 — the alert
+        // would miss exactly the first failure per pod, which is the typical
+        // case (one lock timeout, one login row lost during a DB blip). Tagged
+        // by mode only, so the series set is closed and can be registered up
+        // front; the event type is in the AUDIT_WRITE_FAILED log line.
+        this.auditWriteFailedBestEffort = auditWriteFailedCounter(AUDIT_MODE_BEST_EFFORT);
+        this.auditWriteFailedRequired = auditWriteFailedCounter(AUDIT_MODE_REQUIRED);
+    }
+
+    private Counter auditWriteFailedCounter(String mode) {
+        return Counter.builder("security.audit.write_failed")
+                .description("audit_events rows that could not be written, by mode "
+                        + "(best_effort: went ahead unrecorded; required: refused with 503)")
+                .tag("mode", mode)
                 .register(registry);
     }
 
@@ -114,6 +138,19 @@ public class SecurityMetrics {
 
     public void mfaFailure() {
         mfaFailure.increment();
+    }
+
+    /**
+     * An audit row that could not be written. {@code required = false}
+     * ({@code mode=best_effort}): the action went ahead unrecorded (a login, a
+     * logout — the audit path must not break them); {@code required = true}
+     * ({@code mode=required}): the action was REFUSED with
+     * {@code 503 audit_unavailable} because it may not happen unrecorded (a role
+     * grant or edit). Either is worth a look; alert {@code AuditWriteFailed}.
+     * Which event it was is in the {@code AUDIT_WRITE_FAILED} log line.
+     */
+    public void auditWriteFailed(boolean required) {
+        (required ? auditWriteFailedRequired : auditWriteFailedBestEffort).increment();
     }
 
     /** Called by the audit-integrity verifier for each row that fails HMAC checking. */

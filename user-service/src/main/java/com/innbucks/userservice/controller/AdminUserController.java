@@ -67,6 +67,14 @@ public class AdminUserController {
                     super_admin`): the platform-owner account is managed only through
                     `BOOTSTRAP_ADMIN_PASSWORD`.
 
+                    **Refuses a target holding any permission the caller does not, or a platform staff
+                    built-in (`PRODUCT_*`, `CALL_CENTER_*`, `FRAUD_DESK`) the caller does not hold
+                    themselves** — `403 target_not_manageable` (`reason: exceeds_your_authority`), read
+                    from the caller's current roles (SUPER_ADMIN passes both). Resetting someone's 2FA
+                    opens their account to whoever holds their password, so a narrower administrator
+                    cannot do it to a broader one — including a `PRODUCT_MANAGER`, whose authority is
+                    mostly its name in event-service and booking-service.
+
                     Requires the `users:mfa:reset` permission.
                     """)
     @ApiResponses({
@@ -93,7 +101,8 @@ public class AdminUserController {
                                     { "code": "401 UNAUTHORIZED", "message": "Invalid token", "data": null }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
-                    description = "The caller lacks `users:mfa:reset`, or the target is the SUPER_ADMIN account",
+                    description = "The caller lacks `users:mfa:reset`, the target is the SUPER_ADMIN account, or "
+                            + "the target holds a permission the caller does not",
                     content = @Content(mediaType = "application/json",
                             examples = {
                                     @ExampleObject(name = "Target is SUPER_ADMIN", value = """
@@ -101,6 +110,13 @@ public class AdminUserController {
                                               "code": "403 FORBIDDEN",
                                               "message": "You can't change this account.",
                                               "data": { "errorCode": "target_not_manageable", "reason": "super_admin" }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Target holds more than the caller", value = """
+                                            {
+                                              "code": "403 FORBIDDEN",
+                                              "message": "You can't change this account.",
+                                              "data": { "errorCode": "target_not_manageable", "reason": "exceeds_your_authority" }
                                             }
                                             """),
                                     @ExampleObject(name = "Missing permission", value = """
@@ -372,6 +388,13 @@ public class AdminUserController {
                     "lock the platform out of itself, and reactivating it requires a SUPER_ADMIN, so no caller " +
                     "is ever permitted to toggle it. The SUPER_ADMIN's `active` state is fixed at seed time " +
                     "(BOOTSTRAP_ADMIN_PASSWORD).\n\n" +
+                    "**Deactivating a STAFF-role holder needs the caller to hold every permission the " +
+                    "account holds, and every platform staff built-in it holds** (read from the caller's " +
+                    "current roles; SUPER_ADMIN passes both) — otherwise `403 target_not_manageable` " +
+                    "(`reason: exceeds_your_authority`), so a narrower administrator cannot switch off a " +
+                    "broader one. A staff role is a platform staff built-in (PRODUCT_*, " +
+                    "CALL_CENTER_*, FRAUD_DESK) or any role holding a PLATFORM permission; business " +
+                    "accounts are not gated this way.\n\n" +
                     "Requires the `users:activation:write` permission."
     )
     @ApiResponses({
@@ -427,7 +450,8 @@ public class AdminUserController {
                                     { "code": "404 NOT_FOUND", "message": "User not found: 999", "data": null }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
-                    description = "Caller lacks `users:activation:write`, OR the target IS a SUPER_ADMIN (always protected)",
+                    description = "Caller lacks `users:activation:write`, the target IS a SUPER_ADMIN (always "
+                            + "protected), or the target is a staff-role holder with a permission the caller lacks",
                     content = @Content(mediaType = "application/json",
                             examples = {
                                     @ExampleObject(name = "Target is SUPER_ADMIN", value = """
@@ -435,6 +459,13 @@ public class AdminUserController {
                                               "code": "403 FORBIDDEN",
                                               "message": "The SUPER_ADMIN account cannot be activated or deactivated.",
                                               "data": null
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Staff target holds more than the caller", value = """
+                                            {
+                                              "code": "403 FORBIDDEN",
+                                              "message": "You can't change this account.",
+                                              "data": { "errorCode": "target_not_manageable", "reason": "exceeds_your_authority" }
                                             }
                                             """),
                                     @ExampleObject(name = "Missing permission", value = """
@@ -450,8 +481,10 @@ public class AdminUserController {
 
         // Capture the admin's identity + request envelope so the audit row
         // (written inside setActive) ties the action back to whoever made it.
-        // Authentication is non-null here — @PreAuthorize already enforced
-        // hasRole('SUPER_ADMIN'), so Spring Security would have 401'd anonymous.
+        // Authentication is non-null here — @PreAuthorize already required
+        // users:activation:write, so Spring Security would have 401'd anonymous.
+        // The name is also what bounds a staff deactivation: setActive reads this
+        // account's LIVE roles and refuses a target it does not cover.
         String adminEmail = authentication.getName();
         AuditContext auditContext = new AuditContext(clientIp(httpRequest),
                 httpRequest.getHeader("User-Agent"));
@@ -472,13 +505,16 @@ public class AdminUserController {
                     every role the user should keep. Re-submitting the roles the user already has is
                     an idempotent no-op (no audit row, no session change).
 
-                    ### The nine platform roles
+                    ### The built-in roles
 
                     | Role | What it is | How it is normally assigned |
                     |---|---|---|
                     | `SUPER_ADMIN` | Platform owner. Full access to every admin endpoint. | Seeded once from `BOOTSTRAP_ADMIN_PASSWORD`. **Never grantable or revocable here.** |
-                    | `PRODUCT_OFFICER` | Internal platform staff. Not scoped to a tenant, merchant, shop or organizer, and grants no service bundle. Treated as a system user for MFA and admin listing. | This endpoint — no prerequisites. |
-                    | `PRODUCT_MANAGER` | Internal platform staff, same shape as `PRODUCT_OFFICER`. | This endpoint — no prerequisites. |
+                    | `PRODUCT_OFFICER` | Internal platform staff. Not scoped to a tenant, merchant, shop or organizer, and grants no service bundle. Treated as a system user for MFA and admin listing. | This endpoint, by a caller who holds it (or SUPER_ADMIN). |
+                    | `PRODUCT_MANAGER` | Internal platform staff, same shape as `PRODUCT_OFFICER`. | This endpoint, by a caller who holds it (or SUPER_ADMIN). |
+                    | `CALL_CENTER_AGENT` | Customer support: looks customers up and performs routine support actions (`device-security:read`, `device-security:manage`). | This endpoint, by a caller who holds it (or SUPER_ADMIN). |
+                    | `CALL_CENTER_SUPERVISOR` | Customer-support supervisor; same grants as the agent for now. | This endpoint, by a caller who holds it (or SUPER_ADMIN). |
+                    | `FRAUD_DESK` | Add-on held with an agent or supervisor role: bans, fraud holds and lifting them (`device-security:read`, `device-security:fraud`). | This endpoint, by a caller who holds it (or SUPER_ADMIN). |
                     | `EVENT_ORGANIZER` | Runs ticketed events — owns events, invoices, settlements and team members. | Self-registration as a business account, then `PUT /admin/users/{id}/active` to approve. |
                     | `TEAM_MEMBER` | Gate staff / scanner operator working for one EVENT_ORGANIZER. Their JWT carries the parent organizer's uuid so booking-service can authorize ticket scans. | `POST /event-organizer/team-members` |
                     | `MERCHANT_ADMIN` | Runs a loyalty merchant — manages that merchant's shops, staff and rules. | `POST /loyalty/merchants` plus the merchant-admin account. |
@@ -494,6 +530,27 @@ public class AdminUserController {
                     would keep their old privileges until the token expired. The user picks up the new
                     roles on their next login, or silently via `POST /auth/refresh`.
 
+                    ### No escalation
+
+                    The caller's authority is read from their CURRENT roles, never their token.
+
+                    * **Every role ADDED** must grant only permissions the caller holds, and a
+                      platform staff built-in (`PRODUCT_*`, `CALL_CENTER_*`, `FRAUD_DESK`) also needs
+                      the caller to hold that same role (or be SUPER_ADMIN) — **400
+                      `role_not_assignable`**, `data.roles` naming each refused role with its reason
+                      (`exceeds_your_authority`, `named_role_not_held`, `reserved_to_super_admin`). A
+                      stored code the catalog no longer defines counts as one the caller does not
+                      hold. Roles the account already
+                      holds are not re-checked.
+                    * **Every role ADDED** that stores a code reserved to SUPER_ADMIN (`roles:write`,
+                      `users:roles:write` — a legacy grant from before they were reserved) can be given
+                      by SUPER_ADMIN only — **400 `role_not_assignable`** (`reserved_to_super_admin`).
+                    * **Removing any role** needs the caller to hold every permission the account
+                      holds now, and every platform staff built-in it holds — **403
+                      `target_not_manageable`** (`reason: exceeds_your_authority`), so a narrower
+                      administrator cannot strip a broader one (a `PRODUCT_MANAGER` included, whose
+                      authority is mostly its name in other services).
+
                     ### Refusals
 
                     * The target already being a `SUPER_ADMIN`, or `SUPER_ADMIN` appearing in the
@@ -502,8 +559,11 @@ public class AdminUserController {
                       `TEAM_MEMBER` on an account with no parent organizer — **400**. Those roles
                       authorize off scope baked in at creation time; granting one without it produces
                       an account that logs in and then fails inside every handler.
+                    * The `USER_ROLES_CHANGED` audit row cannot be written — **503
+                      `audit_unavailable`**, and nothing changes.
 
-                    Requires **SUPER_ADMIN** role.
+                    Requires the `users:roles:write` permission, which only SUPER_ADMIN holds: it is
+                    reserved to the `*` wildcard and cannot be granted to any role through the API.
                     """)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -518,17 +578,50 @@ public class AdminUserController {
                                         "firstName": "Alice",
                                         "lastName": "Moyo",
                                         "email": "alice@innbucks.co.zw",
-                                        "roles": ["EVENT_ORGANIZER", "CUSTOMER"],
+                                        "roles": ["CALL_CENTER_AGENT", "FRAUD_DESK"],
                                         "active": true,
-                                        "createdAt": "2026-01-15T10:30:00"
+                                        "createdAt": "2026-01-15T10:30:00+02:00"
                                       }
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "400",
-                    description = "Empty role set, an unrecognised role name, or a role whose required scope is missing",
+                    description = "Empty role set, an unrecognised role name, a role whose required scope is missing, "
+                            + "or a role the caller may not give",
                     content = @Content(mediaType = "application/json",
                             examples = {
+                                    @ExampleObject(name = "Role the caller may not give", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "These roles can't be given to this account: FRAUD_DESK (grants more than you hold), PRODUCT_OFFICER (only someone who holds this role can give it).",
+                                              "data": {
+                                                "errorCode": "role_not_assignable",
+                                                "roles": {
+                                                  "FRAUD_DESK": "exceeds_your_authority",
+                                                  "PRODUCT_OFFICER": "named_role_not_held"
+                                                }
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Legacy role storing a code reserved to SUPER_ADMIN", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "These roles can't be given to this account: SUPPORT_ADMIN (reserved to SUPER_ADMIN).",
+                                              "data": {
+                                                "errorCode": "role_not_assignable",
+                                                "roles": {
+                                                  "SUPPORT_ADMIN": "reserved_to_super_admin"
+                                                }
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Unknown role", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Unknown role(s): CALL_CENTRE_AGENT. List the available roles with GET /admin/roles.",
+                                              "data": null
+                                            }
+                                            """),
                                     @ExampleObject(name = "Empty role set", value = """
                                             {
                                               "code": "400 BAD_REQUEST",
@@ -553,9 +646,20 @@ public class AdminUserController {
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "403",
-                    description = "Caller is not a SUPER_ADMIN, target IS a SUPER_ADMIN, or SUPER_ADMIN was requested",
+                    description = "Caller lacks `users:roles:write`, target IS a SUPER_ADMIN, SUPER_ADMIN was "
+                            + "requested, or a role is being removed from an account holding more than the caller",
                     content = @Content(mediaType = "application/json",
                             examples = {
+                                    @ExampleObject(name = "Removing a role from an account holding more than the caller", value = """
+                                            {
+                                              "code": "403 FORBIDDEN",
+                                              "message": "You can't change this account.",
+                                              "data": { "errorCode": "target_not_manageable", "reason": "exceeds_your_authority" }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Missing permission", value = """
+                                            { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
+                                            """),
                                     @ExampleObject(name = "Target is the platform owner", value = """
                                             {
                                               "code": "403 FORBIDDEN",
@@ -571,7 +675,21 @@ public class AdminUserController {
                                             }
                                             """)
                             })),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "User not found")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "User not found",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    { "code": "404 NOT_FOUND", "message": "User not found: 999", "data": null }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503",
+                    description = "The USER_ROLES_CHANGED audit row could not be written; nothing changed",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(value = """
+                                    {
+                                      "code": "503 SERVICE_UNAVAILABLE",
+                                      "message": "We couldn't record this change, so it wasn't made. Try again.",
+                                      "data": { "errorCode": "audit_unavailable" }
+                                    }
+                                    """)))
     })
     public ResponseEntity<ApiResult<UserResponseDTO>> updateRoles(
             @PathVariable Long id,
@@ -579,7 +697,9 @@ public class AdminUserController {
             Authentication authentication,
             HttpServletRequest httpRequest) {
 
-        // @PreAuthorize already enforced SUPER_ADMIN, so authentication is non-null.
+        // @PreAuthorize already enforced users:roles:write, so authentication is
+        // non-null. Its name is the caller whose LIVE roles bound what they may
+        // add or remove (RoleGrantGuard).
         String adminEmail = authentication.getName();
         AuditContext auditContext = new AuditContext(clientIp(httpRequest),
                 httpRequest.getHeader("User-Agent"));

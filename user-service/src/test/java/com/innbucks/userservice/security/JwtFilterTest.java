@@ -162,7 +162,7 @@ class JwtFilterTest {
         // endpoints are skipped too: none of them carries a fleet session.
         assertTrue(filter.shouldNotFilter(new MockHttpServletRequest("POST", "/auth/client-service")));
         assertTrue(filter.shouldNotFilter(new MockHttpServletRequest("POST", "/device-security/ussd/devices/unlock")));
-        // ...but the call-centre console under /admin is a normal JWT surface.
+        // ...but the call-center console under /admin is a normal JWT surface.
         assertFalse(filter.shouldNotFilter(new MockHttpServletRequest("GET", "/admin/device-security/devices")));
     }
 
