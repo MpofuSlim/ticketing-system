@@ -76,6 +76,16 @@ public final class PermissionCatalog {
     public static final String ORGANIZATIONS_READ = "organizations:read";
 
     /**
+     * DTX device security (V40) — the call centre's and fraud desk's tools.
+     * Three tiers on purpose: an agent who can look a caller up need not be able
+     * to unlock their phone, and the call centre must not be able to lift a
+     * fraud-desk ban on a caller's say-so.
+     */
+    public static final String DEVICE_SECURITY_READ = "device-security:read";
+    public static final String DEVICE_SECURITY_MANAGE = "device-security:manage";
+    public static final String DEVICE_SECURITY_FRAUD = "device-security:fraud";
+
+    /**
      * Every permission this service defines, in declaration order, mapped to the
      * description an operator sees in {@code GET /admin/permissions}. Ordered
      * (LinkedHashMap) so the listing groups related codes together rather than
@@ -109,6 +119,10 @@ public final class PermissionCatalog {
         all.put(SHOP_STAFF_MERCHANT_READ, "Read shop staff across any shop of a merchant");
         all.put(SHOP_STAFF_PASSWORD_RESET, "Issue a temporary password for a shop staff account");
         all.put(ORGANIZATIONS_READ, "List every organization on the platform");
+        all.put(DEVICE_SECURITY_READ, "Look up a customer's phones, blocks, references and sign-in history");
+        all.put(DEVICE_SECURITY_MANAGE, "Block, unlock, remove or reset a customer's phone, and cancel open codes");
+        all.put(DEVICE_SECURITY_FRAUD, "Ban a phone for fraud (including every account on it), lift such bans, "
+                + "and fraud-flag a customer");
         ALL = Collections.unmodifiableMap(all);
     }
 

@@ -207,5 +207,29 @@ public enum AuditEventType {
     ORGANIZATION_MEMBER_ADDED,
     ORGANIZATION_MEMBER_ROLE_CHANGED,
     ORGANIZATION_MEMBER_REMOVED,
-    ORGANIZATION_PRODUCT_GRANTED
+    ORGANIZATION_PRODUCT_GRANTED,
+
+    /**
+     * DTX device security (V40). Only the state changes a PERSON makes land on
+     * the chain — the call centre or fraud desk in the admin portal, or the
+     * customer on *569# — because those are the ones an auditor must be able
+     * to trust after the fact ("who unlocked this phone the day before the
+     * fraud?"). The high-volume automatic decisions are in
+     * {@code device_security_events}; putting every sign-in and every silent
+     * renewal on the chain would serialise sign-ins on its head lock. Target is
+     * the device's public id; the number rides in metadata masked to its last 4.
+     */
+    DEVICE_SECURITY_BLOCKED,
+    DEVICE_SECURITY_BANNED,
+    DEVICE_SECURITY_UNLOCKED,
+    DEVICE_SECURITY_REVOKED,
+    DEVICE_SECURITY_TRUST_RESET,
+    DEVICE_SECURITY_OTP_VOIDED,
+    DEVICE_SECURITY_FRAUD_FLAG_CHANGED,
+    /**
+     * The broker or USSD service presented a missing or wrong {@code x-api-key}
+     * on a device-security partner endpoint — the same S2S-boundary signal as
+     * {@link #AUTH_INTERNAL_TOKEN_FAILURE}, for the two external callers.
+     */
+    DEVICE_SECURITY_PARTNER_KEY_FAILURE
 }

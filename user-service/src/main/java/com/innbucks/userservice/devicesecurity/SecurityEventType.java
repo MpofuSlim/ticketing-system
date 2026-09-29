@@ -1,0 +1,36 @@
+package com.innbucks.userservice.devicesecurity;
+
+/**
+ * Rows in {@code device_security_events}. VARCHAR in the table, so adding a value
+ * needs no migration.
+ */
+public enum SecurityEventType {
+    SIGN_IN_DECISION,
+    OTP_CHALLENGE_CREATED,
+    OTP_SENT,
+    OTP_SEND_FAILED,
+    OTP_VERIFIED,
+    OTP_WRONG,
+    OTP_CHALLENGE_DEAD,
+    OTP_RELAY_SUSPECTED,
+    OTP_VOIDED,
+    TICKET_REDEEMED,
+    TICKET_REJECTED,
+    LOGIN_RESULT,
+    DEVICE_BOUND,
+    DEVICE_TEMP_BLOCKED,
+    DEVICE_BANNED,
+    DEVICE_UNLOCKED,
+    DEVICE_REVOKED,
+    DEVICE_TRUST_RESET,
+    BLOCK_LIFTED,
+    INTEGRITY_HOLD_LIFTED,
+    USSD_UNLOCK_REFUSED,
+    USSD_BLOCK_REFUSED,
+    SESSION_STEP_UP_NOT_REQUIRED,
+    SESSION_STEP_UP_VERIFIED,
+    FRAUD_FLAG_SET,
+    FRAUD_FLAG_CLEARED,
+    NOTIFICATION_SENT,
+    NOTIFICATION_FAILED
+}

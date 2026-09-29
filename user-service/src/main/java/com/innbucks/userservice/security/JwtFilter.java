@@ -304,6 +304,10 @@ public class JwtFilter extends OncePerRequestFilter {
             "/swagger-ui",
             "/v3/api-docs",
             "/auth",
+            // DTX partner endpoints (broker, *569#) authenticate with an x-api-key,
+            // never a fleet JWT. Filtered, a stray Authorization header the broker
+            // forwarded would be rejected INVALID_TOKEN before the key is read.
+            "/device-security/",
             "/error"
     );
 
@@ -315,6 +319,14 @@ public class JwtFilter extends OncePerRequestFilter {
         // blanket /auth skip — process the JWT here so SecurityConfig can enforce
         // .authenticated() on it (audit H1).
         if (path.startsWith("/auth/customer/send-money/details")) {
+            return false;
+        }
+        // DTX device security's customer surface (Your devices, the in-session
+        // step-up) is authenticated by the fleet CUSTOMER session and gated by
+        // @PreAuthorize("hasRole('CUSTOMER')"). Riding the blanket /auth skip,
+        // the token would never be read and every call would 401 as anonymous —
+        // so, like send-money above, these paths are filtered.
+        if (path.equals("/auth/devices") || path.startsWith("/auth/devices/") || path.startsWith("/auth/device/")) {
             return false;
         }
         return EXCLUDED_PATHS.stream().anyMatch(path::startsWith);

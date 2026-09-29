@@ -44,7 +44,8 @@ class GatewayRouteTableTest {
     private static final List<String> EXPECTED_ROUTE_IDS = List.of(
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
             "auth-otp-route", "auth-exchange-route", "auth-mfa-route", "auth-password-reset-route",
-            "user-auth-route",
+            "auth-device-security-route",
+            "user-auth-route", "device-security-partner-route",
             "cells-lookup-route", "user-admin-route", "user-notifications-route",
             "user-organizations-route",
             "booking-event-organizer-reports-route", "user-event-organizer-route",
@@ -70,6 +71,7 @@ class GatewayRouteTableTest {
     // user-event-organizer-route and booking-tickets-route.
     private static final Map<String, String> SERVICE_PREFIXES = Map.ofEntries(
             Map.entry("user-auth-route", "/auth/**"),
+            Map.entry("device-security-partner-route", "/device-security/**"),
             Map.entry("user-admin-route", "/admin/**"),
             Map.entry("user-notifications-route", "/notifications/**"),
             Map.entry("user-organizations-route", "/organizations/**"),
@@ -89,6 +91,7 @@ class GatewayRouteTableTest {
     private static final List<String> RATE_LIMITED_ROUTES = List.of(
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
             "auth-otp-route", "auth-exchange-route", "auth-mfa-route", "auth-password-reset-route",
+            "auth-device-security-route", "device-security-partner-route",
             "user-admin-route", "user-notifications-route", "user-organizations-route",
             "user-event-organizer-route", "booking-event-organizer-reports-route",
             "user-self-route", "event-service-route",
@@ -128,7 +131,11 @@ class GatewayRouteTableTest {
             // And again: an unauthenticated endpoint that accepts a secret in
             // its body. The limiter is the only thing capping how fast refresh
             // tokens can be guessed.
-            "loyalty-session-refresh-route");
+            "loyalty-session-refresh-route",
+            // DTX device security: the app-facing surface sends real OTPs (SMS
+            // cost), and the partner surface is shared-key authenticated — the
+            // loyalty-partner-registration hazard exactly.
+            "auth-device-security-route", "device-security-partner-route");
 
     @Autowired
     RouteDefinitionLocator locator;
@@ -411,7 +418,8 @@ class GatewayRouteTableTest {
         List<String> order = orderedIds();
         int catchAll = order.indexOf("user-auth-route");
         List.of("auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
-                        "auth-otp-route", "auth-exchange-route", "auth-mfa-route", "auth-password-reset-route")
+                        "auth-otp-route", "auth-exchange-route", "auth-mfa-route", "auth-password-reset-route",
+                        "auth-device-security-route")
                 .forEach(id -> assertThat(order.indexOf(id))
                         .as("%s must match before the /auth/** catch-all", id)
                         .isBetween(0, catchAll - 1));
@@ -442,6 +450,11 @@ class GatewayRouteTableTest {
                 .containsExactly("/auth/login/mfa", "/auth/mfa/**");
         assertThat(predicateArgs("auth-password-reset-route", "Path"))
                 .containsExactly("/auth/forgot-password", "/auth/reset-password");
+        // DTX device security: exactly the app-facing paths, so nothing else under
+        // /auth inherits a bucket sized for the whole broker's traffic.
+        assertThat(predicateArgs("auth-device-security-route", "Path"))
+                .containsExactly("/auth/client-service", "/auth/client-service/**", "/auth/devices",
+                        "/auth/devices/**", "/auth/device/**");
     }
 
     @Test
@@ -480,7 +493,8 @@ class GatewayRouteTableTest {
         // bucket per request and the per-IP cap never engages. Pin the
         // hardcoded-IP resolver on all three routes so a refactor that swaps
         // the resolver back fails CI instead of reopening the bypass.
-        List.of("auth-otp-route", "auth-mfa-route", "auth-password-reset-route").forEach(id -> {
+        List.of("auth-otp-route", "auth-mfa-route", "auth-password-reset-route",
+                "auth-device-security-route", "device-security-partner-route").forEach(id -> {
             boolean usesPreAuthIpResolver = route(id).getFilters().stream()
                     .filter(f -> "RequestRateLimiter".equals(f.getName()))
                     .flatMap(f -> f.getArgs().values().stream())
