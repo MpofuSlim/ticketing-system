@@ -45,11 +45,20 @@ updates:
           - "net.logstash.logback*"
         update-types: ["minor", "patch"]
 
+  # eclipse-temurin: MAJOR bumps are ignored on every Docker entry below.
+  # A major bump here is a JDK change, not a patch: #621-#626 moved six images
+  # 21 -> 24 (a non-LTS JDK, past end of support) and the Release Trivy gate
+  # then refused all six on 27 unfixable Alpine CVEs in the frozen 24 base.
+  # It also broke the invariant that images run the JDK CI tests on (ci.yml
+  # java-version + <java.version>, both 21). Adopting a new JDK is a deliberate
+  # LTS move (e.g. 25) made in ONE PR together with those two - never a
+  # Dependabot merge. Remove this ignore in that same PR.
   - package-ecosystem: "docker"
     directory: "/api-gateway"
     schedule: { interval: "weekly", day: "monday", time: "08:00", timezone: "Etc/UTC" }
     open-pull-requests-limit: 3
     labels: ["dependencies", "docker"]
+    ignore: [{ dependency-name: "eclipse-temurin", update-types: ["version-update:semver-major"] }]
     commit-message: { prefix: "docker(api-gateway)" }
 
   - package-ecosystem: "docker"
@@ -57,6 +66,7 @@ updates:
     schedule: { interval: "weekly", day: "monday", time: "08:00", timezone: "Etc/UTC" }
     open-pull-requests-limit: 3
     labels: ["dependencies", "docker"]
+    ignore: [{ dependency-name: "eclipse-temurin", update-types: ["version-update:semver-major"] }]
     commit-message: { prefix: "docker(user-service)" }
 
   - package-ecosystem: "docker"
@@ -64,6 +74,7 @@ updates:
     schedule: { interval: "weekly", day: "monday", time: "08:00", timezone: "Etc/UTC" }
     open-pull-requests-limit: 3
     labels: ["dependencies", "docker"]
+    ignore: [{ dependency-name: "eclipse-temurin", update-types: ["version-update:semver-major"] }]
     commit-message: { prefix: "docker(event-service)" }
 
   - package-ecosystem: "docker"
@@ -71,6 +82,7 @@ updates:
     schedule: { interval: "weekly", day: "monday", time: "08:00", timezone: "Etc/UTC" }
     open-pull-requests-limit: 3
     labels: ["dependencies", "docker"]
+    ignore: [{ dependency-name: "eclipse-temurin", update-types: ["version-update:semver-major"] }]
     commit-message: { prefix: "docker(seat-service)" }
 
   - package-ecosystem: "docker"
@@ -78,6 +90,7 @@ updates:
     schedule: { interval: "weekly", day: "monday", time: "08:00", timezone: "Etc/UTC" }
     open-pull-requests-limit: 3
     labels: ["dependencies", "docker"]
+    ignore: [{ dependency-name: "eclipse-temurin", update-types: ["version-update:semver-major"] }]
     commit-message: { prefix: "docker(booking-service)" }
 
   - package-ecosystem: "docker"
@@ -85,6 +98,7 @@ updates:
     schedule: { interval: "weekly", day: "monday", time: "08:00", timezone: "Etc/UTC" }
     open-pull-requests-limit: 3
     labels: ["dependencies", "docker"]
+    ignore: [{ dependency-name: "eclipse-temurin", update-types: ["version-update:semver-major"] }]
     commit-message: { prefix: "docker(payment-service)" }
 
   # loyalty-service was extracted to MpofuSlim/InnRewards, which carries its
