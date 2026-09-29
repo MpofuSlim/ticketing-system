@@ -171,7 +171,9 @@ public class CustomerDeviceService {
             boolean recentlyBound = d.getBoundAt() == null
                     || d.getBoundAt().isAfter(now.minus(properties.getTrust().getSessionStepUpWindow()));
             boolean flagged = profile != null && profile.fraudFlagged();
-            boolean required = force || (properties.getEnforce().isOtp() && (recentlyBound || flagged));
+            // A phone trusted only by watch mode has never proved the SIM: ask, once codes are on.
+            boolean required = force || (properties.getEnforce().isOtp()
+                    && (recentlyBound || flagged || !d.possessionVerified()));
             if (!required) {
                 events.record(SecurityEventType.SESSION_STEP_UP_NOT_REQUIRED, ActorType.CUSTOMER, callerId(auth),
                         msisdn, d, b -> b.reason(req.action()).ipAddress(ip));

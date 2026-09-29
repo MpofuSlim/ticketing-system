@@ -39,7 +39,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.after;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -345,6 +347,50 @@ class DeviceSecurityFlowTest {
         assertThat((String) JsonPath.read(res, "$.data.trust.state")).isEqualTo("PENDING_PIN");
         assertThat(jdbc.queryForObject("SELECT evaluated_decision FROM device_security_events "
                 + "WHERE msisdn = ? AND event_type = 'SIGN_IN_DECISION'", String.class, msisdn)).isEqualTo("OTP_REQUIRED");
+    }
+
+    @Test
+    @DisplayName("watch mode trust is provisional: no notice, no cooling, and one code once OTP is enforced")
+    void watchModeTrust_isProvisional_untilACodeIsVerified() throws Exception {
+        properties.getEnforce().setOtp(false);
+        properties.getEnforce().setBlocks(false);
+        properties.getEnforce().setBans(false);
+        String msisdn = number();
+        String install = UUID.randomUUID().toString();
+
+        // Watching: TOKEN with no code, and the PIN login binds the phone...
+        String first = clientService(msisdn, install, "SIGN_IN", "{}");
+        assertThat((String) JsonPath.read(first, "$.data.decision")).isEqualTo("TOKEN");
+        loginResult(jti(JsonPath.read(first, "$.data.loginTicket")), "SUCCESS")
+                .andExpect(jsonPath("$.data.deviceState").value("TRUSTED"));
+        assertThat(jdbc.queryForObject("SELECT otp_verified_at IS NULL FROM customer_devices WHERE msisdn = ?",
+                Boolean.class, msisdn)).isTrue();
+
+        // ...but announces nothing: no "a new phone signed in", no new-phone cooling.
+        String second = clientService(msisdn, install, "SIGN_IN", "{}");
+        assertThat((String) JsonPath.read(second, "$.data.trust.state")).isEqualTo("TRUSTED");
+        assertThat((Boolean) JsonPath.read(second, "$.data.limits.cooling")).isFalse();
+        assertThat((String) JsonPath.read(second, "$.message")).isEqualTo("Enter your PIN to continue.");
+        verify(whatsApp, after(500).never()).sendCustomNotification(eq(msisdn), anyString());
+        verify(sms, never()).sendSms(eq(msisdn), anyString(), anyString());
+
+        // Codes switched on: that trust never proved the SIM, so even a silent renewal asks once.
+        properties.getEnforce().setOtp(true);
+        String renew = clientService(msisdn, install, "RENEW", "{}");
+        assertThat((String) JsonPath.read(renew, "$.data.decision")).isEqualTo("OTP_REQUIRED");
+        assertThat((String) JsonPath.read(renew, "$.data.reason")).isEqualTo("NEW_DEVICE");
+        String challenge = JsonPath.read(renew, "$.data.challengeId");
+        String token = verifyOtp(challenge, sendAndCapture(challenge, "WHATSAPP", install, msisdn), install);
+        loginResult(jti(JsonPath.read(token, "$.data.loginTicket")), "SUCCESS")
+                .andExpect(jsonPath("$.data.deviceState").value("TRUSTED"));
+        assertThat(jdbc.queryForObject("SELECT otp_verified_at IS NOT NULL FROM customer_devices WHERE msisdn = ?",
+                Boolean.class, msisdn)).isTrue();
+
+        // Confirmed for real: renewals are silent again, and the customer's own phone was never
+        // announced as "new" — the only message they received was the code.
+        assertThat((String) JsonPath.read(clientService(msisdn, install, "RENEW", "{}"), "$.data.decision"))
+                .isEqualTo("TOKEN");
+        verify(whatsApp, after(500).never()).sendCustomNotification(eq(msisdn), contains("A new phone"));
     }
 
     @Test

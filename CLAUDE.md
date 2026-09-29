@@ -712,10 +712,22 @@ and blocks phones on `/device-security/ussd/**`; the call centre works it from
   goes to `device_security_events` (12 months, not chained — the audit chain's
   head lock would serialise sign-ins). State changes a PERSON makes (support,
   USSD) also go on the tamper-evident `audit_events` chain (`DEVICE_SECURITY_*`).
-- **Rollout is config** (`DEVICE_SECURITY_*`): off = 404; on with all
-  `ENFORCE_*` false = watch mode (log `evaluated_decision`, answer TOKEN); then
-  OTP, then BLOCKS, then BANS. A block/ban verdict whose family is not yet
-  enforced degrades to an OTP when OTP is. Staff/USSD actions are always enforced.
+- **Enforcement is the default** (`DEVICE_SECURITY_*`): off = 404; on = every
+  family (OTP, BLOCKS, BANS) enforces, because the app and DTX launch together —
+  there is no watch period (operator's decision, 2026-09-29). All `ENFORCE_*`
+  false = watch mode (log `evaluated_decision`, answer TOKEN), an explicit
+  opt-out for tuning only. A block/ban verdict whose family is off degrades to an
+  OTP when OTP is on. Staff/USSD actions are always enforced.
+- **Trust earned while watching is PROVISIONAL** (V41 `otp_verified_at`). In
+  watch mode a PIN login binds the phone TRUSTED without it ever proving the SIM,
+  so that trust is marked unproven: it sends no "new phone" notice and starts no
+  cooling (else every existing customer is told a new phone signed in), and once
+  OTP is enforced `DeviceSignInService.input` shows the engine the phone as NEW —
+  one code, on a silent RENEW too — before it is trusted for real. Without this,
+  every phone that signed in during watch mode (a stolen-PIN one included) stayed
+  exempt for the full 90-day window after enforcement began. Revoke and
+  trust-reset clear the proof. Pinned by
+  `watchModeTrust_isProvisional_untilACodeIsVerified`.
 - **Permissions**: `device-security:read` / `:manage` / `:fraud`. Lifting a
   SHARED_DEVICE / CONFIRMED_FRAUD / SIM_SWAP / device-wide ban needs `:fraud` —
   checked in the service too, so the call centre cannot undo the fraud desk on a

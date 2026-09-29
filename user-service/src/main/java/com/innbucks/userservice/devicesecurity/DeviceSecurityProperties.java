@@ -55,15 +55,18 @@ public class DeviceSecurityProperties {
     private Lookup lookup = new Lookup();
     private Retention retention = new Retention();
 
-    /** Which automatic rule families answer for real. All false = watch mode. */
+    /**
+     * Which automatic rule families answer for real. All enforce by default — the
+     * app and DTX launch together; all false is watch mode, an explicit opt-out.
+     */
     @Data
     public static class Enforce {
-        /** OTP for new, changed, expired or risky devices. The first family to switch on. */
-        private boolean otp = false;
+        /** OTP for new, changed, expired or risky devices. */
+        private boolean otp = true;
         /** Temporary blocks (§8.4). */
-        private boolean blocks = false;
+        private boolean blocks = true;
         /** Bans (§8.5). */
-        private boolean bans = false;
+        private boolean bans = true;
     }
 
     /** Staging's {@code /auth/client-service} — the credential only DTX holds (§3 rule 2). */

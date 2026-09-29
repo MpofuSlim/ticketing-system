@@ -285,9 +285,18 @@ public class DeviceSignInService {
         long wrongPins = tickets.countByInstallIdHashAndOutcomeAndOutcomeAtAfter(device.getInstallIdHash(),
                 LoginOutcome.WRONG_PIN, now.minusDays(1));
 
+        // Provisional trust (granted by watch mode, never confirmed with a code) is
+        // not trust once OTP is enforced: the engine sees the phone as never proven,
+        // so it is asked for one code — on a silent renewal too — and is trusted
+        // for real after it. While only watching, the engine sees the stored state,
+        // so the logged verdicts stay those of the steady state rather than every
+        // renewal reading as "would have asked for a code".
+        boolean provisional = properties.getEnforce().isOtp() && device.getState() == DeviceState.TRUSTED
+                && !device.possessionVerified();
         var loc = req.location();
         return new RiskEngine.Input(now, purpose, context,
-                device.getState(), device.getStateReason(), device.getTrustedUntil(), device.getBoundAt() != null,
+                provisional ? DeviceState.NEW : device.getState(), provisional ? null : device.getStateReason(),
+                provisional ? null : device.getTrustedUntil(), device.getBoundAt() != null,
                 device.inPinGrace(now),
                 device.getPlatform(), device.getManufacturer(), device.getModel(),
                 f.platform(), f.manufacturer(), f.model(),
@@ -451,6 +460,7 @@ public class DeviceSignInService {
                     device.transition(DeviceState.PENDING_PIN, null, ActorType.APP.name(), now);
                     device.setPinGraceUntil(now.plus(properties.getTrust().getPendingPinGrace()));
                     device.setConsecutiveDeadChallenges(0);
+                    device.setOtpVerifiedAt(now);
                     devices.save(device);
                     CustomerSecurityProfile profile = profile(device.getMsisdn(), now);
                     if (c.getChannel() != null) {

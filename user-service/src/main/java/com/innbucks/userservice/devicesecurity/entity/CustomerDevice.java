@@ -90,6 +90,13 @@ public class CustomerDevice {
     @Column(name = "cooling_until")
     private LocalDateTime coolingUntil;
 
+    /**
+     * Last time this phone verified a sign-in OTP for this number (V41). NULL means
+     * it never has: any trust it holds came from watch mode and is provisional.
+     */
+    @Column(name = "otp_verified_at")
+    private LocalDateTime otpVerifiedAt;
+
     @Column(name = "pin_grace_until")
     private LocalDateTime pinGraceUntil;
 
@@ -162,6 +169,15 @@ public class CustomerDevice {
     /** Whether a PENDING_PIN device is still inside its PIN-retry grace at {@code now}. */
     public boolean inPinGrace(LocalDateTime now) {
         return state == DeviceState.PENDING_PIN && pinGraceUntil != null && pinGraceUntil.isAfter(now);
+    }
+
+    /**
+     * Whether this phone has ever proved, with a sign-in OTP, that it holds the
+     * number's SIM. Trust without that proof was granted by watch mode and must be
+     * confirmed with one code once OTP is enforced.
+     */
+    public boolean possessionVerified() {
+        return otpVerifiedAt != null;
     }
 
     /** Whether the new-device cooling period is running at {@code now} (§8.6). */
