@@ -130,6 +130,17 @@
                 <artifactId>bcprov-jdk18on</artifactId>
                 <version>1.86</version>
             </dependency>
+            <!-- freemarker 2.3.34 (transitive via spring-cloud-starter-netflix-
+                 eureka-server, which renders the Eureka dashboard with it) has
+                 CVE-2026-84939 (CRITICAL): path traversal via a malformed locale
+                 identifier. Only discovery-server ships it, and it failed the
+                 Release Trivy gate on every PR (2026-09-28) before any push.
+                 2.3.35 fixes it. Drop once Spring Cloud's BOM carries 2.3.35+. -->
+            <dependency>
+                <groupId>org.freemarker</groupId>
+                <artifactId>freemarker</artifactId>
+                <version>2.3.35</version>
+            </dependency>
             <!-- commons-fileupload 1.5 (transitive via Spring's multipart support)
                  has CVE-2025-48976 (HIGH): DoS via multipart form-data part-count
                  amplification. 1.6.0 fixes it. -->
