@@ -166,6 +166,92 @@ class AdminUserControllerTest {
 
     @Test
     @WithSuperAdmin
+    void listUsers_listsAnAccountHoldingCustomerAndAnotherRole_withoutShowingCustomer() throws Exception {
+        // A merchant admin who also shops in the super app holds CUSTOMER. The
+        // default listing used to drop every account HOLDING CUSTOMER, so they
+        // vanished from the console. Only customer-ONLY accounts are hidden now,
+        // and the listed roles leave CUSTOMER out.
+        User dualRole = User.builder()
+                .firstName("Dual").lastName("Role")
+                .email("dual-role-listusers@example.com").phoneNumber("+260000000011")
+                .password(passwordEncoder.encode("Password123"))
+                .roles(User.roleNames(User.Role.CUSTOMER, User.Role.EVENT_ORGANIZER, User.Role.MERCHANT_ADMIN))
+                .active(true)
+                .build();
+        User customerOnly = User.builder()
+                .firstName("Only").lastName("Customer")
+                .email("customer-only-listusers@example.com").phoneNumber("+260000000012")
+                .password(passwordEncoder.encode("Password123"))
+                .roles(User.roleNames(User.Role.CUSTOMER))
+                .active(true)
+                .build();
+        userRepository.save(dualRole);
+        userRepository.save(customerOnly);
+
+        for (String url : List.of("/admin/users", "/admin/users?active=true")) {
+            JsonNode row = rowByEmail(url, "dual-role-listusers@example.com");
+            assertThat(row).as("dual-role account listed by %s", url).isNotNull();
+            List<String> roles = new java.util.ArrayList<>();
+            row.path("roles").forEach(r -> roles.add(r.asText()));
+            assertThat(roles).containsExactlyInAnyOrder("EVENT_ORGANIZER", "MERCHANT_ADMIN");
+            assertThat(rowByEmail(url, "customer-only-listusers@example.com"))
+                    .as("customer-only account hidden by %s", url).isNull();
+        }
+
+        // Display only: the account still holds CUSTOMER.
+        assertThat(userRepository.findByEmail("dual-role-listusers@example.com").orElseThrow()
+                .hasRole(User.Role.CUSTOMER)).isTrue();
+    }
+
+    @Test
+    @WithSuperAdmin
+    void listUsers_listsSuperAdminHolders() throws Exception {
+        // Once there is more than the one seeded owner, hiding SUPER_ADMIN hides
+        // exactly the accounts an operator most needs to see. The write
+        // endpoints still refuse to act on them.
+        User extraOwner = User.builder()
+                .firstName("Second").lastName("Owner")
+                .email("second-owner-listusers@example.com").phoneNumber("+260000000013")
+                .password(passwordEncoder.encode("Password123"))
+                .roles(User.roleNames(User.Role.CUSTOMER, User.Role.SUPER_ADMIN))
+                .active(true)
+                .build();
+        userRepository.save(extraOwner);
+
+        JsonNode row = rowByEmail("/admin/users", "second-owner-listusers@example.com");
+        assertThat(row).isNotNull();
+        assertThat(row.path("roles").toString()).isEqualTo("[\"SUPER_ADMIN\"]");
+    }
+
+    @Test
+    @WithSuperAdmin
+    void listUsers_optInStillShowsCustomerOnACustomerOnlyAccount() throws Exception {
+        User customer = User.builder()
+                .firstName("Plain").lastName("Shopper")
+                .email("plain-shopper-listusers@example.com").phoneNumber("+260000000014")
+                .password(passwordEncoder.encode("Password123"))
+                .roles(User.roleNames(User.Role.CUSTOMER))
+                .active(true)
+                .build();
+        userRepository.save(customer);
+
+        JsonNode row = rowByEmail("/admin/users?includeCustomers=true", "plain-shopper-listusers@example.com");
+        assertThat(row).isNotNull();
+        assertThat(row.path("roles").toString()).isEqualTo("[\"CUSTOMER\"]");
+    }
+
+    private JsonNode rowByEmail(String url, String email) throws Exception {
+        String body = mockMvc.perform(get(url).contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsString();
+        for (JsonNode n : new ObjectMapper().readTree(body).get("data")) {
+            if (email.equals(n.path("email").asText())) return n;
+        }
+        return null;
+    }
+
+    @Test
+    @WithSuperAdmin
     void listUsers_surfacesBusinessDetailsForBusinessAccounts() throws Exception {
         // Regression: GET /admin/users used to map with the no-profile overload
         // (UserResponseDTO::from), so a business account's tenant profile never

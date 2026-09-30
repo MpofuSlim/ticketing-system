@@ -9,6 +9,7 @@ import lombok.Data;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -41,7 +42,11 @@ public class UserResponseDTO {
     @Schema(example = "+263771234567")
     private String phoneNumber;
 
-    @Schema(example = "[\"EVENT_ORGANIZER\"]")
+    @Schema(example = "[\"EVENT_ORGANIZER\"]",
+            description = "The account's roles, WITHOUT `CUSTOMER` when it holds any other role. "
+                    + "CUSTOMER is the account's super-app side and is not managed from the console; "
+                    + "`PUT /admin/users/{id}/roles` keeps it when a submitted set leaves it out. "
+                    + "A customer-only account (listed with `?includeCustomers=true`) shows `[\"CUSTOMER\"]`.")
     private List<String> roles;
 
     @Schema(example = "[\"ticketing\"]", nullable = true)
@@ -129,7 +134,7 @@ public class UserResponseDTO {
                 .lastName(user.getLastName())
                 .email(user.getEmail())
                 .phoneNumber(user.getPhoneNumber())
-                .roles(user.getRoles() == null ? List.of() : List.copyOf(user.getRoles()))
+                .roles(consoleRoles(user.getRoles()))
                 .defaultServices(user.getDefaultServices() == null ? null
                         : List.copyOf(user.getDefaultServices()))
                 .active(user.isActive())
@@ -141,5 +146,23 @@ public class UserResponseDTO {
                 .business(user.isBusiness())
                 .businessDetails(profile == null ? null : BusinessDetails.from(profile))
                 .build();
+    }
+
+    /**
+     * The roles the console shows: {@code CUSTOMER} is dropped when the account
+     * holds anything else. A merchant admin who also shops in the super app
+     * holds CUSTOMER, and printing it beside their business roles reads as if
+     * the console granted or could revoke it — it cannot usefully do either.
+     * A customer-only account keeps it, or it would render with no roles at all.
+     *
+     * <p>Display only. The account keeps the role, and
+     * {@code UserAdminService.setRoles} re-adds it when a submitted set omits
+     * it, so a console that PUTs back what it was shown cannot strip it.
+     */
+    static List<String> consoleRoles(Set<String> roles) {
+        if (roles == null || roles.isEmpty()) return List.of();
+        String customer = User.Role.CUSTOMER.name();
+        if (roles.size() == 1 || !roles.contains(customer)) return List.copyOf(roles);
+        return roles.stream().filter(r -> !customer.equals(r)).toList();
     }
 }

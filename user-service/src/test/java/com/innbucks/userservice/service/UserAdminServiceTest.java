@@ -82,9 +82,10 @@ class UserAdminServiceTest {
         final com.innbucks.userservice.repository.OtpRepository otps =
                 mock(com.innbucks.userservice.repository.OtpRepository.class);
         final AccountSessionRevoker revoker = new AccountSessionRevoker(bumper, refreshTokens, deviceTrust, otps);
+        final StaffEligibility staffEligibility = mock(StaffEligibility.class);
         final UserAdminService service = new UserAdminService(
                 userRepo, encoder, audit, publisher, tenantProfiles, bumper, revoker, roleRepo, guard,
-                org.mockito.Mockito.mock(com.innbucks.userservice.service.StaffEligibility.class));
+                staffEligibility);
     }
 
     /** Capture the plaintext handed to encode() — it's the generated temp password. */
@@ -677,6 +678,72 @@ class UserAdminServiceTest {
     }
 
     @Test
+    void setRoles_keepsCustomer_whenTheSubmittedSetLeavesItOut() {
+        // The console's role lists hide CUSTOMER (UserResponseDTO.consoleRoles),
+        // so a console that PUTs back what it was shown sends the set WITHOUT
+        // it. That must not strip the account's super-app side.
+        Fixture f = new Fixture();
+        User user = userWithRoles(56L, User.Role.CUSTOMER, User.Role.EVENT_ORGANIZER);
+        when(f.userRepo.findById(56L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        User result = f.service.setRoles(56L,
+                User.roleNames(User.Role.EVENT_ORGANIZER, User.Role.MERCHANT_ADMIN),
+                "admin@innbucks.co.zw", AuditContext.none());
+
+        assertThat(result.getRoles()).containsExactlyInAnyOrder(
+                User.Role.CUSTOMER.name(), User.Role.EVENT_ORGANIZER.name(), User.Role.MERCHANT_ADMIN.name());
+    }
+
+    @Test
+    void setRoles_resubmittingTheShownRoles_isANoOp_forADualRoleAccount() {
+        // The shown set omits CUSTOMER; saving it unchanged must neither strip
+        // CUSTOMER nor bump the token (which would sign the user out).
+        Fixture f = new Fixture();
+        User user = userWithRoles(57L, User.Role.CUSTOMER, User.Role.MERCHANT_ADMIN);
+        user.setTokenVersion(4);
+        when(f.userRepo.findById(57L)).thenReturn(Optional.of(user));
+
+        User result = f.service.setRoles(57L, User.roleNames(User.Role.MERCHANT_ADMIN),
+                "admin@innbucks.co.zw", AuditContext.none());
+
+        assertEquals(4, result.getTokenVersion());
+        assertThat(result.getRoles()).containsExactlyInAnyOrder(
+                User.Role.CUSTOMER.name(), User.Role.MERCHANT_ADMIN.name());
+        verify(f.userRepo, never()).save(any(User.class));
+        verifyNoInteractions(f.tokenVersions);
+    }
+
+    @Test
+    void setRoles_doesNotAddCustomer_toAnAccountThatNeverHeldIt() {
+        Fixture f = new Fixture();
+        User user = userWithRoles(58L, User.Role.MERCHANT_ADMIN);
+        when(f.userRepo.findById(58L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        User result = f.service.setRoles(58L, User.roleNames(User.Role.EVENT_ORGANIZER),
+                "admin@innbucks.co.zw", AuditContext.none());
+
+        assertThat(result.getRoles()).containsExactly(User.Role.EVENT_ORGANIZER.name());
+    }
+
+    @Test
+    void setRoles_doesNotKeepCustomer_onAStaffProfiledAccount() {
+        // A profiled staff account may hold staff roles only; re-adding CUSTOMER
+        // there would make every roles edit fail the staff-only rule.
+        Fixture f = new Fixture();
+        User user = userWithRoles(59L, User.Role.CUSTOMER, User.Role.PRODUCT_OFFICER);
+        when(f.userRepo.findById(59L)).thenReturn(Optional.of(user));
+        when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(f.staffEligibility.isProfiled(user)).thenReturn(true);
+
+        User result = f.service.setRoles(59L, User.roleNames(User.Role.PRODUCT_OFFICER),
+                "admin@innbucks.co.zw", AuditContext.none());
+
+        assertThat(result.getRoles()).containsExactly(User.Role.PRODUCT_OFFICER.name());
+    }
+
+    @Test
     void setRoles_refusesSuperAdminTarget_403() {
         Fixture f = new Fixture();
         User owner = userWithRoles(1L, User.Role.SUPER_ADMIN);
@@ -769,6 +836,9 @@ class UserAdminServiceTest {
         User user = userWithRoles(60L, User.Role.CUSTOMER);
         when(f.userRepo.findById(60L)).thenReturn(Optional.of(user));
         when(f.userRepo.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        // Named staff roles go to a staff-profiled account (V44), which is why
+        // CUSTOMER is replaced here rather than kept alongside them.
+        when(f.staffEligibility.isProfiled(user)).thenReturn(true);
 
         // Unlike SHOP_* and TEAM_MEMBER, the product roles are platform-side and
         // carry no merchant/shop/organizer scope, so they must be grantable to a

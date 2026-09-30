@@ -148,19 +148,21 @@ public class AdminUserController {
     @GetMapping
     @PreAuthorize("hasAuthority('" + PermissionCatalog.USERS_READ + "')")
     @Operation(
-            summary = "List system users (no customers, no SUPER_ADMIN)",
-            description = "Returns user accounts for the SUPER_ADMIN portal: every role **except CUSTOMER** " +
-                    "by default, and **SUPER_ADMIN is always excluded** regardless of the other filters. " +
-                    "Customers are the wallet-holding end-users of the super-app and are managed via the " +
-                    "customer-facing surface (`/auth/customer/**`), not the admin portal — listing them " +
-                    "here would drown the page in millions of rows. SUPER_ADMIN is the platform-owner " +
-                    "account (seeded once via BOOTSTRAP_ADMIN_PASSWORD); it isn't a user under admin " +
-                    "management and never appears in any listing.\n\n" +
+            summary = "List system users (no customer-only accounts)",
+            description = "Returns user accounts for the admin portal: every account **except those whose " +
+                    "only role is CUSTOMER**. An account holding CUSTOMER alongside any other role (a " +
+                    "merchant admin who also shops in the super app) IS listed, and its `roles` omit " +
+                    "`CUSTOMER` — the console neither shows nor manages the super-app side of an account. " +
+                    "Customer-only accounts are the wallet-holding end-users of the super app and would " +
+                    "drown the page in millions of rows.\n\n" +
+                    "**SUPER_ADMIN holders are listed.** The write endpoints still refuse to act on them " +
+                    "(deactivate, roles and MFA reset answer 403, temp-password reset 400), so hide those " +
+                    "actions on a row whose `roles` contain `SUPER_ADMIN`.\n\n" +
                     "Pass `?active=true` for approved/active accounts, `?active=false` for pending/inactive " +
                     "accounts. Omit to return all status values.\n\n" +
-                    "Pass `?includeCustomers=true` to opt back in to the customer population (e.g. for " +
-                    "support triage) — SUPER_ADMIN stays excluded even then. Defaults to `false`. " +
-                    "Requires **SUPER_ADMIN** role."
+                    "Pass `?includeCustomers=true` to opt back in to the customer-only population (e.g. " +
+                    "for support triage). Defaults to `false`. " +
+                    "Requires the `users:read` permission."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -216,23 +218,21 @@ public class AdminUserController {
             @RequestParam(name = "active", required = false) Boolean active,
             @RequestParam(name = "includeCustomers", required = false, defaultValue = "false") boolean includeCustomers) {
 
-        List<User> users;
+        // Customer-ONLY accounts stay off the page; an account holding CUSTOMER
+        // alongside any other role is listed (a merchant admin who also shops
+        // used to vanish). SUPER_ADMIN holders are listed too: once there is
+        // more than the one seeded owner, hiding them hides exactly the accounts
+        // whose existence an operator most needs to see. The write endpoints
+        // still refuse to act on them (the SUPER_ADMIN guards in
+        // UserAdminService and MfaService), so listing grants nothing.
+        List<User> visible;
         if (includeCustomers) {
-            users = (active != null) ? userRepository.findByActive(active) : userRepository.findAll();
+            visible = (active != null) ? userRepository.findByActive(active) : userRepository.findAll();
         } else {
-            users = (active != null)
-                    ? userRepository.findByActiveExcludingRole(active, User.Role.CUSTOMER.name())
-                    : userRepository.findAllExcludingRole(User.Role.CUSTOMER.name());
+            visible = (active != null)
+                    ? userRepository.findByActiveExceptOnlyRole(active, User.Role.CUSTOMER.name())
+                    : userRepository.findAllExceptOnlyRole(User.Role.CUSTOMER.name());
         }
-
-        // SUPER_ADMIN never appears in any listing — it's the platform-owner
-        // account, not a user under admin management. Filtered in-memory: a
-        // cell has 1 SUPER_ADMIN row (BOOTSTRAP_ADMIN_PASSWORD-seeded), so
-        // adding a 3rd exclusion variant of the repository query isn't worth
-        // the surface — the row count makes the filter free.
-        List<User> visible = users.stream()
-                .filter(u -> !u.hasRole(User.Role.SUPER_ADMIN))
-                .collect(Collectors.toList());
 
         // Batch-load tenant profiles so business accounts carry their business
         // details here too (not just on GET /admin/users/merchants), without an

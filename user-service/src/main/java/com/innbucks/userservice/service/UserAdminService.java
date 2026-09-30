@@ -378,6 +378,17 @@ public class UserAdminService {
                     "roles must contain at least one role");
         }
 
+        // CUSTOMER is kept when the submitted set leaves it out. The console's
+        // role lists hide it (UserResponseDTO.consoleRoles) because it is the
+        // account's super-app side, not something an admin manages — so a
+        // console that PUTs back the roles it was shown would otherwise strip
+        // a merchant admin's shopping account without anyone having asked. Not
+        // for a staff-profiled account: it may hold staff roles only, and
+        // re-adding CUSTOMER there would refuse every roles edit.
+        if (user.hasRole(User.Role.CUSTOMER) && !staffEligibility.isProfiled(user)) {
+            requested.add(User.Role.CUSTOMER.name());
+        }
+
         // Row locks FIRST, before any role is read (V44): SELECT ... FOR UPDATE on
         // every requested role, in name order. A concurrent
         // PUT /admin/roles/{name}/permissions that would turn one of them into a
