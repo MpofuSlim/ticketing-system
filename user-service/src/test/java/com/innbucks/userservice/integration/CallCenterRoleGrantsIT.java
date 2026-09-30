@@ -85,5 +85,8 @@ class CallCenterRoleGrantsIT extends SessionRevocationItSupport {
                 .andExpect(status().isOk()));
         List<String> names = roles.findValuesAsText("name");
         assertThat(names).contains("CALL_CENTER_AGENT", "CALL_CENTER_SUPERVISOR", "FRAUD_DESK");
+        // The console assigns staff and business roles; CUSTOMER comes from the
+        // super app and is kept by PUT /admin/users/{id}/roles, so it is not offered.
+        assertThat(names).doesNotContain("CUSTOMER").contains("MERCHANT_ADMIN", "EVENT_ORGANIZER");
     }
 }
