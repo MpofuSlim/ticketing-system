@@ -507,4 +507,82 @@ class ShopStaffServiceTest {
 
         assertThatCode(() -> service.listForMerchant(merchantId)).doesNotThrowAnyException();
     }
+
+    // --- SUPER_ADMIN acts for every merchant -----------------------------------
+    // The ownership checks resolve the merchants the caller's ORGANIZATION owns;
+    // the platform owner belongs to none, so every shop used to answer 403
+    // "Shop does not belong to your merchant" on the console's Shop Users screen.
+
+    private User superAdmin() {
+        return User.builder().email("admin@innbucks.co.zw")
+                .roles(User.roleNames(User.Role.SUPER_ADMIN)).build();
+    }
+
+    @Test
+    void listForShop_superAdmin_readsAnyMerchantsShop_withoutAnOwnershipLookup() {
+        UUID shopId = UUID.randomUUID();
+        authenticateAs(superAdmin());
+        when(loyaltyServiceClient.findShop(shopId)).thenReturn(Optional.of(
+                new LoyaltyServiceClient.ShopLookupResponse(
+                        shopId.toString(), UUID.randomUUID().toString(), "tenant-2", "ACTIVE")));
+        User cashier = User.builder().email("cashier@shop.co.zw")
+                .roles(User.roleNames(User.Role.SHOP_USER)).loyaltyShopId(shopId).build();
+        when(userRepository.findByLoyaltyShopId(shopId)).thenReturn(List.of(cashier));
+
+        assertThat(service.listForShop(shopId)).hasSize(1);
+        verify(loyaltyServiceClient, never()).merchantIdsForOrganization(any());
+    }
+
+    @Test
+    void listForShop_superAdmin_unknownShop_isStillABadRequest() {
+        UUID shopId = UUID.randomUUID();
+        authenticateAs(superAdmin());
+        when(loyaltyServiceClient.findShop(shopId)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.listForShop(shopId))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.BAD_REQUEST));
+        verify(userRepository, never()).findByLoyaltyShopId(any());
+    }
+
+    @Test
+    void listForMerchant_superAdmin_readsAnyMerchant() {
+        UUID merchantId = UUID.randomUUID();
+        authenticateAs(superAdmin());
+        when(userRepository.findByLoyaltyMerchantId(merchantId)).thenReturn(List.of());
+
+        assertThatCode(() -> service.listForMerchant(merchantId)).doesNotThrowAnyException();
+        verify(userRepository).findByLoyaltyMerchantId(merchantId);
+        verify(loyaltyServiceClient, never()).merchantIdsForOrganization(any());
+    }
+
+    @Test
+    void createShopAdmin_superAdmin_provisionsIntoAnyMerchantsShop_boundToTheShopsMerchant() {
+        UUID shopId = UUID.randomUUID();
+        UUID merchantId = UUID.randomUUID();
+        authenticateAs(superAdmin());
+        stubShopAdminHappyPath(shopId, merchantId);
+
+        service.createShopAdmin(shopAdminDto(shopId));
+
+        ArgumentCaptor<User> saved = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(saved.capture());
+        assertThat(saved.getValue().hasRole(User.Role.SHOP_ADMIN)).isTrue();
+        assertThat(saved.getValue().getLoyaltyShopId()).isEqualTo(shopId);
+        // The merchant comes from the SHOP, never from the caller.
+        assertThat(saved.getValue().getLoyaltyMerchantId()).isEqualTo(merchantId);
+    }
+
+    @Test
+    void createShopAdmin_aShopAdminCaller_isStillRefused() {
+        authenticateAs(User.builder().email("shopadmin@x.com")
+                .roles(User.roleNames(User.Role.SHOP_ADMIN)).build());
+
+        assertThatThrownBy(() -> service.createShopAdmin(shopAdminDto(UUID.randomUUID())))
+                .isInstanceOf(ResponseStatusException.class)
+                .satisfies(ex -> assertThat(((ResponseStatusException) ex).getStatusCode())
+                        .isEqualTo(HttpStatus.FORBIDDEN));
+        verifyNoInteractions(loyaltyServiceClient);
+    }
 }

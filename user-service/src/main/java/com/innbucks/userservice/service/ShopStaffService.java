@@ -101,7 +101,7 @@ public class ShopStaffService {
         // (or the permission), which is a design change of its own rather than a
         // rename — tracked as follow-up work, and called out in the PR so nobody
         // reads the permission as usable by a custom role yet.
-        if (!caller.hasRole(User.Role.MERCHANT_ADMIN)) {
+        if (!caller.hasRole(User.Role.MERCHANT_ADMIN) && !isPlatformOwner(caller)) {
             throw forbidden("Only MERCHANT_ADMIN can create shop admins");
         }
         var shop = loyaltyServiceClient.findShop(req.getShopId())
@@ -113,7 +113,11 @@ public class ShopStaffService {
         // Scope to the caller's own merchant: a MERCHANT_ADMIN must not be able
         // to provision a SHOP_ADMIN into another merchant's shop (cross-tenant
         // privilege escalation) -> 403 "Shop does not belong to your merchant".
-        requireCallerOwnsShop(caller, shop.merchantId());
+        // SUPER_ADMIN acts for every merchant; the merchant still comes from the
+        // shop, never from the caller.
+        if (!isPlatformOwner(caller)) {
+            requireCallerOwnsShop(caller, shop.merchantId());
+        }
 
         String tempPassword = TemporaryPasswordGenerator.generate();
         User staff = buildStaff(req.getFirstName(), req.getMiddleName(), req.getLastName(),
@@ -347,10 +351,12 @@ public class ShopStaffService {
         // Scope to the caller's own merchant: a MERCHANT_ADMIN may only list the
         // staff of shops belonging to THEIR merchant. Resolve the shop, then
         // require its merchant to match the caller's — 403 otherwise (closes the
-        // cross-merchant staff-PII leak).
+        // cross-merchant staff-PII leak). SUPER_ADMIN reads every shop.
         var shop = loyaltyServiceClient.findShop(shopId)
                 .orElseThrow(() -> badRequest("Shop not found in loyalty-service"));
-        requireCallerOwnsShop(caller, shop.merchantId());
+        if (!isPlatformOwner(caller)) {
+            requireCallerOwnsShop(caller, shop.merchantId());
+        }
         return userRepository.findByLoyaltyShopId(shopId).stream()
                 .map(UserResponseDTO::from)
                 .toList();
@@ -368,7 +374,8 @@ public class ShopStaffService {
         // Scope to the caller's own merchant(s): a MERCHANT_ADMIN may only list
         // the headcount of a merchant THEY administer, not enumerate any
         // merchant's staff PII by id -> 403 for a merchant they don't own.
-        if (!resolveCallerMerchantIds(caller).contains(merchantId)) {
+        // SUPER_ADMIN reads every merchant.
+        if (!isPlatformOwner(caller) && !resolveCallerMerchantIds(caller).contains(merchantId)) {
             throw forbidden("Merchant does not belong to your account");
         }
         return userRepository.findByLoyaltyMerchantId(merchantId).stream()
@@ -526,6 +533,19 @@ public class ShopStaffService {
         }
         return userRepository.findByEmail(auth.getName())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Caller not found"));
+    }
+
+    /**
+     * The platform owner reads and provisions shop staff for EVERY merchant.
+     * The ownership checks below resolve the merchants the caller's
+     * organization owns, and SUPER_ADMIN belongs to none, so without this
+     * every shop answered 403 "Shop does not belong to your merchant" to the
+     * one account entitled to all of them. Keyed on the built-in role, like the
+     * other guards in this class (see the NOTE in {@link #createShopAdmin}); a
+     * custom role holding the same permissions stays merchant-scoped.
+     */
+    private static boolean isPlatformOwner(User caller) {
+        return caller.hasRole(User.Role.SUPER_ADMIN);
     }
 
     /**

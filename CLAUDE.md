@@ -1215,6 +1215,24 @@ agent token can call directly — it would bypass all of it.
   `permissions` rows first, asserts its targets are `builtin = TRUE` in a `DO`
   block, and never names SUPER_ADMIN (`SupportGrantMigrationContentTest`).
 
+## SUPER_ADMIN is never scoped out of a read (owner decision, 2026-09-30)
+
+**Every GET — reports, lists, detail views — answers SUPER_ADMIN for every
+merchant, shop, organization and organizer.** SUPER_ADMIN is the account that
+oversees the whole platform; a read that 403s it is a bug, not a safeguard.
+
+The trap is ownership checks that resolve the caller's scope from their
+ORGANIZATION (`resolveCallerMerchantIds`, "does this shop belong to a merchant
+your organization owns"): SUPER_ADMIN belongs to none, so the check is
+vacuously false and the platform owner is refused everywhere — found on the
+console's Shop Users screen ("Shop does not belong to your merchant").
+`ShopStaffService.isPlatformOwner` bypasses them for reads and for
+`createShopAdmin` (the merchant is still taken from the SHOP, never from the
+caller). A new ownership-scoped read must do the same, keyed on the built-in
+role — a custom role holding the same permission stays scoped. This is about
+reads: writes keep their own rules, and SUPER_ADMIN's write powers are decided
+per endpoint.
+
 ## Platform staff means one role set — use it
 
 `AuthenticatedCaller.PLATFORM_STAFF_ROLES` (`SUPER_ADMIN`, `PRODUCT_OFFICER`,
