@@ -176,6 +176,35 @@ class DeviceSecurityFlowTest {
     }
 
     @Test
+    @DisplayName("a trusted phone is not asked for a code on every login when the broker reports app check 'absent' (2026-09-30 loop)")
+    void trustedPhone_appCheckAbsent_signsInWithoutACode() throws Exception {
+        String msisdn = number();
+        String install = UUID.randomUUID().toString();
+        trustedPhone(msisdn, install);
+
+        // What the broker sends on every request today.
+        for (int login = 0; login < 3; login++) {
+            String res = mvc.perform(broker(post("/auth/client-service"), install)
+                            .header("x-innbucks-app-check", "absent")
+                            .content(signInBody(msisdn, install, "SIGN_IN", "{}")))
+                    .andExpect(status().isOk()).andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+            assertThat((String) JsonPath.read(res, "$.data.decision")).isEqualTo("TOKEN");
+        }
+        // Recorded for the fraud desk, just not asked about again.
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM device_security_events WHERE msisdn = ? "
+                + "AND event_type = 'SIGN_IN_DECISION' AND features LIKE '%APP_CHECK_ABSENT%'", Integer.class, msisdn))
+                .isEqualTo(3);
+
+        // A phone that has never proved itself is still asked.
+        String freshInstall = UUID.randomUUID().toString();
+        String fresh = mvc.perform(broker(post("/auth/client-service"), freshInstall)
+                        .header("x-innbucks-app-check", "absent")
+                        .content(signInBody(number(), freshInstall, "SIGN_IN", "{}")))
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8);
+        assertThat(fresh).contains("OTP_REQUIRED").doesNotContain("\"TOKEN\"");
+    }
+
+    @Test
     @DisplayName("a ticket for one number or one phone cannot authorise another")
     void ticket_isBoundToNumberAndDevice() throws Exception {
         String msisdn = number();

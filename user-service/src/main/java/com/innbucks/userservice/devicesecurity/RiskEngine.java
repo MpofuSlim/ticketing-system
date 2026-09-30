@@ -195,6 +195,19 @@ public class RiskEngine {
         // ---- Tier 2: soft triggers (§8.3) -----------------------------------------
         List<OtpReason> reasons = new ArrayList<>();
 
+        // A phone inside its trust window has already proved it holds the SIM (with
+        // OTP enforced, provisional watch-mode trust reaches the engine as NEW, never
+        // as TRUSTED). For it, STANDING conditions — the same on every request from
+        // that phone, such as the broker reporting app check "absent", no integrity
+        // result, a recently issued PIN, a fourth phone on the account, a place not
+        // seen before — are recorded and scored but never ask for a code again: the
+        // code the phone already passed answered them, and asking on every sign-in
+        // turned each login into an SMS (found in production 2026-09-30:
+        // APP_CHECK_ABSENT on every request). What still asks is a CHANGE: a
+        // different handset, impossible travel, a mocked location, an emulator or
+        // debugger, a burst of wrong PINs, a dormant account, or a PIN (re)issue.
+        boolean provenTrusted = trustedWindow;
+
         if (in.purpose() == SignInPurpose.PIN_ISSUE) {
             reasons.add(OtpReason.PIN_ISSUE);
         }
@@ -240,7 +253,7 @@ public class RiskEngine {
                 }
                 if (outsideKnownPlaces(in)) {
                     signals.put("OUTSIDE_KNOWN_PLACES", W_OUTSIDE_KNOWN_PLACES);
-                    reasons.add(OtpReason.LOCATION_ANOMALY);
+                    if (!provenTrusted) reasons.add(OtpReason.LOCATION_ANOMALY);
                 }
             }
         } else if (in.locationStatus() != null && "DENIED".equalsIgnoreCase(in.locationStatus())) {
@@ -259,11 +272,11 @@ public class RiskEngine {
         if (in.production() && (in.integritySource() == null
                 || "unavailable".equalsIgnoreCase(in.integritySource().trim()))) {
             signals.put("INTEGRITY_UNAVAILABLE", W_INTEGRITY_UNAVAILABLE);
-            reasons.add(OtpReason.RISK);
+            if (!provenTrusted) reasons.add(OtpReason.RISK);
         }
         if (in.appCheck() != null && "absent".equalsIgnoreCase(in.appCheck().trim())) {
             signals.put("APP_CHECK_ABSENT", W_APP_CHECK_ABSENT);
-            reasons.add(OtpReason.RISK);
+            if (!provenTrusted) reasons.add(OtpReason.RISK);
         }
         if (in.lastSignInAt() != null
                 && in.lastSignInAt().isBefore(in.now().minusDays(in.trust().getDormantDays()))) {
@@ -277,19 +290,22 @@ public class RiskEngine {
         if (in.pinIssuedAt() != null
                 && in.pinIssuedAt().isAfter(in.now().minusDays(in.trust().getPinIssueElevatedDays()))) {
             signals.put("PIN_RECENTLY_ISSUED", W_PIN_RECENTLY_ISSUED);
-            reasons.add(OtpReason.POLICY);
+            if (!provenTrusted) reasons.add(OtpReason.POLICY);
         }
         long trustedIncludingThis = in.otherTrustedDevices() + 1;
         if (trustedIncludingThis > in.trust().getMaxTrustedDevices()) {
             signals.put("TOO_MANY_DEVICES", W_TOO_MANY_DEVICES);
-            reasons.add(OtpReason.POLICY);
+            if (!provenTrusted) reasons.add(OtpReason.POLICY);
         }
         if (in.fraudFlagged()) {
             // Scores only: the fraud flag shortens trust, it does not force a code.
             signals.put("FRAUD_FLAG", W_FRAUD_FLAG);
         }
 
-        int score = sum(signals);
+        // A trusted phone's standing conditions do not add up to a block either: a
+        // customer who travels (a real signal) must not be tipped over the block
+        // score by the same missing app check that is on every one of their requests.
+        int score = sum(signals) - (provenTrusted ? ambient(signals) : 0);
         if (score >= in.risk().getBlockScore()) {
             return new Assessment(Verdict.TEMP_BLOCK, null, BlockReason.RISK, null, score, signals);
         }
@@ -297,6 +313,18 @@ public class RiskEngine {
             return new Assessment(Verdict.STEP_UP, primary(reasons), null, null, score, signals);
         }
         return new Assessment(Verdict.ALLOW, null, null, null, score, signals);
+    }
+
+    /** Standing conditions: scored for a trusted phone but never, on their own, a reason to ask again. */
+    static final Set<String> AMBIENT = Set.of("APP_CHECK_ABSENT", "INTEGRITY_UNAVAILABLE", "OUTSIDE_KNOWN_PLACES",
+            "PIN_RECENTLY_ISSUED", "TOO_MANY_DEVICES", "LOCATION_REFUSED");
+
+    private static int ambient(Map<String, Integer> signals) {
+        int total = 0;
+        for (Map.Entry<String, Integer> e : signals.entrySet()) {
+            if (AMBIENT.contains(e.getKey())) total += e.getValue();
+        }
+        return total;
     }
 
     /** The reason the app's log shows when several fired: the one most useful to support. */

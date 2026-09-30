@@ -244,11 +244,18 @@ class RiskEngineTest {
     @Test
     @DisplayName("outside every known place once the customer has a pattern; silent before they do (§8.1)")
     void outsideKnownPlaces() {
-        In in = new In();
+        In in = notYetTrusted();
         for (int i = 0; i < 6; i++) in.knownFixes.add(new double[]{-20.150, 28.583}); // Bulawayo, six times
         RiskEngine.Assessment a = assess(in);
         assertThat(a.signals()).containsKey("OUTSIDE_KNOWN_PLACES");
-        assertThat(a.otpReason()).isEqualTo(OtpReason.LOCATION_ANOMALY);
+        assertThat(a.verdict()).isEqualTo(RiskEngine.Verdict.STEP_UP);
+
+        // A trusted phone records it but is not asked: a new place is not a new phone.
+        In trusted = new In();
+        for (int i = 0; i < 6; i++) trusted.knownFixes.add(new double[]{-20.150, 28.583});
+        RiskEngine.Assessment t = assess(trusted);
+        assertThat(t.signals()).containsKey("OUTSIDE_KNOWN_PLACES");
+        assertThat(t.verdict()).isEqualTo(RiskEngine.Verdict.ALLOW);
 
         In young = new In();
         for (int i = 0; i < 3; i++) young.knownFixes.add(new double[]{-20.150, 28.583});
@@ -282,14 +289,20 @@ class RiskEngineTest {
     @Test
     @DisplayName("integrity 'unavailable' is a risk signal on production only")
     void integrityUnavailable_onlyOnProduction() {
-        In prod = new In();
+        In prod = notYetTrusted();
         prod.integritySource = "unavailable";
+        assertThat(assess(prod).signals()).containsKey("INTEGRITY_UNAVAILABLE");
         assertThat(assess(prod).verdict()).isEqualTo(RiskEngine.Verdict.STEP_UP);
 
-        In staging = new In();
+        In trusted = new In();
+        trusted.integritySource = "unavailable";
+        assertThat(assess(trusted).signals()).containsKey("INTEGRITY_UNAVAILABLE");
+        assertThat(assess(trusted).verdict()).isEqualTo(RiskEngine.Verdict.ALLOW);
+
+        In staging = notYetTrusted();
         staging.integritySource = "unavailable";
         staging.production = false;
-        assertThat(assess(staging).verdict()).isEqualTo(RiskEngine.Verdict.ALLOW);
+        assertThat(assess(staging).signals()).doesNotContainKey("INTEGRITY_UNAVAILABLE");
     }
 
     @Test
@@ -314,10 +327,80 @@ class RiskEngineTest {
 
     @Test
     void moreThanThreeTrustedDevices_needsOtp() {
-        In in = new In();
+        In in = notYetTrusted();
         in.otherTrusted = 3;
         assertThat(assess(in).signals()).containsKey("TOO_MANY_DEVICES");
-        assertThat(assess(in).otpReason()).isEqualTo(OtpReason.POLICY);
+        assertThat(assess(in).verdict()).isEqualTo(RiskEngine.Verdict.STEP_UP);
+
+        // The fourth phone is asked ONCE, when it joins; once trusted it is not asked every time.
+        In trusted = new In();
+        trusted.otherTrusted = 3;
+        assertThat(assess(trusted).signals()).containsKey("TOO_MANY_DEVICES");
+        assertThat(assess(trusted).verdict()).isEqualTo(RiskEngine.Verdict.ALLOW);
+    }
+
+    @Test
+    @DisplayName("a trusted phone is NOT asked again for standing conditions — the production login loop (2026-09-30)")
+    void trustedPhone_standingConditions_neverAskAgain() {
+        // Exactly what the broker sends today: app check "absent" on every request.
+        In absent = new In();
+        absent.appCheck = "absent";
+        RiskEngine.Assessment a = assess(absent);
+        assertThat(a.signals()).containsKey("APP_CHECK_ABSENT");
+        assertThat(a.verdict()).isEqualTo(RiskEngine.Verdict.ALLOW);
+        assertThat(a.decision()).isEqualTo(Decision.TOKEN);
+
+        // All of them at once still does not ask, and does not add up to a block.
+        In all = new In();
+        all.appCheck = "absent";
+        all.integritySource = "unavailable";
+        all.pinIssuedAt = NOW.minusDays(2);
+        all.otherTrusted = 3;
+        all.locationStatus = "DENIED";
+        all.lat = null;
+        all.lng = null;
+        RiskEngine.Assessment b = assess(all);
+        assertThat(b.signals()).containsKeys("APP_CHECK_ABSENT", "INTEGRITY_UNAVAILABLE", "PIN_RECENTLY_ISSUED",
+                "TOO_MANY_DEVICES", "LOCATION_REFUSED");
+        assertThat(b.verdict()).isEqualTo(RiskEngine.Verdict.ALLOW);
+        assertThat(b.score()).isZero();
+    }
+
+    @Test
+    @DisplayName("a phone not yet trusted IS asked for a standing condition (that is the one time it counts)")
+    void untrustedPhone_appCheckAbsent_asks() {
+        In in = notYetTrusted();
+        in.appCheck = "absent";
+        assertThat(assess(in).verdict()).isEqualTo(RiskEngine.Verdict.STEP_UP);
+    }
+
+    @Test
+    @DisplayName("a trusted phone is still asked on a real CHANGE, and a standing condition cannot tip it into a block")
+    void trustedPhone_realChange_stillAsks_butNotBlocked() {
+        In changed = new In();
+        changed.appCheck = "absent";
+        changed.model = "SM-S918B";            // a different handset
+        assertThat(assess(changed).verdict()).isEqualTo(RiskEngine.Verdict.STEP_UP);
+        assertThat(assess(changed).otpReason()).isEqualTo(OtpReason.DEVICE_CHANGED);
+
+        // Impossible travel (40) + integrity/app-check/new-place (55) would have been 95 ≥ 90:
+        // a blocked customer. The standing part no longer counts toward the block.
+        In traveller = new In();
+        traveller.appCheck = "absent";
+        traveller.integritySource = "unavailable";
+        traveller.lastFix = new RiskEngine.LastFix(-33.925, 18.424, NOW.minusHours(1)); // Cape Town an hour ago
+        for (int i = 0; i < 6; i++) traveller.knownFixes.add(new double[]{-33.925, 18.424});
+        RiskEngine.Assessment t = assess(traveller);
+        assertThat(t.signals()).containsKey("IMPOSSIBLE_TRAVEL");
+        assertThat(t.verdict()).isEqualTo(RiskEngine.Verdict.STEP_UP);
+        assertThat(t.otpReason()).isEqualTo(OtpReason.LOCATION_ANOMALY);
+    }
+
+    /** A phone whose trust window has ended: every soft trigger counts again, as it did before trust. */
+    private static In notYetTrusted() {
+        In in = new In();
+        in.trustedUntil = NOW.minusDays(1);
+        return in;
     }
 
     @Test
