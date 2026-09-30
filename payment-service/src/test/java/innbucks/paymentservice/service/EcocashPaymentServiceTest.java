@@ -174,6 +174,42 @@ class EcocashPaymentServiceTest {
     }
 
     @Test
+    @DisplayName("race loser on the active-order index: 409 'already in progress', no charge")
+    void startCharge_activeOrderIndexRace_is409() {
+        properties.setNotifyUrl("https://x.example/foundry/payments/ecocash/notify");
+        when(client.canStartCharge()).thenReturn(true);
+        when(client.isConfigured()).thenReturn(true);
+        payableGateway();
+        when(records.openPending(any(Payment.class))).thenThrow(
+                new org.springframework.dao.DataIntegrityViolationException(
+                        "duplicate key value violates unique constraint \"uq_payment_active_order\""));
+
+        assertThatThrownBy(() -> service.startCharge(OrderType.BOOKING, UUID.randomUUID().toString()))
+                .isInstanceOf(InvalidPaymentRequestException.class)
+                .hasMessageContaining("already in progress")
+                .extracting("statusCode").isEqualTo(409);
+        verify(client, never()).charge(anyString(), anyString(), anyLong(), anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("any other ledger refusal is a defect, never reported as 'already in progress'")
+    void startCharge_checkConstraintRefusal_isNotARace() {
+        // The staging failure, verbatim in shape: chk_payment_order_type
+        // refused every LOYALTY_VOUCHER row and the 409 hid it.
+        properties.setNotifyUrl("https://x.example/foundry/payments/ecocash/notify");
+        when(client.canStartCharge()).thenReturn(true);
+        when(client.isConfigured()).thenReturn(true);
+        payableGateway();
+        var checkRefusal = new org.springframework.dao.DataIntegrityViolationException(
+                "new row for relation \"payment\" violates check constraint \"chk_payment_order_type\"");
+        when(records.openPending(any(Payment.class))).thenThrow(checkRefusal);
+
+        assertThatThrownBy(() -> service.startCharge(OrderType.BOOKING, UUID.randomUUID().toString()))
+                .isSameAs(checkRefusal);
+        verify(client, never()).charge(anyString(), anyString(), anyLong(), anyString(), anyString());
+    }
+
+    @Test
     @DisplayName("half-provisioned gate: credentials without a notify URL refuse BEFORE any ledger write")
     void startCharge_refusesWhenHalfProvisioned() {
         when(client.canStartCharge()).thenReturn(false);

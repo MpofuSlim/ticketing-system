@@ -299,6 +299,22 @@ class InnbucksPaymentServiceTest {
     }
 
     @Test
+    void schemaRefusalOnOpenPending_isNotReportedAsARace() {
+        // The staging failure: chk_payment_order_type refused every voucher
+        // row and the 409 "already in progress" hid it. Only the active-order
+        // index means another attempt holds the order; anything else escapes.
+        DataIntegrityViolationException checkRefusal = new DataIntegrityViolationException(
+                "new row for relation \"payment\" violates check constraint \"chk_payment_order_type\"");
+        when(records.openPending(any(Payment.class))).thenThrow(checkRefusal);
+
+        DataIntegrityViolationException ex = assertThrows(DataIntegrityViolationException.class,
+                () -> processBooking("+263770000001"));
+
+        assertSame(checkRefusal, ex);
+        verify(innbucksApi, never()).generatePaymentCode(anyString(), anyString(), anyLong());
+    }
+
+    @Test
     void toCents_exactConversions() {
         assertEquals(5000L, BookingOrderGateway.toCents(new BigDecimal("50.00")));
         assertEquals(5000L, BookingOrderGateway.toCents(new BigDecimal("50")));

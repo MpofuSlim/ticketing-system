@@ -255,6 +255,12 @@ public class EcocashPaymentService {
         try {
             opened = paymentRecordService.openPending(draft);
         } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            if (!PaymentRecordService.isActiveOrderConflict(e)) {
+                // A schema refusal, not a race: surface it as the defect it is.
+                log.error("[ecocash] ledger refused the payment row (not the active-order index) "
+                        + "orderType={} orderRef={}", orderType, orderRef, e);
+                throw e;
+            }
             log.warn("[ecocash] concurrent payment refused by active-order index orderType={} orderRef={}",
                     orderType, orderRef);
             throw new InvalidPaymentRequestException(

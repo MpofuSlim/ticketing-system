@@ -181,6 +181,12 @@ public class InnbucksPaymentService {
         try {
             opened = paymentRecordService.openPending(draft);
         } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            if (!PaymentRecordService.isActiveOrderConflict(e)) {
+                // A schema refusal, not a race: surface it as the defect it is.
+                log.error("[innbucks-payment] ledger refused the payment row (not the active-order index) "
+                        + "orderType={} orderRef={}", orderType, orderRef, e);
+                throw e;
+            }
             // Race loser against uq_payment_active_order (two concurrent
             // submits for the same order): the other request's row stands.
             log.warn("[innbucks-payment] concurrent payment refused by active-order index orderType={} orderRef={}",

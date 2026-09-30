@@ -1848,7 +1848,15 @@ moment the payment confirms). `LoyaltyVoucherOrderGateway` +
 units and PLAIN-MAP bodies (no ApiResult envelope; a bad internal token is a
 bodyless 401), so the gateway owns the cents conversion and the client's
 parsing deliberately differs from `MarketplaceOrderClient`'s. Cash voucher
-payments never touch payment-service (staff confirm them in loyalty). The InnBucks canonical spec is
+payments never touch payment-service (staff confirm them in loyalty).
+**A new `OrderType`, `PaymentRail` or `PaymentStatus` needs a migration that
+re-creates its CHECK** (`chk_payment_order_type` / `_rail` / `_status`):
+`LOYALTY_VOUCHER` shipped without one and Postgres refused every voucher
+payment row until V16 — reported as a 409 "already in progress", because
+`openPending` read every integrity failure as the one-payment-per-order race.
+Now only `uq_payment_active_order` maps to that 409
+(`PaymentRecordService.isActiveOrderConflict`), and
+`LedgerVocabularyMigrationTest` fails the build when an enum outgrows its CHECK. The InnBucks canonical spec is
 `docs/api/InnBucks_Merchant_Api_Doc_v1.0.9.pdf`, distilled (greppable) at
 `docs/api/innbucks-merchant-api.md`.
 

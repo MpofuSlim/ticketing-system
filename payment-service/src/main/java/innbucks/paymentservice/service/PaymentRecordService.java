@@ -111,6 +111,39 @@ public class PaymentRecordService {
         return repository.existsByOrderTypeAndOrderRefAndStatusIn(orderType, orderRef, ACTIVE_OR_SUCCEEDED);
     }
 
+    /** The partial unique index that enforces one active payment per order (V12). */
+    static final String ACTIVE_ORDER_INDEX = "uq_payment_active_order";
+
+    /**
+     * Whether a refused {@link #openPending} write was refused by the
+     * one-active-payment-per-order index — the ONLY refusal that means
+     * "another attempt holds this order", and so the only one the rails may
+     * answer with 409 "already in progress".
+     *
+     * <p>Every other integrity failure (a CHECK constraint, a NOT NULL, a
+     * correlator collision) is a defect, not a race. Reading those as the race
+     * is how {@code chk_payment_order_type} refusing every LOYALTY_VOUCHER row
+     * reached staging as "a payment for this order is already in progress" —
+     * with no row, no prompt and no charge. Walks the cause chain because
+     * Spring wraps Hibernate's exception, which wraps the driver's.
+     */
+    public static boolean isActiveOrderConflict(org.springframework.dao.DataIntegrityViolationException e) {
+        for (Throwable t = e; t != null; t = t.getCause()) {
+            if (t instanceof org.hibernate.exception.ConstraintViolationException cve
+                    && ACTIVE_ORDER_INDEX.equalsIgnoreCase(cve.getConstraintName())) {
+                return true;
+            }
+            String message = t.getMessage();
+            if (message != null && message.contains(ACTIVE_ORDER_INDEX)) {
+                return true;
+            }
+            if (t.getCause() == t) {
+                break;
+            }
+        }
+        return false;
+    }
+
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public Payment openPending(Payment draft) {
         draft.setStatus(PaymentStatus.PENDING);

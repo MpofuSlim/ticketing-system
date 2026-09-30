@@ -13,8 +13,10 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Proves the V5 ledger-hardening invariants on REAL Postgres (Flyway-applied
@@ -197,6 +199,60 @@ class PaymentLedgerIntegrityPostgresIT extends PostgresIntegrationTestBase {
 
         assertDoesNotThrow(() -> payments.saveAndFlush(
                 marketplaceRow(sharedText.toString(), PaymentStatus.PENDING)));
+    }
+
+    private static Payment voucherRow(String orderRef, PaymentStatus status) {
+        return Payment.builder()
+                .id(UUID.randomUUID())
+                .paymentReference("TKZ-VCH-" + UUID.randomUUID().toString().substring(0, 12))
+                .orderType(innbucks.paymentservice.order.OrderType.LOYALTY_VOUCHER)
+                .orderRef(orderRef)
+                .paymentRail(innbucks.paymentservice.entity.PaymentRail.ECOCASH)
+                .customerMsisdn("+263771234567")
+                .amount(new BigDecimal("1.00"))
+                .currency("USD")
+                .status(status)
+                .build();
+    }
+
+    @Test
+    void loyaltyVoucherRow_roundTripsThroughV16() {
+        // Before V16, chk_payment_order_type refused this row on every rail —
+        // no voucher could be paid electronically at all.
+        Payment p = payments.saveAndFlush(voucherRow("VCH-E46F12CF3C1E", PaymentStatus.PENDING));
+
+        Payment reloaded = payments.findById(p.getId()).orElseThrow();
+        assertEquals(innbucks.paymentservice.order.OrderType.LOYALTY_VOUCHER, reloaded.getOrderType());
+        assertEquals("VCH-E46F12CF3C1E", reloaded.getOrderRef());
+        assertNull(reloaded.getBookingId());
+    }
+
+    @Test
+    void activeOrderIndexViolation_isClassifiedAsTheRace_onRealPostgres() {
+        // The classifier reads the REAL exception chain Spring/Hibernate/pgjdbc
+        // produce, so it is proven here rather than against a hand-built one.
+        String ref = "VCH-" + UUID.randomUUID().toString().substring(0, 12).toUpperCase();
+        payments.saveAndFlush(voucherRow(ref, PaymentStatus.TOKEN_ISSUED));
+
+        DataIntegrityViolationException race = assertThrows(DataIntegrityViolationException.class,
+                () -> payments.saveAndFlush(voucherRow(ref, PaymentStatus.PENDING)));
+        assertTrue(innbucks.paymentservice.service.PaymentRecordService.isActiveOrderConflict(race),
+                "a second active attempt must read as the one-payment-per-order race (409)");
+    }
+
+    @Test
+    void otherUniqueViolation_isNotClassifiedAsTheRace_onRealPostgres() {
+        // uq_payment_ecocash_correlator: a real integrity failure that is NOT
+        // "another attempt holds this order" — it must not become a 409.
+        Payment first = voucherRow("VCH-" + UUID.randomUUID().toString().substring(0, 12), PaymentStatus.FAILED);
+        first.setEcocashClientCorrelator("1790768730634541617");
+        payments.saveAndFlush(first);
+        Payment second = voucherRow("VCH-" + UUID.randomUUID().toString().substring(0, 12), PaymentStatus.PENDING);
+        second.setEcocashClientCorrelator("1790768730634541617");
+
+        DataIntegrityViolationException other = assertThrows(DataIntegrityViolationException.class,
+                () -> payments.saveAndFlush(second));
+        assertFalse(innbucks.paymentservice.service.PaymentRecordService.isActiveOrderConflict(other));
     }
 
     @Test

@@ -288,4 +288,38 @@ class PaymentRecordServiceTest {
         assertEquals("TOKEN_ISSUED", ev.getValue().getToStatus());
         assertEquals("Payment code delivered via SMS", ev.getValue().getDetail());
     }
+
+    // -- isActiveOrderConflict ------------------------------------------------
+    // Only the one-payment-per-order index may be answered "already in
+    // progress". The Postgres IT proves the real driver chain; these pin the
+    // shapes without Docker.
+
+    @Test
+    void activeOrderConflict_recognisedByHibernateConstraintName() {
+        var hibernate = new org.hibernate.exception.ConstraintViolationException(
+                "could not execute statement", new java.sql.SQLException("duplicate key"),
+                "uq_payment_active_order");
+        assertTrue(PaymentRecordService.isActiveOrderConflict(
+                new org.springframework.dao.DataIntegrityViolationException("wrapped", hibernate)));
+    }
+
+    @Test
+    void activeOrderConflict_recognisedFromTheDriverMessageDeepInTheChain() {
+        var driver = new java.sql.SQLException(
+                "ERROR: duplicate key value violates unique constraint \"uq_payment_active_order\"");
+        assertTrue(PaymentRecordService.isActiveOrderConflict(
+                new org.springframework.dao.DataIntegrityViolationException("wrapped",
+                        new RuntimeException("statement failed", driver))));
+    }
+
+    @Test
+    void checkConstraintRefusal_isNotAnActiveOrderConflict() {
+        var hibernate = new org.hibernate.exception.ConstraintViolationException(
+                "could not execute statement",
+                new java.sql.SQLException("new row for relation \"payment\" violates check constraint "
+                        + "\"chk_payment_order_type\""),
+                "chk_payment_order_type");
+        assertFalse(PaymentRecordService.isActiveOrderConflict(
+                new org.springframework.dao.DataIntegrityViolationException("wrapped", hibernate)));
+    }
 }
