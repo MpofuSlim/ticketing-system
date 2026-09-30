@@ -4,7 +4,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.innbucks.userservice.entity.CustomerProfile;
 import com.innbucks.userservice.entity.User;
+import com.innbucks.userservice.entity.StaffProfile;
 import com.innbucks.userservice.repository.CustomerProfileRepository;
+import com.innbucks.userservice.repository.StaffProfileRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
@@ -48,6 +50,7 @@ public abstract class SessionRevocationItSupport extends PostgresIntegrationTest
     @Autowired protected ObjectMapper objectMapper;
     @Autowired protected UserRepository users;
     @Autowired protected CustomerProfileRepository customerProfiles;
+    @Autowired protected StaffProfileRepository staffProfiles;
     @Autowired protected PasswordEncoder passwordEncoder;
     @Autowired protected PlatformTransactionManager transactionManager;
     @PersistenceContext protected EntityManager em;
@@ -76,6 +79,27 @@ public abstract class SessionRevocationItSupport extends PostgresIntegrationTest
                 .mfaEnabled(enrolled)
                 .mfaSecret(enrolled ? TOTP_SECRET : null)
                 .build());
+    }
+
+    /**
+     * A staff account as {@code POST /admin/staff} plus an accepted invite leave
+     * it (V44): on an allowed domain, email proven, profiled, and no sign-in
+     * phone — the only shape that may newly be given staff authority.
+     */
+    protected User eligibleStaff(String role, boolean enrolled) {
+        java.time.LocalDateTime now = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC);
+        User user = users.save(User.builder()
+                .firstName("Tariro").lastName("Moyo")
+                .email("staff-" + unique() + "@innbucks.co.zw")
+                .password(passwordEncoder.encode(PASSWORD))
+                .roles(new java.util.LinkedHashSet<>(List.of(role)))
+                .active(true).approved(true)
+                .emailVerifiedAt(now)
+                .mfaEnabled(enrolled)
+                .mfaSecret(enrolled ? TOTP_SECRET : null)
+                .build());
+        staffProfiles.save(StaffProfile.builder().userId(user.getId()).createdAt(now).inviteAcceptedAt(now).build());
+        return user;
     }
 
     /** A tier-2 super-app customer — never challenged for a second factor. */

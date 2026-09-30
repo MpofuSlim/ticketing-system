@@ -58,6 +58,7 @@ class ShopStaffServiceTest {
     @Mock private LoyaltyServiceClient loyaltyServiceClient;
     @Mock private ApplicationEventPublisher eventPublisher;
     @Mock private OrganizationMemberRepository organizationMembers;
+    @Mock private StaffEligibility staffEligibility;
 
     @InjectMocks private ShopStaffService service;
 

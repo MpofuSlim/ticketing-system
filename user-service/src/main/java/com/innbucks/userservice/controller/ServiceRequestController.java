@@ -121,9 +121,23 @@ public class ServiceRequestController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
-                    description = "Unknown bundle, already-granted bundle, or duplicate pending request"),
+                    description = "Unknown bundle, already-granted bundle, or duplicate pending request",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Rejected",
+                            value = """
+                                    { "code": "400 BAD_REQUEST", "message": "We couldn't process your request. Please try again.", "data": null }
+                                    """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
-                    description = "Missing or invalid bearer token")
+                    description = "Missing or invalid bearer token"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
+                    description = "The caller is an InnBucks staff account: staff never request business products",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Staff account",
+                            value = """
+                            {
+                              "code": "409 CONFLICT",
+                              "message": "InnBucks staff accounts can't join a business or request products.",
+                              "data": { "errorCode": "staff_account_not_eligible" }
+                            }
+                                    """)))
     })
     public ResponseEntity<ApiResult<ServiceRequestResponseDTO>> submit(
             Authentication authentication,

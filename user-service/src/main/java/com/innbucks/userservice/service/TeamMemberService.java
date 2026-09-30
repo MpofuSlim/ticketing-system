@@ -64,6 +64,8 @@ public class TeamMemberService {
      * published to Redis after commit.
      */
     private final AccountSessionRevoker accountSessionRevoker;
+    /** Staff addresses are reserved (V44): a team member is never created at one. */
+    private final StaffEligibility staffEligibility;
 
     // A09 audit coverage for the team-member disable action. Field-injected
     // (required=false) so tests constructing this service don't widen; null =>
@@ -85,6 +87,11 @@ public class TeamMemberService {
         UUID organizerUuid = resolveOwningOrganizer(req.getOrganizerUuid());
         User caller = currentUser();
 
+        // An InnBucks STAFF address is never a team member (V44): the temporary
+        // password goes to the organizer. FIRST — before the bootstrap-admin and
+        // duplicate checks — so this path cannot confirm which staff addresses
+        // exist, the platform admin's among them.
+        staffEligibility.requireEmailNotReserved(req.getEmail(), caller.getEmail(), "team_member_create");
         // The platform admin's address is never an organizer's to hand out. A
         // row parked here becomes a SUPER_ADMIN candidate the next time
         // DataInitializer boots against an admin-less cell (a rotated

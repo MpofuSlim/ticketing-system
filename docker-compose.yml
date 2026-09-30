@@ -119,6 +119,15 @@ services:
       # Generate one with: openssl rand -base64 32
       MFA_ENCRYPTION_KEY: ${MFA_ENCRYPTION_KEY:?set MFA_ENCRYPTION_KEY in .env — Base64'd 32-byte value; rotating it orphans every existing TOTP secret}
       MFA_ISSUER: ${MFA_ISSUER:-InnBucks}
+      # Staff accounts (V44) — see deploy/cells/cell.example.env. Blank domains
+      # = every staff grant 503s; blank console URL = no invite can be sent.
+      STAFF_ALLOWED_EMAIL_DOMAINS: ${STAFF_ALLOWED_EMAIL_DOMAINS:-}
+      STAFF_CONSOLE_BASE_URL: ${STAFF_CONSOLE_BASE_URL:-}
+      STAFF_INVITE_PATH: ${STAFF_INVITE_PATH:-/set-password}
+      STAFF_INVITE_TTL: ${STAFF_INVITE_TTL:-PT72H}
+      STAFF_INVITE_RESEND_LIMIT: ${STAFF_INVITE_RESEND_LIMIT:-5}
+      STAFF_CREATE_DAILY_LIMIT: ${STAFF_CREATE_DAILY_LIMIT:-20}
+      STAFF_ELIGIBILITY_ENFORCEMENT: ${STAFF_ELIGIBILITY_ENFORCEMENT:-watch}
     ports:
       - "127.0.0.1:8081:8081"
     healthcheck:

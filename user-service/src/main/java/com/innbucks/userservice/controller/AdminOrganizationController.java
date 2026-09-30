@@ -20,6 +20,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -102,5 +105,94 @@ public class AdminOrganizationController {
             @RequestParam(defaultValue = "20") @Min(1) @Max(MAX_PAGE_SIZE) int size) {
         return ResponseEntity.ok(ApiResult.ok("Organizations retrieved",
                 organizationService.directory(q, product, page, size)));
+    }
+
+    @PostMapping("/{id}/suspend")
+    @PreAuthorize("hasAuthority('" + PermissionCatalog.ORGANIZATIONS_MANAGE + "')")
+    @Operation(summary = "Suspend an organization",
+            description = """
+                    Sets the organization SUSPENDED and ends every member's current access token, so the
+                    organization's claims (`orgId`, `orgRole`, `products`) drop at once: a suspended
+                    organization is never chosen for a session and never selectable.
+
+                    This is how an operator clears a business organization that console-created "staff"
+                    ended up owning (the last owner can never be removed), so the account can be adopted
+                    with `POST /admin/staff/{id}/resend-invite`. There is no reinstate endpoint. `note` is
+                    required and recorded. Requires `organizations:manage` (SUPER_ADMIN only).
+                    """)
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Suspended; members signed out",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Suspended",
+                            value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Organization suspended",
+                                      "data": {
+                                        "organizationId": "7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f",
+                                        "name": "Tariro Moyo",
+                                        "status": "SUSPENDED",
+                                        "membersSignedOut": 1
+                                      }
+                                    }
+                                    """))),
+            @ApiResponse(responseCode = "400", description = "Missing note",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Note missing",
+                            value = """
+                                    { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "note": "note is required" } }
+                                    """))),
+            @ApiResponse(responseCode = "401", description = "Missing or invalid JWT"),
+            @ApiResponse(responseCode = "403", description = "Caller lacks organizations:manage",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Missing permission",
+                            value = """
+                                    { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
+                                    """))),
+            @ApiResponse(responseCode = "404", description = "No such organization",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Not found",
+                            value = """
+                                    {
+                                      "code": "404 NOT_FOUND",
+                                      "message": "We couldn't find that organization.",
+                                      "data": { "errorCode": "organization_not_found" }
+                                    }
+                                    """))),
+            @ApiResponse(responseCode = "409", description = "Already suspended",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Already suspended",
+                            value = """
+                                    {
+                                      "code": "409 CONFLICT",
+                                      "message": "This organization is already suspended.",
+                                      "data": { "errorCode": "organization_not_active" }
+                                    }
+                                    """))),
+            @ApiResponse(responseCode = "503", description = "The audit row could not be written; nothing changed",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Audit unavailable",
+                            value = """
+                                    {
+                                      "code": "503 SERVICE_UNAVAILABLE",
+                                      "message": "We couldn't record this change, so it wasn't made. Try again.",
+                                      "data": { "errorCode": "audit_unavailable" }
+                                    }
+                                    """)))
+    })
+    public ResponseEntity<ApiResult<OrganizationDTOs.SuspendResult>> suspend(
+            @PathVariable java.util.UUID id,
+            @jakarta.validation.Valid @RequestBody OrganizationDTOs.SuspendRequest request,
+            org.springframework.security.core.Authentication authentication,
+            jakarta.servlet.http.HttpServletRequest httpRequest) {
+        return ResponseEntity.ok(ApiResult.ok("Organization suspended",
+                organizationService.suspend(id, request.note(), authentication.getName(),
+                        new com.innbucks.userservice.service.AuditContext(clientIp(httpRequest),
+                                httpRequest.getHeader("User-Agent")))));
+    }
+
+    /** Leftmost {@code X-Forwarded-For} entry behind the gateway, else the remote address. */
+    private static String clientIp(jakarta.servlet.http.HttpServletRequest request) {
+        String forwarded = request.getHeader("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isBlank()) {
+            int comma = forwarded.indexOf(',');
+            String first = (comma < 0 ? forwarded : forwarded.substring(0, comma)).trim();
+            if (!first.isEmpty()) return first;
+        }
+        return request.getRemoteAddr();
     }
 }

@@ -44,7 +44,8 @@ class RoleAdminServiceTest {
         com.innbucks.userservice.testsupport.BuiltInRoleRows.stub(roles);
         com.innbucks.userservice.testsupport.BuiltInRoleRows.caller(users, "admin@x.co", "SUPER_ADMIN");
         com.innbucks.userservice.testsupport.BuiltInRoleRows.caller(users, "admin@innbucks.co.zw", "SUPER_ADMIN");
-        service = new RoleAdminService(roles, audit, new RoleGrantGuard(users, roles), bumper);
+        service = new RoleAdminService(roles, audit, new RoleGrantGuard(users, roles), bumper,
+                org.mockito.Mockito.mock(com.innbucks.userservice.service.StaffEligibility.class));
     }
 
     private static Role builtin(String name, String... permissions) {

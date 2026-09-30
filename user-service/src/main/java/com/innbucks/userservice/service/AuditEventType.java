@@ -216,6 +216,42 @@ public enum AuditEventType {
     ORGANIZATION_MEMBER_ROLE_CHANGED,
     ORGANIZATION_MEMBER_REMOVED,
     ORGANIZATION_PRODUCT_GRANTED,
+    /**
+     * {@code POST /admin/organizations/{id}/suspend} (V44): the organization
+     * stops being ACTIVE, so its members' organization claims drop at their
+     * next request. Written fail-closed ({@code recordRequired}).
+     */
+    ORGANIZATION_SUSPENDED,
+
+    /**
+     * Staff accounts (V44). Every one is a change to who holds platform
+     * authority, so the SUCCESS rows are written fail-closed
+     * ({@code AuditService.recordRequired}) as the transaction's last
+     * statement. Target is the account's numeric {@code users.id}, target type
+     * {@code USER}; metadata carries {@code targetEmail}, {@code roles},
+     * {@code note} (at most 500 characters) and, on a refusal,
+     * {@code failure_reason}.
+     */
+    STAFF_INVITED,
+    /** A new invite for an INVITED account, or the adoption of a legacy one ({@code adoption: true}). */
+    STAFF_INVITE_RESENT,
+    /** The invite was redeemed: password set, mailbox proven, old sign-in material stripped. Actor = the user. */
+    STAFF_INVITE_ACCEPTED,
+    /**
+     * A used, revoked or expired invite was presented again — a FAILURE row
+     * naming the account. Also counted on {@code user.staff.invite.replayed}.
+     * The client gets the same opaque {@code invite_invalid} either way.
+     */
+    STAFF_INVITE_REPLAYED,
+    STAFF_DEACTIVATED,
+    STAFF_REACTIVATED,
+    /**
+     * A FAILURE row for every refusal of the staff rules: a grant to an
+     * ineligible account, a PLATFORM code added to a role with ineligible
+     * holders, a staff account joining a business, an accept that is no longer
+     * eligible. {@code failure_reason} says which.
+     */
+    STAFF_GRANT_REFUSED,
 
     /**
      * DTX device security (V40). Only the state changes a PERSON makes land on

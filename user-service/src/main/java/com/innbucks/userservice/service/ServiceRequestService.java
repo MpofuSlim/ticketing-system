@@ -25,6 +25,7 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -62,6 +63,24 @@ public class ServiceRequestService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private OrganizationService organizationService;
 
+    /**
+     * Staff accounts (V44) never request or receive business products: submit and
+     * approve refuse one with 409 {@code staff_account_not_eligible}, and a role
+     * an approval grants that is itself a staff role (an operator gave a business
+     * built-in a PLATFORM code) needs a staff-eligible requester. Field-injected
+     * like the collaborators above; null only in the plain unit tests.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private StaffEligibility staffEligibility;
+
+    /** Records the approval's role grant ({@code USER_ROLES_CHANGED}, fail-closed). Null only in plain unit tests. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AuditService auditService;
+
+    /** Tells whether a granted role is a staff role. Null only in plain unit tests. */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private RoleGrantGuard roleGrantGuard;
+
     /** Submit a request to be granted access to an additional default service bundle. */
     @Transactional
     public ServiceRequestResponseDTO submit(String requesterEmail, CreateServiceRequestDTO request) {
@@ -79,6 +98,9 @@ public class ServiceRequestService {
                                             CreateServiceRequestDTO request) {
         User user = userRepository.findByEmail(requesterEmail)
                 .orElseThrow(() -> new RuntimeException("User not found: " + requesterEmail));
+        if (staffEligibility != null) {
+            staffEligibility.requireNotStaffAccount(user, requesterEmail, "service_request_submit");
+        }
 
         String service = request.getService().trim().toLowerCase(Locale.ROOT);
 
@@ -202,8 +224,29 @@ public class ServiceRequestService {
         User reviewer = userRepository.findByEmail(reviewerEmail)
                 .orElseThrow(() -> new RuntimeException("Reviewer not found: " + reviewerEmail));
 
+        // A staff account never becomes a business (V44) — refused whatever it
+        // asked for, including a request submitted before it became staff.
+        if (staffEligibility != null) {
+            staffEligibility.requireNotStaffAccount(user, reviewerEmail, "service_request_approve");
+        }
+
+        java.util.List<String> previousRoles = user.getRoles().stream().sorted().toList();
         user.getDefaultServices().add(req.getService());
         User.Role grantedRole = Services.BUNDLE_ROLES.get(req.getService());
+        boolean roleAdded = grantedRole != null && !user.getRoles().contains(grantedRole.name());
+        if (roleAdded && roleGrantGuard != null) {
+            // Row lock FIRST, before the role is read (V44 §2.4): a concurrent
+            // permission edit on this role waits for this grant (and then sees
+            // this account among its holders), or this waits for it.
+            roleGrantGuard.lockRoles(java.util.Set.of(grantedRole.name()));
+        }
+        if (roleAdded && staffEligibility != null && roleGrantGuard != null
+                && roleGrantGuard.isStaffRoleName(grantedRole.name())) {
+            // Only reachable if an operator has given a business built-in a
+            // PLATFORM permission: the grant is then a staff grant, with the
+            // same eligibility rule as PUT /admin/users/{id}/roles.
+            staffEligibility.requireEligibleForStaffGrant(user, reviewerEmail, java.util.List.of(grantedRole.name()));
+        }
         if (grantedRole != null) {
             user.getRoles().add(grantedRole.name());
         }
@@ -222,6 +265,23 @@ public class ServiceRequestService {
         log.info("Service request approved id={} userId={} service={} reviewerId={}",
                 saved.getId(), user.getId(), req.getService(), reviewer.getId());
         publishDecision(saved, user, ServiceRequestDecided.Outcome.APPROVED);
+        // Approval adds a role, so it is a change to who can do what: recorded
+        // as USER_ROLES_CHANGED like PUT /admin/users/{id}/roles, REQUIRED and
+        // last (a grant that cannot be recorded is not made — 503 rolls this
+        // transaction back). It used to record only ORGANIZATION_PRODUCT_GRANTED.
+        if (roleAdded && auditService != null) {
+            serviceRequestRepository.flush();
+            Map<String, Object> metadata = new java.util.LinkedHashMap<>();
+            metadata.put("targetEmail", user.getEmail() == null ? "" : user.getEmail());
+            metadata.put("previousRoles", previousRoles);
+            metadata.put("newRoles", user.getRoles().stream().sorted().toList());
+            metadata.put("serviceRequestId", saved.getId());
+            metadata.put("service", req.getService());
+            auditService.recordRequired(AuditEventType.USER_ROLES_CHANGED,
+                    reviewerEmail, AuditService.ACTOR_TYPE_USER,
+                    String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
+                    metadata, AuditContext.none());
+        }
         return toResponse(saved, user);
     }
 

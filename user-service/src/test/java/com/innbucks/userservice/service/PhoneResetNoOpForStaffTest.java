@@ -59,7 +59,7 @@ class PhoneResetNoOpForStaffTest {
         service = new PasswordResetService(otp, users, encoder, mock(RefreshTokenRepository.class),
                 mock(AuditService.class), mock(ApplicationEventPublisher.class),
                 new InMemoryTokenVersionBumper(mock(TokenVersionPublisher.class)),
-                new RoleGrantGuard(users, roles));
+                new RoleGrantGuard(users, roles), org.mockito.Mockito.mock(com.innbucks.userservice.service.StaffEligibility.class));
     }
 
     private User account(String... roles) {

@@ -83,6 +83,45 @@ public class RoleGrantGuard {
     private final RoleRepository roleRepository;
 
     /**
+     * Every refusal is written as a {@code STAFF_GRANT_REFUSED} FAILURE row (V44)
+     * — who tried to hand out or act against what, and why it was refused.
+     * Fail-OPEN like every failure row ({@link AuditService#recordFailure}: its
+     * own transaction, never thrown), so a broken audit path cannot turn a
+     * refusal into something else. Optional so the plain unit tests that build
+     * the guard directly need no audit service; the running service always has
+     * one.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private AuditService auditService;
+
+    /** Test seam: the audit service {@link #recordRefusal} writes through. */
+    public void setAuditService(AuditService auditService) {
+        this.auditService = auditService;
+    }
+
+    /**
+     * Writes a {@code STAFF_GRANT_REFUSED} FAILURE row. {@code target} may be
+     * null (a role edit, or an anonymous registration); {@code detail} carries
+     * the roles or codes involved. Never throws.
+     */
+    public void recordRefusal(String actor, User target, String failureReason, Map<String, Object> detail) {
+        if (auditService == null) return;
+        try {
+            Map<String, Object> metadata = new LinkedHashMap<>();
+            if (target != null && target.getEmail() != null) metadata.put("targetEmail", target.getEmail());
+            if (detail != null) metadata.putAll(detail);
+            auditService.recordFailure(AuditEventType.STAFF_GRANT_REFUSED,
+                    actor == null ? "system" : actor,
+                    actor == null ? AuditService.ACTOR_TYPE_SYSTEM : AuditService.ACTOR_TYPE_USER,
+                    target == null || target.getId() == null ? null : String.valueOf(target.getId()),
+                    target == null ? null : AuditService.TARGET_TYPE_USER,
+                    failureReason, metadata, AuditContext.none());
+        } catch (RuntimeException ex) {
+            log.warn("Could not record STAFF_GRANT_REFUSED reason={}: {}", failureReason, ex.toString());
+        }
+    }
+
+    /**
      * The acting administrator, resolved live.
      *
      * @param subject     the JWT subject ({@code Authentication#getName()}): the
@@ -191,6 +230,26 @@ public class RoleGrantGuard {
      * reset the 2FA of a product manager they could never have appointed.
      */
     public void requireMayManage(Caller caller, User target) {
+        String refusal = manageRefusal(caller, target);
+        if (refusal != null) {
+            log.warn("Refused: caller={} may not act on target userId={}: {}",
+                    caller.subject(), target.getId(), refusal);
+            recordRefusal(caller.subject(), target, StaffPolicyException.TARGET_NOT_MANAGEABLE,
+                    Map.of("reason", StaffPolicyException.REASON_EXCEEDS_YOUR_AUTHORITY,
+                            "targetRoles", new TreeSet<>(target.getRoles())));
+            throw StaffPolicyException.targetNotManageable(StaffPolicyException.REASON_EXCEEDS_YOUR_AUTHORITY);
+        }
+    }
+
+    /**
+     * The same decision as {@link #requireMayManage}, answered rather than
+     * thrown — what a directory row shows as {@code manageable}. Writes nothing.
+     */
+    public boolean mayManage(Caller caller, User target) {
+        return manageRefusal(caller, target) == null;
+    }
+
+    private String manageRefusal(Caller caller, User target) {
         Set<String> held = storedGrants(target);
         String refusal = null;
         if (!caller.resolved()) {
@@ -206,11 +265,7 @@ public class RoleGrantGuard {
             }
             if (!namedNotHeld.isEmpty()) refusal = "missing named roles " + namedNotHeld;
         }
-        if (refusal != null) {
-            log.warn("Refused: caller={} may not act on target userId={}: {}",
-                    caller.subject(), target.getId(), refusal);
-            throw StaffPolicyException.targetNotManageable(StaffPolicyException.REASON_EXCEEDS_YOUR_AUTHORITY);
-        }
+        return refusal;
     }
 
     /**
@@ -233,6 +288,26 @@ public class RoleGrantGuard {
      * </ul>
      */
     public void requireMayAssign(Caller caller, Collection<Role> added) {
+        requireMayAssign(caller, added, null);
+    }
+
+    /** As {@link #requireMayAssign(Caller, Collection)}, naming the account for the refusal's audit row. */
+    public void requireMayAssign(Caller caller, Collection<Role> added, User target) {
+        Map<String, String> refused = assignRefusals(caller, added);
+        if (!refused.isEmpty()) {
+            log.warn("Refused role grant by caller={}: {}", caller.subject(), refused);
+            recordRefusal(caller.subject(), target, StaffPolicyException.ROLE_NOT_ASSIGNABLE,
+                    Map.of("roles", new LinkedHashMap<>(refused)));
+            throw StaffPolicyException.roleNotAssignable(refused);
+        }
+    }
+
+    /**
+     * The decision {@link #requireMayAssign} throws on, answered as role name →
+     * reason (empty when every role may be given), for a caller that collects it
+     * with other refusals into one 400 ({@code POST /admin/staff}).
+     */
+    public Map<String, String> assignRefusals(Caller caller, Collection<Role> added) {
         Map<String, String> refused = new LinkedHashMap<>();
         for (Role role : added.stream().sorted(java.util.Comparator.comparing(Role::getName)).toList()) {
             Set<String> stored = grantsOf(role);
@@ -247,10 +322,7 @@ public class RoleGrantGuard {
                 refused.put(role.getName(), StaffPolicyException.REASON_NAMED_ROLE_NOT_HELD);
             }
         }
-        if (!refused.isEmpty()) {
-            log.warn("Refused role grant by caller={}: {}", caller.subject(), refused);
-            throw StaffPolicyException.roleNotAssignable(refused);
-        }
+        return refused;
     }
 
     /**
@@ -260,9 +332,22 @@ public class RoleGrantGuard {
      * answer that does not change with who asks.
      */
     public void requireMayGrant(Caller caller, Collection<String> addedCodes) {
+        requireMayGrant(caller, addedCodes, null);
+    }
+
+    /** As {@link #requireMayGrant(Caller, Collection)}, naming the role for the refusal's audit row. */
+    public void requireMayGrant(Caller caller, Collection<String> addedCodes, String roleName) {
         Map<String, String> refused = new LinkedHashMap<>();
+        // A business built-in is handed out by writers that never check staff
+        // eligibility (register + approval, shop-staff and team-member create,
+        // the OTP and federation creators), so it must never become a staff
+        // role — whoever asks, SUPER_ADMIN included.
+        boolean businessRole = StaffRoles.isBusinessBuiltIn(roleName);
         for (String code : new TreeSet<>(addedCodes)) {
-            if (PermissionCatalog.isReservedToWildcard(code)) {
+            if (businessRole && (PermissionCatalog.WILDCARD.equals(code)
+                    || PermissionCatalog.scopeOf(code) == PermissionCatalog.Scope.PLATFORM)) {
+                refused.put(code, StaffPolicyException.REASON_BUSINESS_ROLE);
+            } else if (PermissionCatalog.isReservedToWildcard(code)) {
                 refused.put(code, StaffPolicyException.REASON_RESERVED_TO_SUPER_ADMIN);
             } else if (!caller.permissions().contains(code)) {
                 refused.put(code, StaffPolicyException.REASON_EXCEEDS_YOUR_AUTHORITY);
@@ -270,7 +355,61 @@ public class RoleGrantGuard {
         }
         if (!refused.isEmpty()) {
             log.warn("Refused permission grant by caller={}: {}", caller.subject(), refused);
+            Map<String, Object> detail = new LinkedHashMap<>();
+            if (roleName != null) detail.put("role", roleName);
+            detail.put("codes", new LinkedHashMap<>(refused));
+            recordRefusal(caller.subject(), null, StaffPolicyException.PERMISSION_NOT_ASSIGNABLE, detail);
             throw StaffPolicyException.permissionNotAssignable(refused);
         }
+    }
+
+    /**
+     * True when {@code name} is a staff role: NAMED, or a row granting the
+     * wildcard or a PLATFORM code. A name with no row and not NAMED is not
+     * (it grants nothing).
+     */
+    /**
+     * {@code SELECT … FOR UPDATE} on the named role rows, in name order (V44
+     * §2.4) — for a grant site that has no role repository of its own.
+     */
+    public void lockRoles(Collection<String> names) {
+        roleRepository.lockAllByNameIn(new TreeSet<>(names));
+    }
+
+    public boolean isStaffRoleName(String name) {
+        if (StaffRoles.isNamed(name)) return true;
+        List<Role> rows = roleRepository.findAllByNameIn(List.of(name));
+        return !rows.isEmpty() && StaffRoles.isStaffRole(rows.get(0));
+    }
+
+    /**
+     * The role names that are staff roles right now: the NAMED set plus every
+     * role row granting the wildcard or a PLATFORM code. Resolved per call — a
+     * custom role becomes staff the moment a PLATFORM code is added to it.
+     */
+    public Set<String> staffRoleNames() {
+        Set<String> names = new TreeSet<>(StaffRoles.NAMED);
+        for (Role role : roleRepository.findAll()) {
+            if (StaffRoles.isStaffRole(role)) names.add(role.getName());
+        }
+        return names;
+    }
+
+    /**
+     * The account's role names that are NOT staff roles (a business role, or a
+     * name with no row). Empty for an account holding only staff roles.
+     */
+    public Set<String> nonStaffRoles(User account) {
+        Set<String> held = account.getRoles() == null ? Set.of() : account.getRoles();
+        if (held.isEmpty()) return Set.of();
+        Map<String, Role> rows = new LinkedHashMap<>();
+        for (Role role : roleRepository.findAllByNameIn(held)) rows.put(role.getName(), role);
+        Set<String> nonStaff = new TreeSet<>();
+        for (String name : held) {
+            if (StaffRoles.isNamed(name)) continue;
+            Role row = rows.get(name);
+            if (row == null || !StaffRoles.isStaffRole(row)) nonStaff.add(name);
+        }
+        return nonStaff;
     }
 }

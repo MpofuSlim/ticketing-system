@@ -38,6 +38,7 @@ import java.time.Instant;
  *       use after a reactivation (a code cannot be requested DURING it:
  *       {@code PasswordResetService} treats a deactivated account like an
  *       unknown one);</li>
+ *   <li>revokes every live staff invite ({@code DEACTIVATED}, V44);</li>
  *   <li>after commit, publishes {@code auth:tokenver:<userUuid>} so every other
  *       service rejects the old access tokens immediately (a failed publish is
  *       counted as {@code user.tokenver.publish_failed}; those services then
@@ -72,6 +73,20 @@ public class AccountSessionRevoker {
     private final DeviceTrustService deviceTrustService;
     private final OtpRepository otpRepository;
 
+    /**
+     * Live staff invites (V44) die with a deactivation ({@code DEACTIVATED}): an
+     * invite redeemed after the account was switched off must never set its
+     * password. Optional so the unit tests that build this class directly need no
+     * repository; the running service always has one.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.innbucks.userservice.repository.StaffInviteRepository staffInvites;
+
+    /** Test seam for {@link #staffInvites}. */
+    public void setStaffInvites(com.innbucks.userservice.repository.StaffInviteRepository staffInvites) {
+        this.staffInvites = staffInvites;
+    }
+
     /** What one revocation did — for the caller's audit row and log line. */
     public record Revocation(long tokenVersion, int refreshTokensRevoked, int resetCodesDeleted) {
     }
@@ -85,7 +100,16 @@ public class AccountSessionRevoker {
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public Revocation revokeAll(User user, String reason) {
-        return endSessions(user, tokenVersionBumper.deactivateAndBump(user), reason);
+        Revocation revocation = endSessions(user, tokenVersionBumper.deactivateAndBump(user), reason);
+        if (staffInvites != null) {
+            int invites = staffInvites.revokeLive(user.getId(),
+                    com.innbucks.userservice.entity.StaffInvite.REVOKED_DEACTIVATED,
+                    java.time.LocalDateTime.now(java.time.ZoneOffset.UTC));
+            if (invites > 0) {
+                log.info("Staff invites revoked on deactivation userId={} count={}", user.getId(), invites);
+            }
+        }
+        return revocation;
     }
 
     /**

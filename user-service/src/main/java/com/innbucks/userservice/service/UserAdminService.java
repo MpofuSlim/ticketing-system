@@ -78,6 +78,12 @@ public class UserAdminService {
      * ({@link RoleGrantGuard}).
      */
     private final RoleGrantGuard roleGrantGuard;
+    /**
+     * The staff-account rules (V44): who may newly hold a staff role, what a
+     * profiled account may hold, and which accounts must be managed through
+     * {@code /admin/staff} instead of here.
+     */
+    private final StaffEligibility staffEligibility;
 
     /**
      * Backward-compatible overload used by unit tests / callers that don't have
@@ -108,12 +114,34 @@ public class UserAdminService {
                     "The SUPER_ADMIN account cannot be activated or deactivated.");
         }
 
+        // Switching a STAFF account on goes through POST /admin/staff/{id}/reactivate
+        // (staff:manage), never here: that endpoint re-checks the email domain
+        // and resets the credentials (a deactivation is often a response to a
+        // compromise), and this one would let a different permission
+        // (users:activation:write) skip both. Checked before anything else so
+        // the no-op and retry-delivery branches below cannot reach a staff row
+        // either — the latter would mail a temporary password to a staff
+        // account, the one credential staff never receive.
+        if (active && staffEligibility.isStaffAccount(user)) {
+            log.warn("setActive(true) refused on a staff account userId={} by={}",
+                    id, adminEmail == null ? "system" : adminEmail);
+            throw com.innbucks.userservice.exception.StaffPolicyException.useStaffEndpoints();
+        }
+
         // The first activation of an account is its approval: registration left
         // only an unusable placeholder password, so assign the default now and
         // force a change on first login. The `approved` flag makes this a
         // one-shot — a later deactivate/reactivate must never reset a password
         // the user has since changed.
         boolean firstApproval = active && !user.isApproved();
+
+        // A registration on an InnBucks STAFF address is never approved: approval
+        // mails a temporary password to whatever phone the registrant typed, so
+        // approving one would hand a squatter a working login at a staff
+        // address. Staff are invited through POST /admin/staff instead.
+        if (firstApproval) {
+            staffEligibility.requireEmailNotReserved(user.getEmail(), adminEmail, "first_approval");
+        }
 
         // Retry semantics: if the row already shows the requested state AND it
         // isn't a still-pending first approval, only treat as a no-op when the
@@ -256,6 +284,18 @@ public class UserAdminService {
                     "Cannot reset the temporary password of a SUPER_ADMIN; that credential is "
                             + "managed via BOOTSTRAP_ADMIN_PASSWORD");
         }
+        // Staff set passwords through an invite, which proves the mailbox; a
+        // temporary password goes out over SMS/WhatsApp as a fallback and would
+        // bypass exactly that. Refused for a profiled account and for a legacy
+        // one that could be adopted instead (POST /admin/staff/{id}/resend-invite).
+        // Off-domain legacy staff keep this reset until they are demoted.
+        if (staffEligibility.isProfiled(user)
+                || (user.isActive() && roleGrantGuard.holdsStaffRole(user)
+                    && staffEligibility.adoptionBlocker(user).isEmpty())) {
+            log.warn("reset-temp-password refused on a staff account userId={} by={}",
+                    id, adminEmail == null ? "system" : adminEmail);
+            throw com.innbucks.userservice.exception.StaffPolicyException.useStaffInvite();
+        }
 
         String tempPassword = TemporaryPasswordGenerator.generate();
         user.setPassword(passwordEncoder.encode(tempPassword));
@@ -338,6 +378,14 @@ public class UserAdminService {
                     "roles must contain at least one role");
         }
 
+        // Row locks FIRST, before any role is read (V44): SELECT ... FOR UPDATE on
+        // every requested role, in name order. A concurrent
+        // PUT /admin/roles/{name}/permissions that would turn one of them into a
+        // staff role waits for this commit — and then sees this account among
+        // the role's holders — instead of both checks passing against the old
+        // state. RoleGrantRaceIT pins it.
+        roleRepository.lockAllByNameIn(new java.util.TreeSet<>(requested));
+
         // Existence check against the roles table. This guard is LOAD-BEARING as
         // of V35 and did not need to exist before: roles used to deserialize
         // straight to the User.Role enum, so Jackson rejected an unknown name
@@ -415,8 +463,27 @@ public class UserAdminService {
         if (!removed.isEmpty()) {
             roleGrantGuard.requireMayManage(caller, user);
         }
+        java.util.List<com.innbucks.userservice.entity.Role> addedRows = added.isEmpty()
+                ? java.util.List.of() : roleRepository.findAllByNameIn(added);
         if (!added.isEmpty()) {
-            roleGrantGuard.requireMayAssign(caller, roleRepository.findAllByNameIn(added));
+            roleGrantGuard.requireMayAssign(caller, addedRows, user);
+        }
+
+        // Staff rules (V44). A profiled account holds only staff roles; and a
+        // staff role — NAMED, or granting a PLATFORM permission — may only be
+        // ADDED to a staff-eligible account (on an allowed domain, email proven
+        // by an invite). Removal is never refused on these grounds: taking
+        // authority away must always be possible.
+        staffEligibility.requireOnlyStaffRolesForProfiled(user, requested, adminEmail);
+        Set<String> staffAdded = new java.util.TreeSet<>();
+        for (String name : added) {
+            if (com.innbucks.userservice.security.StaffRoles.isNamed(name)) staffAdded.add(name);
+        }
+        for (com.innbucks.userservice.entity.Role row : addedRows) {
+            if (com.innbucks.userservice.security.StaffRoles.isStaffRole(row)) staffAdded.add(row.getName());
+        }
+        if (!staffAdded.isEmpty()) {
+            staffEligibility.requireEligibleForStaffGrant(user, adminEmail, staffAdded);
         }
 
         // Mutate the mapped collection in place rather than swapping the

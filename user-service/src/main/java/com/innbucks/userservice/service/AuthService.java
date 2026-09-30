@@ -103,6 +103,23 @@ public class AuthService implements ApplicationEventPublisherAware {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private OrganizationService organizationService;
 
+    /**
+     * Staff accounts (V44): registration reserves the staff email domains, an
+     * INVITED staff account is refused a session, and a profiled account never
+     * carries organization claims. Field-injected for the same reason as the
+     * collaborators above; null only in a plain unit test, where no account has
+     * a staff profile.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private StaffEligibility staffEligibility;
+
+    /**
+     * The mint-time eligibility filter (V44) — see {@link StaffMintFilter}. Null
+     * only in a plain unit test, where the token is minted unfiltered.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private StaffMintFilter staffMintFilter;
+
     /** Null-safe security-metric emit — no-op when SecurityMetrics isn't wired
      *  (plain unit tests). Keeps the call sites free of repeated null checks. */
     private void sec(java.util.function.Consumer<com.innbucks.userservice.config.SecurityMetrics> op) {
@@ -284,6 +301,21 @@ public class AuthService implements ApplicationEventPublisherAware {
     public AuthResponseDTO register(RegisterRequestDTO request) {
         log.info("Starting system user registration email={} defaultServices={}",
                 request.getEmail(), request.getDefaultServices());
+
+        // Registration creates business owners only; its roles come from
+        // defaultServices. A non-empty `roles` used to be dropped silently, so a
+        // console creating "staff" here got an organizer or merchant admin with
+        // an organization of their own. Refused now; absent or [] still accepted.
+        if (request.getRoles() != null && !request.getRoles().isEmpty()) {
+            log.warn("Registration refused — a roles list was sent email={}", request.getEmail());
+            throw com.innbucks.userservice.exception.StaffPolicyException.rolesNotAccepted();
+        }
+        // A staff address is never self-registered (V44). Checked BEFORE the
+        // duplicate-email check below, so registration cannot be used to find
+        // out which staff addresses exist.
+        if (staffEligibility != null) {
+            staffEligibility.requireEmailNotReserved(request.getEmail(), null, "register");
+        }
 
         Set<String> bundles = parseBundles(request.getDefaultServices());
         // Services.rolesFor still speaks the built-in Role enum — bundle-to-role
@@ -590,6 +622,19 @@ public class AuthService implements ApplicationEventPublisherAware {
         }
         if (!user.isActive()) {
             refuseInactiveLogin(user, auditContext);
+        }
+        // An INVITED staff account signs in only after redeeming its invite
+        // (V44) — refused here, before any mfaToken is handed out. A backstop:
+        // creation, adoption and reactivation all leave the account with an
+        // unusable password, so a correct one should never reach this line.
+        if (staffEligibility != null && staffEligibility.isInvitePending(user)) {
+            auditService.recordFailure(
+                    AuditEventType.AUTH_LOGIN_FAILURE,
+                    null, AuditService.ACTOR_TYPE_ANONYMOUS,
+                    String.valueOf(user.getId()), AuditService.TARGET_TYPE_USER,
+                    "staff_invite_pending", null, auditContext);
+            sec(m -> m.loginFailure("staff_invite_pending"));
+            throw new com.innbucks.userservice.exception.StaffInvitePendingException();
         }
 
         // Single-active-session: bump the token version BEFORE minting and
@@ -1081,6 +1126,7 @@ public class AuthService implements ApplicationEventPublisherAware {
             // customer added to an organization as STAFF — and the super app
             // has no enrolment flow to send them to.
             User rotated = rotation.user();
+            refuseInvitePendingRefresh(rotated);
             if (mfaPolicy != null
                     && !rotation.phoneProof()
                     && mfaPolicy.required(rotated, com.innbucks.userservice.security.AuthChannel.WEB)
@@ -1133,6 +1179,9 @@ public class AuthService implements ApplicationEventPublisherAware {
         } catch (com.innbucks.userservice.exception.AccountInactiveException ex) {
             recordInactiveRefresh(subject, false, auditContext);
             throw ex;
+        } catch (com.innbucks.userservice.exception.StaffInvitePendingException ex) {
+            recordInvitePendingRefresh(subject, false, auditContext);
+            throw ex;
         }
     }
 
@@ -1170,6 +1219,7 @@ public class AuthService implements ApplicationEventPublisherAware {
             RefreshTokenService.Rotation rotation =
                     refreshTokenService.rotateInto(refreshToken, deviceId, organizationId);
             User rotated = rotation.user();
+            refuseInvitePendingRefresh(rotated);
             if (mfaPolicy != null
                     && mfaPolicy.required(rotated, com.innbucks.userservice.security.AuthChannel.WEB)
                     && (!rotated.isMfaEnabled() || rotated.getMfaSecret() == null)) {
@@ -1209,7 +1259,43 @@ public class AuthService implements ApplicationEventPublisherAware {
         } catch (com.innbucks.userservice.exception.AccountInactiveException ex) {
             recordInactiveRefresh(subject, true, auditContext);
             throw ex;
+        } catch (com.innbucks.userservice.exception.StaffInvitePendingException ex) {
+            recordInvitePendingRefresh(subject, true, auditContext);
+            throw ex;
         }
+    }
+
+    /**
+     * A refresh (or organization switch) for an account whose staff invite is
+     * pending (V44). The authoritative check is inside the rotation
+     * ({@code RefreshTokenService}), ahead of replay detection and in its own
+     * writable transaction, where it also revokes every family; this one only
+     * makes sure no later check (the MFA guard below it) answers first where no
+     * rotation guard is wired. It writes NOTHING: this method runs outside any
+     * transaction, where a {@code @Modifying} revoke fails and the client would
+     * get a generic 400 instead of 401 {@code staff_invite_pending}.
+     */
+    private void refuseInvitePendingRefresh(User rotated) {
+        if (staffEligibility == null || !staffEligibility.isInvitePending(rotated)) return;
+        log.warn("Refresh refused — staff invite pending userId={}", rotated.getId());
+        throw new com.innbucks.userservice.exception.StaffInvitePendingException();
+    }
+
+    /**
+     * Audit row for a refresh or organization switch refused because the
+     * account is an INVITED staff account (V44). Raised by the rotation itself
+     * (ahead of replay detection, revoking every family), by
+     * {@link #refuseInvitePendingRefresh}, or by the mint.
+     */
+    private void recordInvitePendingRefresh(String subject, boolean organizationSwitch, AuditContext auditContext) {
+        auditService.recordFailure(
+                AuditEventType.AUTH_REFRESH_ACCOUNT_INACTIVE,
+                subject, AuditService.ACTOR_TYPE_USER,
+                subject, AuditService.TARGET_TYPE_USER,
+                "staff_invite_pending",
+                java.util.Map.of("organizationSwitch", organizationSwitch),
+                auditContext);
+        sec(m -> m.loginFailure("staff_invite_pending"));
     }
 
     private String safeRefreshSubject(String token) {
@@ -1237,7 +1323,14 @@ public class AuthService implements ApplicationEventPublisherAware {
         // transaction — and the next refresh re-validates it either way.
         UUID organizationId = organizationService == null
                 ? null : organizationService.defaultOrganizationFor(user);
-        return buildResponse(user, refreshToken, false, organizationId);
+        AuthResponseDTO response = buildResponse(user, refreshToken, false, organizationId);
+        // Every path through here is a sign-in that ends in a session — a
+        // password login without a second factor, a trusted-device skip, a 2FA
+        // verify, enrolment-complete — never the password step before the
+        // second factor, and never a refresh (which does not come here). Stamped
+        // only once the mint has succeeded, so a refused mint is no "sign-in".
+        stampLastSignIn(user);
+        return response;
     }
 
     /**
@@ -1274,6 +1367,26 @@ public class AuthService implements ApplicationEventPublisherAware {
         return buildResponse(user, refreshToken, true, null);
     }
 
+    /**
+     * {@code users.last_sign_in_at} (V44), by a targeted UPDATE so the sign-in
+     * never writes a stale snapshot of any other column back; the entity is
+     * updated in memory too.
+     *
+     * <p>Part of the sign-in's own transaction, NOT best-effort: a failure fails
+     * the sign-in like any other write in it. It cannot be split into a
+     * {@code REQUIRES_NEW} to make it best-effort — every path here has already
+     * bumped {@code token_version} on this same row (the password step's
+     * {@code bumpIfActive}, the second factor's {@code bumpIfCurrent}), so the
+     * caller holds the row lock and a second transaction updating the row would
+     * wait on its own caller forever.
+     */
+    private void stampLastSignIn(User user) {
+        if (user == null || user.getId() == null) return;
+        java.time.LocalDateTime now = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC);
+        userRepository.stampLastSignIn(user.getId(), now);
+        user.setLastSignInAt(now);
+    }
+
     private AuthResponseDTO buildResponse(User user, String refreshToken) {
         return buildResponse(user, refreshToken, false, null);
     }
@@ -1295,7 +1408,25 @@ public class AuthService implements ApplicationEventPublisherAware {
             log.warn("Mint refused — account is deactivated userId={}", user.getId());
             throw new com.innbucks.userservice.exception.AccountInactiveException();
         }
+        // A staff account whose invite is pending never gets a session (V44):
+        // the backstop for any path that did not refuse it earlier.
+        boolean profiled = false;
+        if (staffEligibility != null) {
+            java.util.Optional<StaffProfile> staffProfile = staffEligibility.profileOf(user);
+            if (staffProfile.isPresent() && staffProfile.get().isInvitePending()) {
+                log.warn("Mint refused — staff invite pending userId={}", user.getId());
+                throw new com.innbucks.userservice.exception.StaffInvitePendingException();
+            }
+            profiled = staffProfile.isPresent();
+        }
+        // The JWT subject: the email, else the phone. An account with neither
+        // cannot be issued a session — refused rather than minting a subjectless
+        // token that every filter would then reject as invalid.
         String subject = user.getEmail() != null ? user.getEmail() : user.getPhoneNumber();
+        if (subject == null || subject.isBlank()) {
+            log.error("Mint refused — account has no email and no phone userId={}", user.getId());
+            throw new InvalidCredentialsException();
+        }
 
         int tier;
         boolean verified;
@@ -1396,12 +1527,24 @@ public class AuthService implements ApplicationEventPublisherAware {
                 ? List.of()
                 : new ArrayList<>(permissionResolver.resolve(roleNames));
 
+        // The mint-time eligibility filter (V44): a holder of staff authority
+        // who is not staff-eligible is counted (watch) or has the PLATFORM codes
+        // and NAMED staff roles withheld (enforce). Whatever wrote the grant.
+        if (staffMintFilter != null) {
+            StaffMintFilter.Minted minted = staffMintFilter.apply(user, roleNames, permissions);
+            roleNames = minted.roles();
+            permissions = new ArrayList<>(minted.permissions());
+        }
+
         // Organization scope (V39): the business this session acts for. Withheld
         // on a phone proof for the same reason as merchantId / shopId / organizerUuid
         // above — it is authority phone possession does not establish.
         com.innbucks.userservice.security.OrgScope orgScope = null;
         boolean organizationSelectionRequired = false;
-        if (!phoneProof && organizationService != null) {
+        // Never for a staff account (V44), whatever organization_members holds:
+        // a support agent is never also a merchant or a seller. The backstop for
+        // any membership writer the staff rules missed.
+        if (!phoneProof && !profiled && organizationService != null) {
             orgScope = organizationService.scopeFor(user, organizationId).orElse(null);
             organizationSelectionRequired = organizationService.selectionRequired(user,
                     orgScope == null ? null : orgScope.orgId());

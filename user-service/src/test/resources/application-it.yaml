@@ -24,6 +24,12 @@ jwt:
 innbucks:
   internal-api-token: it-internal-token-it-internal-token
 
+# Staff accounts (V44): both staff domains, so the suites exercise the real rule
+# instead of the 503 an unconfigured cell answers.
+staff:
+  allowed-email-domains: innbucks.co.zw,innbucks.co.ke
+  console-base-url: https://foundry.innbucks.co.zw
+
 # Valid Base64 32-byte AES-GCM key so MfaSecretCipher constructs. Test-only.
 mfa:
   encryption-key: bWZhLXRlc3Qta2V5LTAwMDAwMDAwMDAwMDAwMDAtMzI=

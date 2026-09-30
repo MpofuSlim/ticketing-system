@@ -2020,4 +2020,90 @@ class AuthServiceTest {
                 mock(MfaService.class), mock(DeviceTrustService.class));
         return svc;
     }
+
+    // ------------------------------------------------------------------
+    // V44 staff accounts: an INVITED account never gets a session
+    // ------------------------------------------------------------------
+
+    private static com.innbucks.userservice.entity.StaffProfile invitedProfile(long userId) {
+        return com.innbucks.userservice.entity.StaffProfile.builder().userId(userId)
+                .createdAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC)).build();
+    }
+
+    /**
+     * The 2FA step (and enrolment-complete, which ends in the same
+     * {@code issueToken}) for a profiled account whose invite is unredeemed:
+     * the mint refuses with StaffInvitePendingException, and nothing is stamped
+     * as a sign-in.
+     */
+    @Test
+    void completeLoginWithMfa_forAnInvitedStaffAccount_theMintRefuses() {
+        UserRepository userRepo = mock(UserRepository.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        RefreshTokenService refreshTokenService = mock(RefreshTokenService.class);
+        User user = mfaSystemUser();
+        user.setRoles(User.roleNames(User.Role.CALL_CENTER_AGENT));
+        when(userRepo.findById(55L)).thenReturn(Optional.of(user));
+        when(refreshTokenService.issueNewFamily(any(), any())).thenReturn("refresh");
+
+        com.innbucks.userservice.security.MfaTokenService tokenService =
+                mock(com.innbucks.userservice.security.MfaTokenService.class);
+        when(tokenService.verifySubject("step1",
+                com.innbucks.userservice.security.MfaTokenService.Purpose.LOGIN_MFA))
+                .thenReturn(new com.innbucks.userservice.security.MfaTokenService.Subject(55L, 0L));
+        MfaService mfaService = mock(MfaService.class);
+        when(mfaService.verifyForLogin(user, "472938")).thenReturn(true);
+
+        AuthService svc = withLockoutConfig(new AuthService(userRepo, mock(TenantProfileRepository.class),
+                mock(CustomerProfileRepository.class), mock(PasswordEncoder.class), jwt,
+                mock(TokenRevocationService.class), refreshTokenService, mock(RefreshTokenRepository.class),
+                mock(AuditService.class)));
+        wireMfa(svc, realMfaPolicy(), tokenService, mfaService, mock(DeviceTrustService.class));
+        StaffEligibility eligibility = mock(StaffEligibility.class);
+        when(eligibility.profileOf(user)).thenReturn(Optional.of(invitedProfile(55L)));
+        org.springframework.test.util.ReflectionTestUtils.setField(svc, "staffEligibility", eligibility);
+
+        assertThrows(com.innbucks.userservice.exception.StaffInvitePendingException.class,
+                () -> svc.completeLoginWithMfa("step1", "472938", "my-dev", false, AuditContext.none()));
+        assertThrows(com.innbucks.userservice.exception.StaffInvitePendingException.class,
+                () -> svc.issueToken(user, "my-dev"));
+        verify(jwt, never()).generateToken(any(), any(), any(), any(), anyInt(), anyBoolean(), any(), any(),
+                any(), any(), any(), any(), anyLong(), any(), any(), any(), anyBoolean(), any());
+        verify(userRepo, never()).stampLastSignIn(anyLong(), any());
+    }
+
+    /**
+     * A refresh for an INVITED account (where the rotation's own guard is not
+     * wired): 401 staff_invite_pending, audited as such — and NO database write
+     * from AuthService, which runs outside a transaction here (a @Modifying
+     * revoke there failed and surfaced as a generic 400).
+     */
+    @Test
+    void refresh_forAnInvitedStaffAccount_is401_auditsIt_andWritesNothing() {
+        RefreshTokenService refreshTokenService = mock(RefreshTokenService.class);
+        RefreshTokenRepository refreshRepo = mock(RefreshTokenRepository.class);
+        AuditService audit = mock(AuditService.class);
+        JwtUtil jwt = mock(JwtUtil.class);
+        when(jwt.extractEmail("rt")).thenReturn("tariro.moyo@innbucks.co.zw");
+        User invited = User.builder().id(81L).email("tariro.moyo@innbucks.co.zw")
+                .roles(User.roleNames(User.Role.CALL_CENTER_AGENT)).active(true).mfaEnabled(false).build();
+        when(refreshTokenService.rotate("rt", "dev-1"))
+                .thenReturn(new RefreshTokenService.Rotation(invited, "rt2", false));
+        AuthService svc = withLockoutConfig(new AuthService(mock(UserRepository.class),
+                mock(TenantProfileRepository.class), mock(CustomerProfileRepository.class),
+                mock(PasswordEncoder.class), jwt, mock(TokenRevocationService.class),
+                refreshTokenService, refreshRepo, audit));
+        wireMfa(svc, realMfaPolicy(), mock(com.innbucks.userservice.security.MfaTokenService.class),
+                mock(MfaService.class), mock(DeviceTrustService.class));
+        StaffEligibility eligibility = mock(StaffEligibility.class);
+        when(eligibility.isInvitePending(invited)).thenReturn(true);
+        org.springframework.test.util.ReflectionTestUtils.setField(svc, "staffEligibility", eligibility);
+
+        // Staff-invite-pending, not the MFA guard's 403 that would otherwise answer first.
+        assertThrows(com.innbucks.userservice.exception.StaffInvitePendingException.class,
+                () -> svc.refresh("rt", "dev-1", AuditContext.none()));
+        verify(audit).recordFailure(eq(AuditEventType.AUTH_REFRESH_ACCOUNT_INACTIVE),
+                eq("tariro.moyo@innbucks.co.zw"), any(), any(), any(), eq("staff_invite_pending"), any(), any());
+        verifyNoInteractions(refreshRepo);
+    }
 }

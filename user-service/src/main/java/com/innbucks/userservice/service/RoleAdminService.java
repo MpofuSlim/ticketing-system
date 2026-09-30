@@ -78,6 +78,11 @@ public class RoleAdminService {
      * permission — the one writer of {@code token_version}.
      */
     private final TokenVersionBumper tokenVersionBumper;
+    /**
+     * Holder eligibility (V44): a role that gains platform authority may only do
+     * so while every account holding it is staff-eligible.
+     */
+    private final StaffEligibility staffEligibility;
 
     @Transactional(readOnly = true)
     public List<Role> list() {
@@ -116,7 +121,14 @@ public class RoleAdminService {
 
         Set<String> granted = validatePermissions(permissions, Set.of());
         // Every code on a new role is an ADDED code.
-        roleGrantGuard.requireMayGrant(roleGrantGuard.resolveCaller(adminEmail), granted);
+        roleGrantGuard.requireMayGrant(roleGrantGuard.resolveCaller(adminEmail), granted, normalized);
+        // user_roles has no FK to roles, so accounts may already hold this name
+        // as an orphan string — and a new STAFF role would hand every one of
+        // them platform authority the moment it is saved. They must all be
+        // staff-eligible first (400 staff_holders_ineligible).
+        if (com.innbucks.userservice.security.StaffRoles.isStaffRole(normalized, granted)) {
+            staffEligibility.requireHoldersEligible(normalized, adminEmail);
+        }
 
         Role role = Role.builder()
                 .name(normalized)
@@ -181,6 +193,11 @@ public class RoleAdminService {
     @Transactional
     public Role setPermissions(String name, Collection<String> permissions,
                                String adminEmail, AuditContext auditContext) {
+        // Row lock FIRST (V44), before the role is read: a concurrent
+        // PUT /admin/users/{id}/roles adding this role waits for this commit (or
+        // this waits for it), so the holder check below and its grant check never
+        // both pass against the old state. See RoleRepository.lockAllByNameIn.
+        roleRepository.lockAllByNameIn(List.of(normalize(name)));
         Role role = get(name);
         Set<String> granted = validatePermissions(permissions, role.getPermissions());
 
@@ -207,7 +224,15 @@ public class RoleAdminService {
         Set<String> removed = new LinkedHashSet<>(previous);
         removed.removeAll(granted);
         if (!added.isEmpty()) {
-            roleGrantGuard.requireMayGrant(roleGrantGuard.resolveCaller(adminEmail), added);
+            roleGrantGuard.requireMayGrant(roleGrantGuard.resolveCaller(adminEmail), added, role.getName());
+        }
+        // Adding a PLATFORM code (or making a business role a staff role) hands
+        // every current holder platform authority: each must be staff-eligible
+        // (400 staff_holders_ineligible, naming how many and why). An edit that
+        // only REMOVES codes is never refused on these grounds.
+        if (!added.isEmpty()
+                && StaffEligibility.makesStaffAuthority(role.getName(), previous, granted, added)) {
+            staffEligibility.requireHoldersEligible(role.getName(), adminEmail);
         }
 
         // Mutate in place: `permissions` is an @ElementCollection and Hibernate

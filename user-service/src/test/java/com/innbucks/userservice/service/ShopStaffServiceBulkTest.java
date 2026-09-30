@@ -67,7 +67,8 @@ class ShopStaffServiceBulkTest {
     void setUp() {
         service = new ShopStaffService(userRepository, passwordEncoder, loyaltyServiceClient,
                 eventPublisher, validator, selfProvider,
-                org.mockito.Mockito.mock(com.innbucks.userservice.repository.OrganizationMemberRepository.class));
+                org.mockito.Mockito.mock(com.innbucks.userservice.repository.OrganizationMemberRepository.class),
+                org.mockito.Mockito.mock(com.innbucks.userservice.service.StaffEligibility.class));
         ReflectionTestUtils.setField(service, "deploymentCountry", "ZW");
         // The bulk method calls createShopUser through the proxy; in the unit
         // test the "proxy" is the instance itself, so the real per-row logic runs.
@@ -108,6 +109,38 @@ class ShopStaffServiceBulkTest {
         // Two users saved, two onboarding credential deliveries dispatched.
         verify(userRepository, times(2)).save(any(User.class));
         verify(eventPublisher, times(2)).publishEvent(any(CredentialDeliveryRequested.class));
+    }
+
+    @Test
+    void staffDomainRow_failsWithItsOwnMessage_notUnexpectedError() {
+        // A typed StaffPolicyException (400 email_domain_reserved) is reported on
+        // the row with its client-facing message, like a ResponseStatusException.
+        com.innbucks.userservice.repository.RoleRepository roles =
+                org.mockito.Mockito.mock(com.innbucks.userservice.repository.RoleRepository.class);
+        service = new ShopStaffService(userRepository, passwordEncoder, loyaltyServiceClient,
+                eventPublisher, validator, selfProvider,
+                org.mockito.Mockito.mock(com.innbucks.userservice.repository.OrganizationMemberRepository.class),
+                com.innbucks.userservice.testsupport.StaffFixtures.eligibility(
+                        org.mockito.Mockito.mock(com.innbucks.userservice.repository.StaffProfileRepository.class),
+                        new RoleGrantGuard(userRepository, roles),
+                        org.mockito.Mockito.mock(com.innbucks.userservice.repository.OrganizationMemberRepository.class),
+                        org.mockito.Mockito.mock(com.innbucks.userservice.repository.OrganizationRepository.class),
+                        roles, userRepository));
+        ReflectionTestUtils.setField(service, "deploymentCountry", "ZW");
+        when(selfProvider.getObject()).thenReturn(service);
+        authenticateAsShopAdmin(SHOP, MERCHANT);
+        String csv = HEADER
+                + "Rufaro,T,Ncube,rufaro@shop.co.zw,+263772345678\n"
+                + "Tariro,,Moyo,tariro.moyo@innbucks.co.zw,+263772345679\n";
+
+        BulkShopUserResultDTO result = service.bulkImportShopUsersCsv(csv);
+
+        assertThat(result.created()).isEqualTo(1);
+        assertThat(result.failed()).isEqualTo(1);
+        BulkShopUserResultDTO.RowResult bad = result.results().get(1);
+        assertThat(bad.status()).isEqualTo("FAILED");
+        assertThat(bad.error())
+                .isEqualTo("InnBucks staff addresses can't be used here. Your administrator will invite you.");
     }
 
     @Test

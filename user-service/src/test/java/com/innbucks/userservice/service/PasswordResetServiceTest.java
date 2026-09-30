@@ -52,7 +52,7 @@ class PasswordResetServiceTest {
         service = new PasswordResetService(otpService, userRepository, passwordEncoder,
                 refreshTokenRepository, auditService, eventPublisher,
                 new com.innbucks.userservice.testsupport.InMemoryTokenVersionBumper(tokenVersionPublisher),
-                new RoleGrantGuard(userRepository, roleRepository));
+                new RoleGrantGuard(userRepository, roleRepository), org.mockito.Mockito.mock(com.innbucks.userservice.service.StaffEligibility.class));
     }
 
     // ---- requestReset --------------------------------------------------------

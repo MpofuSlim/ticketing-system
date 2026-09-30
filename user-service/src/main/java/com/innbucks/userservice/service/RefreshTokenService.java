@@ -2,7 +2,10 @@ package com.innbucks.userservice.service;
 
 import com.innbucks.userservice.entity.RefreshToken;
 import com.innbucks.userservice.entity.User;
+import com.innbucks.userservice.entity.StaffProfile;
 import com.innbucks.userservice.exception.AccountInactiveException;
+import com.innbucks.userservice.exception.StaffInvitePendingException;
+import com.innbucks.userservice.repository.StaffProfileRepository;
 import com.innbucks.userservice.repository.RefreshTokenRepository;
 import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.security.JwtUtil;
@@ -37,6 +40,13 @@ public class RefreshTokenService {
     private final RefreshTokenRepository refreshTokenRepository;
     private final UserRepository userRepository;
     private final JwtUtil jwtUtil;
+    /** Staff profiles (V44) — optional so plain unit tests can build this service without one. */
+    private StaffProfileRepository staffProfiles;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setStaffProfiles(StaffProfileRepository staffProfiles) {
+        this.staffProfiles = staffProfiles;
+    }
 
     public static class ReuseDetectedException extends RuntimeException {
         public ReuseDetectedException(String msg) { super(msg); }
@@ -126,7 +136,8 @@ public class RefreshTokenService {
     // commit. Without this, Spring would roll back the family-revocation
     // UPDATE and an attacker could keep replaying the stolen token. Same for
     // AccountInactiveException: the revocation it performs must survive the throw.
-    @Transactional(noRollbackFor = {ReuseDetectedException.class, AccountInactiveException.class})
+    @Transactional(noRollbackFor = {ReuseDetectedException.class, AccountInactiveException.class,
+            StaffInvitePendingException.class})
     public Rotation rotate(String rawToken, String deviceId) {
         return rotate(rawToken, deviceId, null, false);
     }
@@ -138,7 +149,8 @@ public class RefreshTokenService {
      * throws with the presented token still valid. A phone-proof session can
      * never be moved into an organization.
      */
-    @Transactional(noRollbackFor = {ReuseDetectedException.class, AccountInactiveException.class})
+    @Transactional(noRollbackFor = {ReuseDetectedException.class, AccountInactiveException.class,
+            StaffInvitePendingException.class})
     public Rotation rotateInto(String rawToken, String deviceId, UUID organizationId) {
         return rotate(rawToken, deviceId, organizationId, true);
     }
@@ -170,6 +182,17 @@ public class RefreshTokenService {
             log.warn("Refresh refused — account deactivated userId={} familyId={} rowsRevoked={}",
                     user.getId(), row.getFamilyId(), killed);
             throw new AccountInactiveException();
+        }
+        // Same for an INVITED staff account (V44), for the same reason: adoption
+        // and reactivation revoke every family, so behind the replay branch the
+        // holder of an adopted account's old session would read as a token thief
+        // (400) instead of being told to redeem the invite (401).
+        if (staffProfiles != null && staffProfiles.findById(user.getId())
+                .map(StaffProfile::isInvitePending).orElse(false)) {
+            int killed = refreshTokenRepository.revokeAllForUser(user.getId(), Instant.now());
+            log.warn("Refresh refused — staff invite pending userId={} familyId={} rowsRevoked={}",
+                    user.getId(), row.getFamilyId(), killed);
+            throw new StaffInvitePendingException();
         }
 
         if (row.getRevokedAt() != null) {

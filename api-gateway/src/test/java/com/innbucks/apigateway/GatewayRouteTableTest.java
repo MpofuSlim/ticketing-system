@@ -44,7 +44,7 @@ class GatewayRouteTableTest {
     private static final List<String> EXPECTED_ROUTE_IDS = List.of(
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
             "auth-otp-route", "auth-exchange-route", "auth-mfa-route", "auth-password-reset-route",
-            "auth-device-security-route",
+            "auth-device-security-route", "auth-staff-invite-route",
             "user-auth-route", "device-security-partner-route",
             "cells-lookup-route", "user-admin-route", "user-notifications-route",
             "user-organizations-route",
@@ -91,7 +91,7 @@ class GatewayRouteTableTest {
     private static final List<String> RATE_LIMITED_ROUTES = List.of(
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
             "auth-otp-route", "auth-exchange-route", "auth-mfa-route", "auth-password-reset-route",
-            "auth-device-security-route", "device-security-partner-route",
+            "auth-device-security-route", "auth-staff-invite-route", "device-security-partner-route",
             "user-admin-route", "user-notifications-route", "user-organizations-route",
             "user-event-organizer-route", "booking-event-organizer-reports-route",
             "user-self-route", "event-service-route",
@@ -115,6 +115,9 @@ class GatewayRouteTableTest {
     // (@resilientRedisRateLimiter) rather than RedisRateLimiter's fail-open one.
     private static final List<String> RESILIENT_LIMITED_ROUTES = List.of(
             "auth-register-route", "auth-otp-route", "auth-password-reset-route",
+            // Unauthenticated and redeems a single-use credential (V44): its
+            // per-IP cap must hold during a Redis outage.
+            "auth-staff-invite-route",
             // Unauthenticated and session-minting: the per-IP cap is the only
             // brake on hammering the replay guard and the find-or-create write.
             "auth-exchange-route",
@@ -419,7 +422,7 @@ class GatewayRouteTableTest {
         int catchAll = order.indexOf("user-auth-route");
         List.of("auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
                         "auth-otp-route", "auth-exchange-route", "auth-mfa-route", "auth-password-reset-route",
-                        "auth-device-security-route")
+                        "auth-device-security-route", "auth-staff-invite-route")
                 .forEach(id -> assertThat(order.indexOf(id))
                         .as("%s must match before the /auth/** catch-all", id)
                         .isBetween(0, catchAll - 1));
@@ -455,6 +458,11 @@ class GatewayRouteTableTest {
         assertThat(predicateArgs("auth-device-security-route", "Path"))
                 .containsExactly("/auth/client-service", "/auth/client-service/**", "/auth/devices",
                         "/auth/devices/**", "/auth/device/**");
+        // Staff invites (V44): the two public POSTs and nothing else — a GET
+        // under the prefix falls through to the catch-all and 404s upstream.
+        assertThat(predicateArgs("auth-staff-invite-route", "Path"))
+                .containsExactly("/auth/staff-invite/**");
+        assertThat(predicateArgs("auth-staff-invite-route", "Method")).containsExactly("POST");
     }
 
     @Test
@@ -494,7 +502,8 @@ class GatewayRouteTableTest {
         // hardcoded-IP resolver on all three routes so a refactor that swaps
         // the resolver back fails CI instead of reopening the bypass.
         List.of("auth-otp-route", "auth-mfa-route", "auth-password-reset-route",
-                "auth-device-security-route", "device-security-partner-route").forEach(id -> {
+                "auth-device-security-route", "auth-staff-invite-route",
+                "device-security-partner-route").forEach(id -> {
             boolean usesPreAuthIpResolver = route(id).getFilters().stream()
                     .filter(f -> "RequestRateLimiter".equals(f.getName()))
                     .flatMap(f -> f.getArgs().values().stream())

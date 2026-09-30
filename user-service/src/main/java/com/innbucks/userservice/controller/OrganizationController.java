@@ -277,7 +277,9 @@ public class OrganizationController {
                                     }
                                     """)})),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
-                    description = "No account with that email, or the caller is not a member of the organization",
+                    description = "No account with that email — which is also the answer for an InnBucks staff "
+                            + "address or staff account (staff never join a business, and the answer does not "
+                            + "reveal which addresses are staff) — or the caller is not a member of the organization",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "No such account", value = """
                                     {
@@ -295,13 +297,14 @@ public class OrganizationController {
                                     """)})),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
                     description = "Already a member",
-                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Already a member", value = """
                             {
                               "code": "409 CONFLICT",
                               "message": "That person is already a member of this organization.",
                               "data": { "errorCode": "already_member" }
                             }
-                            """)))
+                            """)}))
     })
     public ResponseEntity<ApiResult<OrganizationDTOs.MemberResponse>> addMember(
             Authentication authentication, @PathVariable UUID organizationId,
@@ -350,14 +353,23 @@ public class OrganizationController {
                             }
                             """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
-                    description = "Would leave the organization with no owner",
-                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                    description = "Would leave the organization with no owner, or the member is an InnBucks staff "
+                            + "account (can be removed, never given a role)",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "Last owner", value = """
                             {
                               "code": "409 CONFLICT",
                               "message": "An organization must keep at least one owner. Make someone else an owner first.",
                               "data": { "errorCode": "last_owner" }
                             }
-                            """)))
+                            """),
+                            @ExampleObject(name = "Staff account", value = """
+                            {
+                              "code": "409 CONFLICT",
+                              "message": "InnBucks staff accounts can't join a business or request products.",
+                              "data": { "errorCode": "staff_account_not_eligible" }
+                            }
+                            """)}))
     })
     public ResponseEntity<ApiResult<OrganizationDTOs.MemberResponse>> changeRole(
             Authentication authentication, @PathVariable UUID organizationId, @PathVariable UUID userUuid,

@@ -86,15 +86,24 @@ public class ShopStaffController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "400", description = "Validation failed, email/phone already registered, or shop not found",
+                    responseCode = "400", description = "Validation failed, email/phone already registered, shop not found, or an InnBucks staff address",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(value = """
+                            examples = {
+                                    @ExampleObject(name = "Rejected", value = """
                                     {
                                       "code": "400 BAD_REQUEST",
                                       "message": "Shop not found in loyalty-service",
                                       "data": null
                                     }
-                                    """))),
+                                    """),
+                                    @ExampleObject(name = "An InnBucks staff address", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "InnBucks staff addresses can't be used here. Your administrator will invite you.",
+                                      "data": { "errorCode": "email_domain_reserved", "field": "email" }
+                                    }
+                                    """)
+                            })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "403", description = "Shop belongs to a different merchant, or caller is not a MERCHANT_ADMIN",
                     content = @Content(mediaType = "application/json",
@@ -149,15 +158,24 @@ public class ShopStaffController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "400", description = "Validation failed, email/phone already registered, or caller has no shop scope",
+                    responseCode = "400", description = "Validation failed, email/phone already registered, caller has no shop scope, or an InnBucks staff address",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(value = """
+                            examples = {
+                                    @ExampleObject(name = "Rejected", value = """
                                     {
                                       "code": "400 BAD_REQUEST",
                                       "message": "Email already registered",
                                       "data": null
                                     }
-                                    """))),
+                                    """),
+                                    @ExampleObject(name = "An InnBucks staff address", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "InnBucks staff addresses can't be used here. Your administrator will invite you.",
+                                      "data": { "errorCode": "email_domain_reserved", "field": "email" }
+                                    }
+                                    """)
+                            })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "403", description = "Caller is not a SHOP_ADMIN",
                     content = @Content(mediaType = "application/json",

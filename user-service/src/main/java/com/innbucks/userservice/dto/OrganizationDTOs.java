@@ -151,4 +151,21 @@ public final class OrganizationDTOs {
 
     /** S2S: a person who may act for an organization (OWNER or ADMIN). */
     public record OrganizationAdmin(UUID userUuid, String email) {}
+
+    @Schema(name = "OrganizationSuspendRequest")
+    public record SuspendRequest(
+            @NotBlank(message = "note is required")
+            @Size(max = 1000, message = "note must not exceed 1000 characters")
+            @Schema(example = "Created through the console by mistake for Tariro Moyo's staff account (OPS-1187).",
+                    requiredMode = Schema.RequiredMode.REQUIRED,
+                    description = "Why the business is being suspended. Recorded on the audit trail.")
+            String note) {}
+
+    @Schema(name = "OrganizationSuspendResult")
+    public record SuspendResult(
+            @Schema(example = "7b1e2c4d-9f3a-4e5b-8c6d-0a1b2c3d4e5f") UUID organizationId,
+            @Schema(example = "Tariro Moyo") String name,
+            @Schema(example = "SUSPENDED") String status,
+            @Schema(example = "1", description = "Members whose sessions were ended so the organization's "
+                    + "claims drop at once.") int membersSignedOut) {}
 }

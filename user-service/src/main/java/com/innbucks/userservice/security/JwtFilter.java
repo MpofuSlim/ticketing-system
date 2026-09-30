@@ -69,11 +69,43 @@ public class JwtFilter extends OncePerRequestFilter {
      * predating the claim — it stops happening on its own as sessions turn over.
      */
     private List<String> permissionsFor(String token, List<String> roles) {
+        return authorityFor(token, null, roles).permissions();
+    }
+
+    /**
+     * The mint-time eligibility filter (V44), applied on the one path here that
+     * mints nothing: a token WITHOUT a {@code perms} claim, whose permissions are
+     * re-derived from its roles on every request. Without the filter, a grant to
+     * such a token's role would reach its holder with no mint at all — so an
+     * ineligible holder is counted (watch) or loses the PLATFORM codes and NAMED
+     * staff roles (enforce) here exactly as at {@code AuthService.buildResponse}.
+     * Optional so the unit tests that construct this filter need neither.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.innbucks.userservice.service.StaffMintFilter staffMintFilter;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.innbucks.userservice.repository.UserRepository userRepository;
+
+    /** Roles and permissions to authorize with — see {@link #permissionsFor}. */
+    private com.innbucks.userservice.service.StaffMintFilter.Minted authorityFor(String token, String subject,
+                                                                               List<String> roles) {
         List<String> claimed = jwtUtil.extractPermissions(token);
         if (!claimed.isEmpty() || roles.isEmpty() || permissionResolver == null) {
-            return claimed;
+            return new com.innbucks.userservice.service.StaffMintFilter.Minted(roles, claimed);
         }
-        return new ArrayList<>(permissionResolver.resolve(roles));
+        List<String> resolved = new ArrayList<>(permissionResolver.resolve(roles));
+        // Only a token carrying staff authority (a NAMED role name or a PLATFORM
+        // code) can be affected by the filter — so only then is the account read.
+        // A CUSTOMER / TEAM_MEMBER / business token costs no extra query, and
+        // never reaches the ineligible-holder metric.
+        if (staffMintFilter == null || userRepository == null || subject == null
+                || !StaffRoles.carriesStaffAuthority(roles, resolved)) {
+            return new com.innbucks.userservice.service.StaffMintFilter.Minted(roles, resolved);
+        }
+        com.innbucks.userservice.entity.User account = (subject.contains("@")
+                ? userRepository.findByEmail(subject)
+                : userRepository.findByPhoneNumber(subject)).orElse(null);
+        return staffMintFilter.apply(account, roles, resolved);
     }
 
     @Override
@@ -145,8 +177,10 @@ public class JwtFilter extends OncePerRequestFilter {
                 writePasswordChangeRequired(response);
                 return;
             }
-            List<String> roles = jwtUtil.extractRoles(token);
-            List<String> permissions = permissionsFor(token, roles);
+            com.innbucks.userservice.service.StaffMintFilter.Minted authority =
+                    authorityFor(token, email, jwtUtil.extractRoles(token));
+            List<String> roles = authority.roles();
+            List<String> permissions = authority.permissions();
             List<String> services = jwtUtil.extractServices(token);
             Integer tier = jwtUtil.extractTier(token);
             Boolean verified = jwtUtil.extractVerified(token);

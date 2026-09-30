@@ -41,7 +41,8 @@ class CustomerServiceTest {
                 mock(PasswordEncoder.class),
                 mock(OtpService.class),
                 new com.innbucks.userservice.security.NationalIdHasher("test-secret")
-        );
+        ,
+                org.mockito.Mockito.mock(com.innbucks.userservice.service.StaffEligibility.class));
     }
 
     private CustomerTier2RegisterDTO tier2Request(String msisdn) {

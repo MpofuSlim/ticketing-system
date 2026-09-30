@@ -540,6 +540,138 @@ user-service deactivation should switch loyalty off is loyalty's decision
   verifies; `SET LOCAL lock_timeout` makes it fail fast rather than queue
   behind live audit writers.
 
+## Staff accounts are INVITED, never registered (user-service V44)
+
+**An InnBucks staff account is created by `POST /admin/staff` (`staff:create`,
+wildcard-only) and becomes usable only when its invite is redeemed.** Before
+V44 the console made "staff" through `/auth/register`, which silently dropped
+the `roles` it sent and minted an organizer or merchant admin with a business of
+its own, approved by a temporary password mailed to whatever phone the form
+held. Now registration refuses a non-empty `roles` (400 `roles_not_accepted`;
+absent and `[]` still accepted) and every self-service email writer refuses a
+staff address.
+
+- **Staff-eligible** (`StaffEligibility`) = active, not SUPER_ADMIN, email on
+  `STAFF_ALLOWED_EMAIL_DOMAINS` (exact domain, `StaffEmailPolicy`), email PROVEN
+  (`users.email_verified_at`, set only by accepting an invite) and a
+  `staff_profiles` row whose invite was accepted. **Only a staff-eligible account
+  may newly gain staff authority**: a staff role through `setRoles`, a PLATFORM
+  code added to a role it holds (every holder but SUPER_ADMIN checked — 400
+  `staff_holders_ineligible` with counts, reasons and a sample), or a role
+  created under a name orphan `user_roles` strings already hold. REMOVING is
+  never refused on these grounds. Every refusal is audited
+  `STAFF_GRANT_REFUSED`. SUPER_ADMIN is exempt from all of it.
+- **A business built-in never becomes a staff role**: a PLATFORM code (or `*`)
+  on EVENT_ORGANIZER, MERCHANT_ADMIN, SHOP_ADMIN, SHOP_USER, TEAM_MEMBER or
+  CUSTOMER is 400 `permission_not_assignable` (`business_role`), whoever asks.
+  Registration + approval, shop-staff and team-member create and the OTP /
+  federation creators hand those roles out with NO eligibility check, so the
+  staff rules only hold while they grant nothing platform-wide.
+- **Both halves of a grant lock the `roles` rows first** (`RoleRepository
+  .lockAllByNameIn`, `SELECT … FOR UPDATE` in name order) — `setRoles`, role edits,
+  staff create and service-request approval. Without it, "give X role R" and "add
+  a PLATFORM code to R" each pass against the state the other has not committed
+  yet. `RoleGrantRaceIT` fails in its first round with the locks removed.
+- **The staff lifecycle locks the ACCOUNT row first** (`UserRepository.lockById`):
+  resend/adopt, deactivate, reactivate — and invite accept, which reads the
+  invite unlocked only to learn whose row to lock, THEN consumes it. One order
+  everywhere (users, then `staff_invites`), so two resends cannot leave two live
+  links (`StaffInviteLinkLifecycleIT`: four without the lock, one with it) and an
+  accept racing a deactivation cannot deadlock. Consuming first would invert the
+  order against a resend.
+- **The invite**: `STI-` + 32 random bytes, only the SHA-256 stored
+  (`staff_invites`), bound to the address it was sent to, 72h
+  (`STAFF_INVITE_TTL`), one use (a conditional `UPDATE … WHERE used_at IS NULL
+  AND revoked_at IS NULL AND expires_at > now`), revoked by deactivation,
+  reactivation, a resend and acceptance. The link is
+  `STAFF_CONSOLE_BASE_URL + STAFF_INVITE_PATH + "#token=STI-…"` — in the
+  FRAGMENT, so no browser sends it to a server or a log. It goes out through
+  the ordinary email path (`EmailNotificationClient`, SES then the notification
+  API) as a branded CTA button, AFTER COMMIT, reference `STAFF-INVITE-<id>`.
+  **Never log the link, the token or the body** — the mailer logs reference and
+  upstream status only, and the client withholds the upstream reply for any
+  email carrying a CTA. A replayed link is `STAFF_INVITE_REPLAYED`.
+  Unconfigured (no console URL, or no transport) is 503
+  `staff_invites_unconfigured` plus a HALF-PROVISIONED boot ERROR; no domains is
+  503 `staff_domains_unconfigured`.
+- **INVITED (profiled, `invite_accepted_at IS NULL`) cannot hold a session.**
+  Creation, adoption and reactivation all leave it an unusable password, so the
+  password step is the ordinary 400 (401 `staff_invite_pending` there is only a
+  backstop); refresh and organization switch are 401 `staff_invite_pending`
+  from the rotation itself, ahead of replay detection (same reason as
+  `account_inactive`) and in its own transaction — nothing outside it writes;
+  the mint refuses it; forgot and reset-password are no-ops for it by ANY
+  identifier (this also closes the shared-OTP-row path).
+- **Accepting strips the old sign-in material**: `users.phone_number` becomes
+  NULL (moved to `staff_profiles.contact_phone`), TOTP/backup codes/device trust
+  cleared, every session ended. **A staff account has no sign-in phone —
+  `users.phone_number` is nullable since V44, and every reader must be
+  null-safe.** Phone-based reset and the CUSTOMER creators (OTP, `/auth/exchange`)
+  match by phone, so they cannot reach a profiled account.
+- **Legacy staff are ADOPTED, not re-created**: `POST /admin/staff/{id}/resend-invite`
+  on a profile-less account creates the profile (INVITED at once), ends every
+  session AND replaces the password, clears the TOTP, backup codes and trusted
+  devices, then emails an invite — the squatter lockout: nothing the old holder
+  knew works again, even past the profile check. Refused 409
+  `adoption_blocked` (`holds_non_staff_roles` → remove them with `setRoles`;
+  `organization_member` → `POST /admin/organizations/{id}/suspend`,
+  `organizations:manage`; `off_domain` → demote). Reactivation also returns an
+  account to INVITED (unusable password, 2FA cleared, email unproven) — it never
+  restores the old credentials. **`PUT /admin/users/{id}/active` with `true` on
+  staff is 409 `use_staff_endpoints`**, and `reset-temp-password` on a profiled
+  or adoptable account is 409 `use_staff_invite`.
+- **Staff never belong to a business.** `changeRole` and service request
+  submit/approve refuse a staff account (409 `staff_account_not_eligible`);
+  `addMember` answers a staff account, or ANY staff-domain address, exactly like
+  an unknown email (404 `account_not_found`, still audited
+  `STAFF_GRANT_REFUSED`) so a business owner cannot probe which addresses are
+  staff; tier-2 refuses a staff account's phone in its own words. The mint
+  never puts `orgId`/`orgRole`/
+  `products` on a profiled account's token whatever `organization_members`
+  holds (`ProfiledAccountNeverGetsOrgClaimsIT`). Service-request approval that
+  adds a role now records `USER_ROLES_CHANGED`.
+- **A staff address is reserved** at every other `User.email` writer —
+  register, tier-2, shop-staff and team-member create, and the FIRST approval of
+  a registration — 400 `email_domain_reserved`, checked FIRST (before the
+  bootstrap-admin and duplicate checks) so none of them is an oracle for which
+  staff addresses exist, the platform admin's among them. Reserved
+  means the domain or any subdomain. `RoleWriterInventoryTest` lists every
+  writer of `User.roles`, `User.email`, memberships and products and fails on a
+  new one — decide guarded or unreachable, and write the reason there.
+- **The mint-time backstop** (`StaffMintFilter`, `AuthService.buildResponse` and
+  `JwtFilter`'s perms-less legacy path): an ineligible holder of staff authority
+  (a NAMED role name or a PLATFORM code) is counted on
+  `user.staff.ineligible_holder{reason}` in `STAFF_ELIGIBILITY_ENFORCEMENT=watch`
+  (the default), and in `enforce` has every PLATFORM code AND every NAMED role
+  name withheld (booking/event grant by name). Flip to `enforce` only once the
+  counter reads 0 — i.e. every legacy holder is adopted or demoted.
+  `user.staff.invariant_breach{kind}` (15-minute read-only job, deliberately no
+  lock) must stay 0.
+- **Config** (`deploy/cells/cell.<iso>.env`, committed): `STAFF_ALLOWED_EMAIL_DOMAINS`,
+  `STAFF_CONSOLE_BASE_URL` (`https://foundry.innbucks.co.zw`),
+  `STAFF_INVITE_PATH`, `STAFF_INVITE_TTL`, `STAFF_INVITE_RESEND_LIMIT` (5/24h,
+  429 `invite_resend_limited`), `STAFF_CREATE_DAILY_LIMIT` (20/24h per creator,
+  429 `staff_create_limited`), `STAFF_ELIGIBILITY_ENFORCEMENT`. On a live cell
+  add them to the `cell-zw` ConfigMap ONE KEY AT A TIME (`kubectl patch` /
+  `jq`), never a `--from-env-file` rebuild — see
+  `~/ticketing-system/deploy/PROD_UPGRADE_RUNBOOK.md` §5. **No mail change is
+  needed:** invites use the normal email path (SES where `MAIL_ENABLED=true`,
+  else the notification API — `BANK_API_*` must be configured). The public
+  `/auth/staff-invite/{inspect,accept}` ride the gateway's
+  `auth-staff-invite-route` (POST, IP-keyed fail-safe limiter, before
+  `user-auth-route`).
+- **Rollback caveat — a security regression, not a crash.** V44 is additive and
+  the previous image boots and signs in accounts with a NULL `phone_number`
+  (its sign-in paths are null-safe on the phone). What it does is IGNORE
+  `staff_profiles` and `email_verified_at`: an INVITED account — new, adopted or
+  reactivated — can set a password through forgot-password BY EMAIL without ever
+  redeeming its invite; the mint filter and every staff refusal (reserved
+  domain, eligibility, business role, no-business-for-staff) stop; and `/auth/staff-invite/**` is a 404, so pending
+  invites cannot be redeemed. Adopted accounts do NOT reopen to their previous
+  holder — adoption already replaced the password and cleared the TOTP. Roll
+  back only as an emergency, and re-invite the INVITED accounts after rolling
+  forward.
+
 ## Bookings carry WHO is coming (booking-service V22)
 
 `bookings.customer_name` is the purchaser's full name; `booking_items.attendee_*`
@@ -1117,13 +1249,10 @@ change. Check a timestamp fix under both `TZ=UTC` and `TZ=Africa/Harare`.
    typed `OffsetDateTime` and converted explicitly in `ScanReportService`,
    because they start as `Instant` rather than a UTC `LocalDateTime`.
 
-   **Not covered: payment-service.** It has no `UtcJsonTimeConfig` at all, so
-   its user-facing `/payments` and `/payments/ecocash` responses still serialize
-   `LocalDateTime` with Jackson's default — zoneless, no designator — including
-   `promptExpiresAt`, `paymentCodeExpiresAt` and `checkoutExpiresAt`, which a
-   customer reads while waiting to pay. It is market-pinned already
-   (`innbucks.country`, `CountryMdcConfig`), so widening it is the same three
-   files as the others; it is called out here rather than left to be discovered.
+   **payment-service is covered too** (#581): it has its own `UtcJsonTimeConfig`
+   + `MarketTimeZone` + `WireAudience`, so `promptExpiresAt`,
+   `paymentCodeExpiresAt` and `checkoutExpiresAt` reach the customer at the
+   market offset like every other human-facing timestamp.
 
 The remaining long-term step (LocalDateTime → Instant + `timestamptz`
 columns) is now invisible on the wire — the `Z` already ships — so it can

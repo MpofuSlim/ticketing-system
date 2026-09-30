@@ -70,7 +70,11 @@ public class AuthController {
                     "the role and the underlying microservice access. `ticketing` -> EVENT_ORGANIZER " +
                     "(events/seats/bookings/payments). `loyalty` -> MERCHANT_ADMIN (loyalty/payments). Picking " +
                     "both grants both. When `isBusiness` is true, `businessName`, `businessAddress` and " +
-                    "`bpoNumber` are required. Customers must use the tiered /auth/customer/register endpoints.")
+                    "`bpoNumber` are required. Customers must use the tiered /auth/customer/register endpoints.\n\n" +
+                    "**This is business self-sign-up only.** A non-empty `roles` list is refused (400 " +
+                    "`roles_not_accepted`) — staff accounts are created with `POST /admin/staff`; an absent or " +
+                    "empty `roles` is accepted. An address on an InnBucks staff domain is refused (400 " +
+                    "`email_domain_reserved`), checked before the duplicate-email check.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "201",
@@ -111,6 +115,20 @@ public class AuthController {
                                       "code": "400 BAD_REQUEST",
                                       "message": "Email already registered",
                                       "data": null
+                                    }
+                                    """),
+                            @ExampleObject(name = "A roles list was sent", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "Staff accounts are created by an administrator with POST /admin/staff.",
+                                      "data": { "errorCode": "roles_not_accepted", "field": "roles" }
+                                    }
+                                    """),
+                            @ExampleObject(name = "An InnBucks staff address", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "InnBucks staff addresses can't be used here. Your administrator will invite you.",
+                                      "data": { "errorCode": "email_domain_reserved", "field": "email" }
                                     }
                                     """)
                     }))
@@ -192,6 +210,19 @@ public class AuthController {
                                             """)
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid credentials or missing identifier"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
+                    description = "A staff account whose invite has not been redeemed. A backstop: creation, "
+                            + "adoption and reactivation all leave such an account with no usable password, so the "
+                            + "password step normally answers the ordinary 400 first. Send the person to their "
+                            + "invite email.",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Staff invite not yet redeemed", value = """
+                                    {
+                                      "code": "401 UNAUTHORIZED",
+                                      "message": "This account hasn't been set up yet. Use the invite link we emailed you to set a password.",
+                                      "data": { "errorCode": "staff_invite_pending" }
+                                    }
+                                    """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
                     description = "Account has been registered but not yet approved by a SUPER_ADMIN. " +
                             "Returned instead of a generic 400 so the caller knows the credentials " +
@@ -324,6 +355,13 @@ public class AuthController {
                                               "message": "This account has been deactivated. Contact your administrator to restore access.",
                                               "data": { "errorCode": "account_inactive" }
                                             }
+                                            """),
+                                    @ExampleObject(name = "Staff invite not yet redeemed", value = """
+                                            {
+                                              "code": "401 UNAUTHORIZED",
+                                              "message": "This account hasn't been set up yet. Use the invite link we emailed you to set a password.",
+                                              "data": { "errorCode": "staff_invite_pending" }
+                                            }
                                             """)
                             }))
     })
@@ -443,6 +481,13 @@ public class AuthController {
                                               "code": "401 UNAUTHORIZED",
                                               "message": "This account has been deactivated. Contact your administrator to restore access.",
                                               "data": { "errorCode": "account_inactive" }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Staff invite not yet redeemed", value = """
+                                            {
+                                              "code": "401 UNAUTHORIZED",
+                                              "message": "This account hasn't been set up yet. Use the invite link we emailed you to set a password.",
+                                              "data": { "errorCode": "staff_invite_pending" }
                                             }
                                             """)
                             }))
@@ -627,6 +672,13 @@ public class AuthController {
                                               "data": { "errorCode": "account_inactive" }
                                             }
                                             """),
+                                    @ExampleObject(name = "Staff invite not yet redeemed", value = """
+                                            {
+                                              "code": "401 UNAUTHORIZED",
+                                              "message": "This account hasn't been set up yet. Use the invite link we emailed you to set a password.",
+                                              "data": { "errorCode": "staff_invite_pending" }
+                                            }
+                                            """),
                                     @ExampleObject(name = "Missing bearer header", value = """
                                             {
                                               "code": "401 UNAUTHORIZED",
@@ -743,6 +795,13 @@ public class AuthController {
                                               "code": "401 UNAUTHORIZED",
                                               "message": "This account has been deactivated. Contact your administrator to restore access.",
                                               "data": { "errorCode": "account_inactive" }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Staff invite not yet redeemed", value = """
+                                            {
+                                              "code": "401 UNAUTHORIZED",
+                                              "message": "This account hasn't been set up yet. Use the invite link we emailed you to set a password.",
+                                              "data": { "errorCode": "staff_invite_pending" }
                                             }
                                             """),
                                     @ExampleObject(name = "Missing bearer header", value = """
@@ -1078,13 +1137,33 @@ public class AuthController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
-                    description = "Validation failure or no Tier-1 customer matches the supplied `msisdn`.",
+                    description = "Validation failure, no Tier-1 customer matches the supplied `msisdn`, or an "
+                            + "InnBucks staff address.",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(value = """
+                            examples = {
+                                    @ExampleObject(name = "No such customer", value = """
                                     {
                                       "code": "400 BAD_REQUEST",
                                       "message": "Customer not found for the supplied phone number",
                                       "data": null
+                                    }
+                                    """),
+                                    @ExampleObject(name = "An InnBucks staff address", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "InnBucks staff addresses can't be used here. Your administrator will invite you.",
+                                      "data": { "errorCode": "email_domain_reserved", "field": "email" }
+                                    }
+                                    """)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
+                    description = "The number belongs to an InnBucks staff account, whose email is never changed here.",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Staff account", value = """
+                                    {
+                                      "code": "409 CONFLICT",
+                                      "message": "This number belongs to an InnBucks staff account, which can't be registered as a customer.",
+                                      "data": { "errorCode": "staff_account_not_eligible" }
                                     }
                                     """)))
     })
@@ -1420,7 +1499,10 @@ public class AuthController {
                     built-in such as `PRODUCT_MANAGER` or `CALL_CENTER_AGENT`, or any role holding a
                     platform-wide permission) a request by `phoneNumber` sends nothing — same 200. A phone
                     on a staff account is a takeover path (a SIM swap, or a number left on a legacy
-                    account), so the console's reset screen should ask staff for their email.
+                    account), so the console's reset screen should ask staff for their email. The same
+                    holds for any account with a staff profile, and an INVITED staff account (invite not
+                    yet redeemed) is sent nothing by ANY identifier — it sets its first password through
+                    the invite link.
 
                     **Rate limit:** shares the OTP quota — at most 3 codes per identifier per 10-minute
                     window, then a 30-minute lockout (HTTP 429).
@@ -1466,8 +1548,9 @@ public class AuthController {
                     The confirm-match is checked BEFORE the OTP is consumed, so a typo in `confirmPassword`
                     lets the user retry with the same code.
 
-                    **Staff reset by email only:** by `phoneNumber`, an account holding a staff role always
-                    gets `400 Invalid or expired code`, whatever code is sent.
+                    **Staff reset by email only:** by `phoneNumber`, an account holding a staff role (or a
+                    staff profile) always gets `400 Invalid or expired code`, whatever code is sent; an
+                    INVITED staff account gets the same answer by ANY identifier.
                     """)
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200",
