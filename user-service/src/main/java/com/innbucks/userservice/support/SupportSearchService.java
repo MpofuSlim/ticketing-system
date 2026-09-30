@@ -74,6 +74,8 @@ public class SupportSearchService {
 
     static final String OP_SEARCH = "SEARCH";
     static final String OP_SEARCH_REFUSED = "SEARCH_REFUSED";
+    /** A valid query whose customer records could not be read (503 support_search_unavailable). */
+    static final String OP_SEARCH_FAILED = "SEARCH_FAILED";
 
     /** Sections this build has, in response order, with the permission each is read with. */
     static final Map<String, String> SECTIONS = new LinkedHashMap<>();
@@ -127,8 +129,24 @@ public class SupportSearchService {
         LocalDateTime now = LocalDateTime.now(clock);
         List<String> visible = SECTIONS.entrySet().stream()
                 .filter(e -> agent.holds(e.getValue())).map(Map.Entry::getKey).toList();
+        // What the agent may learn about CONSOLE accounts (identity warnings, the
+        // staff flag) follows the console section: an agent who can't see it
+        // must not learn of those accounts through a side channel.
+        boolean consoleVisible = visible.contains(ConsoleSupportSection.NAME);
 
-        Resolution r = resolve(query);
+        // Resolving the query and the staff check read the records every section
+        // is built from. With no answer there is no section to show as
+        // UNAVAILABLE, so the search is refused — 503, and still logged.
+        Resolution r;
+        Set<UUID> staff;
+        try {
+            r = resolve(query);
+            staff = staffTargets.staffAccounts(r.keys());
+        } catch (DeviceSecurityException e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw searchUnavailable(agent, query, clientIp, e);
+        }
         Map<String, SectionView<?>> sections = new LinkedHashMap<>();
         Map<String, List<String>> targets = new LinkedHashMap<>();
         List<String> notShown = new ArrayList<>();
@@ -154,9 +172,14 @@ public class SupportSearchService {
                     continue;
                 }
                 if (ConsoleSupportSection.NAME.equals(name)) {
-                    List<User> consoleAccounts = r.accounts.stream().filter(console::isConsoleAccount).toList();
-                    sections.put(name, safely(name, () -> console.section(consoleAccounts, matchedBy, agent, now)));
-                    targets.put(name, consoleAccounts.stream().map(u -> String.valueOf(u.getId())).toList());
+                    // Which accounts are console accounts is itself a read: inside
+                    // safely(), so an outage renders this section UNAVAILABLE.
+                    SectionView<?> section = safely(name, () -> console.section(
+                            r.accounts.stream().filter(console::isConsoleAccount).toList(), matchedBy, agent, now));
+                    sections.put(name, section);
+                    // Full views only: a staff stub's account is never a target, so
+                    // no detail read or write can be aimed at it (404 target_not_found).
+                    targets.put(name, ConsoleSupportSection.targets(section));
                 } else {
                     // A phone searched is matched by phone; the phones of an
                     // emailed account are matched through the email.
@@ -167,21 +190,28 @@ public class SupportSearchService {
         }
 
         SupportCustomerKeys keys = r.keys();
-        Set<UUID> staff = staffTargets.staffAccounts(keys);
         boolean staffAccount = !staff.isEmpty();
 
-        List<IdentityWarning> warnings = warnings(query, r, visible);
-        CustomerView customer = customer(query, sections, r);
+        List<IdentityWarning> warnings = consoleVisible && query.kind() != Kind.DTX_REFERENCE
+                ? degrade("identity warnings", () -> warnings(query, r), () -> List.of(IDENTITY_CHECK_UNAVAILABLE))
+                : List.of();
+        CustomerView customer = degrade("customer name", () -> customer(query, sections, r, true),
+                () -> customer(query, sections, r, false));
         String lookupId = record(agent, query, keys, sections.keySet(), targets, staffAccount, clientIp, now);
         if (staffAccount) {
+            // The alert fires whoever looked; only the RESPONSE flag follows the console section.
             metrics.staffTargetLookup();
             log.warn("Support lookup matched an InnBucks STAFF account lookupId={} agent={} staffUserUuids={}",
                     lookupId, agent.userUuid(), staff);
         }
         metrics.lookup("ok");
         return new SearchResult(lookupId, new QueryView(query.kind().name(), query.value()), customer, warnings,
-                sections, focus, notShown, staffAccount);
+                sections, focus, notShown, staffAccount && consoleVisible);
     }
+
+    static final IdentityWarning IDENTITY_CHECK_UNAVAILABLE = new IdentityWarning("identity_check_unavailable",
+            "We couldn't check whether this phone number or email is on other accounts. Confirm the caller's "
+                    + "details before acting.");
 
     static void requireEnabled(SupportProperties properties) {
         if (!properties.isEnabled()) throw SupportPolicyException.supportDisabled();
@@ -209,7 +239,7 @@ public class SupportSearchService {
                 .op(OP_SEARCH_REFUSED)
                 .outcome(refusal.getErrorCode())
                 .agentUserUuid(agent.userUuid())
-                .agentSubject(agent.subject())
+                .agentSubject(SupportAccessLogWriter.subject(agent.subject()))
                 .queryKind(query.kind().name())
                 .clientIpUntrusted(truncate(clientIp, 64))
                 .build());
@@ -249,18 +279,27 @@ public class SupportSearchService {
         }
     }
 
+    /**
+     * Resolves the query to accounts and the phones the app section reads. A
+     * STAFF account (SUPER_ADMIN included) still counts as found — its keys
+     * drive the staff flag and the write-time check — but it lends the app
+     * section nothing: an emailed staff account's sign-in phone is not listed,
+     * and a staff account using a searched number is not attached to it (its
+     * name and profile stay out of the response, like the console stub's).
+     */
     private Resolution resolve(Query query) {
         Resolution r = new Resolution(query);
         switch (query.kind()) {
             case PHONE -> {
                 Optional<User> account = users.findByPhoneNumber(query.value());
                 account.ifPresent(r.accounts::add);
-                r.phones.put(query.value(), account);
+                r.phones.put(query.value(), account.filter(u -> !staffTargets.isStaffAccount(u)));
             }
             case EMAIL -> {
                 r.accounts.addAll(users.findAllByEmailIgnoreCase(query.value()));
                 for (User u : r.accounts) {
-                    if (u.getPhoneNumber() != null && !r.phones.containsKey(u.getPhoneNumber())) {
+                    if (u.getPhoneNumber() != null && !r.phones.containsKey(u.getPhoneNumber())
+                            && !staffTargets.isStaffAccount(u)) {
                         r.phones.put(u.getPhoneNumber(), Optional.of(u));
                     }
                 }
@@ -271,7 +310,7 @@ public class SupportSearchService {
                     r.referenceFound = true;
                     Optional<User> account = users.findByPhoneNumber(found.msisdn());
                     account.ifPresent(r.accounts::add);
-                    r.phones.put(found.msisdn(), account);
+                    r.phones.put(found.msisdn(), account.filter(u -> !staffTargets.isStaffAccount(u)));
                 } catch (DeviceSecurityException e) {
                     if (e.getStatus() != HttpStatus.NOT_FOUND) throw e;
                     r.referenceFound = false;
@@ -280,6 +319,39 @@ public class SupportSearchService {
             default -> throw new IllegalStateException("unsearchable kind " + query.kind());
         }
         return r;
+    }
+
+    /**
+     * 503 {@code support_search_unavailable}, with a best-effort row: the query
+     * was valid, so its kind and MASKED form are recorded (never the keys — none
+     * were resolved).
+     */
+    private SupportPolicyException searchUnavailable(SupportAgent agent, Query query, String clientIp,
+                                                     RuntimeException cause) {
+        log.error("Support search could not read the customer records: {}", cause.getClass().getSimpleName());
+        SupportPolicyException refusal = SupportPolicyException.searchUnavailable();
+        metrics.lookup(refusal.getErrorCode());
+        accessLog.bestEffort(SupportAccessLog.builder()
+                .createdAt(LocalDateTime.now(clock))
+                .op(OP_SEARCH_FAILED)
+                .outcome(refusal.getErrorCode())
+                .agentUserUuid(agent.userUuid())
+                .agentSubject(SupportAccessLogWriter.subject(agent.subject()))
+                .queryKind(query.kind().name())
+                .queryMasked(SupportMasking.query(query))
+                .clientIpUntrusted(truncate(clientIp, 64))
+                .build());
+        return refusal;
+    }
+
+    /** A read the response can do without: logged, then the fallback. */
+    private <T> T degrade(String what, java.util.function.Supplier<T> call, java.util.function.Supplier<T> fallback) {
+        try {
+            return call.get();
+        } catch (RuntimeException e) {
+            log.error("Support search: {} could not be read: {}", what, e.getClass().getSimpleName());
+            return fallback.get();
+        }
     }
 
     private <T> SectionView<?> safely(String name, java.util.function.Supplier<SectionView<T>> build) {
@@ -300,13 +372,16 @@ public class SupportSearchService {
      * Built ONLY from sections the agent can see: a field is filled when the
      * searched key names it, or when every visible account agrees on one value.
      */
-    private CustomerView customer(Query query, Map<String, SectionView<?>> sections, Resolution r) {
+    private CustomerView customer(Query query, Map<String, SectionView<?>> sections, Resolution r,
+                                  boolean withProfiles) {
         Set<String> phones = new LinkedHashSet<>();
         Set<String> emails = new LinkedHashSet<>();
         Set<String> names = new LinkedHashSet<>();
         if (sections.get(ConsoleSupportSection.NAME) instanceof SectionView<?> s
                 && s.data() instanceof ConsoleSectionData data) {
-            for (ConsoleAccountView a : data.accounts()) {
+            for (var entry : data.accounts()) {
+                // A staff stub carries nothing to take.
+                if (!(entry instanceof ConsoleAccountView a)) continue;
                 if (a.phone() != null) phones.add(a.phone());
                 if (a.email() != null) emails.add(a.email().toLowerCase(Locale.ROOT));
                 if (a.name() != null) names.add(a.name());
@@ -317,11 +392,13 @@ public class SupportSearchService {
             for (InnbucksAppPhoneView p : data.phones()) {
                 phones.add(p.msisdn());
                 Optional<User> account = r.phones.getOrDefault(p.msisdn(), Optional.empty());
-                account.flatMap(u -> customerProfiles.findByUserId(u.getId()))
-                        .map(cp -> cp.getFullName())
-                        .filter(n -> n != null && !n.isBlank())
-                        .ifPresentOrElse(names::add, () -> account.map(ConsoleSupportSection::name)
-                                .ifPresent(names::add));
+                Optional<String> profileName = withProfiles
+                        ? account.flatMap(u -> customerProfiles.findByUserId(u.getId()))
+                                .map(cp -> cp.getFullName())
+                                .filter(n -> n != null && !n.isBlank())
+                        : Optional.empty();
+                profileName.ifPresentOrElse(names::add, () -> account.map(ConsoleSupportSection::name)
+                        .ifPresent(names::add));
             }
         }
         String phone = query.kind() == Kind.PHONE ? query.value() : (phones.size() == 1 ? phones.iterator().next() : null);
@@ -330,9 +407,9 @@ public class SupportSearchService {
         return new CustomerView(phone, email, name);
     }
 
-    private List<IdentityWarning> warnings(Query query, Resolution r, List<String> visible) {
+    /** Called only for an agent who can see the console section, and never for a reference search. */
+    private List<IdentityWarning> warnings(Query query, Resolution r) {
         List<IdentityWarning> out = new ArrayList<>();
-        if (visible.isEmpty() || query.kind() == Kind.DTX_REFERENCE) return out;
         if (r.accounts.size() > 1) {
             out.add(new IdentityWarning("multiple_accounts", "This " + (query.kind() == Kind.EMAIL ? "email" : "number")
                     + " is on " + r.accounts.size() + " accounts. Check which one the caller means before acting."));
@@ -369,13 +446,13 @@ public class SupportSearchService {
         for (int attempt = 0; ; attempt++) {
             String lookupId = SupportLookupIds.next();
             try {
-                accessLog.required(SupportAccessLog.builder()
+                accessLog.requiredWithUniqueLookupId(SupportAccessLog.builder()
                         .createdAt(now)
                         .lookupId(lookupId)
                         .op(OP_SEARCH)
                         .outcome("OK")
                         .agentUserUuid(agent.userUuid())
-                        .agentSubject(agent.subject())
+                        .agentSubject(SupportAccessLogWriter.subject(agent.subject()))
                         .queryKind(query.kind().name())
                         .queryMasked(SupportMasking.query(query))
                         .customerKeys(keysJson)

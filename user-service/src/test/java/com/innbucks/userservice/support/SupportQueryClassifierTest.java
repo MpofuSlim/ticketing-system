@@ -107,12 +107,30 @@ class SupportQueryClassifierTest {
             "9087 8765 9876 4566",       // a 16-digit voucher code, as the customer reads it
             "9087876598764566",
             "3782822463100051234",       // 19 digits
-            "0027712345678",             // 13 digits: card-shaped wins over a phone (T15)
             "(0771) 234-567-890-12"      // brackets and dashes are removed before the digit test
     })
     @DisplayName("row 9: 13-19 digits are a card or voucher number — refused, whatever else they resemble")
     void cardAndVoucherDigitsAreRefused(String typed) {
         assertThat(c(typed)).isEqualTo(new Query(Kind.NOT_ACCEPTED, null));
+    }
+
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+            "00263771234567, +263771234567",       // 14 digits: the international prefix, not a card
+            "00263 77 123 4567, +263771234567",
+            "0027712345678, +27712345678",         // 13 digits (South Africa)
+            "00-254-712-345678, +254712345678"
+    })
+    @DisplayName("C3: a leading 00 is the international prefix — rewritten to + BEFORE the card rule, so it's a phone")
+    void internationalPrefixIsAPhone(String typed, String e164) {
+        assertThat(c(typed)).isEqualTo(new Query(Kind.PHONE, e164));
+    }
+
+    @Test
+    @DisplayName("C3: the card refusal tells the agent to type a phone number with its country code")
+    void cardRefusalSaysHowToTypeAPhone() {
+        assertThat(com.innbucks.userservice.exception.SupportPolicyException.QUERY_NOT_ACCEPTED_MESSAGE)
+                .contains("+263771234567").contains("country code");
     }
 
     @ParameterizedTest

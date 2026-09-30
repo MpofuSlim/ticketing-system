@@ -44,22 +44,52 @@ public class SupportAccessLogWriter {
         this.requiresNew.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
+    /** {@code agent_subject} is VARCHAR(254); a subject is an email (users.email is 255) or a phone. */
+    public static final int SUBJECT_MAX = 254;
+
+    /** The agent subject as the column holds it: never null, never longer than {@link #SUBJECT_MAX}. */
+    public static String subject(String subject) {
+        if (subject == null) return "anonymous";
+        return subject.length() <= SUBJECT_MAX ? subject : subject.substring(0, SUBJECT_MAX);
+    }
+
     /**
-     * Writes the row or refuses the call. A duplicate lookup id is rethrown as
-     * {@link DataIntegrityViolationException} so the search can issue another.
+     * Writes the row or refuses the call — every failure, a constraint
+     * violation included, is 503 {@code support_log_unavailable}. For every
+     * caller except the search's lookup-id draw ({@link #requiredWithUniqueLookupId}).
      *
      * @throws SupportPolicyException 503 {@code support_log_unavailable}
      */
     public void required(SupportAccessLog row) {
         try {
             requiresNew.executeWithoutResult(status -> repository.saveAndFlush(row));
+        } catch (RuntimeException e) {
+            throw unavailable(row, e);
+        }
+    }
+
+    /**
+     * {@link #required} for the SEARCH row, whose lookup id is drawn at random
+     * against a unique index: a {@link DataIntegrityViolationException} is
+     * rethrown so the search can draw another id. Every other failure is 503.
+     *
+     * @throws DataIntegrityViolationException the row broke a constraint (normally: the id was taken)
+     * @throws SupportPolicyException          503 {@code support_log_unavailable}
+     */
+    public void requiredWithUniqueLookupId(SupportAccessLog row) {
+        try {
+            requiresNew.executeWithoutResult(status -> repository.saveAndFlush(row));
         } catch (DataIntegrityViolationException e) {
             throw e;
         } catch (RuntimeException e) {
-            log.error("SUPPORT_ACCESS_LOG_WRITE_FAILED (required — the read is refused) op={} reason={}",
-                    row.getOp(), e.getClass().getSimpleName());
-            throw SupportPolicyException.logUnavailable();
+            throw unavailable(row, e);
         }
+    }
+
+    private static SupportPolicyException unavailable(SupportAccessLog row, RuntimeException e) {
+        log.error("SUPPORT_ACCESS_LOG_WRITE_FAILED (required — the read is refused) op={} reason={}",
+                row.getOp(), e.getClass().getSimpleName());
+        return SupportPolicyException.logUnavailable();
     }
 
     /** Writes the row if it can; never throws. */

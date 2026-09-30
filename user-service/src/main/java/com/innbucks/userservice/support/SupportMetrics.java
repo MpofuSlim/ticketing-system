@@ -20,6 +20,11 @@ import org.springframework.stereotype.Component;
  *       effective limit is multiplied by the number of replicas. Alerted.</li>
  *   <li>{@code user.support.staff_target_lookup} — a lookup whose resolved keys
  *       match an InnBucks staff account. Alerted.</li>
+ *   <li>{@code user.support.reset_delivery{outcome}} — the after-commit send of a
+ *       support-requested password-reset email: {@code sent} or {@code failed}.
+ *       The agent's response cannot know this (it is written before the send),
+ *       so a run of {@code failed} is the only signal that callers are waiting
+ *       for codes that never come.</li>
  * </ul>
  */
 @Component
@@ -51,6 +56,10 @@ public class SupportMetrics {
 
     public void limiterDegraded(String op) {
         increment("user.support.limiter.degraded", "op", op);
+    }
+
+    public void resetDelivery(String outcome) {
+        increment("user.support.reset_delivery", "outcome", outcome);
     }
 
     public void staffTargetLookup() {

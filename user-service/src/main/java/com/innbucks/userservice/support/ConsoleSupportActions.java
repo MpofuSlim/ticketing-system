@@ -1,11 +1,9 @@
 package com.innbucks.userservice.support;
 
-import com.innbucks.userservice.client.NotificationDeliveryException;
 import com.innbucks.userservice.entity.Organization;
 import com.innbucks.userservice.entity.OrganizationMember;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.event.SupportMfaResetNotice;
-import com.innbucks.userservice.exception.StaffPolicyException;
 import com.innbucks.userservice.exception.SupportPolicyException;
 import com.innbucks.userservice.repository.OrganizationMemberRepository;
 import com.innbucks.userservice.repository.OrganizationRepository;
@@ -17,8 +15,8 @@ import com.innbucks.userservice.service.AuditService;
 import com.innbucks.userservice.service.MfaService;
 import com.innbucks.userservice.service.OtpService;
 import com.innbucks.userservice.service.PasswordResetService;
-import com.innbucks.userservice.service.RoleGrantGuard;
 import com.innbucks.userservice.support.dto.SupportDTOs.ActionResult;
+import com.innbucks.userservice.support.dto.SupportDTOs.ConsoleAccountEntry;
 import com.innbucks.userservice.support.dto.SupportDTOs.ConsoleAccountView;
 import com.innbucks.userservice.support.dto.SupportDTOs.WriteRequest;
 import lombok.extern.slf4j.Slf4j;
@@ -32,6 +30,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -40,6 +39,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.UUID;
 
@@ -68,12 +68,20 @@ import java.util.UUID;
  *       the key returns the stored outcome ({@code replayed: true}) and acts
  *       nothing twice. A concurrent repeat waits on the unique index and is then
  *       answered from the first request's row.</li>
- *   <li><b>Act</b>, in one transaction with the account row locked.</li>
+ *   <li><b>Act</b>, in one transaction with the account row locked — on an
+ *       account that is, on that fresh read, neither staff (403
+ *       {@code console_staff_account}) nor deactivated or pending approval (409
+ *       {@code account_inactive}).</li>
  *   <li><b>Seal</b>: {@code SUPPORT_CONSOLE_*} via {@link AuditService#recordRequired},
  *       the transaction's LAST statement — an in-process write that cannot be
- *       recorded is not made (503 {@code audit_unavailable}).</li>
+ *       recorded is not made (503 {@code audit_unavailable}). Every message the
+ *       action causes (the reset email, the owners' notice, the account's alert)
+ *       leaves only AFTER this commit, so a refused seal sends nothing.</li>
  *   <li><b>Tell</b> the agent what happens next, in a server-rendered sentence.</li>
  * </ol>
+ *
+ * <p>Before any of it, the note: sealed cleaned ({@link MfaService#cleanNote}),
+ * and one with nothing left once cleaned is 400 {@code note_required}.
  */
 @Service
 @Slf4j
@@ -117,14 +125,25 @@ public class ConsoleSupportActions {
             + "to wait a minute and try once more.";
     static final String NOT_LOCKED_NEXT = "This account wasn't locked, so nothing changed. If the caller still can't "
             + "sign in, check the email they use or send a reset code.";
-    static final String MFA_RESET_NEXT = "Two-factor sign-in is off for this account and every session it had open "
-            + "has ended. At their next sign-in they'll be asked to set it up again. We've emailed the account and "
-            + "the owners of its businesses about this change.";
+    private static final String MFA_RESET_DONE = "Two-factor sign-in is off for this account and every session it "
+            + "had open has ended. At their next sign-in they'll be asked to set it up again. ";
+    /** After an MFA reset that emailed at least one other owner of the account's businesses. */
+    static final String MFA_RESET_NEXT = MFA_RESET_DONE + "We've sent the account a security alert and emailed the "
+            + "other owners of its businesses.";
+    /** After an MFA reset with no other owner on file to tell. */
+    static final String MFA_RESET_NEXT_NO_OWNERS = MFA_RESET_DONE + "We've sent the account a security alert. No "
+            + "business owner was emailed: its businesses have no other owner with an email on file.";
 
+    /**
+     * The code goes out AFTER the action commits and is sealed, off the request
+     * thread — so this sentence says the email is on its way, never that it
+     * arrived: the response is written before delivery is known.
+     */
     static String resetSentNext(String email) {
-        return "We've emailed a password-reset code to " + email + ". It works for "
+        return "We're emailing a password-reset code to " + email + " now. It works for "
                 + OtpService.OTP_TTL.toMinutes() + " minutes: ask the caller to choose Forgot password on the "
-                + "Foundry sign-in page, enter this email, then the code.";
+                + "Foundry sign-in page, enter this email, then the code. If it hasn't arrived within a couple of "
+                + "minutes, ask them to check their spam folder before you send another.";
     }
 
     private final SupportLookupLimiter limiter;
@@ -139,7 +158,6 @@ public class ConsoleSupportActions {
     private final OrganizationRepository organizations;
     private final MfaService mfaService;
     private final PasswordResetService passwordResetService;
-    private final RoleGrantGuard roleGrantGuard;
     private final AuditService auditService;
     private final ApplicationEventPublisher events;
     private final SupportProperties properties;
@@ -151,7 +169,7 @@ public class ConsoleSupportActions {
                                  SupportAccessLogWriter accessLog, SupportMetrics metrics, ConsoleSupportSection console,
                                  UserRepository users, OrganizationMemberRepository members,
                                  OrganizationRepository organizations, MfaService mfaService,
-                                 PasswordResetService passwordResetService, RoleGrantGuard roleGrantGuard,
+                                 PasswordResetService passwordResetService,
                                  AuditService auditService, ApplicationEventPublisher events,
                                  SupportProperties properties, PlatformTransactionManager transactionManager,
                                  @Qualifier("supportClock") Clock supportClock) {
@@ -167,7 +185,6 @@ public class ConsoleSupportActions {
         this.organizations = organizations;
         this.mfaService = mfaService;
         this.passwordResetService = passwordResetService;
-        this.roleGrantGuard = roleGrantGuard;
         this.auditService = auditService;
         this.events = events;
         this.properties = properties;
@@ -180,20 +197,31 @@ public class ConsoleSupportActions {
     /**
      * {@code GET /admin/support/console-users/{id}?lookupId=} — the account as it
      * is now, bound to the lookup like a write (so an id from outside the lookup
-     * is simply not found), counted and logged fail-closed like a search.
+     * is simply not found), counted and logged fail-closed like a search. An
+     * account that has become a staff account since the search is refused (403
+     * {@code console_staff_account}) on a FRESH read — never shown. Every refusal
+     * is access-logged, best-effort.
      */
     public ConsoleAccountView detail(SupportAgent agent, Long userId, String lookupId, String clientIp) {
         SupportSearchService.requireEnabled(properties);
         limiter.acquire(agent);
-        SupportLookupBinding.Bound bound;
+        SupportLookupBinding.Bound bound = null;
+        User user;
         try {
             bound = binding.bind(agent, lookupId, ConsoleSupportSection.NAME, String.valueOf(userId));
+            user = users.findById(userId).orElseThrow(SupportPolicyException::targetNotFound);
+            if (user.hasRole(User.Role.SUPER_ADMIN) || staffTargets.isStaffAccount(user)) {
+                log.warn("Support detail read refused: the account is now a STAFF account userId={} agent={} "
+                        + "lookupId={}", userId, agent.userUuid(), bound.lookupId());
+                throw SupportPolicyException.consoleStaffAccount();
+            }
         } catch (SupportPolicyException e) {
-            refusalLog(agent, OP_DETAIL, lookupId, userId, null, e.getErrorCode(), clientIp);
+            refusalLog(agent, OP_DETAIL, lookupId, userId, bound == null ? null : bound.keys(), e.getErrorCode(),
+                    clientIp);
             throw e;
         }
-        User user = users.findById(userId).orElseThrow(SupportPolicyException::targetNotFound);
         ConsoleAccountView view = console.view(user, agent, LocalDateTime.now(clock));
+        // Fail-CLOSED: a read whose row cannot be written is not shown.
         accessLog.required(row(agent, OP_DETAIL, bound.lookupId(), userId, bound.keys(), "OK", clientIp));
         metrics.lookup("ok");
         return view;
@@ -209,8 +237,16 @@ public class ConsoleSupportActions {
         if (!agent.holds(op.permission())) {
             throw new AccessDeniedException("missing " + op.permission());
         }
+        // The note is the seal's "why". @NotBlank let it through, but it is sealed
+        // CLEANED (markup and invisible characters stripped); one that is empty
+        // once cleaned is refused like a missing one — never sealed as nothing.
+        // Before the limiter, like the bean validation it completes.
+        String note = body == null ? null : MfaService.cleanNote(body.note());
+        if (note == null) {
+            throw SupportPolicyException.noteRequired();
+        }
         limiter.acquire(agent);
-        String lookupId = body == null ? null : body.lookupId();
+        String lookupId = body.lookupId();
         SupportLookupBinding.Bound bindingResult = null;
         try {
             // 2. Lookup binding.
@@ -245,10 +281,13 @@ public class ConsoleSupportActions {
             return replay(earlier.get(), op, agent, userId, bound, clientIp);
         }
 
-        // 6 + 7. Act and seal, in one transaction.
+        // 6 + 7. Act and seal, in one transaction. Anything that must happen
+        // only if the action stands — the owners' notice, the account's alert,
+        // the reset email — runs AFTER this commit, so a refused seal rolls it
+        // back unsent.
         String next;
         try {
-            next = tx.execute(status -> act(op, agent, userId, body, key, bound, ctx));
+            next = tx.execute(status -> act(op, agent, userId, note, body.caseId(), key, bound, ctx));
         } catch (DataIntegrityViolationException race) {
             // The same key, concurrently: the first request's row decides.
             SupportAction first = actions.findByAgentUserUuidAndIdempotencyKey(agent.userUuid(), key)
@@ -265,11 +304,21 @@ public class ConsoleSupportActions {
     }
 
     /** Runs inside the transaction. Returns the whatHappensNext sentence. */
-    private String act(Op op, SupportAgent agent, Long userId, WriteRequest body, UUID key,
+    private String act(Op op, SupportAgent agent, Long userId, String note, String caseId, UUID key,
                        SupportLookupBinding.Bound bound, AuditContext ctx) {
         User user = users.lockById(userId).orElseThrow(SupportPolicyException::targetNotFound);
+        // The account ITSELF, read fresh under its row lock: staff and SUPER_ADMIN
+        // are never console targets, even for a supervisor — and an account that
+        // became staff after the search is refused here, whatever the lookup says.
         if (user.hasRole(User.Role.SUPER_ADMIN) || staffTargets.isStaffAccount(user)) {
             throw refuseAimed(agent, op, bound, userId, SupportPolicyException.consoleStaffAccount(), ctx);
+        }
+        // Every console write needs an account that is active AND approved: a
+        // deactivated one is an administrator's decision support must not work
+        // around (an unlock or a fresh second factor waiting for a reactivation),
+        // and a pending one has not been let in yet.
+        if (!user.isActive() || !user.isApproved()) {
+            throw SupportPolicyException.accountInactive();
         }
         LocalDateTime now = LocalDateTime.now(clock);
         String customerKey = SupportMasking.customerKey(user.getPhoneNumber(), user.getEmail());
@@ -284,15 +333,15 @@ public class ConsoleSupportActions {
                 .target(String.valueOf(userId))
                 .customerKey(customerKey)
                 .outcome(SupportAction.OUTCOME_PENDING)
-                .caseId(body.caseId())
+                .caseId(caseId)
                 .createdAt(now)
                 .build());
 
         Map<String, Object> metadata = new LinkedHashMap<>();
         String next = switch (op) {
             case UNLOCK -> unlock(user, metadata);
-            case SEND_PASSWORD_RESET -> sendPasswordReset(user);
-            case MFA_RESET -> resetMfa(user, agent, metadata, now);
+            case SEND_PASSWORD_RESET -> sendPasswordReset(user, metadata);
+            case MFA_RESET -> resetMfa(user, metadata, now);
         };
 
         row.setOutcome(SupportAction.OUTCOME_SUCCESS);
@@ -305,8 +354,7 @@ public class ConsoleSupportActions {
         metadata.put("idempotencyKey", key.toString());
         metadata.put("section", ConsoleSupportSection.NAME);
         metadata.put("outcome", SupportAction.OUTCOME_SUCCESS);
-        String note = MfaService.cleanNote(body.note());
-        if (note != null) metadata.put("note", note);
+        metadata.put("note", note);
         // 7. The seal — LAST, fail-closed.
         auditService.recordRequired(op.event(), agent.subject(), AuditService.ACTOR_TYPE_USER,
                 String.valueOf(userId), AuditService.TARGET_TYPE_USER, metadata,
@@ -329,62 +377,89 @@ public class ConsoleSupportActions {
         return UNLOCKED_NEXT;
     }
 
-    private String sendPasswordReset(User user) {
-        if (!user.isActive() || !user.isApproved()) throw SupportPolicyException.accountInactive();
+    /**
+     * Issues the reset code inside this transaction (the OTP row and the quota
+     * commit with the seal, or not at all) and sends it only AFTER commit, off the
+     * request thread: the users row lock is never held across the email gateway,
+     * and a seal that fails rolls the code back unsent. So the agent is told the
+     * email is on its way — delivery is known only later, as the
+     * {@code user.support.reset_delivery{outcome}} meter and a log line.
+     */
+    private String sendPasswordReset(User user, Map<String, Object> metadata) {
         String email = user.getEmail();
         if (email == null || email.isBlank()) throw SupportPolicyException.noEmailOnAccount();
+        boolean issued;
         try {
-            // ONLY the account's email: PasswordResetService prefers the email when
-            // both are given, but passing the phone at all is how a reset would be
-            // aimed at a number support never verified.
-            passwordResetService.requestReset(null, email);
+            // ONLY the account's email: passing the phone at all is how a reset
+            // would be aimed at a number support never verified.
+            issued = passwordResetService.requestResetForSupport(email,
+                    delivered -> metrics.resetDelivery(delivered ? "sent" : "failed"));
         } catch (OtpService.OtpRateLimitException e) {
             throw SupportPolicyException.resetCodeLimited();
-        } catch (NotificationDeliveryException e) {
-            throw SupportPolicyException.resetDeliveryFailed();
         }
+        if (!issued) {
+            // PasswordResetService refused to issue (deactivated, or an invite
+            // pending) — execute() checked the first, and staff never get here.
+            throw SupportPolicyException.accountInactive();
+        }
+        metadata.put("delivery", "after_commit");
         return resetSentNext(email);
     }
 
-    private String resetMfa(User user, SupportAgent agent, Map<String, Object> metadata, LocalDateTime now) {
-        if (!user.isMfaEnabled() && user.getMfaSecret() == null) throw SupportPolicyException.mfaNotEnrolled();
-        // Caller ⊇ target (PR 1b's rule for an MFA reset), where it applies: a
-        // console target is never a staff account, so it holds no PLATFORM code
-        // and the comparison is over PLATFORM codes only — a supervisor does not
-        // hold a merchant's TENANT codes and was never meant to.
-        Set<String> platformHeld = new TreeSet<>();
-        for (String code : roleGrantGuard.storedGrants(user)) {
-            if (PermissionCatalog.WILDCARD.equals(code)
-                    || PermissionCatalog.scopeOf(code) == PermissionCatalog.Scope.PLATFORM) {
-                platformHeld.add(code);
-            }
-        }
-        if (!platformHeld.isEmpty() && !roleGrantGuard.resolveCaller(agent.subject()).holdsAll(platformHeld)) {
-            throw StaffPolicyException.targetNotManageable(StaffPolicyException.REASON_EXCEEDS_YOUR_AUTHORITY);
-        }
+    /**
+     * The wipe, through {@link MfaService#resetForSupport}. No caller-covers-target
+     * comparison here, deliberately: {@link #act} has already refused a staff
+     * account on a fresh read, and an account that is not staff holds no PLATFORM
+     * code (a role granting one IS a staff role), so there is nothing for a
+     * supervisor to fall short of. A merchant's TENANT codes were never compared.
+     */
+    private String resetMfa(User user, Map<String, Object> metadata, LocalDateTime now) {
+        if (!ConsoleSupportSection.hasSecondFactor(user)) throw SupportPolicyException.mfaNotEnrolled();
         long version = mfaService.resetForSupport(user);
         metadata.put("tokenVersion", version);
 
-        List<OrganizationMember> memberships = members.findByUserId(user.getId());
-        List<UUID> orgIds = memberships.stream().map(OrganizationMember::getOrganizationId).toList();
-        Set<String> ownerEmails = new LinkedHashSet<>();
-        List<String> orgNames = List.of();
-        if (!orgIds.isEmpty()) {
-            orgNames = organizations.findAllById(orgIds).stream().map(Organization::getName)
-                    .filter(Objects::nonNull).sorted().toList();
-            List<Long> ownerIds = members.findByOrganizationIdInAndRole(orgIds, OrganizationMember.Role.OWNER).stream()
-                    .map(OrganizationMember::getUserId).filter(id -> !id.equals(user.getId())).distinct().toList();
-            String own = user.getEmail() == null ? null : user.getEmail().toLowerCase(Locale.ROOT);
-            for (User owner : users.findAllById(ownerIds)) {
-                if (owner.getEmail() == null || owner.getEmail().isBlank()) continue;
-                String e = owner.getEmail().toLowerCase(Locale.ROOT);
-                if (!e.equals(own)) ownerEmails.add(e);
+        List<SupportMfaResetNotice.OwnerNotice> owners = ownersToTell(user);
+        metadata.put("ownersNotified", owners.size());
+        if (!owners.isEmpty()) {
+            events.publishEvent(new SupportMfaResetNotice(user.getId(), ConsoleSupportSection.name(user),
+                    user.getEmail(), owners, now));
+        }
+        return owners.isEmpty() ? MFA_RESET_NEXT_NO_OWNERS : MFA_RESET_NEXT;
+    }
+
+    /**
+     * Every OTHER owner of the account's businesses, each with ONLY the
+     * businesses they own: an owner of one business must not learn which other
+     * businesses the account belongs to, nor be told they own them. One notice
+     * per address (lower-cased), never the account's own.
+     */
+    List<SupportMfaResetNotice.OwnerNotice> ownersToTell(User user) {
+        List<UUID> orgIds = members.findByUserId(user.getId()).stream()
+                .map(OrganizationMember::getOrganizationId).distinct().toList();
+        if (orgIds.isEmpty()) return List.of();
+        Map<UUID, String> names = new LinkedHashMap<>();
+        for (Organization o : organizations.findAllById(orgIds)) names.put(o.getId(), o.getName());
+        Map<Long, Set<UUID>> ownedBy = new LinkedHashMap<>();
+        for (OrganizationMember m : members.findByOrganizationIdInAndRole(orgIds, OrganizationMember.Role.OWNER)) {
+            if (m.getUserId() == null || m.getUserId().equals(user.getId())) continue;
+            ownedBy.computeIfAbsent(m.getUserId(), id -> new LinkedHashSet<>()).add(m.getOrganizationId());
+        }
+        if (ownedBy.isEmpty()) return List.of();
+        String own = user.getEmail() == null ? null : user.getEmail().toLowerCase(Locale.ROOT);
+        Map<String, Set<String>> byEmail = new TreeMap<>();
+        for (User owner : users.findAllById(new ArrayList<>(ownedBy.keySet()))) {
+            if (owner.getEmail() == null || owner.getEmail().isBlank()) continue;
+            String e = owner.getEmail().toLowerCase(Locale.ROOT);
+            if (e.equals(own)) continue;
+            Set<String> theirs = byEmail.computeIfAbsent(e, k -> new TreeSet<>());
+            for (UUID org : ownedBy.getOrDefault(owner.getId(), Set.of())) {
+                String name = names.get(org);
+                if (name != null && !name.isBlank()) theirs.add(name);
             }
         }
-        metadata.put("ownersNotified", ownerEmails.size());
-        events.publishEvent(new SupportMfaResetNotice(user.getId(), ConsoleSupportSection.name(user), user.getEmail(),
-                orgNames, List.copyOf(ownerEmails), now));
-        return MFA_RESET_NEXT;
+        List<SupportMfaResetNotice.OwnerNotice> out = new ArrayList<>();
+        byEmail.forEach((e, orgs) -> out.add(new SupportMfaResetNotice.OwnerNotice(e, List.copyOf(orgs))));
+        return List.copyOf(out);
     }
 
     // ---- helpers -----------------------------------------------------------------------------
@@ -401,8 +476,9 @@ public class ConsoleSupportActions {
         return new ActionResult(earlier.getOutcome(), earlier.getWhatHappensNext(), true, currentView(userId, agent));
     }
 
-    private ConsoleAccountView currentView(Long userId, SupportAgent agent) {
-        return users.findById(userId).map(u -> console.view(u, agent, LocalDateTime.now(clock))).orElse(null);
+    /** A staff stub if the account has become staff since (a replay can land after that); null if it is gone. */
+    private ConsoleAccountEntry currentView(Long userId, SupportAgent agent) {
+        return users.findById(userId).map(u -> console.entry(u, agent, LocalDateTime.now(clock))).orElse(null);
     }
 
     /**
@@ -439,7 +515,7 @@ public class ConsoleSupportActions {
                 .op(op)
                 .outcome(outcome)
                 .agentUserUuid(agent.userUuid())
-                .agentSubject(agent.subject())
+                .agentSubject(SupportAccessLogWriter.subject(agent.subject()))
                 .customerKeys(keys == null ? null : SupportAccessLogWriter.json(keys))
                 .sections(ConsoleSupportSection.NAME)
                 .target(userId == null ? null : String.valueOf(userId))

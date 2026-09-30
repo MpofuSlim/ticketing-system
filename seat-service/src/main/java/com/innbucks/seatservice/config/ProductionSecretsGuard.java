@@ -67,6 +67,8 @@ public class ProductionSecretsGuard {
             return;
         }
 
+        refuseSupportSigningKey(env, Arrays.toString(active));
+
         List<String> offenders = new ArrayList<>();
         for (String key : SECRETS_TO_CHECK) {
             String value = env.getProperty(key);
@@ -97,5 +99,30 @@ public class ProductionSecretsGuard {
         }
         log.info("Secrets guard passed for profile {} ({} keys verified)",
                 Arrays.toString(active), SECRETS_TO_CHECK.size());
+    }
+
+    /**
+     * Customer support's assertion-signing key belongs to user-service ALONE:
+     * whoever holds it can mint {@code X-Support-Assertion}s that booking,
+     * payment, loyalty and the marketplace accept as a support agent's call. It
+     * reaches user-service through its own Secret ({@code
+     * user-service-support-signing}, deploy/k8s/03-user-service.yaml). Present in
+     * THIS service's environment, it has leaked into something every pod
+     * receives — {@code cell-zw-secrets} ({@code cell.<iso>.local.env}) or the
+     * cell ConfigMap — and every sibling can mint. Refusing to boot makes that
+     * leak loud at the next rollout instead of silent; the fix is to remove the
+     * key from the shared source AND rotate it (it has been in every pod).
+     */
+    static final String SUPPORT_ASSERTION_PRIVATE_KEY = "SUPPORT_ASSERTION_PRIVATE_KEY";
+
+    static void refuseSupportSigningKey(Environment env, String profiles) {
+        String key = env.getProperty(SUPPORT_ASSERTION_PRIVATE_KEY);
+        if (key != null && !key.isBlank()) {
+            throw new IllegalStateException("Refusing to start under deployment profile " + profiles + ": "
+                    + SUPPORT_ASSERTION_PRIVATE_KEY + " is set in this service's environment. It belongs to "
+                    + "user-service alone (the user-service-support-signing Secret); here it means the key has "
+                    + "leaked into a source every pod receives. Remove it from cell-zw-secrets / the cell "
+                    + "ConfigMap and rotate it.");
+        }
     }
 }

@@ -122,6 +122,15 @@ public final class SupportQueryClassifier {
 
         String s = input.replaceAll("\\s", "").toUpperCase(Locale.ROOT);
         String d = DASHES_BRACKETS.matcher(s).replaceAll("");
+        // The international call prefix: 00263 77 123 4567 is +263 77 123 4567,
+        // not a 14-digit card number. Rewritten BEFORE row 9 — no card number
+        // (the ISO 7812 issuer ranges start at 1) and no voucher code (first
+        // digit 1-9) begins with 00, so nothing that row exists to refuse is let
+        // through by it.
+        if (d.startsWith("00") && d.length() > 2 && d.chars().allMatch(Character::isDigit)) {
+            d = "+" + d.substring(2);
+            input = d;
+        }
 
         // Row 2: the SEC- prefix is proven on s BEFORE SupportRefs.normalise.
         if (SEC.matcher(s).matches()) {

@@ -11,11 +11,13 @@ import com.innbucks.userservice.repository.OrganizationProductRepository;
 import com.innbucks.userservice.repository.OrganizationRepository;
 import com.innbucks.userservice.repository.ServiceRequestRepository;
 import com.innbucks.userservice.security.PermissionCatalog;
+import com.innbucks.userservice.support.dto.SupportDTOs.ConsoleAccountEntry;
 import com.innbucks.userservice.support.dto.SupportDTOs.ConsoleAccountView;
 import com.innbucks.userservice.support.dto.SupportDTOs.ConsoleSectionData;
 import com.innbucks.userservice.support.dto.SupportDTOs.OrganizationView;
 import com.innbucks.userservice.support.dto.SupportDTOs.SectionView;
 import com.innbucks.userservice.support.dto.SupportDTOs.ServiceRequestView;
+import com.innbucks.userservice.support.dto.SupportDTOs.StaffAccountStub;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -44,6 +46,17 @@ import java.util.stream.Collectors;
  * <p>The view is an allow-list ({@link ConsoleAccountView}): no password hash,
  * TOTP secret, backup codes, token version, OTP, or organization contact details
  * — and the business OWNERs an MFA reset notifies are never shown.
+ *
+ * <p><b>A staff account (SUPER_ADMIN included) is a {@link StaffAccountStub}</b>:
+ * that it is one and whom to ask, nothing else — no id, roles, second factor,
+ * lockout, sign-in or contact details. Support can't act on it, and a
+ * {@code support-console:read} holder has no business browsing a colleague's (or
+ * the platform owner's) account. Its id is also kept out of the lookup's targets
+ * ({@code SupportSearchService}), so no detail read or write can be aimed at it.
+ *
+ * <p>{@code actions} lists only what the server would accept now: every console
+ * write refuses an account that is not active AND approved (409
+ * {@code account_inactive}), so none is offered for one.
  */
 @Component
 public class ConsoleSupportSection {
@@ -91,9 +104,9 @@ public class ConsoleSupportSection {
                     "If the caller says they use the console, ask which email they sign in with and search by that.",
                     new ConsoleSectionData(List.of()));
         }
-        List<ConsoleAccountView> views = accounts.stream()
+        List<ConsoleAccountEntry> views = accounts.stream()
                 .sorted(Comparator.comparing(User::getId))
-                .map(u -> view(u, agent, now))
+                .map(u -> entry(u, agent, now))
                 .toList();
         String summary = views.size() == 1
                 ? "1 Foundry console account: " + describe(views.get(0)) + "."
@@ -104,8 +117,34 @@ public class ConsoleSupportSection {
         return new SectionView<>("OK", matchedBy, summary, guidance, new ConsoleSectionData(views));
     }
 
+    /** The ids a later detail read or write may target: the full views only — never a staff stub's account. */
+    public static List<String> targets(SectionView<?> section) {
+        if (section == null || !(section.data() instanceof ConsoleSectionData data)) return List.of();
+        return data.accounts().stream()
+                .filter(ConsoleAccountView.class::isInstance)
+                .map(a -> String.valueOf(((ConsoleAccountView) a).userId()))
+                .toList();
+    }
+
+    /** The stub for a staff account, the full view otherwise. */
+    public ConsoleAccountEntry entry(User u, SupportAgent agent, LocalDateTime now) {
+        if (staffTargets.isStaffAccount(u)) return staffStub();
+        return view(u, agent, now);
+    }
+
+    public static StaffAccountStub staffStub() {
+        return new StaffAccountStub(true, STAFF_GUIDANCE, List.of());
+    }
+
+    static final String STAFF_GUIDANCE =
+            "This is an InnBucks staff account; ask a SUPER_ADMIN. Support can't see or change it.";
+
+    /**
+     * The full view. Callers must have refused a staff account first
+     * ({@link #entry} does; the detail read refuses one outright) — this method
+     * renders whatever it is given.
+     */
     public ConsoleAccountView view(User u, SupportAgent agent, LocalDateTime now) {
-        boolean staff = staffTargets.isStaffAccount(u);
         LocalDateTime lockedUntil = future(u.getLockedUntil(), now);
         LocalDateTime mfaLockedUntil = future(u.getMfaLockedUntil(), now);
         boolean mfaEnrolled = u.isMfaEnabled() && u.getMfaSecret() != null;
@@ -115,28 +154,33 @@ public class ConsoleSupportSection {
         List<ServiceRequestView> requests = serviceRequests.findByUserIdOrderByCreatedAtDesc(u.getId()).stream()
                 .map(r -> request(r, now)).toList();
 
+        // Only what execute() would accept: every write refuses an account that is
+        // not active AND approved, so none is offered for one (409 account_inactive).
         List<String> actions = new ArrayList<>();
-        if (!staff) {
+        if ("ACTIVE".equals(status)) {
             boolean locked = lockedUntil != null || mfaLockedUntil != null || u.getFailedLoginAttempts() > 0
                     || u.getMfaFailedAttempts() > 0;
-            if (locked && agent.holds(PermissionCatalog.SUPPORT_CONSOLE_MANAGE)) actions.add(ACTION_UNLOCK);
-            if (u.isActive() && u.getEmail() != null && agent.holds(PermissionCatalog.SUPPORT_CONSOLE_MANAGE)) {
-                actions.add(ACTION_SEND_PASSWORD_RESET);
+            boolean manage = agent.holds(PermissionCatalog.SUPPORT_CONSOLE_MANAGE);
+            if (locked && manage) actions.add(ACTION_UNLOCK);
+            if (manage && u.getEmail() != null && !u.getEmail().isBlank()) actions.add(ACTION_SEND_PASSWORD_RESET);
+            if (hasSecondFactor(u) && agent.holds(PermissionCatalog.SUPPORT_CONSOLE_MFA_RESET)) {
+                actions.add(ACTION_MFA_RESET);
             }
-            if (mfaEnrolled && agent.holds(PermissionCatalog.SUPPORT_CONSOLE_MFA_RESET)) actions.add(ACTION_MFA_RESET);
         }
         return new ConsoleAccountView(u.getId(), u.getUserUuid(), name(u), u.getEmail(), u.getPhoneNumber(), status,
-                List.copyOf(new TreeSet<>(u.getRoles())), staff, mfaEnrolled, lockedUntil, mfaLockedUntil,
+                List.copyOf(new TreeSet<>(u.getRoles())), false, mfaEnrolled, lockedUntil, mfaLockedUntil,
                 u.getFailedLoginAttempts(), u.getLastSignInAt(), u.isMustChangePassword(), u.getCreatedAt(), orgs,
-                requests, guidance(u, staff, status, lockedUntil, mfaLockedUntil, mfaEnrolled, now), List.copyOf(actions));
+                requests, guidance(u, status, lockedUntil, mfaLockedUntil, mfaEnrolled, now), List.copyOf(actions));
+    }
+
+    /** What mfa/reset has to wipe: the same test {@code ConsoleSupportActions} refuses 409 mfa_not_enrolled on. */
+    static boolean hasSecondFactor(User u) {
+        return u.isMfaEnabled() || u.getMfaSecret() != null;
     }
 
     /** What the agent should say or do, in one or two sentences — never a state to interpret. */
-    String guidance(User u, boolean staff, String status, LocalDateTime lockedUntil, LocalDateTime mfaLockedUntil,
+    String guidance(User u, String status, LocalDateTime lockedUntil, LocalDateTime mfaLockedUntil,
                     boolean mfaEnrolled, LocalDateTime now) {
-        if (staff) {
-            return "This is an InnBucks staff account; ask a SUPER_ADMIN. Support can't change it.";
-        }
         if ("PENDING_APPROVAL".equals(status)) {
             return "This registration is waiting for approval by an InnBucks administrator. Support can't approve it.";
         }
@@ -200,8 +244,9 @@ public class ConsoleSupportSection {
         return out;
     }
 
-    private static String describe(ConsoleAccountView v) {
-        return v.name() + " (" + String.join(", ", v.roles()) + (v.staffAccount() ? ", staff" : "")
+    private static String describe(ConsoleAccountEntry entry) {
+        if (!(entry instanceof ConsoleAccountView v)) return "an InnBucks staff account";
+        return (v.name() == null ? "An unnamed account" : v.name()) + " (" + String.join(", ", v.roles())
                 + ("ACTIVE".equals(v.status()) ? "" : ", " + v.status().toLowerCase(java.util.Locale.ROOT).replace('_', ' '))
                 + ")";
     }

@@ -6,6 +6,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.context.TestPropertySource;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -49,5 +50,27 @@ class SupportRateLimitIT extends SupportItSupport {
 
         // Another agent has their own window.
         search(colleague, merchant.getPhoneNumber()).andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("T2: detail reads and writes count too — search + detail + write fill the window; the next write is 429 and changes nothing")
+    void detailReadsAndWritesCount() throws Exception {
+        User merchant = lockedMerchant();
+        String agent = session(eligibleStaff("CALL_CENTER_AGENT", true));
+
+        String lookup = lookupId(agent, merchant.getPhoneNumber());                         // 1: search
+        detail(agent, merchant.getId(), lookup).andExpect(status().isOk());                  // 2: detail read
+        write(agent, merchant.getId(), "send-password-reset", lookup,
+                java.util.UUID.randomUUID().toString()).andExpect(status().isOk());          // 3: write
+
+        write(agent, merchant.getId(), "unlock", lookup, java.util.UUID.randomUUID().toString())
+                .andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.data.errorCode").value("lookup_rate_limited"));
+        User after = users.findById(merchant.getId()).orElseThrow();
+        assertThat(after.getLockedUntil()).as("the refused unlock did nothing").isNotNull();
+        assertThat(after.getFailedLoginAttempts()).isEqualTo(5);
+        assertThat(count("SELECT count(*) FROM support_actions WHERE target = ?1 AND op = 'CONSOLE_UNLOCK'",
+                String.valueOf(merchant.getId()))).isZero();
+        detail(agent, merchant.getId(), lookup).andExpect(status().isTooManyRequests());
     }
 }

@@ -44,13 +44,14 @@ class AdminSupportDispatchTest {
 
     private SupportSearchService search;
     private ConsoleSupportActions actions;
+    private SupportAgentResolver agents;
     private MockMvc mvc;
 
     @BeforeEach
     void setUp() {
         search = mock(SupportSearchService.class);
         actions = mock(ConsoleSupportActions.class);
-        SupportAgentResolver agents = mock(SupportAgentResolver.class);
+        agents = mock(SupportAgentResolver.class);
         when(agents.require(any())).thenReturn(new SupportAgent("agent.one@innbucks.co.zw", 7L, UUID.randomUUID(),
                 "agent.one@innbucks.co.zw", null, null, Set.of("support-console:read")));
         mvc = MockMvcBuilders.standaloneSetup(new AdminSupportController(search, actions, agents))
@@ -153,5 +154,93 @@ class AdminSupportDispatchTest {
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.data.errorCode").value("support_self_action"))
                 .andExpect(jsonPath("$.message").value("You can't act on your own account. Ask a colleague."));
+    }
+
+    private org.springframework.test.web.servlet.ResultActions write(String action) throws Exception {
+        return mvc.perform(post("/admin/support/console-users/1042/" + action).principal(auth())
+                .header("Idempotency-Key", UUID.randomUUID().toString())
+                .contentType(MediaType.APPLICATION_JSON).content("{\"lookupId\":\"SLK-7Q2M9X\",\"note\":\"verified\"}"));
+    }
+
+    @Test
+    @DisplayName("T7: an agent whose account can't be resolved is 403 agent_not_resolved — nothing runs")
+    void agentNotResolved() throws Exception {
+        when(agents.require(any())).thenThrow(SupportPolicyException.agentNotResolved());
+        mvc.perform(post("/admin/support/customers/search").principal(auth())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"q\":\"+263771234567\"}"))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.data.errorCode").value("agent_not_resolved"))
+                .andExpect(jsonPath("$.message").value("Your account couldn't be verified. Sign in again."));
+        write("unlock").andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.data.errorCode").value("agent_not_resolved"));
+        verifyNoInteractions(search, actions);
+    }
+
+    @Test
+    @DisplayName("T7: support switched off is 404 support_disabled; an unrecordable read is 503 support_log_unavailable")
+    void disabledAndLogUnavailable() throws Exception {
+        when(search.search(any(), anyString(), any())).thenThrow(SupportPolicyException.supportDisabled());
+        mvc.perform(post("/admin/support/customers/search").principal(auth())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"q\":\"+263771234567\"}"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("404 NOT_FOUND"))
+                .andExpect(jsonPath("$.message").value("Customer support isn't available on this server."))
+                .andExpect(jsonPath("$.data.errorCode").value("support_disabled"));
+
+        when(actions.detail(any(), eq(1042L), eq("SLK-7Q2M9X"), any())).thenThrow(SupportPolicyException.logUnavailable());
+        mvc.perform(get("/admin/support/console-users/1042").param("lookupId", "SLK-7Q2M9X").principal(auth()))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.code").value("503 SERVICE_UNAVAILABLE"))
+                .andExpect(jsonPath("$.message").value("We couldn't record this lookup, so it wasn't shown. Try again."))
+                .andExpect(jsonPath("$.data.errorCode").value("support_log_unavailable"))
+                .andExpect(header().string("Cache-Control", "no-store"));
+    }
+
+    @Test
+    @DisplayName("C4: a search whose records can't be read is 503 support_search_unavailable")
+    void searchUnavailable() throws Exception {
+        when(search.search(any(), anyString(), any())).thenThrow(SupportPolicyException.searchUnavailable());
+        mvc.perform(post("/admin/support/customers/search").principal(auth())
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"q\":\"+263771234567\"}"))
+                .andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.message").value("We couldn't search the customer records just now. Try again in a minute."))
+                .andExpect(jsonPath("$.data.errorCode").value("support_search_unavailable"));
+    }
+
+    @Test
+    @DisplayName("T7: 409 mfa_not_enrolled and 409 account_inactive render as documented; S3: 400 note_required")
+    void actionRefusals() throws Exception {
+        when(actions.execute(eq(ConsoleSupportActions.Op.MFA_RESET), any(), eq(1042L), any(), any(), any()))
+                .thenThrow(SupportPolicyException.mfaNotEnrolled());
+        write("mfa/reset").andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("409 CONFLICT"))
+                .andExpect(jsonPath("$.message").value("This account hasn't set up two-factor sign-in, so there is nothing to reset."))
+                .andExpect(jsonPath("$.data.errorCode").value("mfa_not_enrolled"));
+
+        when(actions.execute(eq(ConsoleSupportActions.Op.UNLOCK), any(), eq(1042L), any(), any(), any()))
+                .thenThrow(SupportPolicyException.accountInactive());
+        write("unlock").andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("This account isn't active, so support can't change it. An "
+                        + "administrator decides whether to approve or reactivate it."))
+                .andExpect(jsonPath("$.data.errorCode").value("account_inactive"));
+
+        when(actions.execute(eq(ConsoleSupportActions.Op.SEND_PASSWORD_RESET), any(), eq(1042L), any(), any(), any()))
+                .thenThrow(SupportPolicyException.noteRequired());
+        write("send-password-reset").andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.data.errorCode").value("note_required"))
+                .andExpect(jsonPath("$.data.field").value("note"));
+    }
+
+    @Test
+    @DisplayName("S3: a note over 500 characters is the validation 400 — the bound the seal keeps")
+    void noteOver500IsRefused() throws Exception {
+        String note = "x".repeat(501);
+        mvc.perform(post("/admin/support/console-users/1042/unlock").principal(auth())
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"lookupId\":\"SLK-7Q2M9X\",\"note\":\"" + note + "\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.data.note").value("note must be 500 characters or fewer"));
+        verifyNoInteractions(actions);
     }
 }

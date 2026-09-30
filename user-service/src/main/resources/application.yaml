@@ -33,6 +33,19 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
+      # Bounded, because Redis sits on request paths that must not hang and every
+      # caller already has an answer for "Redis didn't reply": the login and
+      # customer-support limiters fall back to a per-replica window, the
+      # token-version and logout-denylist publishes log (and count) a failure —
+      # Postgres stays this service's truth and JwtFilter reads it, not Redis —
+      # and /auth/exchange's replay check refuses with a retryable 503. Lettuce's default is 60s — a minute of a
+      # request thread per call before any of those fallbacks runs. Nothing here
+      # issues a blocking command (no BLPOP/WAIT/SUBSCRIBE); the longest call is a
+      # pipelined batch of <= 500 tiny EVALs (TokenVersionPublisher.publishAll),
+      # well inside the bound, and a batch that does time out is counted as a
+      # failed publish, never an error.
+      timeout: ${REDIS_COMMAND_TIMEOUT:500ms}
+      connect-timeout: ${REDIS_CONNECT_TIMEOUT:1s}
       repositories:
         enabled: false
 

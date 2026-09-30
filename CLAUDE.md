@@ -1128,7 +1128,34 @@ agent token can call directly — it would bypass all of it.
   the stored outcome, `replayed: true`) → act → seal (`SUPPORT_*`,
   `recordRequired`, LAST statement — an in-process write that can't be sealed is
   not made) → `whatHappensNext`. Staff and SUPER_ADMIN accounts are never console
-  write targets (`403 console_staff_account`), even for a supervisor.
+  write targets (`403 console_staff_account`, on a FRESH read of the account under
+  its row lock — so one that became staff after the search is refused too), even
+  for a supervisor; a deactivated or pending account is `409 account_inactive` for
+  every write. The note is sealed CLEANED (`MfaService.cleanNote`, ≤ 500 — the
+  request bound matches); one that is empty once cleaned is `400 note_required`.
+- **Nothing a write causes leaves before its seal commits.** The owners' notice
+  and the account's alert are AFTER_COMMIT listeners, and `send-password-reset`
+  issues the OTP inside the transaction but emails it after commit
+  (`OtpService.sendPasswordResetOtpToEmailAfterCommit`, on the notification
+  executor) — never while the account row lock is held, never for a write whose
+  seal rolled back. So the agent is told the code is ON ITS WAY, not delivered:
+  `reset_delivery_failed` (502) is gone, and delivery shows up only as
+  `user.support.reset_delivery{outcome}`.
+- **A staff account (SUPER_ADMIN included) is a STUB in the console section** —
+  `staffAccount: true`, the "ask a SUPER_ADMIN" guidance, no actions — never its
+  id, roles, second factor, lockout, sign-in or contact details, and its id is
+  kept out of the lookup's targets, so a detail read or write aimed at it is
+  `404 target_not_found`. The lookup is still flagged and alerted
+  (`staff_target_lookup`, the log row's `staff_account`). `identityWarnings` and
+  the response's `staffAccount` flag are shown only to an agent who can see the
+  console section: a `device-security:read`-only agent must not learn about
+  console accounts through them.
+- **A search whose records can't be read at all** (resolving the query, the staff
+  check) is `503 support_search_unavailable` with a best-effort `SEARCH_FAILED`
+  row; a section whose reads fail renders `UNAVAILABLE`; identity warnings that
+  can't be read say so (`identity_check_unavailable`). `support_log_unavailable`
+  stays the fail-closed answer for a row that can't be written — only the
+  search's lookup-id draw gets a constraint violation back to retry.
 - **`support_access_log` is not on the audit chain** (D10 — the head lock would
   serialise every lookup). Customer data leaving the service is logged
   FAIL-CLOSED (`503 support_log_unavailable`); refusals are best-effort. It holds
@@ -1139,20 +1166,28 @@ agent token can call directly — it would bypass all of it.
   Lua with Redis `TIME`; Redis down → a per-replica window (never fail-open;
   effective limit × replicas; `user.support.limiter.degraded`). The device-security
   READS were brought under the limit and the access log without any other change
-  — they still take no `lookupId`.
+  — they still take no `lookupId` — and stay under both when `SUPPORT_ENABLED=false`
+  (that switch removes the new screen, not the record of who looked).
 - **Never shown**: passwords, OTPs, TOTP secrets, install ids, voucher/collection
   codes, full ticket numbers. Masked: DTX `lastIp`/event addresses, third-party
   contacts. The customer's own phone/email are shown whole (the agent verifies the
   caller with them). Every response DTO is an allow-list — `SupportResponseAllowListTest`.
 - **`support-console:mfa:reset` is SUPERVISOR-only** (the classic help-desk
   takeover: stolen password + one phone call). It bumps `tokenVersion` through
-  `MfaService.resetForSupport` and emails the account AND every OWNER of its
-  organizations. `send-password-reset` passes ONLY the account's email to
+  `MfaService.resetForSupport` and alerts the account AND emails every OTHER OWNER
+  of its organizations — each owner about the businesses THEY own, never the
+  account's other ones. There is no caller-covers-target comparison: a non-staff
+  account holds no PLATFORM code (a role granting one is a staff role), and staff
+  are refused first. `send-password-reset` passes ONLY the account's email to
   `PasswordResetService`.
 - **The support assertion** (`X-Support-Assertion`, RS256, ≤ 60s) is signed here
   by `SupportAssertionSigner` for every S2S support call (PRs 3–5). Its PRIVATE key
   lives ONLY in the `user-service-support-signing` Secret (`secretKeyRef`,
-  `optional: true`) — never in `cell-zw-secrets`, which every pod receives. The
+  `optional: true`) — never in `cell-zw-secrets`, which every pod receives. If it
+  ever lands there, api-gateway (`SupportKeyCustodyGuard`) and booking / event /
+  seat / payment (`ProductionSecretsGuard`) refuse to boot under a deployment
+  profile: remove it and rotate. loyalty and marketplace (other repos) don't check
+  yet. The
   public half is `SUPPORT_ASSERTION_PUBLIC_KEY` in the cell ConfigMap, patched per
   key. Verifiers pin `user-service/src/test/resources/support-assertion/test-vector.json`
   (its private half was discarded; `SupportAssertionSignerTest` fails if the

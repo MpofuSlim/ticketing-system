@@ -59,6 +59,10 @@ class SupportResponseAllowListTest {
                 "userId", "userUuid", "name", "email", "phone", "status", "roles", "staffAccount", "mfaEnrolled",
                 "lockedUntil", "mfaLockedUntil", "failedSignInAttempts", "lastSignInAt", "mustChangePassword",
                 "createdAt", "organizations", "serviceRequests", "agentGuidance", "actions");
+        // A staff account is a stub: that it is one, whom to ask — nothing that describes it.
+        assertThat(names(SupportDTOs.StaffAccountStub.class)).containsExactly("staffAccount", "agentGuidance", "actions");
+        assertThat(SupportDTOs.ConsoleAccountEntry.class.getPermittedSubclasses())
+                .containsExactlyInAnyOrder(SupportDTOs.ConsoleAccountView.class, SupportDTOs.StaffAccountStub.class);
         // No organization contact details, and no member list (the OWNERs an MFA reset notifies are never shown).
         assertThat(names(SupportDTOs.OrganizationView.class))
                 .containsExactly("organizationId", "name", "role", "status", "products");

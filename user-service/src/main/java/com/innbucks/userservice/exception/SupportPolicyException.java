@@ -26,7 +26,8 @@ public class SupportPolicyException extends RuntimeException {
     // ---- the query ------------------------------------------------------------------------
     public static final String QUERY_NOT_ACCEPTED = "query_not_accepted";
     public static final String QUERY_NOT_ACCEPTED_MESSAGE =
-            "Card, voucher and collection codes can't be searched. Ask the caller for their phone number or email.";
+            "Card, voucher and collection codes can't be searched. Ask the caller for their phone number or email, "
+                    + "and type a phone number with its country code, like +263771234567.";
     public static final String QUERY_NOT_RECOGNISED = "query_not_recognised";
     public static final String QUERY_NOT_RECOGNISED_MESSAGE =
             "Search by the customer's phone number, email address or a support reference such as SEC-8F2KQ7.";
@@ -67,7 +68,8 @@ public class SupportPolicyException extends RuntimeException {
     // ---- the console actions --------------------------------------------------------------
     public static final String ACCOUNT_INACTIVE = "account_inactive";
     public static final String ACCOUNT_INACTIVE_MESSAGE =
-            "This account isn't active, so a reset code can't be sent. An administrator decides whether to reactivate it.";
+            "This account isn't active, so support can't change it. An administrator decides whether to approve or "
+                    + "reactivate it.";
     public static final String NO_EMAIL_ON_ACCOUNT = "no_email_on_account";
     public static final String NO_EMAIL_ON_ACCOUNT_MESSAGE =
             "This account has no email address, so a reset code can't be sent.";
@@ -78,9 +80,9 @@ public class SupportPolicyException extends RuntimeException {
     public static final String RESET_CODE_LIMITED_MESSAGE =
             "Too many reset codes have gone to this account recently. Ask the caller to use the latest one, "
                     + "or try again later.";
-    public static final String RESET_DELIVERY_FAILED = "reset_delivery_failed";
-    public static final String RESET_DELIVERY_FAILED_MESSAGE =
-            "We couldn't send the reset email. Try again in a few minutes.";
+    public static final String NOTE_REQUIRED = "note_required";
+    public static final String NOTE_REQUIRED_MESSAGE =
+            "Write a note saying why, for example how you verified the caller. Markup on its own doesn't count.";
 
     // ---- the surface ----------------------------------------------------------------------
     public static final String LOOKUP_RATE_LIMITED = "lookup_rate_limited";
@@ -89,6 +91,9 @@ public class SupportPolicyException extends RuntimeException {
     public static final String SUPPORT_LOG_UNAVAILABLE = "support_log_unavailable";
     public static final String SUPPORT_LOG_UNAVAILABLE_MESSAGE =
             "We couldn't record this lookup, so it wasn't shown. Try again.";
+    public static final String SEARCH_UNAVAILABLE = "support_search_unavailable";
+    public static final String SEARCH_UNAVAILABLE_MESSAGE =
+            "We couldn't search the customer records just now. Try again in a minute.";
 
     private final HttpStatus status;
     private final String errorCode;
@@ -191,12 +196,27 @@ public class SupportPolicyException extends RuntimeException {
         return new SupportPolicyException(HttpStatus.TOO_MANY_REQUESTS, RESET_CODE_LIMITED, RESET_CODE_LIMITED_MESSAGE);
     }
 
-    public static SupportPolicyException resetDeliveryFailed() {
-        return new SupportPolicyException(HttpStatus.BAD_GATEWAY, RESET_DELIVERY_FAILED, RESET_DELIVERY_FAILED_MESSAGE);
+    /**
+     * 400 {@code note_required}: the note passed {@code @NotBlank} but nothing is
+     * left once markup and invisible characters are stripped — a seal must never
+     * carry an empty "why".
+     */
+    public static SupportPolicyException noteRequired() {
+        return new SupportPolicyException(HttpStatus.BAD_REQUEST, NOTE_REQUIRED, NOTE_REQUIRED_MESSAGE,
+                Map.of("field", "note"), null);
     }
 
     public static SupportPolicyException supportDisabled() {
         return new SupportPolicyException(HttpStatus.NOT_FOUND, SUPPORT_DISABLED, SUPPORT_DISABLED_MESSAGE);
+    }
+
+    /**
+     * 503 {@code support_search_unavailable}: the customer records could not be
+     * read at all (resolving the query, or the staff check every lookup needs),
+     * so there is no section to show as UNAVAILABLE.
+     */
+    public static SupportPolicyException searchUnavailable() {
+        return new SupportPolicyException(HttpStatus.SERVICE_UNAVAILABLE, SEARCH_UNAVAILABLE, SEARCH_UNAVAILABLE_MESSAGE);
     }
 
     public static SupportPolicyException logUnavailable() {

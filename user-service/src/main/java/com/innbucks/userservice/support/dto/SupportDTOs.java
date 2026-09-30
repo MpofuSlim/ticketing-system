@@ -105,7 +105,42 @@ public final class SupportDTOs {
     // ---- console section ---------------------------------------------------------------------
 
     @Schema(name = "SupportConsoleSection")
-    public record ConsoleSectionData(List<ConsoleAccountView> accounts) {
+    public record ConsoleSectionData(
+            @Schema(description = "One entry per console account the search reached. An InnBucks staff account "
+                    + "(SUPER_ADMIN included) is only a stub — staffAccount: true, the guidance and no actions — "
+                    + "never its id, roles, second factor, lockout, sign-in or contact details.")
+            List<? extends ConsoleAccountEntry> accounts) {
+    }
+
+    /**
+     * One account in the console section: the full {@link ConsoleAccountView},
+     * or the {@link StaffAccountStub} a staff account gets instead. Sealed, so a
+     * third shape cannot appear without this file (and its allow-list test)
+     * changing.
+     */
+    @Schema(name = "SupportConsoleAccountEntry", oneOf = {ConsoleAccountView.class, StaffAccountStub.class})
+    public sealed interface ConsoleAccountEntry permits ConsoleAccountView, StaffAccountStub {
+        boolean staffAccount();
+
+        String agentGuidance();
+
+        List<String> actions();
+    }
+
+    /**
+     * What an agent sees of an InnBucks STAFF account (SUPER_ADMIN included):
+     * that it is one, and whom to ask. Nothing that describes it — support can't
+     * act on it, and a colleague's (or the platform owner's) roles, second
+     * factor, lockout, sign-in history and contact details are not something a
+     * {@code support-console:read} holder needs, or may browse. It carries no id,
+     * and the lookup records none, so no detail read or write can be aimed at it.
+     */
+    @Schema(name = "SupportConsoleStaffAccount")
+    public record StaffAccountStub(
+            @Schema(example = "true") boolean staffAccount,
+            @Schema(example = "This is an InnBucks staff account; ask a SUPER_ADMIN. Support can't see or change it.")
+            String agentGuidance,
+            @Schema(example = "[]") List<String> actions) implements ConsoleAccountEntry {
     }
 
     @Schema(name = "SupportConsoleAccount")
@@ -133,8 +168,9 @@ public final class SupportDTOs {
             @Schema(example = "Locked after too many wrong passwords until 14:30. After verifying the caller you can "
                     + "unlock it now.") String agentGuidance,
             @Schema(example = "[\"unlock\",\"send-password-reset\",\"mfa/reset\"]",
-                    description = "The actions that apply to this account now, among those you hold.")
-            List<String> actions) {
+                    description = "The actions that apply to this account now, among those you hold — only ones "
+                            + "the server would accept.")
+            List<String> actions) implements ConsoleAccountEntry {
     }
 
     @Schema(name = "SupportConsoleOrganization")
@@ -202,13 +238,17 @@ public final class SupportDTOs {
                     description = "The lookupId of YOUR search for this customer, at most 30 minutes old.")
             String lookupId,
             @NotBlank(message = "note is required")
-            @Size(max = 1000, message = "note must be 1000 characters or fewer")
+            // The same bound the seal keeps (MfaService.cleanNote): a longer note
+            // would be cut short on the chain without anyone being told.
+            @Size(max = 500, message = "note must be 500 characters or fewer")
             @Schema(example = "Caller verified by date of birth and last sign-in time; locked out after a password "
-                    + "change.", requiredMode = Schema.RequiredMode.REQUIRED,
-                    description = "Why — sealed on the audit chain.")
+                    + "change.", requiredMode = Schema.RequiredMode.REQUIRED, maxLength = 500,
+                    description = "Why — sealed on the audit chain, with markup and invisible characters removed. A "
+                            + "note that is empty once cleaned is 400 note_required.")
             String note,
             @Size(max = 64, message = "caseId must be 64 characters or fewer")
-            @Schema(example = "null", nullable = true, description = "Reserved for support cases; ignored for now.")
+            @Schema(example = "null", nullable = true, description = "Reserved for support cases (PR 6). Recorded "
+                    + "with the action (support_actions.case_id) but not yet checked against any case.")
             String caseId) {
     }
 
@@ -219,6 +259,7 @@ public final class SupportDTOs {
                     + "minute and try once more.") String whatHappensNext,
             @Schema(example = "false", description = "True when this answer is the stored outcome of an earlier "
                     + "request with the same Idempotency-Key — nothing was done twice.") boolean replayed,
-            @Schema(description = "The account as it is now.") ConsoleAccountView account) {
+            @Schema(description = "The account as it is now (a staff stub if it has become a staff account since; "
+                    + "null if it no longer exists).", nullable = true) ConsoleAccountEntry account) {
     }
 }

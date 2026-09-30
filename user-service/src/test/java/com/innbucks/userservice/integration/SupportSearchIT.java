@@ -19,6 +19,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 class SupportSearchIT extends SupportItSupport {
 
+    @org.springframework.beans.factory.annotation.Autowired
+    com.innbucks.userservice.support.SupportProperties supportProperties;
+
     @Test
     @DisplayName("an agent finds a merchant by phone: both sections, the console account, and a recorded lookup")
     void searchByPhone() throws Exception {
@@ -100,15 +103,19 @@ class SupportSearchIT extends SupportItSupport {
     @Test
     @DisplayName("a card number is refused 400 query_not_accepted and logged by KIND — its digits are stored nowhere")
     void cardNumberRefused() throws Exception {
-        String agent = session(eligibleStaff("CALL_CENTER_AGENT", true));
+        User agentAccount = eligibleStaff("CALL_CENTER_AGENT", true);
+        String agent = session(agentAccount);
+        java.time.LocalDateTime before = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusSeconds(5);
         String card = "4111 1111 1111 " + (1000 + (int) (Math.random() * 8999));
         search(agent, card)
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.data.errorCode").value("query_not_accepted"));
         String digits = card.replace(" ", "");
+        // THIS agent's row, from THIS test — not any refusal another IT happened to leave behind.
         assertThat(count("SELECT count(*) FROM support_access_log WHERE op = 'SEARCH_REFUSED' "
                 + "AND outcome = 'query_not_accepted' AND query_kind = 'NOT_ACCEPTED' AND query_masked IS NULL "
-                + "AND customer_keys IS NULL")).isPositive();
+                + "AND customer_keys IS NULL AND agent_user_uuid = CAST(?1 AS uuid) AND created_at >= ?2",
+                agentAccount.getUserUuid().toString(), before)).isEqualTo(1);
         assertThat(count("SELECT count(*) FROM support_access_log WHERE coalesce(query_masked,'') LIKE ?1 "
                 + "OR coalesce(customer_keys,'') LIKE ?1", "%" + digits.substring(8) + "%")).isZero();
     }
@@ -132,23 +139,76 @@ class SupportSearchIT extends SupportItSupport {
     }
 
     @Test
-    @DisplayName("looking up a colleague sets staffAccount — the lookup itself is allowed, and alerted")
+    @DisplayName("S1: looking up a colleague sets staffAccount and shows a STUB — nothing about the account, and no target")
     void staffLookupIsFlagged() throws Exception {
         User colleague = eligibleStaff("CALL_CENTER_SUPERVISOR", true);
         String agent = session(eligibleStaff("CALL_CENTER_AGENT", true));
         JsonNode data = data(search(agent, colleague.getEmail()).andExpect(status().isOk()));
         assertThat(data.at("/staffAccount").asBoolean()).isTrue();
-        assertThat(firstConsoleAccount(data).at("/staffAccount").asBoolean()).isTrue();
-        assertThat(strings(firstConsoleAccount(data).at("/actions"))).isEmpty();
+
+        JsonNode stub = firstConsoleAccount(data);
+        assertThat(stub.at("/staffAccount").asBoolean()).isTrue();
+        assertThat(stub.at("/agentGuidance").asText()).contains("ask a SUPER_ADMIN");
+        assertThat(strings(stub.at("/actions"))).isEmpty();
+        java.util.List<String> keys = new java.util.ArrayList<>();
+        stub.fieldNames().forEachRemaining(keys::add);
+        assertThat(keys).containsExactlyInAnyOrder("staffAccount", "agentGuidance", "actions");
+        // Nothing about the colleague anywhere in the console section.
+        String console = data.at("/sections/console").toString();
+        assertThat(console).doesNotContain("\"userId\"")
+                .doesNotContain(colleague.getUserUuid().toString())
+                .doesNotContain("CALL_CENTER_SUPERVISOR")
+                .doesNotContain("mfaEnrolled").doesNotContain("lockedUntil").doesNotContain("lastSignInAt");
+        assertThat(data.at("/customer/name").isNull()).isTrue();
+
+        // Alerted as before, and the colleague's id is not a target of this lookup …
+        String lookupId = data.at("/lookupId").asText();
+        assertThat(count("SELECT count(*) FROM support_access_log WHERE lookup_id = ?1 AND staff_account = TRUE",
+                lookupId)).isEqualTo(1);
+        assertThat(com.innbucks.userservice.support.SupportAccessLogWriter.targets((String) single(
+                "SELECT section_targets FROM support_access_log WHERE lookup_id = ?1", lookupId)).get("console"))
+                .isEmpty();
+        // … so a detail read of it is simply not found.
+        detail(agent, colleague.getId(), lookupId)
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.data.errorCode").value("target_not_found"));
+    }
+
+    @Test
+    @DisplayName("T7: an agent with only device-security:read learns nothing about console accounts — no staff flag, no warnings")
+    void deviceOnlyAgentLearnsNothingAboutConsoleAccounts() throws Exception {
+        User colleague = eligibleStaff("CALL_CENTER_SUPERVISOR", true);
+        User fraudDesk = eligibleStaff("FRAUD_DESK", true);
+        String agent = session(fraudDesk);
+        JsonNode data = data(search(agent, colleague.getEmail()).andExpect(status().isOk()));
+        assertThat(data.at("/staffAccount").asBoolean()).isFalse();
+        assertThat(data.at("/identityWarnings").size()).isZero();
+        assertThat(data.at("/sections/console").isMissingNode()).isTrue();
+        assertThat(strings(data.at("/notShown"))).containsExactly("console");
+        assertThat(data.toString()).doesNotContain(colleague.getUserUuid().toString());
+        // The alert still fires: the log row records the staff match.
         assertThat(count("SELECT count(*) FROM support_access_log WHERE lookup_id = ?1 AND staff_account = TRUE",
                 data.at("/lookupId").asText())).isEqualTo(1);
     }
 
     @Test
-    @DisplayName("a caller with neither section read is refused by the security chain")
+    @DisplayName("T5: a caller with neither section read is refused by the SECURITY CHAIN — no log row, no limiter slot")
     void noSectionReadIsForbidden() throws Exception {
-        String merchant = session(lockedMerchantUnlocked());
-        search(merchant, "+263771234567").andExpect(status().isForbidden());
+        User merchantAccount = lockedMerchantUnlocked();
+        String merchant = session(merchantAccount);
+        search(merchant, "+263771234567")
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.message").value("Forbidden - insufficient role"))
+                // The @PreAuthorize refused it: the service's own query_not_permitted never ran.
+                .andExpect(jsonPath("$.data.errorCode").doesNotExist());
+        assertThat(count("SELECT count(*) FROM support_access_log WHERE agent_user_uuid = CAST(?1 AS uuid)",
+                merchantAccount.getUserUuid().toString())).isZero();
+        // More refusals than the whole short window allows: had any of them taken a
+        // slot, the last would be a 429 — every one stays the security chain's 403.
+        int window = supportProperties.getLimiter().getShortWindowMax();
+        for (int i = 0; i < window; i++) {
+            search(merchant, "+263771234567").andExpect(status().isForbidden());
+        }
     }
 
     @Test

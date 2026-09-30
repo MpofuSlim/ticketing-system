@@ -39,14 +39,13 @@ public class SupportNotificationListener {
     @Async
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT, fallbackExecution = true)
     public void onSupportMfaReset(SupportMfaResetNotice notice) {
-        if (notice.ownerEmails() == null || notice.ownerEmails().isEmpty()) return;
+        if (notice.owners().isEmpty()) return;
         String subject = "InnBucks Foundry security notice";
-        String body = message(notice);
         String ref = "SUPPORT-MFA-RESET-" + notice.userId();
         int sent = 0;
-        for (String to : notice.ownerEmails()) {
+        for (SupportMfaResetNotice.OwnerNotice owner : notice.owners()) {
             try {
-                email.sendEmail(to, subject, body, ref);
+                email.sendEmail(owner.email(), subject, message(notice, owner), ref);
                 sent++;
             } catch (RuntimeException ex) {
                 log.warn("Support MFA-reset owner notice failed userId={} reason={}", notice.userId(),
@@ -54,20 +53,22 @@ public class SupportNotificationListener {
             }
         }
         log.info("Support MFA-reset owner notice sent userId={} owners={}/{}", notice.userId(), sent,
-                notice.ownerEmails().size());
+                notice.owners().size());
     }
 
-    String message(SupportMfaResetNotice n) {
+    /** The notice to ONE owner, naming only the businesses that owner owns. */
+    String message(SupportMfaResetNotice n, SupportMfaResetNotice.OwnerNotice owner) {
         String who = n.accountName() == null ? "a member of your business" : n.accountName();
         String account = n.accountEmail() == null ? "" : " (" + n.accountEmail() + ")";
-        String businesses = n.organizationNames() == null || n.organizationNames().isEmpty() ? "your business"
-                : String.join(", ", n.organizationNames());
+        String businesses = owner.organizationNames().isEmpty() ? "a business"
+                : String.join(", ", owner.organizationNames());
         String when = n.at() == null ? "just now"
                 : WHEN.format(marketTimeZone.atMarketFromUtc(n.at()).atZoneSameInstant(marketTimeZone.zone()));
         return "Hello,\n\n"
                 + "You are an owner of " + businesses + " on InnBucks Foundry. At " + when + ", InnBucks customer "
-                + "support reset two-factor sign-in for " + who + account + ". They will set it up again at their "
-                + "next sign-in, and every session they had open has ended.\n\n"
+                + "support reset two-factor sign-in for " + who + account + ", a member of "
+                + (owner.organizationNames().size() > 1 ? "those businesses" : "that business")
+                + ". They will set it up again at their next sign-in, and every session they had open has ended.\n\n"
                 + "If you didn't expect this, contact InnBucks support now, and consider removing their access "
                 + "from your business until you have spoken to them.\n\n"
                 + "— The InnBucks Foundry Team";

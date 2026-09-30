@@ -74,8 +74,11 @@ public class AdminDeviceSecurityController {
     private final DeviceSupportService service;
     /**
      * Customer support's rules for these READS (V45): each counts against the
-     * agent's lookup limit and is recorded in support_access_log. The contract is
-     * otherwise unchanged — no lookupId is required here.
+     * agent's lookup limit and is recorded in support_access_log (fail-closed:
+     * 503 support_log_unavailable). The contract is otherwise unchanged — no
+     * lookupId is required here. Applied whether or not SUPPORT_ENABLED is on:
+     * that switch turns the new /admin/support surface off, not the record of who
+     * looked at a customer through these existing tools.
      */
     private final DeviceSecurityReadAccess access;
 
@@ -126,6 +129,10 @@ public class AdminDeviceSecurityController {
             @ApiResponse(responseCode = "429", description = "The agent's customer-lookup limit (shared with /admin/support)",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             { "code": "429 TOO_MANY_REQUESTS", "message": "You've looked up a lot of customers in a short time. Try again in 4 minutes.", "data": { "errorCode": "lookup_rate_limited", "retryAfterSeconds": 212, "window": "10m" } }
+                            """))),
+            @ApiResponse(responseCode = "503", description = "The read could not be recorded in the support access log, so it is not shown",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "503 SERVICE_UNAVAILABLE", "message": "We couldn't record this lookup, so it wasn't shown. Try again.", "data": { "errorCode": "support_log_unavailable" } }
                             """)))
     })
     public ResponseEntity<ApiResult<CustomerOverview>> overview(@PathVariable String msisdn, Authentication auth,
@@ -160,6 +167,10 @@ public class AdminDeviceSecurityController {
             @ApiResponse(responseCode = "429", description = "The agent's customer-lookup limit (shared with /admin/support)",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             { "code": "429 TOO_MANY_REQUESTS", "message": "You've looked up a lot of customers in a short time. Try again in 4 minutes.", "data": { "errorCode": "lookup_rate_limited", "retryAfterSeconds": 212, "window": "10m" } }
+                            """))),
+            @ApiResponse(responseCode = "503", description = "The read could not be recorded in the support access log, so it is not shown",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "503 SERVICE_UNAVAILABLE", "message": "We couldn't record this lookup, so it wasn't shown. Try again.", "data": { "errorCode": "support_log_unavailable" } }
                             """)))
     })
     public ResponseEntity<ApiResult<PageView<EventView>>> events(@PathVariable String msisdn,
@@ -201,6 +212,10 @@ public class AdminDeviceSecurityController {
             @ApiResponse(responseCode = "429", description = "The agent's customer-lookup limit (shared with /admin/support)",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             { "code": "429 TOO_MANY_REQUESTS", "message": "You've looked up a lot of customers in a short time. Try again in 4 minutes.", "data": { "errorCode": "lookup_rate_limited", "retryAfterSeconds": 212, "window": "10m" } }
+                            """))),
+            @ApiResponse(responseCode = "503", description = "The read could not be recorded in the support access log, so it is not shown",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "503 SERVICE_UNAVAILABLE", "message": "We couldn't record this lookup, so it wasn't shown. Try again.", "data": { "errorCode": "support_log_unavailable" } }
                             """)))
     })
     public ResponseEntity<ApiResult<SupportRefLookup>> bySupportRef(@PathVariable String supportRef, Authentication auth,
@@ -229,6 +244,10 @@ public class AdminDeviceSecurityController {
             @ApiResponse(responseCode = "429", description = "The agent's customer-lookup limit (shared with /admin/support)",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             { "code": "429 TOO_MANY_REQUESTS", "message": "You've looked up a lot of customers in a short time. Try again in 4 minutes.", "data": { "errorCode": "lookup_rate_limited", "retryAfterSeconds": 212, "window": "10m" } }
+                            """))),
+            @ApiResponse(responseCode = "503", description = "The read could not be recorded in the support access log, so it is not shown",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "503 SERVICE_UNAVAILABLE", "message": "We couldn't record this lookup, so it wasn't shown. Try again.", "data": { "errorCode": "support_log_unavailable" } }
                             """)))
     })
     public ResponseEntity<ApiResult<PageView<SupportDeviceView>>> stopped(@RequestParam(required = false) String state,
@@ -255,6 +274,10 @@ public class AdminDeviceSecurityController {
             @ApiResponse(responseCode = "429", description = "The agent's customer-lookup limit (shared with /admin/support)",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             { "code": "429 TOO_MANY_REQUESTS", "message": "You've looked up a lot of customers in a short time. Try again in 4 minutes.", "data": { "errorCode": "lookup_rate_limited", "retryAfterSeconds": 212, "window": "10m" } }
+                            """))),
+            @ApiResponse(responseCode = "503", description = "The read could not be recorded in the support access log, so it is not shown",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "503 SERVICE_UNAVAILABLE", "message": "We couldn't record this lookup, so it wasn't shown. Try again.", "data": { "errorCode": "support_log_unavailable" } }
                             """)))
     })
     public ResponseEntity<ApiResult<List<SupportDeviceView>>> sameHandset(@PathVariable UUID deviceId,

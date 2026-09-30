@@ -19,6 +19,12 @@ import java.util.function.Supplier;
  * customer data out. The 429 is thrown before the read runs, so a limited
  * agent learns nothing.
  *
+ * <p><b>Not switched off by {@code SUPPORT_ENABLED=false}</b>, deliberately: that
+ * switch takes the new {@code /admin/support/**} surface away (404), but these
+ * reads existed before it and hand out the same customer data — recording who
+ * looked, and capping how fast, is a control on the data, not a feature of the
+ * new screen. So the limit and the fail-closed log row apply on every cell.
+ *
  * <p>NOT bound to a lookup: those endpoints shipped with the console, and they
  * are keyed by the msisdn (which the agent types, exactly as they would into the
  * search) and an opaque device id — not an enumerable one. Their WRITES already

@@ -115,7 +115,7 @@ class SupportSearchServiceTest {
 
     private SupportAccessLog requiredRow() {
         ArgumentCaptor<SupportAccessLog> row = ArgumentCaptor.forClass(SupportAccessLog.class);
-        verify(accessLog).required(row.capture());
+        verify(accessLog).requiredWithUniqueLookupId(row.capture());
         return row.getValue();
     }
 
@@ -144,7 +144,7 @@ class SupportSearchServiceTest {
         assertThat(row.getValue().getCustomerKeys()).isNull();
         assertThat(row.getValue().getLookupId()).isNull();
         verifyNoInteractions(users, deviceSupport, console, innbucksApp);
-        verify(accessLog, never()).required(any());
+        verify(accessLog, never()).requiredWithUniqueLookupId(any());
     }
 
     @Test
@@ -260,7 +260,7 @@ class SupportSearchServiceTest {
     @DisplayName("a lookup that cannot be recorded is not shown (fail-closed)")
     void logFailureRefuses() {
         when(users.findByPhoneNumber("+263771234567")).thenReturn(Optional.of(tariro));
-        doThrow(SupportPolicyException.logUnavailable()).when(accessLog).required(any());
+        doThrow(SupportPolicyException.logUnavailable()).when(accessLog).requiredWithUniqueLookupId(any());
         assertThatThrownBy(() -> search.search(both(), "+263771234567", null))
                 .satisfies(e -> assertThat(((SupportPolicyException) e).getErrorCode())
                         .isEqualTo("support_log_unavailable"));
@@ -279,5 +279,155 @@ class SupportSearchServiceTest {
         assertThatThrownBy(() -> offSearch.search(both(), "+263771234567", null))
                 .satisfies(e -> assertThat(((SupportPolicyException) e).getStatus().value()).isEqualTo(404));
         verifyNoInteractions(users, accessLog);
+    }
+
+    // ---- staff accounts and what an agent may learn -------------------------------------------
+
+    @Test
+    @DisplayName("S1: a staff stub in the console section is never a TARGET — only full views are")
+    void staffStubIsNeverATarget() {
+        User colleague = User.builder().id(77L).userUuid(UUID.randomUUID()).email("tariro@example.com")
+                .roles(new LinkedHashSet<>(List.of("CALL_CENTER_AGENT"))).build();
+        when(users.findAllByEmailIgnoreCase("tariro@example.com")).thenReturn(List.of(tariro, colleague));
+        when(staffTargets.staffAccounts(any())).thenReturn(Set.of(colleague.getUserUuid()));
+        org.mockito.Mockito.doReturn(new SectionView<>("OK", "email", "s", "g",
+                new ConsoleSectionData(List.of(ConsoleSupportSection.staffStub(), new ConsoleAccountView(1042L,
+                        tariro.getUserUuid(), "Tariro Moyo", "tariro@example.com", "+263771234567", "ACTIVE",
+                        List.of(), false, true, null, null, 0, null, false, null, List.of(), List.of(), "g",
+                        List.of()))))).when(console).section(any(), any(), any(), any());
+
+        SearchResult r = search.search(both(), "tariro@example.com", null);
+
+        assertThat(r.staffAccount()).isTrue();
+        assertThat(SupportAccessLogWriter.targets(requiredRow().getSectionTargets()))
+                .containsEntry("console", List.of("1042"));
+    }
+
+    @Test
+    @DisplayName("S1: an emailed STAFF account lends the app section nothing — its sign-in phone is not listed")
+    void staffAccountsPhoneIsNotListedForTheAppSection() {
+        User staff = User.builder().id(77L).userUuid(UUID.randomUUID()).email("rudo@innbucks.co.zw")
+                .phoneNumber("+263772000009").roles(new LinkedHashSet<>(List.of("CALL_CENTER_AGENT"))).build();
+        when(users.findAllByEmailIgnoreCase("rudo@innbucks.co.zw")).thenReturn(List.of(staff));
+        when(staffTargets.isStaffAccount(staff)).thenReturn(true);
+        when(staffTargets.staffAccounts(any())).thenReturn(Set.of(staff.getUserUuid()));
+        org.mockito.Mockito.doReturn(new SectionView<>("OK", "email", "s", "g",
+                new ConsoleSectionData(List.of(ConsoleSupportSection.staffStub()))))
+                .when(console).section(any(), any(), any(), any());
+
+        SearchResult r = search.search(both(), "rudo@innbucks.co.zw", null);
+
+        verify(innbucksApp).section(eq(Map.of()), eq("email"));
+        assertThat(r.customer().phone()).isNull();
+        // Still recorded, so binding and the write-time staff check see it.
+        assertThat(SupportAccessLogWriter.keys(requiredRow().getCustomerKeys()).phones()).contains("+263772000009");
+    }
+
+    @Test
+    @DisplayName("T7: an agent with ONLY device-security:read learns nothing about console accounts — no warnings, no staff flag")
+    void deviceOnlyAgentLearnsNothingAboutConsoleAccounts() {
+        User other = User.builder().id(2000L).userUuid(UUID.randomUUID()).email("tariro@example.com")
+                .roles(new LinkedHashSet<>(List.of("MERCHANT_ADMIN"))).build();
+        when(users.findByPhoneNumber("+263771234567")).thenReturn(Optional.of(tariro));
+        when(users.findAllByEmailIgnoreCase("tariro@example.com")).thenReturn(List.of(tariro, other));
+        when(staffTargets.staffAccounts(any())).thenReturn(Set.of(UUID.randomUUID()));
+
+        SearchResult r = search.search(agent(PermissionCatalog.DEVICE_SECURITY_READ), "+263771234567", null);
+
+        assertThat(r.sections()).containsOnlyKeys("innbucksApp");
+        assertThat(r.identityWarnings()).isEmpty();
+        assertThat(r.staffAccount()).isFalse();
+        assertThat(r.customer().email()).isNull();
+        verify(console, never()).section(any(), any(), any(), any());
+        verify(users, never()).findAllByEmailIgnoreCase(anyString());
+        // The alert still records the match: only the RESPONSE follows the console section.
+        assertThat(requiredRow().isStaffAccount()).isTrue();
+
+        // The same search by a console reader shows both.
+        SearchResult both = search.search(both(), "+263771234567", null);
+        assertThat(both.staffAccount()).isTrue();
+        assertThat(both.identityWarnings()).extracting("code").containsExactly("phone_email_different_accounts");
+    }
+
+    // ---- C4: reads that fail ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("C4: when the query can't be resolved at all, the search is 503 support_search_unavailable — and logged")
+    void resolutionFailureIs503WithALogRow() {
+        when(users.findByPhoneNumber("+263771234567")).thenThrow(new org.springframework.dao
+                .DataAccessResourceFailureException("db down"));
+        assertThatThrownBy(() -> search.search(both(), "0771234567", "41.221.147.12"))
+                .satisfies(e -> {
+                    assertThat(((SupportPolicyException) e).getErrorCode()).isEqualTo("support_search_unavailable");
+                    assertThat(((SupportPolicyException) e).getStatus().value()).isEqualTo(503);
+                });
+        ArgumentCaptor<SupportAccessLog> row = ArgumentCaptor.forClass(SupportAccessLog.class);
+        verify(accessLog).bestEffort(row.capture());
+        assertThat(row.getValue().getOp()).isEqualTo("SEARCH_FAILED");
+        assertThat(row.getValue().getOutcome()).isEqualTo("support_search_unavailable");
+        assertThat(row.getValue().getQueryKind()).isEqualTo("PHONE");
+        assertThat(row.getValue().getQueryMasked()).isEqualTo("****4567");
+        assertThat(row.getValue().getCustomerKeys()).isNull();
+        verify(accessLog, never()).requiredWithUniqueLookupId(any());
+        verifyNoInteractions(console, innbucksApp);
+    }
+
+    @Test
+    @DisplayName("C4: a staff check that can't be read is 503 too — the flag drives an alert, it is never guessed")
+    void staffCheckFailureIs503() {
+        when(users.findByPhoneNumber("+263771234567")).thenReturn(Optional.of(tariro));
+        when(staffTargets.staffAccounts(any())).thenThrow(new IllegalStateException("db"));
+        assertThatThrownBy(() -> search.search(both(), "+263771234567", null))
+                .satisfies(e -> assertThat(((SupportPolicyException) e).getErrorCode())
+                        .isEqualTo("support_search_unavailable"));
+        verify(accessLog, never()).requiredWithUniqueLookupId(any());
+    }
+
+    @Test
+    @DisplayName("C4: the console-account filter failing renders the console section UNAVAILABLE, with no targets")
+    void consoleFilterFailureIsUnavailable() {
+        when(users.findByPhoneNumber("+263771234567")).thenReturn(Optional.of(tariro));
+        when(console.isConsoleAccount(any())).thenThrow(new IllegalStateException("db"));
+        SearchResult r = search.search(both(), "+263771234567", null);
+        assertThat(r.sections().get("console").status()).isEqualTo("UNAVAILABLE");
+        assertThat(r.sections().get("innbucksApp").status()).isEqualTo("OK");
+        assertThat(SupportAccessLogWriter.targets(requiredRow().getSectionTargets())).containsEntry("console", List.of());
+    }
+
+    @Test
+    @DisplayName("C4: identity warnings that can't be read say so; a profile name that can't be read falls back")
+    void warningsAndCustomerDegrade() {
+        when(users.findByPhoneNumber("+263771234567")).thenReturn(Optional.of(tariro));
+        // resolve() and the staff check pass; the warnings' email probe fails.
+        when(users.findAllByEmailIgnoreCase("tariro@example.com")).thenThrow(new IllegalStateException("db"));
+        when(customerProfiles.findByUserId(1042L)).thenThrow(new IllegalStateException("db"));
+        SearchResult r = search.search(both(), "+263771234567", null);
+        assertThat(r.identityWarnings()).extracting("code").containsExactly("identity_check_unavailable");
+        assertThat(r.customer().name()).isEqualTo("Tariro Moyo");
+        requiredRow();
+    }
+
+    // ---- the lookup id --------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("T7: a lookup id that collides is drawn again; three collisions refuse the lookup 503")
+    void lookupIdCollisionRetryThen503() {
+        when(users.findByPhoneNumber("+263771234567")).thenReturn(Optional.of(tariro));
+        doThrow(new org.springframework.dao.DataIntegrityViolationException("uk_support_access_log_lookup"))
+                .doThrow(new org.springframework.dao.DataIntegrityViolationException("uk_support_access_log_lookup"))
+                .doNothing()
+                .when(accessLog).requiredWithUniqueLookupId(any());
+        SearchResult ok = search.search(both(), "+263771234567", null);
+        ArgumentCaptor<SupportAccessLog> rows = ArgumentCaptor.forClass(SupportAccessLog.class);
+        verify(accessLog, org.mockito.Mockito.times(3)).requiredWithUniqueLookupId(rows.capture());
+        assertThat(rows.getAllValues().get(2).getLookupId()).isEqualTo(ok.lookupId());
+
+        org.mockito.Mockito.reset(accessLog);
+        doThrow(new org.springframework.dao.DataIntegrityViolationException("uk_support_access_log_lookup"))
+                .when(accessLog).requiredWithUniqueLookupId(any());
+        assertThatThrownBy(() -> search.search(both(), "+263771234567", null))
+                .satisfies(e -> assertThat(((SupportPolicyException) e).getErrorCode())
+                        .isEqualTo("support_log_unavailable"));
+        verify(accessLog, org.mockito.Mockito.times(3)).requiredWithUniqueLookupId(any());
     }
 }

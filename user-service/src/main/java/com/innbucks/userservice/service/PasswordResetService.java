@@ -112,6 +112,33 @@ public class PasswordResetService {
     }
 
     /**
+     * Customer support's reset ({@code POST /admin/support/console-users/{id}/send-password-reset}):
+     * the same gates as {@link #requestReset} by EMAIL, but the code is issued in
+     * the caller's transaction and emailed only after it commits
+     * ({@link OtpService#sendPasswordResetOtpToEmailAfterCommit}) — the caller
+     * seals the action in that transaction, and a code must not go out for an
+     * action whose seal failed. Returns false (nothing issued) where
+     * {@link #requestReset} would silently no-op, so the caller can say so
+     * instead of claiming a code is on its way.
+     *
+     * @param onDelivery told, after commit, whether the email was accepted
+     * @throws OtpService.OtpRateLimitException too many codes to this address recently
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public boolean requestResetForSupport(String email, java.util.function.Consumer<Boolean> onDelivery) {
+        if (email == null || email.isBlank()) return false;
+        String address = email.strip();
+        Optional<User> user = userRepository.findByEmail(address);
+        if (user.isEmpty() || deactivated(user.get()) || staffEligibility.isInvitePending(user.get())) {
+            log.info("Support password reset not issued userId={} (unknown, deactivated or invite pending)",
+                    user.map(User::getId).orElse(null));
+            return false;
+        }
+        otpService.sendPasswordResetOtpToEmailAfterCommit(address, onDelivery);
+        return true;
+    }
+
+    /**
      * Approved but switched off by an administrator. A registration still
      * pending approval is also inactive, but not deactivated — its reset flow
      * is unchanged (the approval replaces the password anyway).

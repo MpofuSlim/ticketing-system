@@ -91,6 +91,12 @@ public class AdminSupportController {
     private static final String NOTE_REQUIRED_EXAMPLE = """
             { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "note": "note is required" } }
             """;
+    private static final String NOTE_EMPTY_EXAMPLE = """
+            { "code": "400 BAD_REQUEST", "message": "Write a note saying why, for example how you verified the caller. Markup on its own doesn't count.", "data": { "errorCode": "note_required", "field": "note" } }
+            """;
+    private static final String ACCOUNT_INACTIVE_EXAMPLE = """
+            { "code": "409 CONFLICT", "message": "This account isn't active, so support can't change it. An administrator decides whether to approve or reactivate it.", "data": { "errorCode": "account_inactive" } }
+            """;
     private static final String IDEMPOTENCY_REUSED_EXAMPLE = """
             { "code": "409 CONFLICT", "message": "This Idempotency-Key was already used for a different action. Send a new one.", "data": { "errorCode": "idempotency_key_reused" } }
             """;
@@ -137,7 +143,10 @@ public class AdminSupportController {
                     + "device-security:read). A SEC- reference returns ONLY the innbucksApp section plus `focus` — "
                     + "search by phone or email to see the rest. Card, voucher and collection codes are refused. "
                     + "Every search is recorded and counts against your lookup limit (60 per 10 minutes, 400 a day). "
-                    + "Keep the `lookupId`: detail reads and actions for the next 30 minutes must send it.")
+                    + "Keep the `lookupId`: detail reads and actions for the next 30 minutes must send it. An InnBucks "
+                    + "staff account (SUPER_ADMIN included) appears in the console section only as a stub — "
+                    + "`staffAccount: true` and whom to ask — and can't be read or acted on. `identityWarnings` and "
+                    + "`staffAccount` are shown only to an agent who can see the console section.")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "The customer, by section",
                     content = @Content(mediaType = "application/json", examples = {
@@ -195,12 +204,32 @@ public class AdminSupportController {
                                         "staffAccount": false
                                       }
                                     }
+                                    """),
+                            @ExampleObject(name = "staff_account", value = """
+                                    {
+                                      "code": "200 OK",
+                                      "message": "Customer found",
+                                      "data": {
+                                        "lookupId": "SLK-9D4RW1",
+                                        "query": { "kind": "EMAIL", "normalised": "rudo.chikwanha@innbucks.co.zw" },
+                                        "customer": { "phone": null, "email": "rudo.chikwanha@innbucks.co.zw", "name": null },
+                                        "identityWarnings": [],
+                                        "sections": {
+                                          "console": { "status": "OK", "matchedBy": "email", "summary": "1 Foundry console account: an InnBucks staff account.", "agentGuidance": "This is an InnBucks staff account; ask a SUPER_ADMIN. Support can't see or change it.",
+                                            "data": { "accounts": [ { "staffAccount": true, "agentGuidance": "This is an InnBucks staff account; ask a SUPER_ADMIN. Support can't see or change it.", "actions": [] } ] } },
+                                          "innbucksApp": { "status": "NOT_FOUND", "matchedBy": null, "summary": "No phone number is on file for this email, so there is no InnBucks app record to show.", "agentGuidance": "Ask the caller for the phone number they use with the InnBucks app and search by that.", "data": { "phones": [] } }
+                                        },
+                                        "focus": null,
+                                        "notShown": [],
+                                        "staffAccount": true
+                                      }
+                                    }
                                     """)
                     })),
             @ApiResponse(responseCode = "400", description = "A query that can't be searched",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "query_not_accepted", value = """
-                                    { "code": "400 BAD_REQUEST", "message": "Card, voucher and collection codes can't be searched. Ask the caller for their phone number or email.", "data": { "errorCode": "query_not_accepted" } }
+                                    { "code": "400 BAD_REQUEST", "message": "Card, voucher and collection codes can't be searched. Ask the caller for their phone number or email, and type a phone number with its country code, like +263771234567.", "data": { "errorCode": "query_not_accepted" } }
                                     """),
                             @ExampleObject(name = "query_not_recognised", value = """
                                     { "code": "400 BAD_REQUEST", "message": "Search by the customer's phone number, email address or a support reference such as SEC-8F2KQ7.", "data": { "errorCode": "query_not_recognised" } }
@@ -223,8 +252,13 @@ public class AdminSupportController {
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = DISABLED_EXAMPLE))),
             @ApiResponse(responseCode = "429", description = "Your lookup limit",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = LIMITED_EXAMPLE))),
-            @ApiResponse(responseCode = "503", description = "The lookup could not be recorded, so it is not shown",
-                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = LOG_UNAVAILABLE_EXAMPLE)))
+            @ApiResponse(responseCode = "503", description = "The lookup could not be recorded (so it is not shown), or the customer records could not be read at all",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "support_log_unavailable", value = LOG_UNAVAILABLE_EXAMPLE),
+                            @ExampleObject(name = "support_search_unavailable", value = """
+                                    { "code": "503 SERVICE_UNAVAILABLE", "message": "We couldn't search the customer records just now. Try again in a minute.", "data": { "errorCode": "support_search_unavailable" } }
+                                    """)
+                    }))
     })
     public ResponseEntity<ApiResult<SearchResult>> searchCustomers(@Valid @RequestBody SearchRequest body,
                                                                    Authentication auth, HttpServletRequest request) {
@@ -241,7 +275,8 @@ public class AdminSupportController {
     @PreAuthorize("hasAuthority('" + PermissionCatalog.SUPPORT_CONSOLE_READ + "')")
     @Operation(summary = "A Foundry console account from your lookup, as it is now",
             description = "`id` is `sections.console.data.accounts[].userId` from YOUR search, at most 30 minutes "
-                    + "old; an id outside that search is not found. Counts against your lookup limit.")
+                    + "old; an id outside that search is not found (a staff account's stub carries no id, so it is "
+                    + "never one). Counts against your lookup limit.")
     @Parameter(name = "lookupId", in = ParameterIn.QUERY, required = true, example = "SLK-7Q2M9X")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "The account",
@@ -251,8 +286,11 @@ public class AdminSupportController {
                             """))),
             @ApiResponse(responseCode = "400", description = "No lookupId",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = LOOKUP_REQUIRED_EXAMPLE))),
-            @ApiResponse(responseCode = "403", description = "Missing support-console:read",
-                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = FORBIDDEN_EXAMPLE))),
+            @ApiResponse(responseCode = "403", description = "Missing support-console:read, or the account has become an InnBucks staff account since the search",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "missing_permission", value = FORBIDDEN_EXAMPLE),
+                            @ExampleObject(name = "console_staff_account", value = CONSOLE_STAFF_EXAMPLE)
+                    })),
             @ApiResponse(responseCode = "404", description = "Not in this lookup, or support switched off",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "target_not_found", value = TARGET_NOT_FOUND_EXAMPLE),
@@ -289,11 +327,12 @@ public class AdminSupportController {
                             { "code": "200 OK", "message": "Account unlocked", "data": { "outcome": "SUCCESS", "whatHappensNext": "The account can sign in again now. If the caller is still refused, ask them to wait a minute and try once more.", "replayed": false, "account": """ + UNLOCKED_ACCOUNT_JSON + """
                             } }
                             """))),
-            @ApiResponse(responseCode = "400", description = "No lookupId, no Idempotency-Key, or no note",
+            @ApiResponse(responseCode = "400", description = "No lookupId, no Idempotency-Key, or no note (or one that is empty once markup is removed)",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "lookup_required", value = LOOKUP_REQUIRED_EXAMPLE),
                             @ExampleObject(name = "idempotency_key_required", value = IDEMPOTENCY_REQUIRED_EXAMPLE),
-                            @ExampleObject(name = "validation", value = NOTE_REQUIRED_EXAMPLE)
+                            @ExampleObject(name = "validation", value = NOTE_REQUIRED_EXAMPLE),
+                            @ExampleObject(name = "note_required", value = NOTE_EMPTY_EXAMPLE)
                     })),
             @ApiResponse(responseCode = "403", description = "Not allowed — or not on this account",
                     content = @Content(mediaType = "application/json", examples = {
@@ -307,8 +346,9 @@ public class AdminSupportController {
                             @ExampleObject(name = "target_not_found", value = TARGET_NOT_FOUND_EXAMPLE),
                             @ExampleObject(name = "support_disabled", value = DISABLED_EXAMPLE)
                     })),
-            @ApiResponse(responseCode = "409", description = "Stale lookup, or the key was used for another action",
+            @ApiResponse(responseCode = "409", description = "The account is deactivated or pending approval, the lookup is stale, or the key was used for another action",
                     content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "account_inactive", value = ACCOUNT_INACTIVE_EXAMPLE),
                             @ExampleObject(name = "lookup_expired", value = LOOKUP_EXPIRED_EXAMPLE),
                             @ExampleObject(name = "idempotency_key_reused", value = IDEMPOTENCY_REUSED_EXAMPLE)
                     })),
@@ -328,20 +368,24 @@ public class AdminSupportController {
     @PreAuthorize("hasAuthority('" + PermissionCatalog.SUPPORT_CONSOLE_MANAGE + "')")
     @Operation(summary = "Email a password-reset code to the account's own address",
             description = "Starts the ordinary forgot-password flow, to the account's EMAIL only — never a phone, "
-                    + "never an address the caller gives you. Same lookupId, note and Idempotency-Key rules as unlock.")
+                    + "never an address the caller gives you. The code is issued with the action and emailed only "
+                    + "AFTER the action is recorded on the audit chain, so a 200 means the email is on its way, not "
+                    + "that it arrived; a recording failure (503) sends nothing. Same lookupId, note and "
+                    + "Idempotency-Key rules as unlock.")
     @Parameter(name = "Idempotency-Key", in = ParameterIn.HEADER, required = true,
             example = "8a1d2e3f-4b5c-4d6e-9f70-81a2b3c4d5e6")
     @ApiResponses({
-            @ApiResponse(responseCode = "200", description = "The code was sent",
+            @ApiResponse(responseCode = "200", description = "The code was issued; the email goes out once the action is recorded (delivery isn't known when this answers)",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
-                            { "code": "200 OK", "message": "Reset code sent", "data": { "outcome": "SUCCESS", "whatHappensNext": "We've emailed a password-reset code to tariro@example.com. It works for 5 minutes: ask the caller to choose Forgot password on the Foundry sign-in page, enter this email, then the code.", "replayed": false, "account": """ + UNLOCKED_ACCOUNT_JSON + """
+                            { "code": "200 OK", "message": "Reset code sent", "data": { "outcome": "SUCCESS", "whatHappensNext": "We're emailing a password-reset code to tariro@example.com now. It works for 5 minutes: ask the caller to choose Forgot password on the Foundry sign-in page, enter this email, then the code. If it hasn't arrived within a couple of minutes, ask them to check their spam folder before you send another.", "replayed": false, "account": """ + UNLOCKED_ACCOUNT_JSON + """
                             } }
                             """))),
-            @ApiResponse(responseCode = "400", description = "No lookupId, no Idempotency-Key, or no note",
+            @ApiResponse(responseCode = "400", description = "No lookupId, no Idempotency-Key, or no note (or one that is empty once markup is removed)",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "lookup_required", value = LOOKUP_REQUIRED_EXAMPLE),
                             @ExampleObject(name = "idempotency_key_required", value = IDEMPOTENCY_REQUIRED_EXAMPLE),
-                            @ExampleObject(name = "validation", value = NOTE_REQUIRED_EXAMPLE)
+                            @ExampleObject(name = "validation", value = NOTE_REQUIRED_EXAMPLE),
+                            @ExampleObject(name = "note_required", value = NOTE_EMPTY_EXAMPLE)
                     })),
             @ApiResponse(responseCode = "403", description = "Not allowed — or not on this account",
                     content = @Content(mediaType = "application/json", examples = {
@@ -357,9 +401,7 @@ public class AdminSupportController {
                     })),
             @ApiResponse(responseCode = "409", description = "The account can't receive a code, the lookup is stale, or the key was reused",
                     content = @Content(mediaType = "application/json", examples = {
-                            @ExampleObject(name = "account_inactive", value = """
-                                    { "code": "409 CONFLICT", "message": "This account isn't active, so a reset code can't be sent. An administrator decides whether to reactivate it.", "data": { "errorCode": "account_inactive" } }
-                                    """),
+                            @ExampleObject(name = "account_inactive", value = ACCOUNT_INACTIVE_EXAMPLE),
                             @ExampleObject(name = "no_email_on_account", value = """
                                     { "code": "409 CONFLICT", "message": "This account has no email address, so a reset code can't be sent.", "data": { "errorCode": "no_email_on_account" } }
                                     """),
@@ -373,10 +415,6 @@ public class AdminSupportController {
                                     { "code": "429 TOO_MANY_REQUESTS", "message": "Too many reset codes have gone to this account recently. Ask the caller to use the latest one, or try again later.", "data": { "errorCode": "reset_code_limited" } }
                                     """)
                     })),
-            @ApiResponse(responseCode = "502", description = "The email could not be sent; nothing was changed",
-                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
-                            { "code": "502 BAD_GATEWAY", "message": "We couldn't send the reset email. Try again in a few minutes.", "data": { "errorCode": "reset_delivery_failed" } }
-                            """))),
             @ApiResponse(responseCode = "503", description = "The change could not be sealed, so it was not made",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = AUDIT_UNAVAILABLE_EXAMPLE)))
     })
@@ -394,39 +432,39 @@ public class AdminSupportController {
     @Operation(summary = "Reset a Foundry console account's two-factor sign-in (supervisor)",
             description = "The help-desk takeover path (stolen password + a convincing call), so: supervisor only, a "
                     + "note is required, every session of the account ends at once, and the account AND every OWNER of "
-                    + "its businesses are emailed. Staff and SUPER_ADMIN accounts are refused. Same lookupId and "
-                    + "Idempotency-Key rules as unlock.")
+                    + "its businesses are emailed (each owner about the businesses they own). Staff and SUPER_ADMIN "
+                    + "accounts are refused, as are deactivated and pending ones. Same lookupId and Idempotency-Key "
+                    + "rules as unlock.")
     @Parameter(name = "Idempotency-Key", in = ParameterIn.HEADER, required = true,
             example = "c2b7e4a9-1d3f-4e5a-8b6c-7d8e9f0a1b2c")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "2FA reset",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
-                            { "code": "200 OK", "message": "Two-factor sign-in reset", "data": { "outcome": "SUCCESS", "whatHappensNext": "Two-factor sign-in is off for this account and every session it had open has ended. At their next sign-in they'll be asked to set it up again. We've emailed the account and the owners of its businesses about this change.", "replayed": false, "account": """ + UNLOCKED_ACCOUNT_JSON + """
+                            { "code": "200 OK", "message": "Two-factor sign-in reset", "data": { "outcome": "SUCCESS", "whatHappensNext": "Two-factor sign-in is off for this account and every session it had open has ended. At their next sign-in they'll be asked to set it up again. We've sent the account a security alert and emailed the other owners of its businesses.", "replayed": false, "account": """ + UNLOCKED_ACCOUNT_JSON + """
                             } }
                             """))),
-            @ApiResponse(responseCode = "400", description = "No lookupId, no Idempotency-Key, or no note",
+            @ApiResponse(responseCode = "400", description = "No lookupId, no Idempotency-Key, or no note (or one that is empty once markup is removed)",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "lookup_required", value = LOOKUP_REQUIRED_EXAMPLE),
                             @ExampleObject(name = "idempotency_key_required", value = IDEMPOTENCY_REQUIRED_EXAMPLE),
-                            @ExampleObject(name = "validation", value = NOTE_REQUIRED_EXAMPLE)
+                            @ExampleObject(name = "validation", value = NOTE_REQUIRED_EXAMPLE),
+                            @ExampleObject(name = "note_required", value = NOTE_EMPTY_EXAMPLE)
                     })),
             @ApiResponse(responseCode = "403", description = "Not a supervisor — or not on this account",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "missing_permission", value = FORBIDDEN_EXAMPLE),
                             @ExampleObject(name = "support_self_action", value = SELF_EXAMPLE),
                             @ExampleObject(name = "staff_target_requires_supervisor", value = STAFF_TARGET_EXAMPLE),
-                            @ExampleObject(name = "console_staff_account", value = CONSOLE_STAFF_EXAMPLE),
-                            @ExampleObject(name = "target_not_manageable", value = """
-                                    { "code": "403 FORBIDDEN", "message": "You can't change this account.", "data": { "errorCode": "target_not_manageable", "reason": "exceeds_your_authority" } }
-                                    """)
+                            @ExampleObject(name = "console_staff_account", value = CONSOLE_STAFF_EXAMPLE)
                     })),
             @ApiResponse(responseCode = "404", description = "Not in this lookup, or support switched off",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "target_not_found", value = TARGET_NOT_FOUND_EXAMPLE),
                             @ExampleObject(name = "support_disabled", value = DISABLED_EXAMPLE)
                     })),
-            @ApiResponse(responseCode = "409", description = "Nothing to reset, stale lookup, or the key was reused",
+            @ApiResponse(responseCode = "409", description = "Nothing to reset, the account is deactivated or pending approval, stale lookup, or the key was reused",
                     content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "account_inactive", value = ACCOUNT_INACTIVE_EXAMPLE),
                             @ExampleObject(name = "mfa_not_enrolled", value = """
                                     { "code": "409 CONFLICT", "message": "This account hasn't set up two-factor sign-in, so there is nothing to reset.", "data": { "errorCode": "mfa_not_enrolled" } }
                                     """),

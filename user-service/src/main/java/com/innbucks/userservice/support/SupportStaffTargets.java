@@ -83,8 +83,14 @@ public class SupportStaffTargets {
         return staff;
     }
 
-    /** True when {@code user} itself is a staff account — the console guard on its writes. */
+    /**
+     * True when {@code user} itself is a staff account, SUPER_ADMIN included —
+     * the console section renders it as a stub, keeps it out of a lookup's
+     * targets, and refuses every detail read and write aimed at it. SUPER_ADMIN is
+     * named explicitly rather than trusted to arrive through the NAMED role set.
+     */
     public boolean isStaffAccount(User user) {
-        return staffEligibility.isStaffAccount(user);
+        if (user == null) return false;
+        return user.hasRole(User.Role.SUPER_ADMIN) || staffEligibility.isStaffAccount(user);
     }
 }

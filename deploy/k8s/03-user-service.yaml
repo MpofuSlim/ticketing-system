@@ -58,7 +58,9 @@ spec:
             # compromised sibling could mint assertions. optional: true, so a cell
             # without the Secret still starts (support logs HALF-PROVISIONED and the
             # product sections render UNAVAILABLE) instead of CreateContainerConfigError.
-            # Create it per host: see the PR's Rollout notes.
+            # Create it per host: see the PR's Rollout notes. If the key ever does land in
+            # a shared source, api-gateway and booking/event/seat/payment refuse to boot
+            # under a deployment profile (their secrets guards) — remove it and rotate.
             - name: SUPPORT_ASSERTION_PRIVATE_KEY
               valueFrom: { secretKeyRef: { name: user-service-support-signing, key: SUPPORT_ASSERTION_PRIVATE_KEY, optional: true } }
           resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }
