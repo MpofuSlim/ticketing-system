@@ -249,7 +249,7 @@ public class SupportSearchService {
     // ---- resolution ------------------------------------------------------------------------
 
     /** What a query resolves to: the accounts, the phones the app section reads, and a reference hit. */
-    private final class Resolution {
+    private static final class Resolution {
         final Query query;
         final List<User> accounts = new ArrayList<>();
         /** E.164 phone → the account using it, for the InnBucks app section. Ordered. */
@@ -395,7 +395,7 @@ public class SupportSearchService {
                 Optional<String> profileName = withProfiles
                         ? account.flatMap(u -> customerProfiles.findByUserId(u.getId()))
                                 .map(cp -> cp.getFullName())
-                                .filter(n -> n != null && !n.isBlank())
+                                .filter(n -> !n.isBlank())
                         : Optional.empty();
                 profileName.ifPresentOrElse(names::add, () -> account.map(ConsoleSupportSection::name)
                         .ifPresent(names::add));

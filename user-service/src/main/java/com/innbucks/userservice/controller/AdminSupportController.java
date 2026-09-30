@@ -70,6 +70,18 @@ public class AdminSupportController {
     private static final String LOOKUP_EXPIRED_EXAMPLE = """
             { "code": "409 CONFLICT", "message": "Search for the customer again.", "data": { "errorCode": "lookup_expired" } }
             """;
+    private static final String LOOKUP_MISSING_SECTION_EXAMPLE = """
+            { "code": "409 CONFLICT", "message": "Search for the customer again.", "data": { "errorCode": "lookup_expired", "reason": "section_not_in_lookup" } }
+            """;
+    private static final String AGENT_NOT_RESOLVED_EXAMPLE = """
+            { "code": "403 FORBIDDEN", "message": "Your account couldn't be verified. Sign in again.", "data": { "errorCode": "agent_not_resolved" } }
+            """;
+    private static final String LOOKUP_ID_TOO_LONG_EXAMPLE = """
+            { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "lookupId": "lookupId must be 16 characters or fewer" } }
+            """;
+    private static final String CASE_ID_TOO_LONG_EXAMPLE = """
+            { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "caseId": "caseId must be 64 characters or fewer" } }
+            """;
     private static final String LOOKUP_REQUIRED_EXAMPLE = """
             { "code": "400 BAD_REQUEST", "message": "Search for the customer first, then send the lookupId that search returned.", "data": { "errorCode": "lookup_required" } }
             """;
@@ -118,6 +130,14 @@ public class AdminSupportController {
               "organizations": [ { "organizationId": "5c0e8a2d-31f4-4b6e-9d7a-0f1e2d3c4b5a", "name": "Moyo Fresh Foods", "role": "OWNER", "status": "ACTIVE", "products": ["loyalty"] } ],
               "serviceRequests": [ { "id": 311, "service": "marketplace", "status": "PENDING", "submittedAt": "2026-09-28T11:05:00+02:00", "decidedAt": null, "decisionReason": null, "guidance": "Waiting for an InnBucks administrator to review it (submitted 11:05 on 28 Sep). Support can't approve requests; if it's urgent, escalate to the product team." } ],
               "agentGuidance": "Signs in normally. If they've forgotten the password, send a reset code.",
+              "actions": ["send-password-reset"] }
+            """;
+    /** The same account right after an MFA reset: no second factor, so ConsoleSupportSection's guidance says so. */
+    private static final String MFA_RESET_ACCOUNT_JSON = """
+            { "userId": 1042, "userUuid": "9b2f4c1e-6a7d-4e0b-8c3f-2d5e1a7b9c40", "name": "Tariro Moyo", "email": "tariro@example.com", "phone": "+263771234567", "status": "ACTIVE", "roles": ["MERCHANT_ADMIN"], "staffAccount": false, "mfaEnrolled": false, "lockedUntil": null, "mfaLockedUntil": null, "failedSignInAttempts": 0, "lastSignInAt": "2026-09-29T08:12:40+02:00", "mustChangePassword": false, "createdAt": "2026-03-02T10:15:00+02:00",
+              "organizations": [ { "organizationId": "5c0e8a2d-31f4-4b6e-9d7a-0f1e2d3c4b5a", "name": "Moyo Fresh Foods", "role": "OWNER", "status": "ACTIVE", "products": ["loyalty"] } ],
+              "serviceRequests": [ { "id": 311, "service": "marketplace", "status": "PENDING", "submittedAt": "2026-09-28T11:05:00+02:00", "decidedAt": null, "decisionReason": null, "guidance": "Waiting for an InnBucks administrator to review it (submitted 11:05 on 28 Sep). Support can't approve requests; if it's urgent, escalate to the product team." } ],
+              "agentGuidance": "Two-factor sign-in isn't set up yet; they'll be asked to set it up when they next sign in.",
               "actions": ["send-password-reset"] }
             """;
 
@@ -241,9 +261,10 @@ public class AdminSupportController {
                                     { "code": "400 BAD_REQUEST", "message": "Validation failed", "data": { "q": "q is required" } }
                                     """)
                     })),
-            @ApiResponse(responseCode = "403", description = "Not allowed to search, or not by this kind of reference",
+            @ApiResponse(responseCode = "403", description = "Not allowed to search, or not by this kind of reference, or your own account couldn't be verified",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "missing_permission", value = FORBIDDEN_EXAMPLE),
+                            @ExampleObject(name = "agent_not_resolved", value = AGENT_NOT_RESOLVED_EXAMPLE),
                             @ExampleObject(name = "query_not_permitted", value = """
                                     { "code": "403 FORBIDDEN", "message": "You can't search by this kind of reference.", "data": { "errorCode": "query_not_permitted" } }
                                     """)
@@ -286,9 +307,10 @@ public class AdminSupportController {
                             """))),
             @ApiResponse(responseCode = "400", description = "No lookupId",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = LOOKUP_REQUIRED_EXAMPLE))),
-            @ApiResponse(responseCode = "403", description = "Missing support-console:read, or the account has become an InnBucks staff account since the search",
+            @ApiResponse(responseCode = "403", description = "Missing support-console:read, your own account couldn't be verified, or the account has become an InnBucks staff account since the search",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "missing_permission", value = FORBIDDEN_EXAMPLE),
+                            @ExampleObject(name = "agent_not_resolved", value = AGENT_NOT_RESOLVED_EXAMPLE),
                             @ExampleObject(name = "console_staff_account", value = CONSOLE_STAFF_EXAMPLE)
                     })),
             @ApiResponse(responseCode = "404", description = "Not in this lookup, or support switched off",
@@ -296,8 +318,11 @@ public class AdminSupportController {
                             @ExampleObject(name = "target_not_found", value = TARGET_NOT_FOUND_EXAMPLE),
                             @ExampleObject(name = "support_disabled", value = DISABLED_EXAMPLE)
                     })),
-            @ApiResponse(responseCode = "409", description = "The lookup is stale, someone else's, or didn't return the console section",
-                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = LOOKUP_EXPIRED_EXAMPLE))),
+            @ApiResponse(responseCode = "409", description = "The lookup is stale, someone else's, or didn't return the console section (data.reason section_not_in_lookup — e.g. a reference search)",
+                    content = @Content(mediaType = "application/json", examples = {
+                            @ExampleObject(name = "lookup_expired", value = LOOKUP_EXPIRED_EXAMPLE),
+                            @ExampleObject(name = "section_not_in_lookup", value = LOOKUP_MISSING_SECTION_EXAMPLE)
+                    })),
             @ApiResponse(responseCode = "429", description = "Your lookup limit",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = LIMITED_EXAMPLE))),
             @ApiResponse(responseCode = "503", description = "The read could not be recorded, so it is not shown",
@@ -327,16 +352,19 @@ public class AdminSupportController {
                             { "code": "200 OK", "message": "Account unlocked", "data": { "outcome": "SUCCESS", "whatHappensNext": "The account can sign in again now. If the caller is still refused, ask them to wait a minute and try once more.", "replayed": false, "account": """ + UNLOCKED_ACCOUNT_JSON + """
                             } }
                             """))),
-            @ApiResponse(responseCode = "400", description = "No lookupId, no Idempotency-Key, or no note (or one that is empty once markup is removed)",
+            @ApiResponse(responseCode = "400", description = "No lookupId, no Idempotency-Key, no note (or one that is empty once markup is removed), or a field over its length (lookupId 16, note 500, caseId 64)",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "lookup_required", value = LOOKUP_REQUIRED_EXAMPLE),
                             @ExampleObject(name = "idempotency_key_required", value = IDEMPOTENCY_REQUIRED_EXAMPLE),
                             @ExampleObject(name = "validation", value = NOTE_REQUIRED_EXAMPLE),
+                            @ExampleObject(name = "lookup_id_too_long", value = LOOKUP_ID_TOO_LONG_EXAMPLE),
+                            @ExampleObject(name = "case_id_too_long", value = CASE_ID_TOO_LONG_EXAMPLE),
                             @ExampleObject(name = "note_required", value = NOTE_EMPTY_EXAMPLE)
                     })),
-            @ApiResponse(responseCode = "403", description = "Not allowed — or not on this account",
+            @ApiResponse(responseCode = "403", description = "Not allowed, your own account couldn't be verified — or not on this account",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "missing_permission", value = FORBIDDEN_EXAMPLE),
+                            @ExampleObject(name = "agent_not_resolved", value = AGENT_NOT_RESOLVED_EXAMPLE),
                             @ExampleObject(name = "support_self_action", value = SELF_EXAMPLE),
                             @ExampleObject(name = "staff_target_requires_supervisor", value = STAFF_TARGET_EXAMPLE),
                             @ExampleObject(name = "console_staff_account", value = CONSOLE_STAFF_EXAMPLE)
@@ -350,6 +378,7 @@ public class AdminSupportController {
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "account_inactive", value = ACCOUNT_INACTIVE_EXAMPLE),
                             @ExampleObject(name = "lookup_expired", value = LOOKUP_EXPIRED_EXAMPLE),
+                            @ExampleObject(name = "section_not_in_lookup", value = LOOKUP_MISSING_SECTION_EXAMPLE),
                             @ExampleObject(name = "idempotency_key_reused", value = IDEMPOTENCY_REUSED_EXAMPLE)
                     })),
             @ApiResponse(responseCode = "429", description = "Your lookup limit",
@@ -380,16 +409,19 @@ public class AdminSupportController {
                             { "code": "200 OK", "message": "Reset code sent", "data": { "outcome": "SUCCESS", "whatHappensNext": "We're emailing a password-reset code to tariro@example.com now. It works for 5 minutes: ask the caller to choose Forgot password on the Foundry sign-in page, enter this email, then the code. If it hasn't arrived within a couple of minutes, ask them to check their spam folder before you send another.", "replayed": false, "account": """ + UNLOCKED_ACCOUNT_JSON + """
                             } }
                             """))),
-            @ApiResponse(responseCode = "400", description = "No lookupId, no Idempotency-Key, or no note (or one that is empty once markup is removed)",
+            @ApiResponse(responseCode = "400", description = "No lookupId, no Idempotency-Key, no note (or one that is empty once markup is removed), or a field over its length (lookupId 16, note 500, caseId 64)",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "lookup_required", value = LOOKUP_REQUIRED_EXAMPLE),
                             @ExampleObject(name = "idempotency_key_required", value = IDEMPOTENCY_REQUIRED_EXAMPLE),
                             @ExampleObject(name = "validation", value = NOTE_REQUIRED_EXAMPLE),
+                            @ExampleObject(name = "lookup_id_too_long", value = LOOKUP_ID_TOO_LONG_EXAMPLE),
+                            @ExampleObject(name = "case_id_too_long", value = CASE_ID_TOO_LONG_EXAMPLE),
                             @ExampleObject(name = "note_required", value = NOTE_EMPTY_EXAMPLE)
                     })),
-            @ApiResponse(responseCode = "403", description = "Not allowed — or not on this account",
+            @ApiResponse(responseCode = "403", description = "Not allowed, your own account couldn't be verified — or not on this account",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "missing_permission", value = FORBIDDEN_EXAMPLE),
+                            @ExampleObject(name = "agent_not_resolved", value = AGENT_NOT_RESOLVED_EXAMPLE),
                             @ExampleObject(name = "support_self_action", value = SELF_EXAMPLE),
                             @ExampleObject(name = "staff_target_requires_supervisor", value = STAFF_TARGET_EXAMPLE),
                             @ExampleObject(name = "console_staff_account", value = CONSOLE_STAFF_EXAMPLE)
@@ -406,9 +438,10 @@ public class AdminSupportController {
                                     { "code": "409 CONFLICT", "message": "This account has no email address, so a reset code can't be sent.", "data": { "errorCode": "no_email_on_account" } }
                                     """),
                             @ExampleObject(name = "lookup_expired", value = LOOKUP_EXPIRED_EXAMPLE),
+                            @ExampleObject(name = "section_not_in_lookup", value = LOOKUP_MISSING_SECTION_EXAMPLE),
                             @ExampleObject(name = "idempotency_key_reused", value = IDEMPOTENCY_REUSED_EXAMPLE)
                     })),
-            @ApiResponse(responseCode = "429", description = "Your lookup limit, or too many codes to this account",
+            @ApiResponse(responseCode = "429", description = "Your lookup limit (with Retry-After and data.retryAfterSeconds), or too many codes to this account — reset_code_limited carries NO Retry-After and NO retryAfterSeconds: the wait isn't known here, so ask the caller to use the latest code or try later",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "lookup_rate_limited", value = LIMITED_EXAMPLE),
                             @ExampleObject(name = "reset_code_limited", value = """
@@ -440,19 +473,22 @@ public class AdminSupportController {
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "2FA reset",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
-                            { "code": "200 OK", "message": "Two-factor sign-in reset", "data": { "outcome": "SUCCESS", "whatHappensNext": "Two-factor sign-in is off for this account and every session it had open has ended. At their next sign-in they'll be asked to set it up again. We've sent the account a security alert and emailed the other owners of its businesses.", "replayed": false, "account": """ + UNLOCKED_ACCOUNT_JSON + """
+                            { "code": "200 OK", "message": "Two-factor sign-in reset", "data": { "outcome": "SUCCESS", "whatHappensNext": "Two-factor sign-in is off for this account and every session it had open has ended. At their next sign-in they'll be asked to set it up again. We've sent the account a security alert and emailed the other owners of its businesses.", "replayed": false, "account": """ + MFA_RESET_ACCOUNT_JSON + """
                             } }
                             """))),
-            @ApiResponse(responseCode = "400", description = "No lookupId, no Idempotency-Key, or no note (or one that is empty once markup is removed)",
+            @ApiResponse(responseCode = "400", description = "No lookupId, no Idempotency-Key, no note (or one that is empty once markup is removed), or a field over its length (lookupId 16, note 500, caseId 64)",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "lookup_required", value = LOOKUP_REQUIRED_EXAMPLE),
                             @ExampleObject(name = "idempotency_key_required", value = IDEMPOTENCY_REQUIRED_EXAMPLE),
                             @ExampleObject(name = "validation", value = NOTE_REQUIRED_EXAMPLE),
+                            @ExampleObject(name = "lookup_id_too_long", value = LOOKUP_ID_TOO_LONG_EXAMPLE),
+                            @ExampleObject(name = "case_id_too_long", value = CASE_ID_TOO_LONG_EXAMPLE),
                             @ExampleObject(name = "note_required", value = NOTE_EMPTY_EXAMPLE)
                     })),
-            @ApiResponse(responseCode = "403", description = "Not a supervisor — or not on this account",
+            @ApiResponse(responseCode = "403", description = "Not a supervisor, your own account couldn't be verified — or not on this account",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "missing_permission", value = FORBIDDEN_EXAMPLE),
+                            @ExampleObject(name = "agent_not_resolved", value = AGENT_NOT_RESOLVED_EXAMPLE),
                             @ExampleObject(name = "support_self_action", value = SELF_EXAMPLE),
                             @ExampleObject(name = "staff_target_requires_supervisor", value = STAFF_TARGET_EXAMPLE),
                             @ExampleObject(name = "console_staff_account", value = CONSOLE_STAFF_EXAMPLE)
@@ -469,6 +505,7 @@ public class AdminSupportController {
                                     { "code": "409 CONFLICT", "message": "This account hasn't set up two-factor sign-in, so there is nothing to reset.", "data": { "errorCode": "mfa_not_enrolled" } }
                                     """),
                             @ExampleObject(name = "lookup_expired", value = LOOKUP_EXPIRED_EXAMPLE),
+                            @ExampleObject(name = "section_not_in_lookup", value = LOOKUP_MISSING_SECTION_EXAMPLE),
                             @ExampleObject(name = "idempotency_key_reused", value = IDEMPOTENCY_REUSED_EXAMPLE)
                     })),
             @ApiResponse(responseCode = "429", description = "Your lookup limit",

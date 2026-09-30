@@ -34,6 +34,19 @@ class GlobalExceptionHandlerTest {
     }
 
     @Test
+    void staffPolicy_isNoStoreOnTheSupportSurfaceOnly() {
+        org.springframework.mock.web.MockHttpServletRequest support =
+                new org.springframework.mock.web.MockHttpServletRequest("POST", "/admin/support/console-users/1042/unlock");
+        org.springframework.mock.web.MockHttpServletRequest roles =
+                new org.springframework.mock.web.MockHttpServletRequest("PUT", "/admin/roles/CALL_CENTER_AGENT/permissions");
+        assertEquals("no-store", handler.handleStaffPolicy(new AuditUnavailableException(null), support)
+                .getHeaders().getCacheControl());
+        // Unchanged elsewhere: the same refusal on a non-support path sets no Cache-Control.
+        org.junit.jupiter.api.Assertions.assertNull(handler.handleStaffPolicy(new AuditUnavailableException(null), roles)
+                .getHeaders().getCacheControl());
+    }
+
+    @Test
     void responseStatusException_fallsBackToStatusReasonPhrase_whenReasonIsNull() {
         ResponseEntity<ApiResult<Void>> resp = handler.handleResponseStatus(
                 new ResponseStatusException(HttpStatus.FORBIDDEN));

@@ -243,4 +243,58 @@ class AdminSupportDispatchTest {
                 .andExpect(jsonPath("$.data.note").value("note must be 500 characters or fewer"));
         verifyNoInteractions(actions);
     }
+
+    @Test
+    @DisplayName("a lookupId over 16 or a caseId over 64 characters is the validation 400 the Swagger documents")
+    void lookupIdAndCaseIdBounds() throws Exception {
+        mvc.perform(post("/admin/support/console-users/1042/unlock").principal(auth())
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"lookupId\":\"" + "S".repeat(17) + "\",\"note\":\"verified\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value("Validation failed"))
+                .andExpect(jsonPath("$.data.lookupId").value("lookupId must be 16 characters or fewer"));
+        mvc.perform(post("/admin/support/console-users/1042/unlock").principal(auth())
+                        .header("Idempotency-Key", UUID.randomUUID().toString())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"lookupId\":\"SLK-7Q2M9X\",\"note\":\"verified\",\"caseId\":\"" + "c".repeat(65) + "\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.data.caseId").value("caseId must be 64 characters or fewer"));
+        verifyNoInteractions(actions);
+    }
+
+    @Test
+    @DisplayName("a lookup without the console section is 409 lookup_expired with data.reason section_not_in_lookup")
+    void lookupMissingSection() throws Exception {
+        when(actions.detail(any(), eq(1042L), eq("SLK-3H8KD2"), any()))
+                .thenThrow(SupportPolicyException.lookupMissingSection());
+        mvc.perform(get("/admin/support/console-users/1042").param("lookupId", "SLK-3H8KD2").principal(auth()))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.message").value("Search for the customer again."))
+                .andExpect(jsonPath("$.data.errorCode").value("lookup_expired"))
+                .andExpect(jsonPath("$.data.reason").value("section_not_in_lookup"));
+    }
+
+    @Test
+    @DisplayName("429 reset_code_limited carries no Retry-After and no data.retryAfterSeconds, as documented")
+    void resetCodeLimitedHasNoRetryAfter() throws Exception {
+        when(actions.execute(eq(ConsoleSupportActions.Op.SEND_PASSWORD_RESET), any(), eq(1042L), any(), any(), any()))
+                .thenThrow(SupportPolicyException.resetCodeLimited());
+        write("send-password-reset").andExpect(status().isTooManyRequests())
+                .andExpect(jsonPath("$.data.errorCode").value("reset_code_limited"))
+                .andExpect(jsonPath("$.data.retryAfterSeconds").doesNotExist())
+                .andExpect(header().doesNotExist("Retry-After"))
+                .andExpect(header().string("Cache-Control", "no-store"));
+    }
+
+    @Test
+    @DisplayName("503 audit_unavailable from a support write is no-store, like every other support refusal")
+    void auditUnavailableIsNoStore() throws Exception {
+        when(actions.execute(eq(ConsoleSupportActions.Op.UNLOCK), any(), eq(1042L), any(), any(), any()))
+                .thenThrow(new com.innbucks.userservice.exception.AuditUnavailableException(null));
+        write("unlock").andExpect(status().isServiceUnavailable())
+                .andExpect(jsonPath("$.message").value("We couldn't record this change, so it wasn't made. Try again."))
+                .andExpect(jsonPath("$.data.errorCode").value("audit_unavailable"))
+                .andExpect(header().string("Cache-Control", "no-store"));
+    }
 }

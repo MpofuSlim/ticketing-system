@@ -180,18 +180,21 @@ public class SupportLookupLimiter {
             while (!w.isEmpty() && w.peekFirst() <= now - dayMs) w.pollFirst();
             long shortStart = now - shortMs;
             long inShort = 0;
-            Long oldestShort = null;
+            // Both maxima are at least 1 (SupportProperties refuses less), so a
+            // refusal below always has an entry to date it from: the first in the
+            // short window, or the head of a non-empty day window.
+            long oldestShort = now;
             for (Iterator<Long> it = w.iterator(); it.hasNext(); ) {
                 long at = it.next();
                 if (at > shortStart) {
+                    if (inShort == 0) oldestShort = at;
                     inShort++;
-                    if (oldestShort == null) oldestShort = at;
                 }
             }
             if (inShort >= config.getShortWindowMax()) {
                 verdict.set(new long[] {1, oldestShort + shortMs - now});
             } else if (w.size() >= config.getDailyMax()) {
-                verdict.set(new long[] {2, w.peekFirst() + dayMs - now});
+                verdict.set(new long[] {2, w.getFirst() + dayMs - now});
             } else {
                 w.addLast(now);
                 verdict.set(new long[] {0, 0});

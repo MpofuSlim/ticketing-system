@@ -395,8 +395,7 @@ class GatewayRouteTableTest {
                             .filter(p -> "Path".equals(p.getName()))
                             .flatMap(p -> p.getArgs().values().stream())
                             .anyMatch(pattern -> parser.parse(pattern).matches(container)))
-                    .map(RouteDefinition::getId)
-                    .findFirst().orElse(null);
+                    .findFirst().map(RouteDefinition::getId).orElse(null);
             assertThat(first).as(path).isEqualTo("user-admin-route");
         }
         assertThat(route("user-admin-route").getUri()).hasToString("lb://user-service");

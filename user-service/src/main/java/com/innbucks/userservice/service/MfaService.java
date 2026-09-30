@@ -337,8 +337,10 @@ public class MfaService {
      * devices gone, {@code tokenVersion} bumped (every access token and pending
      * mfaToken dies now), and the account told by the usual security alert. The
      * caller ({@code ConsoleSupportActions}) has already refused staff and
-     * SUPER_ADMIN targets and applied caller ⊇ target, and it seals the change
-     * FAIL-CLOSED as {@code SUPPORT_CONSOLE_MFA_RESET} as its last statement —
+     * SUPER_ADMIN targets on a fresh read. It applies no caller ⊇ target
+     * comparison, deliberately: an account that is not staff holds no platform
+     * permission for a supervisor to fall short of. It seals the change
+     * FAIL-CLOSED as {@code SUPPORT_CONSOLE_MFA_RESET} as its last statement,
      * so this method writes no audit row of its own. Joins the caller's
      * transaction: the account row is already locked there.
      *
