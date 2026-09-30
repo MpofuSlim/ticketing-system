@@ -42,7 +42,10 @@ class NamedRoleAssignmentTest {
         h.role("LEGACY_GRANTER", "users:roles:write", "users:merchants:read");
         h.account(30L, GRANTER, "LEGACY_GRANTER", "CALL_CENTER_SUPERVISOR");
         h.account(1L, OWNER, "SUPER_ADMIN");
-        target = h.account(40L, "tariro.moyo@innbucks.co.zw", "CUSTOMER");
+        // A staff-eligible target (V44): email proven, accepted staff profile —
+        // a staff role can only be ADDED to such an account, and a profiled
+        // account holds staff roles only, so its baseline role is one too.
+        target = h.eligibleStaff(h.account(40L, "tariro.moyo@innbucks.co.zw", "CALL_CENTER_AGENT"));
     }
 
     private org.springframework.test.web.servlet.ResultActions setRoles(String caller, String json)
@@ -55,7 +58,7 @@ class NamedRoleAssignmentTest {
     @DisplayName("a NAMED role the caller does not hold is refused even when its permissions are within theirs")
     void namedRoleNotHeld() throws Exception {
         // PRODUCT_OFFICER grants only users:merchants:read, which the granter holds.
-        setRoles(GRANTER, "{\"roles\":[\"CUSTOMER\",\"PRODUCT_OFFICER\"]}")
+        setRoles(GRANTER, "{\"roles\":[\"CALL_CENTER_AGENT\",\"PRODUCT_OFFICER\"]}")
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value(
                         "These roles can't be given to this account: PRODUCT_OFFICER "
@@ -63,7 +66,7 @@ class NamedRoleAssignmentTest {
                 .andExpect(jsonPath("$.data.errorCode").value("role_not_assignable"))
                 .andExpect(jsonPath("$.data.roles.PRODUCT_OFFICER").value("named_role_not_held"));
 
-        assertThat(target.getRoles()).containsExactly("CUSTOMER");
+        assertThat(target.getRoles()).containsExactly("CALL_CENTER_AGENT");
         verify(h.audit, never()).recordRequired(eq(AuditEventType.USER_ROLES_CHANGED),
                 any(), any(), any(), any(), any(), any());
     }
@@ -71,7 +74,7 @@ class NamedRoleAssignmentTest {
     @Test
     @DisplayName("a NAMED role the caller holds may be given")
     void namedRoleHeld() throws Exception {
-        setRoles(GRANTER, "{\"roles\":[\"CUSTOMER\",\"CALL_CENTER_SUPERVISOR\"]}")
+        setRoles(GRANTER, "{\"roles\":[\"CALL_CENTER_AGENT\",\"CALL_CENTER_SUPERVISOR\"]}")
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.roles", org.hamcrest.Matchers.hasItem("CALL_CENTER_SUPERVISOR")));
         verify(h.audit).recordRequired(eq(AuditEventType.USER_ROLES_CHANGED),
@@ -83,7 +86,7 @@ class NamedRoleAssignmentTest {
     void everyRefusalNamed() throws Exception {
         // FRAUD_DESK grants device-security:fraud, which the granter lacks — that
         // is reported before the NAMED rule, which would refuse it as well.
-        setRoles(GRANTER, "{\"roles\":[\"CUSTOMER\",\"FRAUD_DESK\",\"PRODUCT_OFFICER\"]}")
+        setRoles(GRANTER, "{\"roles\":[\"CALL_CENTER_AGENT\",\"FRAUD_DESK\",\"PRODUCT_OFFICER\"]}")
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value(
                         "These roles can't be given to this account: FRAUD_DESK (grants more than you hold), "
@@ -96,7 +99,7 @@ class NamedRoleAssignmentTest {
     @DisplayName("a custom role granting more than the caller holds is refused")
     void customRoleExceedingTheCaller() throws Exception {
         h.role("ACCOUNT_AUDITOR", "users:read");
-        setRoles(GRANTER, "{\"roles\":[\"CUSTOMER\",\"ACCOUNT_AUDITOR\"]}")
+        setRoles(GRANTER, "{\"roles\":[\"CALL_CENTER_AGENT\",\"ACCOUNT_AUDITOR\"]}")
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.data.roles.ACCOUNT_AUDITOR").value("exceeds_your_authority"));
     }
@@ -116,22 +119,22 @@ class NamedRoleAssignmentTest {
         // LEGACY_GRANTER stores users:roles:write from before that code was
         // reserved. The granter holds the role and so every code in it — the
         // permission comparison alone would wave it through.
-        setRoles(GRANTER, "{\"roles\":[\"CUSTOMER\",\"LEGACY_GRANTER\"]}")
+        setRoles(GRANTER, "{\"roles\":[\"CALL_CENTER_AGENT\",\"LEGACY_GRANTER\"]}")
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.message").value(
                         "These roles can't be given to this account: LEGACY_GRANTER (reserved to SUPER_ADMIN)."))
                 .andExpect(jsonPath("$.data.errorCode").value("role_not_assignable"))
                 .andExpect(jsonPath("$.data.roles.LEGACY_GRANTER").value("reserved_to_super_admin"));
 
-        assertThat(target.getRoles()).containsExactly("CUSTOMER");
+        assertThat(target.getRoles()).containsExactly("CALL_CENTER_AGENT");
     }
 
     @Test
     @DisplayName("the platform owner may still give a legacy role that stores a reserved code")
     void wildcardMayGiveALegacyReservedCodeRole() throws Exception {
-        setRoles(OWNER, "{\"roles\":[\"CUSTOMER\",\"LEGACY_GRANTER\"]}")
+        setRoles(OWNER, "{\"roles\":[\"CALL_CENTER_AGENT\",\"LEGACY_GRANTER\"]}")
                 .andExpect(status().isOk());
-        assertThat(target.getRoles()).containsExactlyInAnyOrder("CUSTOMER", "LEGACY_GRANTER");
+        assertThat(target.getRoles()).containsExactlyInAnyOrder("CALL_CENTER_AGENT", "LEGACY_GRANTER");
     }
 
     @Test
@@ -141,11 +144,11 @@ class NamedRoleAssignmentTest {
         // the granter does not hold it — and it must not be read as "nothing to
         // compare" (an unknown code classifies as PLATFORM, failing closed).
         h.role("STALE_ROLE", "users:merchants:read", "refunds:approve");
-        setRoles(GRANTER, "{\"roles\":[\"CUSTOMER\",\"STALE_ROLE\"]}")
+        setRoles(GRANTER, "{\"roles\":[\"CALL_CENTER_AGENT\",\"STALE_ROLE\"]}")
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.data.roles.STALE_ROLE").value("exceeds_your_authority"));
 
-        setRoles(OWNER, "{\"roles\":[\"CUSTOMER\",\"STALE_ROLE\"]}")
+        setRoles(OWNER, "{\"roles\":[\"CALL_CENTER_AGENT\",\"STALE_ROLE\"]}")
                 .andExpect(status().isOk());
     }
 
@@ -155,7 +158,7 @@ class NamedRoleAssignmentTest {
         target.getRoles().add("PRODUCT_OFFICER");
         // The granter could never have given PRODUCT_OFFICER, but keeping it while
         // adding one they may give is not a grant of it.
-        setRoles(GRANTER, "{\"roles\":[\"CUSTOMER\",\"PRODUCT_OFFICER\",\"CALL_CENTER_SUPERVISOR\"]}")
+        setRoles(GRANTER, "{\"roles\":[\"CALL_CENTER_AGENT\",\"PRODUCT_OFFICER\",\"CALL_CENTER_SUPERVISOR\"]}")
                 .andExpect(status().isOk());
     }
 }

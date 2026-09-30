@@ -121,6 +121,20 @@ public class RegisterRequestDTO {
             message = "BPO number must be 6–20 characters of digits and hyphens (at least one digit)")
     private String bpoNumber;
 
+    /**
+     * NOT accepted — declared only so a non-empty value can be refused instead
+     * of silently dropped. Registration's roles come from {@code defaultServices}
+     * alone; a console that sent {@code roles: ["PRODUCT_OFFICER"]} here used to
+     * get an organizer or merchant admin while believing it had created staff.
+     * Absent or {@code []} is accepted (the business form may send an empty
+     * list); anything else is 400 {@code roles_not_accepted}.
+     */
+    @Schema(nullable = true, example = "[]",
+            description = "Not accepted. Omit it, or send an empty array. A non-empty list is refused with "
+                    + "400 `roles_not_accepted`: staff accounts are created by an administrator with "
+                    + "POST /admin/staff.")
+    private List<String> roles;
+
     @AssertTrue(message = "businessName is required for a business account")
     @JsonIgnore
     @Schema(hidden = true)

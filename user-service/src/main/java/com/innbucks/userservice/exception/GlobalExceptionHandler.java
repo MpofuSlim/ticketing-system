@@ -252,6 +252,23 @@ public class GlobalExceptionHandler {
                         "The uploaded file is too large. Split it into smaller batches and try again."));
     }
 
+    /**
+     * An unreadable request body (malformed JSON, a wrong type). Same answer the
+     * catch-all below always gave, but logged WITHOUT the exception message:
+     * Jackson quotes the offending input in it ("Unrecognized token 'STI-…'"),
+     * and a body can carry a secret — a staff invite token, a password — that
+     * must never reach a log line.
+     */
+    @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
+    public ResponseEntity<ApiResult<Void>> handleUnreadable(
+            org.springframework.http.converter.HttpMessageNotReadableException ex) {
+        log.warn("Unreadable request body ({})",
+                ex.getMostSpecificCause() == null ? "unknown" : ex.getMostSpecificCause().getClass().getSimpleName());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(ApiResult.error(HttpStatus.BAD_REQUEST,
+                        "We couldn't process your request. Please try again."));
+    }
+
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<ApiResult<Void>> handleRuntime(RuntimeException ex) {
         log.warn("RuntimeException ({}): {}", ex.getClass().getSimpleName(), ex.getMessage());
@@ -291,8 +308,30 @@ public class GlobalExceptionHandler {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("errorCode", ex.getErrorCode());
         data.putAll(ex.getExtra());
-        return ResponseEntity.status(ex.getStatus())
-                .body(ApiResult.of(ex.getStatus(), ex.getMessage(), data));
+        ResponseEntity.BodyBuilder response = ResponseEntity.status(ex.getStatus());
+        if (ex.getRetryAfterSeconds() != null) {
+            // A quota refusal (429): the header for clients that read it, and
+            // data.retryAfterSeconds for a browser client that cannot (the
+            // gateway's CORS does not expose Retry-After).
+            response.header(org.springframework.http.HttpHeaders.RETRY_AFTER,
+                    String.valueOf(ex.getRetryAfterSeconds()));
+        }
+        return response.body(ApiResult.of(ex.getStatus(), ex.getMessage(), data));
+    }
+
+    /**
+     * A sign-in or refresh for a staff account whose invite has not been
+     * redeemed (V44). 401 like {@link AccountInactiveException} — the credential
+     * no longer admits anyone until the person uses the invite link — with its
+     * own code so the console can say where to go instead of offering a refresh.
+     */
+    @ExceptionHandler(StaffInvitePendingException.class)
+    public ResponseEntity<ApiResult<Map<String, String>>> handleStaffInvitePending(StaffInvitePendingException ex) {
+        log.info("Session refused — staff account has not redeemed its invite");
+        Map<String, String> data = new LinkedHashMap<>();
+        data.put("errorCode", StaffInvitePendingException.ERROR_CODE);
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(ApiResult.of(HttpStatus.UNAUTHORIZED, ex.getMessage(), data));
     }
 
     @ExceptionHandler(WrongCellException.class)

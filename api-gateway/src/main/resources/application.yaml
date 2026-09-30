@@ -179,6 +179,27 @@ spring:
                     key-resolver: "#{@preAuthIpKeyResolver}"
                     rate-limiter: "#{@resilientRedisRateLimiter}"
 
+            # Staff invites (V44): the set-password page's two public calls,
+            # POST /auth/staff-invite/inspect and /accept. The body carries a
+            # single-use bearer token, so the per-IP cap is the brake on guessing
+            # one (256-bit — infeasible anyway) and on hammering accept. IP-keyed
+            # (preAuthIpKeyResolver: the caller has no session) and fail-SAFE: an
+            # unauthenticated credential-redeeming endpoint keeps throttling when
+            # Redis is down. POST-only. MUST precede the /auth/** catch-all below.
+            - id: auth-staff-invite-route
+              uri: lb://user-service
+              predicates:
+                - Path=/auth/staff-invite/**
+                - Method=POST
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${AUTH_STAFF_INVITE_RATE_LIMIT_REPLENISH_PER_SECOND:1}
+                    redis-rate-limiter.burstCapacity: ${AUTH_STAFF_INVITE_RATE_LIMIT_BURST_CAPACITY:5}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@preAuthIpKeyResolver}"
+                    rate-limiter: "#{@resilientRedisRateLimiter}"
+
             - id: user-auth-route
               uri: lb://user-service
               predicates:

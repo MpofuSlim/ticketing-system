@@ -395,6 +395,11 @@ public class AdminUserController {
                     "broader one. A staff role is a platform staff built-in (PRODUCT_*, " +
                     "CALL_CENTER_*, FRAUD_DESK) or any role holding a PLATFORM permission; business " +
                     "accounts are not gated this way.\n\n" +
+                    "**Staff accounts are switched ON only through `POST /admin/staff/{id}/reactivate`** " +
+                    "(409 `use_staff_endpoints` here): that endpoint re-checks the email domain and resets the " +
+                    "credentials. The FIRST approval of a registration on an InnBucks staff address is refused " +
+                    "(400 `email_domain_reserved`) — approving it would mail a temporary password to whatever " +
+                    "phone the registrant typed.\n\n" +
                     "Requires the `users:activation:write` permission."
     )
     @ApiResponses({
@@ -434,13 +439,32 @@ public class AdminUserController {
                                             """)
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400",
-                    description = "`active` missing from the body",
+                    description = "`active` missing from the body, or the first approval of an InnBucks staff address",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(value = """
+                            examples = {
+                                    @ExampleObject(name = "Validation failed", value = """
                                     {
                                       "code": "400 BAD_REQUEST",
                                       "message": "Validation failed",
                                       "data": { "active": "active field is required" }
+                                    }
+                                    """),
+                                    @ExampleObject(name = "Registration on a staff address", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "InnBucks staff addresses can't be used here. Your administrator will invite you.",
+                                      "data": { "errorCode": "email_domain_reserved", "field": "email" }
+                                    }
+                                    """)
+                            })),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
+                    description = "`active: true` on a staff account",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Use the staff endpoints", value = """
+                                    {
+                                      "code": "409 CONFLICT",
+                                      "message": "Reactivate staff with POST /admin/staff/{id}/reactivate.",
+                                      "data": { "errorCode": "use_staff_endpoints" }
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
@@ -562,6 +586,19 @@ public class AdminUserController {
                     * The `USER_ROLES_CHANGED` audit row cannot be written — **503
                       `audit_unavailable`**, and nothing changes.
 
+                    ### Staff accounts
+
+                    * A **staff role** (a platform staff built-in, or any role holding a platform
+                      permission) may only be ADDED to a staff-eligible account: an address on a staff
+                      domain whose email was proven by redeeming an invite — **400
+                      `email_domain_not_allowed`** off the staff domains, **400 `staff_email_unverified`**
+                      otherwise (create the account with `POST /admin/staff`, or adopt a legacy one with
+                      `POST /admin/staff/{id}/resend-invite`, first). 503 `staff_domains_unconfigured` on
+                      a cell with no staff domain.
+                    * An account with a staff profile holds staff roles only — a business role in the set
+                      is **400 `role_not_assignable`** (`not_a_staff_role`).
+                    * Removing a role is never refused on these grounds.
+
                     Requires the `users:roles:write` permission, which only SUPER_ADMIN holds: it is
                     reserved to the `*` wildcard and cannot be granted to any role through the API.
                     """)
@@ -600,6 +637,34 @@ public class AdminUserController {
                                                   "FRAUD_DESK": "exceeds_your_authority",
                                                   "PRODUCT_OFFICER": "named_role_not_held"
                                                 }
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Staff role for an off-domain account", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Staff accounts must use an InnBucks email address ending in @innbucks.co.zw or @innbucks.co.ke.",
+                                              "data": {
+                                                "errorCode": "email_domain_not_allowed",
+                                                "field": "email",
+                                                "allowedDomains": ["innbucks.co.zw", "innbucks.co.ke"]
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Staff role for an account never invited", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "This account's email has never been confirmed. Send them a staff invite first.",
+                                              "data": { "errorCode": "staff_email_unverified" }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "Business role for a staff account", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "These roles can't be given to this account: MERCHANT_ADMIN (not a staff role).",
+                                              "data": {
+                                                "errorCode": "role_not_assignable",
+                                                "roles": { "MERCHANT_ADMIN": "not_a_staff_role" }
                                               }
                                             }
                                             """),
@@ -681,15 +746,25 @@ public class AdminUserController {
                                     { "code": "404 NOT_FOUND", "message": "User not found: 999", "data": null }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503",
-                    description = "The USER_ROLES_CHANGED audit row could not be written; nothing changed",
+                    description = "The USER_ROLES_CHANGED audit row could not be written (nothing changed), or "
+                            + "a staff role was added on a cell with no staff domain",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(value = """
+                            examples = {
+                                    @ExampleObject(name = "Audit unavailable", value = """
                                     {
                                       "code": "503 SERVICE_UNAVAILABLE",
                                       "message": "We couldn't record this change, so it wasn't made. Try again.",
                                       "data": { "errorCode": "audit_unavailable" }
                                     }
-                                    """)))
+                                    """),
+                                    @ExampleObject(name = "No staff domain configured", value = """
+                                    {
+                                      "code": "503 SERVICE_UNAVAILABLE",
+                                      "message": "Staff accounts aren't set up on this server yet.",
+                                      "data": { "errorCode": "staff_domains_unconfigured" }
+                                    }
+                                    """)
+                            }))
     })
     public ResponseEntity<ApiResult<UserResponseDTO>> updateRoles(
             @PathVariable Long id,
@@ -721,7 +796,10 @@ public class AdminUserController {
                     "way to re-issue it.\n\n" +
                     "The old password is irretrievably hashed, so this **rotates** to a new value rather than " +
                     "re-sending the original. Refuses to act on a SUPER_ADMIN target (that credential is " +
-                    "managed via the `BOOTSTRAP_ADMIN_PASSWORD` env seed). Requires **SUPER_ADMIN** role."
+                    "managed via the `BOOTSTRAP_ADMIN_PASSWORD` env seed). **Staff set passwords through an " +
+                    "invite**: a staff account (or a legacy one that could be adopted) is refused with 409 " +
+                    "`use_staff_invite` — use `POST /admin/staff/{id}/resend-invite`. Requires the " +
+                    "`users:password:reset` permission."
     )
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -738,7 +816,7 @@ public class AdminUserController {
                                         "email": "alice@innbucks.co.zw",
                                         "roles": ["EVENT_ORGANIZER"],
                                         "active": true,
-                                        "createdAt": "2026-01-15T10:30:00"
+                                        "createdAt": "2026-01-15T10:30:00+02:00"
                                       }
                                     }
                                     """))),
@@ -752,8 +830,27 @@ public class AdminUserController {
                                       "data": null
                                     }
                                     """))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "User not found"),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Caller is not a SUPER_ADMIN")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404", description = "User not found",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Not found", value = """
+                                    { "code": "404 NOT_FOUND", "message": "User not found: 999", "data": null }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403",
+                    description = "Caller lacks users:password:reset",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Missing permission", value = """
+                                    { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
+                    description = "A staff account: staff set passwords through an invite",
+                    content = @Content(mediaType = "application/json",
+                            examples = @ExampleObject(name = "Use the staff invite", value = """
+                                    {
+                                      "code": "409 CONFLICT",
+                                      "message": "Staff set passwords through an invite.",
+                                      "data": { "errorCode": "use_staff_invite" }
+                                    }
+                                    """)))
     })
     public ResponseEntity<ApiResult<UserResponseDTO>> resetTemporaryPassword(
             @PathVariable Long id,

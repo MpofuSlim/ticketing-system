@@ -324,4 +324,47 @@ class RefreshTokenServiceTest {
                     com.innbucks.userservice.exception.AccountInactiveException.class), name);
         }
     }
+
+    @Test
+    void rotate_anInvitedStaffAccount_is401StaffInvitePending_aheadOfReplayDetection() {
+        // V44: adoption and reactivation revoke every family, so the holder of
+        // the old session presents a revoked row. It must hear "use the invite"
+        // (401), never "reuse detected" (a false theft alarm and a 400).
+        User alice = aliceWithId(43L);
+        String first = service.issueNewFamily(alice, null);
+        stubRevokeAllForUser();
+        store.values().forEach(r -> r.setRevokedAt(Instant.now()));   // what the adoption did
+        com.innbucks.userservice.repository.StaffProfileRepository profiles =
+                org.mockito.Mockito.mock(com.innbucks.userservice.repository.StaffProfileRepository.class);
+        when(profiles.findById(43L)).thenReturn(java.util.Optional.of(
+                com.innbucks.userservice.entity.StaffProfile.builder().userId(43L).adopted(true)
+                        .createdAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC)).build()));
+        service.setStaffProfiles(profiles);
+
+        assertThrows(com.innbucks.userservice.exception.StaffInvitePendingException.class,
+                () -> service.rotate(first, null));
+        assertThrows(com.innbucks.userservice.exception.StaffInvitePendingException.class,
+                () -> service.rotateInto(first, null, UUID.randomUUID()));
+        verify(repo, never()).revokeFamily(any(UUID.class), any(Instant.class));
+
+        // Once the invite is accepted the account refreshes like any other.
+        when(profiles.findById(43L)).thenReturn(java.util.Optional.of(
+                com.innbucks.userservice.entity.StaffProfile.builder().userId(43L).adopted(true)
+                        .createdAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC))
+                        .inviteAcceptedAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC)).build()));
+        String fresh = service.issueNewFamily(alice, null);
+        assertNotNull(service.rotate(fresh, null));
+    }
+
+    @Test
+    void theInvitePendingRevocationCommits_despiteTheThrow() {
+        for (String name : List.of("rotate", "rotateInto")) {
+            java.lang.reflect.Method m = java.util.Arrays.stream(RefreshTokenService.class.getMethods())
+                    .filter(x -> x.getName().equals(name)).findFirst().orElseThrow();
+            org.springframework.transaction.annotation.Transactional tx =
+                    m.getAnnotation(org.springframework.transaction.annotation.Transactional.class);
+            assertTrue(List.of(tx.noRollbackFor()).contains(
+                    com.innbucks.userservice.exception.StaffInvitePendingException.class), name);
+        }
+    }
 }

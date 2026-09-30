@@ -137,22 +137,23 @@ class RequiredAuditRollsBackTheChangeIT extends SessionRevocationItSupport {
 
     @Test
     void aRoleGrantWhoseAuditFails_isNotMade_andNothingIsPublished() throws Exception {
-        User account = customer();
+        // A staff-eligible account (V44): a staff role may only be added to one.
+        User account = eligibleStaff("CALL_CENTER_AGENT", false);
         String target = String.valueOf(account.getId());
         long before = liveTokenVersion(account.getId());
         failAuditFor("USER_ROLES_CHANGED", target);
 
-        refusedAsUnrecorded(setRoles(account.getId(), "CUSTOMER", "CALL_CENTER_AGENT"));
+        refusedAsUnrecorded(setRoles(account.getId(), "CALL_CENTER_AGENT", "FRAUD_DESK"));
 
-        assertThat(liveRoles(account.getId())).containsExactly("CUSTOMER");
+        assertThat(liveRoles(account.getId())).containsExactly("CALL_CENTER_AGENT");
         assertThat(liveTokenVersion(account.getId())).as("the bump rolled back with the grant").isEqualTo(before);
         assertThat(shared(account)).as("a rolled-back bump publishes nothing").isNull();
         assertThat(auditRows("USER_ROLES_CHANGED", target)).isZero();
 
         // Control: with the audit path healthy, the identical request is made.
         dropTheTrigger();
-        setRoles(account.getId(), "CUSTOMER", "CALL_CENTER_AGENT").andExpect(status().isOk());
-        assertThat(liveRoles(account.getId())).containsExactly("CALL_CENTER_AGENT", "CUSTOMER");
+        setRoles(account.getId(), "CALL_CENTER_AGENT", "FRAUD_DESK").andExpect(status().isOk());
+        assertThat(liveRoles(account.getId())).containsExactly("CALL_CENTER_AGENT", "FRAUD_DESK");
         assertThat(liveTokenVersion(account.getId())).isEqualTo(before + 1);
         assertThat(shared(account)).isEqualTo(Long.toString(before + 1));
         assertThat(auditRows("USER_ROLES_CHANGED", target)).isEqualTo(1L);

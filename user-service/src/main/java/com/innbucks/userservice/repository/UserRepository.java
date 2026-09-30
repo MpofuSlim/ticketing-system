@@ -194,4 +194,24 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Modifying
     @Query("UPDATE User u SET u.credentialDeliveredAt = :at WHERE u.id = :id")
     int markCredentialDelivered(@Param("id") Long id, @Param("at") LocalDateTime at);
+
+    /**
+     * Stamp {@code last_sign_in_at} (V44) and nothing else — a targeted UPDATE for
+     * the same reason as {@link #markCredentialDelivered}: the sign-in path must
+     * never write a stale snapshot of any other column back.
+     */
+    @Modifying
+    @Query("UPDATE User u SET u.lastSignInAt = :at WHERE u.id = :id")
+    int stampLastSignIn(@Param("id") Long id, @Param("at") LocalDateTime at);
+
+    /**
+     * Candidate rows for the staff directory ({@code GET /admin/staff}): every
+     * account holding one of {@code staffRoles}, or with a {@code staff_profiles}
+     * row. The staff population is small (tens to hundreds of accounts), so the
+     * directory filters, sorts and pages this in memory — one query, and a filter
+     * can never be bound as an untyped null.
+     */
+    @Query("SELECT DISTINCT u FROM User u LEFT JOIN u.roles r WHERE r IN :staffRoles "
+            + "OR u.id IN (SELECT p.userId FROM StaffProfile p)")
+    List<User> findStaffCandidates(@Param("staffRoles") Collection<String> staffRoles);
 }

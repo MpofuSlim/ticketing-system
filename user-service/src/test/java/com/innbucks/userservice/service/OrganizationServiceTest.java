@@ -133,7 +133,8 @@ class OrganizationServiceTest {
                 .toList());
         when(userRepo.save(any(User.class))).thenAnswer(i -> i.getArgument(0));
 
-        service = new OrganizationService(orgRepo, memberRepo, productRepo, userRepo, audit, bumper);
+        service = new OrganizationService(orgRepo, memberRepo, productRepo, userRepo, audit, bumper,
+                org.mockito.Mockito.mock(com.innbucks.userservice.service.StaffEligibility.class));
     }
 
     // ---- fixtures -------------------------------------------------------------

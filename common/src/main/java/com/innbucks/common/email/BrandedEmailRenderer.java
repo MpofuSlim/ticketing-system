@@ -48,7 +48,53 @@ public final class BrandedEmailRenderer {
      * @param logoUrl  hosted logo image URL; blank → CSS roundel fallback
      */
     public static String render(String subject, String plainBody, String logoUrl) {
-        String paragraphs = toParagraphs(plainBody);
+        return render(subject, plainBody, logoUrl, null);
+    }
+
+    /**
+     * A call-to-action button: a label and the {@code https} link it opens.
+     *
+     * <p>OFF unless a caller passes one. The escaped plain-text body alone leaves
+     * a link to the reader's client to auto-link, which some do not; a button is
+     * a real {@code <a href>}. The URL is VALIDATED here, not just escaped:
+     * absolute {@code https} with a host, and only the characters a URL is made
+     * of — no whitespace, quote, angle bracket or backslash — so nothing a caller
+     * builds from data can become a {@code javascript:} link or break out of the
+     * attribute. The label is HTML-escaped. Callers keep the URL in the plain
+     * text too, for clients that strip buttons.
+     */
+    public record CallToAction(String label, String url) {
+
+        private static final java.util.regex.Pattern URL_CHARS =
+                java.util.regex.Pattern.compile("^https://[A-Za-z0-9._~:/?#\\[\\]@!$&()*+,;=%-]+$");
+
+        public CallToAction {
+            if (label == null || label.isBlank()) {
+                throw new IllegalArgumentException("A call-to-action needs a label");
+            }
+            if (url == null || !URL_CHARS.matcher(url).matches()) {
+                throw new IllegalArgumentException("A call-to-action link must be an absolute https URL");
+            }
+            java.net.URI uri;
+            try {
+                uri = java.net.URI.create(url);
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("A call-to-action link must be an absolute https URL", e);
+            }
+            if (!"https".equals(uri.getScheme()) || uri.getHost() == null || uri.getHost().isBlank()
+                    || uri.getRawUserInfo() != null) {
+                throw new IllegalArgumentException("A call-to-action link must be an absolute https URL");
+            }
+        }
+    }
+
+    /**
+     * As {@link #render(String, String, String)}, with an optional call-to-action
+     * button under the body; {@code cta} null renders exactly what the 3-argument
+     * form renders.
+     */
+    public static String render(String subject, String plainBody, String logoUrl, CallToAction cta) {
+        String paragraphs = toParagraphs(plainBody) + (cta == null ? "" : button(cta));
         String logo = (logoUrl == null || logoUrl.isBlank())
                 ? cssRoundel()
                 : "<img src=\"" + escapeAttr(logoUrl) + "\" width=\"180\" alt=\"InnBucks\" "
@@ -122,6 +168,20 @@ public final class BrandedEmailRenderer {
             +     "line-height:1;\">InnBucks</div>"
             +   "<div style=\"font-size:12px;font-weight:600;color:" + ON_NAVY_MUTED + ";letter-spacing:.4px;"
             +     "margin-top:3px;\">MicroBank Limited</div>"
+            + "</td></tr></table>";
+    }
+
+    /**
+     * A "bulletproof" button: a one-cell table (background as both
+     * {@code bgcolor}, for Outlook, and inline {@code background}, for Gmail)
+     * around the link itself.
+     */
+    private static String button(CallToAction cta) {
+        return "<table role=\"presentation\" cellpadding=\"0\" cellspacing=\"0\" style=\"margin:4px 0 24px;\">"
+            + "<tr><td bgcolor=\"" + TEAL + "\" style=\"background:" + TEAL + ";border-radius:8px;\">"
+            + "<a href=\"" + escapeAttr(cta.url()) + "\" target=\"_blank\" rel=\"noopener noreferrer\" "
+            +   "style=\"display:inline-block;padding:12px 28px;font-size:15px;font-weight:700;color:#ffffff;"
+            +   "text-decoration:none;border-radius:8px;\">" + escape(cta.label()) + "</a>"
             + "</td></tr></table>";
     }
 

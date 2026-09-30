@@ -211,4 +211,52 @@ class EmailNotificationClientContractTest {
         assertThatThrownBy(() -> client(closedPort).sendEmail("a@b.com", "s", "m", "r"))
                 .isInstanceOf(NotificationDeliveryException.class);
     }
+
+    private static final String INVITE_LINK =
+            "https://foundry.innbucks.co.zw/set-password#token=STI-contract-test-token";
+
+    @Test
+    @DisplayName("call-to-action (html-enabled): the message carries the button's href and label")
+    void sendEmail_callToAction_putsTheButtonOnTheWire() {
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).willReturn(okJson("{\"accessToken\":\"tok-abc\"}")));
+        wireMock.stubFor(post(urlEqualTo(EMAIL)).willReturn(aResponse().withStatus(200)));
+
+        client(wireMock.port(), true).sendEmail("tariro.moyo@innbucks.co.zw", "Your InnBucks Foundry staff account",
+                "Set your password here:\n" + INVITE_LINK, "STAFF-INVITE-907",
+                new com.innbucks.common.email.BrandedEmailRenderer.CallToAction("Set your password", INVITE_LINK));
+
+        wireMock.verify(postRequestedFor(urlEqualTo(EMAIL))
+                .withRequestBody(matchingJsonPath("$.message", containing("<a href=\"" + INVITE_LINK + "\"")))
+                .withRequestBody(matchingJsonPath("$.message", containing(">Set your password</a>")))
+                .withRequestBody(matchingJsonPath("$.reference", equalTo("STAFF-INVITE-907"))));
+    }
+
+    @Test
+    @DisplayName("call-to-action refused with an echo of the message: NotificationDeliveryException, echo NOT logged")
+    void sendEmail_callToAction_refusal_neverLogsTheUpstreamEcho() {
+        wireMock.stubFor(post(urlEqualTo(LOGIN)).willReturn(okJson("{\"accessToken\":\"tok-abc\"}")));
+        wireMock.stubFor(post(urlEqualTo(EMAIL)).willReturn(aResponse().withStatus(400)
+                .withHeader("Content-Type", "application/json")
+                .withBody("{\"errors\":[\"Invalid message: " + INVITE_LINK + "\"]}")));
+        ch.qos.logback.core.read.ListAppender<ch.qos.logback.classic.spi.ILoggingEvent> logs =
+                new ch.qos.logback.core.read.ListAppender<>();
+        logs.start();
+        ch.qos.logback.classic.Logger logger =
+                (ch.qos.logback.classic.Logger) org.slf4j.LoggerFactory.getLogger(EmailNotificationClient.class);
+        logger.addAppender(logs);
+        try {
+            assertThatThrownBy(() -> client(wireMock.port()).sendEmail("tariro.moyo@innbucks.co.zw",
+                    "Your InnBucks Foundry staff account", "Set your password here:\n" + INVITE_LINK,
+                    "STAFF-INVITE-907", new com.innbucks.common.email.BrandedEmailRenderer.CallToAction(
+                            "Set your password", INVITE_LINK)))
+                    .isInstanceOf(NotificationDeliveryException.class)
+                    .hasMessage("Notification API rejected email: HTTP 400");
+            org.assertj.core.api.Assertions.assertThat(logs.list)
+                    .isNotEmpty()
+                    .allSatisfy(e -> org.assertj.core.api.Assertions.assertThat(e.getFormattedMessage())
+                            .doesNotContain("STI-contract-test-token"));
+        } finally {
+            logger.detachAppender(logs);
+        }
+    }
 }

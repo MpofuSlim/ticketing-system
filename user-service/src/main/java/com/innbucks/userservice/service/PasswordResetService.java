@@ -41,7 +41,9 @@ import java.util.Optional;
  * expired code" — with the same 200 / 400 an unknown number gets. A phone on a
  * staff account is a takeover path: whoever holds the number (a SIM swap, or a
  * squatter's phone left on a legacy account) could otherwise set the password of
- * an account with platform-wide authority. The email reset is unchanged.
+ * an account with platform-wide authority. The email reset is unchanged. Since
+ * V44 the same holds for any account with a staff profile, and an INVITED staff
+ * account (invite not yet redeemed) resets by NO identifier at all.
  */
 @Service
 @RequiredArgsConstructor
@@ -57,6 +59,13 @@ public class PasswordResetService {
     private final TokenVersionBumper tokenVersionBumper;
     /** Tells whether an account holds a staff role — the phone-reset refusal. */
     private final RoleGrantGuard roleGrantGuard;
+    /**
+     * Staff profiles (V44): a profiled account never resets by phone either, and
+     * an INVITED one never resets at all, by any identifier — until the invite is
+     * redeemed the account has no password anyone chose, and a reset would be a
+     * way to set one without proving the mailbox.
+     */
+    private final StaffEligibility staffEligibility;
 
     /** This cell's country pin — region hint for normalising a reset phone to
      *  E.164 so the OTP key and the user lookup match what registration stored. */
@@ -85,7 +94,12 @@ public class PasswordResetService {
             log.info("Password-reset requested for a deactivated account userId={} — no-op", user.get().getId());
             return;
         }
-        if (!id.email() && roleGrantGuard.holdsStaffRole(user.get())) {
+        if (staffEligibility.isInvitePending(user.get())) {
+            log.info("Password-reset requested for an INVITED staff account userId={} — no-op (invite pending)",
+                    user.get().getId());
+            return;
+        }
+        if (!id.email() && (roleGrantGuard.holdsStaffRole(user.get()) || staffEligibility.isProfiled(user.get()))) {
             log.info("Password-reset requested BY PHONE for a staff account userId={} — no-op (staff reset by email)",
                     user.get().getId());
             return;
@@ -133,8 +147,18 @@ public class PasswordResetService {
         // before the code is looked at. No reset code is ever sent to a staff
         // phone (requestReset above), but OTP rows carry no purpose, so a code
         // sent to the same number by another flow must not work here either.
-        if (target.isPresent() && !id.email() && roleGrantGuard.holdsStaffRole(target.get())) {
+        if (target.isPresent() && !id.email()
+                && (roleGrantGuard.holdsStaffRole(target.get()) || staffEligibility.isProfiled(target.get()))) {
             log.info("Password reset BY PHONE refused for a staff account userId={}", target.get().getId());
+            throw new AuthService.PasswordChangeException("Invalid or expired code");
+        }
+        // An INVITED staff account never resets, by ANY identifier: the same
+        // wrong-code answer, before the code is looked at. requestReset sends it
+        // nothing, but OTP rows carry no purpose — /auth/otp/request to the same
+        // address followed by this call would otherwise set a password on an
+        // account whose mailbox nobody has proven.
+        if (target.isPresent() && staffEligibility.isInvitePending(target.get())) {
+            log.info("Password reset refused for an INVITED staff account userId={}", target.get().getId());
             throw new AuthService.PasswordChangeException("Invalid or expired code");
         }
 

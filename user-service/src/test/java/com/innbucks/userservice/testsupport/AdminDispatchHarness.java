@@ -60,7 +60,18 @@ public class AdminDispatchHarness {
     public final TokenVersionPublisher publisher = mock(TokenVersionPublisher.class);
     public final InMemoryTokenVersionBumper bumper = new InMemoryTokenVersionBumper(publisher);
     public final RoleGrantGuard guard = new RoleGrantGuard(users, roles);
-    public final RoleAdminService roleAdmin = new RoleAdminService(roles, audit, guard, bumper);
+    /** Staff profiles (V44), map-backed: {@link #eligibleStaff} adds one. */
+    public final com.innbucks.userservice.repository.StaffProfileRepository staffProfiles =
+            mock(com.innbucks.userservice.repository.StaffProfileRepository.class);
+    public final Map<Long, com.innbucks.userservice.entity.StaffProfile> profileRows = new LinkedHashMap<>();
+    public final com.innbucks.userservice.repository.OrganizationMemberRepository members =
+            mock(com.innbucks.userservice.repository.OrganizationMemberRepository.class);
+    public final com.innbucks.userservice.repository.OrganizationRepository organizations =
+            mock(com.innbucks.userservice.repository.OrganizationRepository.class);
+    /** The real staff rules, over the mocks above and the test profile's two staff domains. */
+    public final com.innbucks.userservice.service.StaffEligibility eligibility =
+            StaffFixtures.eligibility(staffProfiles, guard, members, organizations, roles, users);
+    public final RoleAdminService roleAdmin = new RoleAdminService(roles, audit, guard, bumper, eligibility);
     public final UserAdminService userAdmin;
     public final MfaService mfa;
     public final MockMvc mvc;
@@ -83,12 +94,18 @@ public class AdminDispatchHarness {
             return r;
         });
         when(users.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(staffProfiles.findById(any())).thenAnswer(inv -> Optional.ofNullable(profileRows.get((Long) inv.getArgument(0))));
+        when(staffProfiles.findAllByUserIdIn(any())).thenAnswer(inv -> {
+            Collection<Long> ids = inv.getArgument(0);
+            return ids.stream().filter(profileRows::containsKey).map(profileRows::get).toList();
+        });
+        when(roles.findHolderIds(anyString())).thenAnswer(inv -> List.of());
 
         AccountSessionRevoker revoker = new AccountSessionRevoker(bumper, mock(RefreshTokenRepository.class),
                 mock(DeviceTrustService.class), mock(OtpRepository.class));
         userAdmin = new UserAdminService(users, mock(PasswordEncoder.class), audit,
                 mock(ApplicationEventPublisher.class), mock(TenantProfileRepository.class), bumper, revoker, roles,
-                guard);
+                guard, eligibility);
         mfa = new MfaService(users, mock(MfaBackupCodeRepository.class), mock(PasswordEncoder.class),
                 new MfaProperties(), bumper, guard);
         mvc = MockMvcBuilders.standaloneSetup(
@@ -113,6 +130,22 @@ public class AdminDispatchHarness {
         when(users.findById(id)).thenReturn(Optional.of(u));
         when(users.findByEmail(email)).thenReturn(Optional.of(u));
         return u;
+    }
+
+    /**
+     * Makes {@code user} STAFF-ELIGIBLE (V44): its email proven and an accepted
+     * staff profile — what an account created through {@code POST /admin/staff}
+     * looks like once its invite is redeemed. Needed before a staff role can be
+     * ADDED to it.
+     */
+    public User eligibleStaff(User user) {
+        user.setEmailVerifiedAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusDays(1));
+        profileRows.put(user.getId(), com.innbucks.userservice.entity.StaffProfile.builder()
+                .userId(user.getId())
+                .createdAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusDays(2))
+                .inviteAcceptedAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusDays(1))
+                .build());
+        return user;
     }
 
     /**

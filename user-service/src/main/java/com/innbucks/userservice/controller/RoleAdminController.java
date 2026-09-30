@@ -66,6 +66,14 @@ public class RoleAdminController {
             }
             """;
 
+    static final String DOMAINS_UNCONFIGURED_EXAMPLE = """
+            {
+              "code": "503 SERVICE_UNAVAILABLE",
+              "message": "Staff accounts aren't set up on this server yet.",
+              "data": { "errorCode": "staff_domains_unconfigured" }
+            }
+            """;
+
     @GetMapping
     @PreAuthorize("hasAuthority('" + PermissionCatalog.ROLES_READ + "')")
     @Operation(summary = "List all roles",
@@ -173,9 +181,16 @@ public class RoleAdminController {
                     **No escalation.** Every code must be one the CALLER holds, read from their \
                     current roles (not their token) — `400 permission_not_assignable`, reason \
                     `exceeds_your_authority`. The codes that hand out authority — `roles:write`, \
-                    `users:roles:write` (and the staff-administration codes, when they ship) — are \
-                    reserved to SUPER_ADMIN and never accepted, whoever asks: reason \
-                    `reserved_to_super_admin`. `data.codes` names every refused code with its reason.
+                    `users:roles:write`, `staff:read`, `staff:create`, `staff:manage` and \
+                    `organizations:manage` — are reserved to SUPER_ADMIN and never accepted, whoever \
+                    asks: reason `reserved_to_super_admin`. `data.codes` names every refused code with \
+                    its reason.
+
+                    **Staff holders.** `user_roles` has no foreign key to `roles`, so accounts may \
+                    already hold the new name. If the new role is a staff role (it holds a PLATFORM \
+                    permission), every such holder must be staff-eligible — an InnBucks address proven \
+                    by a staff invite — or `400 staff_holders_ineligible` (count, count per reason, up \
+                    to 20 holders' userUuids).
 
                     The `*` wildcard is rejected — a role holding it would be equivalent to \
                     SUPER_ADMIN, which is the same escalation `PUT /admin/users/{id}/roles` refuses \
@@ -211,6 +226,18 @@ public class RoleAdminController {
                             + "or one the caller may not grant",
                     content = @Content(mediaType = "application/json",
                             examples = {
+                                    @ExampleObject(name = "Holders not staff-eligible", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Some accounts holding this role haven't confirmed an InnBucks email. Invite or remove them first.",
+                                              "data": {
+                                                "errorCode": "staff_holders_ineligible",
+                                                "ineligibleHolders": 2,
+                                                "byReason": { "no_profile": 1, "off_domain": 1 },
+                                                "sample": ["2b9d4c1a-7e3f-4a6b-8d2c-5f1e0a9b3c47", "5d0f3e2a-1b4c-4d6e-9f8a-7c6b5a4d3e21"]
+                                              }
+                                            }
+                                            """),
                                     @ExampleObject(name = "Reserved to SUPER_ADMIN", value = """
                                             {
                                               "code": "400 BAD_REQUEST",
@@ -280,10 +307,13 @@ public class RoleAdminController {
                             examples = @ExampleObject(value = """
                                     { "code": "409 CONFLICT", "message": "A role named REFUND_OFFICER already exists.", "data": null }
                                     """))),
-            @ApiResponse(responseCode = "503", description = "The ROLE_CREATED audit row could not be written; "
-                    + "the role was not created",
+            @ApiResponse(responseCode = "503", description = "The ROLE_CREATED audit row could not be written "
+                    + "(the role was not created), or a staff role with holders on a cell with no staff domain",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(value = AUDIT_UNAVAILABLE_EXAMPLE)))
+                            examples = {
+                                    @ExampleObject(name = "Audit unavailable", value = AUDIT_UNAVAILABLE_EXAMPLE),
+                                    @ExampleObject(name = "No staff domain configured", value = DOMAINS_UNCONFIGURED_EXAMPLE)
+                            }))
     })
     public ResponseEntity<ApiResult<RoleDTOs.RoleResponse>> create(
             @Valid @RequestBody RoleDTOs.CreateRoleRequest request,
@@ -329,6 +359,13 @@ public class RoleAdminController {
                     as PLATFORM — from a widely held business role such as `MERCHANT_ADMIN` signs \
                     every business out at once.
 
+                    **Staff holders.** ADDING a PLATFORM permission (or turning a business role into a \
+                    staff role) hands every current holder platform authority, so every holder but \
+                    SUPER_ADMIN must be staff-eligible — an InnBucks address proven by a staff invite — \
+                    or `400 staff_holders_ineligible` with `ineligibleHolders` (count), `byReason` and \
+                    `sample` (up to 20 userUuids): adopt or remove them first. Removing codes is never \
+                    refused on these grounds.
+
                     **Audited or not made:** if the `ROLE_PERMISSIONS_CHANGED` audit row cannot be \
                     written, nothing changes — `503 audit_unavailable`.""")
     @ApiResponses({
@@ -354,6 +391,18 @@ public class RoleAdminController {
                     description = "No permissions, one that does not exist, or an added one the caller may not grant",
                     content = @Content(mediaType = "application/json",
                             examples = {
+                                    @ExampleObject(name = "Holders not staff-eligible", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "Some accounts holding this role haven't confirmed an InnBucks email. Invite or remove them first.",
+                                              "data": {
+                                                "errorCode": "staff_holders_ineligible",
+                                                "ineligibleHolders": 2,
+                                                "byReason": { "no_profile": 1, "off_domain": 1 },
+                                                "sample": ["2b9d4c1a-7e3f-4a6b-8d2c-5f1e0a9b3c47", "5d0f3e2a-1b4c-4d6e-9f8a-7c6b5a4d3e21"]
+                                              }
+                                            }
+                                            """),
                                     @ExampleObject(name = "Reserved to SUPER_ADMIN", value = """
                                             {
                                               "code": "400 BAD_REQUEST",
@@ -410,9 +459,13 @@ public class RoleAdminController {
                                     { "code": "404 NOT_FOUND", "message": "Role not found: REFUND_OFICER", "data": null }
                                     """))),
             @ApiResponse(responseCode = "503", description = "The ROLE_PERMISSIONS_CHANGED audit row could not be "
-                    + "written; nothing changed",
+                    + "written (nothing changed), or a platform permission was added to a held role on a cell "
+                    + "with no staff domain",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(value = AUDIT_UNAVAILABLE_EXAMPLE)))
+                            examples = {
+                                    @ExampleObject(name = "Audit unavailable", value = AUDIT_UNAVAILABLE_EXAMPLE),
+                                    @ExampleObject(name = "No staff domain configured", value = DOMAINS_UNCONFIGURED_EXAMPLE)
+                            }))
     })
     public ResponseEntity<ApiResult<RoleDTOs.RoleResponse>> setPermissions(
             @PathVariable String name,

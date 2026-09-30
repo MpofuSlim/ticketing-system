@@ -213,6 +213,29 @@ innbucks-notify:
   html-enabled: ${NOTIFY_HTML_ENABLED:true}
   logo-url: ${NOTIFY_LOGO_URL:}
 
+# Staff accounts (V44): InnBucks employees created by POST /admin/staff and
+# activated by a single-use emailed invite. Every key comes from the cell env
+# file (deploy/cells/cell.<iso>.env) — k3s pods get their environment only via
+# envFrom. Validated at boot (StaffAccountProperties): a wildcard, a leading '@'
+# or '.', a trailing dot or a non-ASCII domain FAILS boot. A blank domain list
+# boots, but every staff grant is refused 503 staff_domains_unconfigured and
+# StaffProvisioningCheck logs HALF-PROVISIONED. Invites go through the same
+# email path as everything else (SES when MAIL_ENABLED, else the notification API).
+staff:
+  allowed-email-domains: ${STAFF_ALLOWED_EMAIL_DOMAINS:}
+  denied-local-parts: ${STAFF_DENIED_LOCAL_PARTS:admin,administrator,info,support,help,noreply,postmaster,hostmaster,webmaster,abuse,security,finance,accounts,billing,sales,contact,office,team,all,staff}
+  # The console origin the invite link points at; the token rides the fragment:
+  # <base><path>#token=STI-...
+  console-base-url: ${STAFF_CONSOLE_BASE_URL:}
+  invite-path: ${STAFF_INVITE_PATH:/set-password}
+  invite-ttl: ${STAFF_INVITE_TTL:PT72H}
+  invite-resend-limit: ${STAFF_INVITE_RESEND_LIMIT:5}
+  create-daily-limit: ${STAFF_CREATE_DAILY_LIMIT:20}
+  # watch (default): mint as today and count user.staff.ineligible_holder;
+  # enforce: withhold platform permissions and named staff roles from holders
+  # who are not staff-eligible.
+  eligibility-enforcement: ${STAFF_ELIGIBILITY_ENFORCEMENT:watch}
+
 whatsapp:
   base-url: ${WHATSAPP_GATEWAY_URL:http://localhost:8089}
   api-key: ${WHATSAPP_API_KEY:change-me-whatsapp-api-key}

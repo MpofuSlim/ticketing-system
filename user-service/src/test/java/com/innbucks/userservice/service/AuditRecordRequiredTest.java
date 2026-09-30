@@ -160,10 +160,10 @@ class AuditRecordRequiredTest {
     void setRolesAuditsLast() throws Exception {
         AdminDispatchHarness h = new AdminDispatchHarness();
         h.account(1L, "admin@innbucks.co.zw", "SUPER_ADMIN");
-        var target = h.account(40L, "agent@innbucks.co.zw", "CUSTOMER");
+        var target = h.eligibleStaff(h.account(40L, "agent@innbucks.co.zw", "FRAUD_DESK"));
         doAnswer(inv -> {
             // At the moment the audit is asked for, the change is already made.
-            assertThat(target.getRoles()).containsExactlyInAnyOrder("CUSTOMER", "CALL_CENTER_AGENT");
+            assertThat(target.getRoles()).containsExactlyInAnyOrder("FRAUD_DESK", "CALL_CENTER_AGENT");
             assertThat(target.getTokenVersion()).isEqualTo(4L);
             return null;
         }).when(h.audit).recordRequired(eq(AuditEventType.USER_ROLES_CHANGED), any(), any(), any(), any(), any(),
@@ -171,7 +171,7 @@ class AuditRecordRequiredTest {
 
         h.mvc.perform(put("/admin/users/40/roles").principal(as("admin@innbucks.co.zw"))
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"roles\":[\"CUSTOMER\",\"CALL_CENTER_AGENT\"]}"))
+                        .content("{\"roles\":[\"FRAUD_DESK\",\"CALL_CENTER_AGENT\"]}"))
                 .andExpect(status().isOk());
 
         InOrder order = inOrder(h.users, h.audit);

@@ -76,7 +76,7 @@ class TeamMemberServiceTest {
                 new com.innbucks.userservice.testsupport.InMemoryTokenVersionBumper(tokenVersionPublisher),
                 refreshTokenRepository, deviceTrustService, otpRepository);
         service = new TeamMemberService(userRepository, assignmentRepository, passwordEncoder,
-                eventPublisher, revoker);
+                eventPublisher, revoker, org.mockito.Mockito.mock(com.innbucks.userservice.service.StaffEligibility.class));
         ReflectionTestUtils.setField(service, "deploymentCountry", "ZW");
         ReflectionTestUtils.setField(service, "bootstrapAdminEmail",
                 com.innbucks.userservice.util.BootstrapAdminEmail.DEFAULT_ADDRESS);

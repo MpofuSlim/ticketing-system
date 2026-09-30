@@ -67,7 +67,8 @@ class ShopStaffServiceBulkTest {
     void setUp() {
         service = new ShopStaffService(userRepository, passwordEncoder, loyaltyServiceClient,
                 eventPublisher, validator, selfProvider,
-                org.mockito.Mockito.mock(com.innbucks.userservice.repository.OrganizationMemberRepository.class));
+                org.mockito.Mockito.mock(com.innbucks.userservice.repository.OrganizationMemberRepository.class),
+                org.mockito.Mockito.mock(com.innbucks.userservice.service.StaffEligibility.class));
         ReflectionTestUtils.setField(service, "deploymentCountry", "ZW");
         // The bulk method calls createShopUser through the proxy; in the unit
         // test the "proxy" is the instance itself, so the real per-row logic runs.

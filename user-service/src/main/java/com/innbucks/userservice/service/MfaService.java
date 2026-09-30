@@ -350,7 +350,7 @@ public class MfaService {
      * refuses an over-long note with a 400; this is the service's own bound, for
      * every other caller. Blank after cleaning means no note.
      */
-    static String cleanNote(String note) {
+    public static String cleanNote(String note) {
         if (note == null) {
             return null;
         }

@@ -118,7 +118,29 @@ public class AdminServiceRequestController {
                             examples = @ExampleObject(value = """
                                     { "code": "404 NOT_FOUND", "message": "Service request not found: 99", "data": null }
                                     """))),
-            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Caller is not a SUPER_ADMIN")
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "403", description = "Caller is not a SUPER_ADMIN"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
+                    description = "The requester is an InnBucks staff account: staff never receive business products. "
+                            + "Reject the request instead.",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Staff account",
+                            value = """
+                            {
+                              "code": "409 CONFLICT",
+                              "message": "InnBucks staff accounts can't join a business or request products.",
+                              "data": { "errorCode": "staff_account_not_eligible" }
+                            }
+                                    """))),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "503",
+                    description = "The approval adds a role and its USER_ROLES_CHANGED audit row could not be "
+                            + "written; nothing changed",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(name = "Audit unavailable",
+                            value = """
+                                    {
+                                      "code": "503 SERVICE_UNAVAILABLE",
+                                      "message": "We couldn't record this change, so it wasn't made. Try again.",
+                                      "data": { "errorCode": "audit_unavailable" }
+                                    }
+                                    """)))
     })
     public ResponseEntity<ApiResult<ServiceRequestResponseDTO>> approve(
             @PathVariable Long id,

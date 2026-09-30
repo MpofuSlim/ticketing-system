@@ -86,6 +86,18 @@ public class EmailNotificationClient {
      *         upstream rejection, or a connectivity failure.
      */
     public void sendEmail(String to, String subject, String message, String reference) {
+        sendEmail(to, subject, message, reference, null);
+    }
+
+    /**
+     * As {@link #sendEmail(String, String, String, String)}, with an optional
+     * call-to-action button in the branded HTML body
+     * ({@link BrandedEmailRenderer.CallToAction}, validated {@code https} only).
+     * The plain-text body is unchanged by it — callers keep the link in the text
+     * as well, for clients that strip buttons and for the plain-text path.
+     */
+    public void sendEmail(String to, String subject, String message, String reference,
+                          BrandedEmailRenderer.CallToAction callToAction) {
         if (to == null || to.isBlank()) {
             throw new NotificationDeliveryException("Email recipient is blank");
         }
@@ -99,8 +111,14 @@ public class EmailNotificationClient {
         // plain-text body closed with the standard InnBucks footer. HTML is
         // off by default — see InnbucksNotifyProperties.htmlEnabled.
         String body = properties.isHtmlEnabled()
-                ? BrandedEmailRenderer.render(subject, message, properties.getLogoUrl())
+                ? BrandedEmailRenderer.render(subject, message, properties.getLogoUrl(), callToAction)
                 : EmailSignature.appendTo(message);
+        // A message carrying a call-to-action carries a LINK, which for a staff
+        // invite is a bearer credential. An upstream refusal can echo the
+        // request back (a validation envelope quoting the message), so on this
+        // path neither the upstream reply nor an exception's text is logged —
+        // only the reference and the status.
+        boolean carriesLink = callToAction != null;
 
         // Own-SMTP first when this cell is configured for it (app.mail.enabled).
         // It is the only path where WE compose the From header, so it is the
@@ -116,7 +134,7 @@ public class EmailNotificationClient {
                 return;
             } catch (RuntimeException e) {
                 log.warn("SMTP email delivery failed, falling back to the notification API: {}",
-                        e.getMessage());
+                        carriesLink ? e.getClass().getSimpleName() : e.getMessage());
             }
         }
         requireConfigured();
@@ -157,13 +175,14 @@ public class EmailNotificationClient {
                     throw new UnauthorizedException();
                 }
                 log.warn("Notification API rejected email ref={} status={} body={}",
-                        ref, ex.getStatusCode(), ex.getResponseBodyAsString());
+                        ref, ex.getStatusCode(), carriesLink ? "<withheld>" : ex.getResponseBodyAsString());
                 throw new NotificationDeliveryException(
                         "Notification API rejected email: HTTP " + ex.getStatusCode().value(), ex);
             } catch (NotificationDeliveryException ex) {
                 throw ex;
             } catch (RuntimeException ex) {
-                log.warn("Notification API unreachable for email ref={} error={}", ref, ex.getMessage());
+                log.warn("Notification API unreachable for email ref={} error={}", ref,
+                        carriesLink ? ex.getClass().getSimpleName() : ex.getMessage());
                 throw new NotificationDeliveryException(
                         "Notification API unreachable: " + ex.getMessage(), ex);
             }
@@ -315,6 +334,21 @@ public class EmailNotificationClient {
         } catch (Exception e) {
             throw new NotificationDeliveryException("Notification API returned an unparseable response", e);
         }
+    }
+
+    /**
+     * True when the notification API has everything {@link #sendEmail} needs
+     * (base URL, API key, username, password) — the transport a staff invite
+     * falls back to when SMTP is off. Used by the staff-invite provisioning check.
+     */
+    public boolean apiConfigured() {
+        return !(isBlank(properties.getBaseUrl()) || isBlank(properties.getApiKey())
+                || isBlank(properties.getUsername()) || isBlank(properties.getPassword()));
+    }
+
+    /** True when own-SMTP (SES) delivery is enabled and usable on this cell. */
+    public boolean smtpEnabled() {
+        return smtpEmailSender != null && smtpEmailSender.isEnabled();
     }
 
     private void requireConfigured() {

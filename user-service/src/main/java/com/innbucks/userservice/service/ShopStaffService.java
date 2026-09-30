@@ -70,6 +70,8 @@ public class ShopStaffService {
     /** Whether the caller RUNS the organization their session acts for — the
      *  gate on which loyalty merchants' staff they may manage. */
     private final OrganizationMemberRepository organizationMembers;
+    /** Staff addresses are reserved (V44): shop staff are never created at one. */
+    private final StaffEligibility staffEligibility;
 
     /** Upper bound on rows per bulk upload — a guard rail on an unbounded import,
      *  not a product limit; split larger files. */
@@ -461,6 +463,11 @@ public class ShopStaffService {
             log.warn("Refused shop-staff creation at the bootstrap admin address role={}", role);
             throw badRequest("Email already registered");
         }
+        // An InnBucks STAFF address is never shop staff (V44): the temporary
+        // password would go to the merchant admin who created it, handing them a
+        // login at a staff address. Before the duplicate check, so this path
+        // cannot confirm which staff addresses exist.
+        staffEligibility.requireEmailNotReserved(email, currentCallerName(), "shop_staff_create");
         if (userRepository.existsByEmail(email)) {
             throw badRequest("Email already registered");
         }
@@ -498,6 +505,11 @@ public class ShopStaffService {
                 .loyaltyMerchantId(merchantId)
                 .loyaltyShopId(shopId)
                 .build();
+    }
+
+    private static String currentCallerName() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        return auth == null ? null : auth.getName();
     }
 
     private User requireCaller() {

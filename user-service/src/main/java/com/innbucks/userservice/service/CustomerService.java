@@ -43,6 +43,12 @@ public class CustomerService {
     private final OtpService otpService;
     // Hashes the national ID before it lands in the DB (PII at rest).
     private final com.innbucks.userservice.security.NationalIdHasher nationalIdHasher;
+    /**
+     * Staff addresses are reserved (V44): tier-2 never writes an InnBucks staff
+     * address, and never changes the email of a staff account (the email is a
+     * staff account's identity and the JWT subject).
+     */
+    private final StaffEligibility staffEligibility;
 
     /** Deployment country fallback for MSISDNs whose dialling prefix isn't an
      *  InnBucks-market entry (rare; foreign numbers). Set via INNBUCKS_COUNTRY
@@ -123,8 +129,15 @@ public class CustomerService {
             log.warn("Refused tier-2 registration claiming the bootstrap admin address");
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Email already registered");
         }
+        // A staff address is never written by a self-service path (V44) —
+        // checked before anything is loaded, so tier-2 cannot confirm which
+        // staff addresses exist.
+        staffEligibility.requireEmailNotReserved(request.getEmail(), null, "customer_tier2");
         CustomerProfile profile = loadProfile(request.getMsisdn(), 1);
         requireRecentlyVerified(profile);
+        // ...and a staff account's email is never changed here (it is the JWT
+        // subject and the address its invite was bound to).
+        staffEligibility.requireNotStaffAccount(profile.getUser(), null, "customer_tier2");
 
         // Strip any HTML from the free-text name fields before they land on the
         // persisted profile + user (OWASP A03 / stored-XSS). The raw request

@@ -89,15 +89,24 @@ public class TeamMemberController {
                                     }
                                     """))),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
-                    responseCode = "400", description = "Validation failed, or email/phone already registered",
+                    responseCode = "400", description = "Validation failed, email/phone already registered, or an InnBucks staff address",
                     content = @Content(mediaType = "application/json",
-                            examples = @ExampleObject(value = """
+                            examples = {
+                                    @ExampleObject(name = "Rejected", value = """
                                     {
                                       "code": "400 BAD_REQUEST",
                                       "message": "Email already registered",
                                       "data": null
                                     }
-                                    """))),
+                                    """),
+                                    @ExampleObject(name = "An InnBucks staff address", value = """
+                                    {
+                                      "code": "400 BAD_REQUEST",
+                                      "message": "InnBucks staff addresses can't be used here. Your administrator will invite you.",
+                                      "data": { "errorCode": "email_domain_reserved", "field": "email" }
+                                    }
+                                    """)
+                            })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "403", description = "Caller is not an EVENT_ORGANIZER",
                     content = @Content(mediaType = "application/json",

@@ -62,6 +62,12 @@ public class OrganizationService {
     private final UserRepository users;
     private final AuditService auditService;
     private final TokenVersionBumper tokenVersions;
+    /**
+     * Staff accounts (V44) never join a business: a support agent must never
+     * also be a merchant or a seller. {@link #addMember} and {@link #changeRole}
+     * refuse one with 409 {@code staff_account_not_eligible}.
+     */
+    private final StaffEligibility staffEligibility;
 
     // ----------------------------------------------------------------------
     // Creation
@@ -351,6 +357,7 @@ public class OrganizationService {
             throw OrganizationException.roleInsufficient("Only an owner can add an owner or an admin.");
         }
         User person = resolveAccount(req.getEmail());
+        staffEligibility.requireNotStaffAccount(person, caller.getEmail(), "organization_add_member");
         if (members.findByOrganizationIdAndUserId(orgId, person.getId()).isPresent()) {
             throw new OrganizationException(HttpStatus.CONFLICT, "already_member",
                     "That person is already a member of this organization.");
@@ -389,6 +396,9 @@ public class OrganizationService {
         if (previous == role) {
             return toMember(target, person);
         }
+        // A staff account that is (still) a member — a legacy row, or one
+        // written before this guard — can be removed, never re-empowered.
+        staffEligibility.requireNotStaffAccount(person, caller.getEmail(), "organization_change_role");
         if (previous == OrganizationMember.Role.OWNER
                 && members.countByOrganizationIdAndRole(orgId, OrganizationMember.Role.OWNER) <= 1) {
             throw lastOwner();
@@ -440,6 +450,53 @@ public class OrganizationService {
                 null);
         log.info("Organization member removed organizationId={} userId={} leaving={}",
                 orgId, person.getId(), leaving);
+    }
+
+    /**
+     * {@code POST /admin/organizations/{id}/suspend} ({@code organizations:manage},
+     * reserved to the wildcard). Sets the organization SUSPENDED and bumps every
+     * member's {@code token_version}, so the organization claims drop at once —
+     * {@link #activeMemberships} and {@link #scopeFor} already ignore a
+     * suspended organization, so the members' next token simply carries none.
+     *
+     * <p>The resolution for an organization that console-created "staff" own:
+     * the last OWNER can never be removed, so the business is suspended instead
+     * and the account can then be adopted. There is deliberately no reinstate
+     * endpoint; a future one must refuse an organization with a profiled
+     * member. The audit row is REQUIRED and the last statement.
+     */
+    @Transactional
+    public OrganizationDTOs.SuspendResult suspend(UUID orgId, String note, String adminEmail,
+                                                  AuditContext auditContext) {
+        Organization org = requireOrganization(orgId);
+        if (org.getStatus() != Organization.Status.ACTIVE) {
+            throw new OrganizationException(HttpStatus.CONFLICT, "organization_not_active",
+                    "This organization is already suspended.");
+        }
+        org.setStatus(Organization.Status.SUSPENDED);
+        org.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
+        organizations.save(org);
+        organizations.flush();
+        List<OrganizationMember> everyone = members.findByOrganizationIdOrderByCreatedAtAsc(orgId);
+        List<User> people = users.findAllById(everyone.stream().map(OrganizationMember::getUserId).toList());
+        for (User person : people) {
+            // Atomic bump each; published to the shared Redis after commit.
+            tokenVersions.bump(person);
+        }
+        log.info("Organization suspended organizationId={} membersSignedOut={} by={}",
+                orgId, people.size(), adminEmail);
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("name", org.getName());
+        metadata.put("membersSignedOut", people.size());
+        String cleanNote = MfaService.cleanNote(note);
+        if (cleanNote != null) metadata.put("note", cleanNote);
+        auditService.recordRequired(AuditEventType.ORGANIZATION_SUSPENDED,
+                adminEmail == null ? "system" : adminEmail,
+                adminEmail == null ? AuditService.ACTOR_TYPE_SYSTEM : AuditService.ACTOR_TYPE_USER,
+                orgId.toString(), AuditService.TARGET_TYPE_ORGANIZATION,
+                metadata, auditContext == null ? AuditContext.none() : auditContext);
+        return new OrganizationDTOs.SuspendResult(org.getId(), org.getName(), org.getStatus().name(),
+                people.size());
     }
 
     // ----------------------------------------------------------------------

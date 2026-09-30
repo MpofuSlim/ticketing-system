@@ -64,7 +64,14 @@ public class User {
     // unique=true is a schema-generation hint only (ignored under
     // ddl-auto: validate), so the change is cosmetic / honest, not
     // load-bearing.
-    @Column(nullable = false)
+    //
+    // NULLABLE since V44: a staff account (staff_profiles) has NO sign-in
+    // phone — a phone on a staff account is a takeover path, because whoever
+    // holds the number could reset its password. Their contact number lives on
+    // staff_profiles.contact_phone. Every reader must cope with null; Postgres
+    // treats NULLs as distinct in uk_users_phone_country, so staff rows never
+    // collide on it.
+    @Column
     private String phoneNumber;
 
     @Column(unique = true)
@@ -160,6 +167,27 @@ public class User {
     // so the admin UI can flag "credentials not delivered, click resend".
     @Column(name = "credential_delivered_at")
     private LocalDateTime credentialDeliveredAt;
+
+    /**
+     * When this account's email address was PROVEN (V44) — today only by
+     * redeeming a staff invite, which is the one flow that sends a secret to the
+     * mailbox and requires it back. NULL means never proven, which is every
+     * account created before V44 and every self-registered one. Staff
+     * eligibility ({@code StaffEligibility}) requires it, so a role with platform
+     * authority never lands on an address nobody has shown they read.
+     */
+    @Column(name = "email_verified_at")
+    private LocalDateTime emailVerifiedAt;
+
+    /**
+     * When a session was last ISSUED to this account (V44): a password login
+     * that returned tokens, a 2FA verify, or enrolment-complete — not the
+     * password step before the second factor, and not a refresh. Written by a
+     * targeted UPDATE ({@code UserRepository.stampLastSignIn}), never a
+     * load-modify-save, so a sign-in cannot write a stale snapshot back.
+     */
+    @Column(name = "last_sign_in_at")
+    private LocalDateTime lastSignInAt;
 
     // Loyalty scope for shop staff. SHOP_ADMIN and SHOP_USER tokens carry these
     // as JWT claims so loyalty-service can scope shop-level operations without

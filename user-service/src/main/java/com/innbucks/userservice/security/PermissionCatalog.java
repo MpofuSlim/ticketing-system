@@ -81,6 +81,18 @@ public final class PermissionCatalog {
     public static final String SHOP_STAFF_PASSWORD_RESET = "shop-staff:password:reset";
 
     public static final String ORGANIZATIONS_READ = "organizations:read";
+    /** Suspend an organization (V44). Reserved to the wildcard. */
+    public static final String ORGANIZATIONS_MANAGE = "organizations:manage";
+
+    /**
+     * Staff accounts (V44): the directory and audit, creating and adopting staff,
+     * and deactivating / reactivating them. All three are reserved to the
+     * wildcard ({@link #WILDCARD_RESERVED}) — staff administration stays with
+     * SUPER_ADMIN until the owner decides otherwise.
+     */
+    public static final String STAFF_READ = "staff:read";
+    public static final String STAFF_CREATE = "staff:create";
+    public static final String STAFF_MANAGE = "staff:manage";
 
     /**
      * DTX device security (V40) — the call center's and fraud desk's tools.
@@ -172,6 +184,10 @@ public final class PermissionCatalog {
                 entry(SHOP_STAFF_PASSWORD_RESET, "Issue a temporary password for a shop staff account",
                         Scope.TENANT),
                 entry(ORGANIZATIONS_READ, "List every organization on the platform", Scope.PLATFORM),
+                entry(ORGANIZATIONS_MANAGE, "Suspend an organization", Scope.PLATFORM),
+                entry(STAFF_READ, "View staff accounts and their audit history", Scope.PLATFORM),
+                entry(STAFF_CREATE, "Invite new staff, adopt existing staff, resend invites", Scope.PLATFORM),
+                entry(STAFF_MANAGE, "Deactivate and reactivate staff accounts", Scope.PLATFORM),
                 entry(DEVICE_SECURITY_READ,
                         "Look up a customer's phones, blocks, references and sign-in history", Scope.PLATFORM),
                 entry(DEVICE_SECURITY_MANAGE,
@@ -202,9 +218,10 @@ public final class PermissionCatalog {
      *   <li>{@code staff:read}, {@code staff:create}, {@code staff:manage},
      *       {@code organizations:manage} — staff administration and suspending a
      *       business, which stay with SUPER_ADMIN until the owner decides
-     *       otherwise. Listed before the endpoints that enforce them exist, so
-     *       they are unreachable through the roles API from the release that
-     *       adds them.</li>
+     *       otherwise. They were reserved one release before the endpoints that
+     *       enforce them ({@code /admin/staff/**},
+     *       {@code POST /admin/organizations/{id}/suspend}) existed, so no role
+     *       could be handed them ahead of time.</li>
      * </ul>
      *
      * SUPER_ADMIN holds them through its wildcard. Only a reviewed migration can
@@ -212,7 +229,7 @@ public final class PermissionCatalog {
      */
     public static final Set<String> WILDCARD_RESERVED = Set.of(
             ROLES_WRITE, USERS_ROLES_WRITE,
-            "staff:read", "staff:create", "staff:manage", "organizations:manage");
+            STAFF_READ, STAFF_CREATE, STAFF_MANAGE, ORGANIZATIONS_MANAGE);
 
     /** Every real permission — {@link #ALL} minus the wildcard. What {@code *} expands to. */
     public static Set<String> concrete() {

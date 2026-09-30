@@ -83,7 +83,8 @@ class UserAdminServiceTest {
                 mock(com.innbucks.userservice.repository.OtpRepository.class);
         final AccountSessionRevoker revoker = new AccountSessionRevoker(bumper, refreshTokens, deviceTrust, otps);
         final UserAdminService service = new UserAdminService(
-                userRepo, encoder, audit, publisher, tenantProfiles, bumper, revoker, roleRepo, guard);
+                userRepo, encoder, audit, publisher, tenantProfiles, bumper, revoker, roleRepo, guard,
+                org.mockito.Mockito.mock(com.innbucks.userservice.service.StaffEligibility.class));
     }
 
     /** Capture the plaintext handed to encode() — it's the generated temp password. */
