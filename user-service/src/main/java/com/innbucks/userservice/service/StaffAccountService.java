@@ -303,6 +303,7 @@ public class StaffAccountService {
 
     @Transactional
     public Outcome deactivate(Long id, String note, String callerEmail, AuditContext context) {
+        lockAccount(id);
         RoleGrantGuard.Caller caller = guard.resolveCaller(callerEmail);
         User user = requireStaff(id, caller);
         requireManageable(caller, user);
@@ -341,6 +342,7 @@ public class StaffAccountService {
      */
     @Transactional
     public Outcome reactivate(Long id, String note, String callerEmail, AuditContext context) {
+        lockAccount(id);
         RoleGrantGuard.Caller caller = guard.resolveCaller(callerEmail);
         User user = requireStaff(id, caller);
         requireManageable(caller, user);
@@ -399,6 +401,7 @@ public class StaffAccountService {
      */
     @Transactional
     public Outcome resendInvite(Long id, String note, String callerEmail, AuditContext context) {
+        lockAccount(id);
         RoleGrantGuard.Caller caller = guard.resolveCaller(callerEmail);
         User user = requireStaff(id, caller);
         requireManageable(caller, user);
@@ -440,6 +443,14 @@ public class StaffAccountService {
         if (adoption) {
             profile = profiles.save(StaffProfile.builder()
                     .userId(user.getId()).adopted(true).createdAt(now).build());
+            // The account's existing credentials go too, not only its sessions
+            // (defence in depth, the same reset reactivation does): an unusable
+            // password, 2FA secret + backup codes and trusted devices cleared.
+            // The profile already refuses every session until the invite is
+            // redeemed; this also means nothing the old holder knew still works
+            // if that refusal were ever bypassed — or the release rolled back.
+            resetCredentials(user);
+            users.save(user);
             // The account's existing sessions end NOW — whoever holds them (a
             // squatter on a console-created account included) is out.
             tokenVersionBumper.bump(user);
@@ -464,7 +475,7 @@ public class StaffAccountService {
 
         String expires = marketTime(invite.row().getExpiresAt());
         String next = adoption
-                ? user.getFirstName() + "'s existing sessions were ended. We're emailing a link to set a new "
+                ? user.getFirstName() + "'s existing sessions were ended and the old password no longer works. We're emailing a link to set a new "
                         + "password; they can't sign in until they use it. It works once and expires at " + expires + "."
                 : "We're emailing " + user.getFirstName() + " a new link to set a password. It works once and "
                         + "expires at " + expires + ". Earlier links no longer work.";
@@ -539,6 +550,15 @@ public class StaffAccountService {
      * see; 404 {@code staff_not_found} otherwise — including a SUPER_ADMIN for a
      * caller not holding the wildcard, so the directory is no oracle for it.
      */
+    /**
+     * The account row lock, taken FIRST by every lifecycle action (see
+     * {@link UserRepository#lockById}); everything after it — the profile, the
+     * live invites — is read under it.
+     */
+    private void lockAccount(Long id) {
+        if (id != null) users.lockById(id);
+    }
+
     private User requireStaff(Long id, RoleGrantGuard.Caller caller) {
         User user = id == null ? null : users.findById(id).orElse(null);
         if (user == null || !eligibility.isStaffAccount(user)

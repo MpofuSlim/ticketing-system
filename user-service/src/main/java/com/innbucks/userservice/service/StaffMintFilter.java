@@ -86,9 +86,7 @@ public class StaffMintFilter {
         if (user == null || user.hasRole(User.Role.SUPER_ADMIN)) {
             return new Minted(roleList, permissionList);
         }
-        boolean staffAuthority = roleList.stream().anyMatch(StaffRoles::isNamed)
-                || permissionList.stream().anyMatch(StaffMintFilter::platform);
-        if (!staffAuthority) {
+        if (!StaffRoles.carriesStaffAuthority(roleList, permissionList)) {
             return new Minted(roleList, permissionList);
         }
         Optional<StaffEligibility.Ineligibility> why = eligibility.ineligibility(user);

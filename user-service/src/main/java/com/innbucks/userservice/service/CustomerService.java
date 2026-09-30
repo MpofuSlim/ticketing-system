@@ -117,6 +117,11 @@ public class CustomerService {
 
     @Transactional
     public CustomerRegistrationResponseDTO registerTier2(CustomerTier2RegisterDTO request) {
+        // A staff address is never written by a self-service path (V44) —
+        // checked FIRST, before the bootstrap-admin check and before anything is
+        // loaded, so tier-2 cannot confirm which staff addresses exist, the
+        // platform admin's among them.
+        staffEligibility.requireEmailNotReserved(request.getEmail(), null, "customer_tier2");
         // Tier-2 is the one place a self-service caller picks an arbitrary email
         // for an existing row, and it has no uniqueness check of its own —
         // uk_users_email is all that stands behind it, and that index is
@@ -129,15 +134,12 @@ public class CustomerService {
             log.warn("Refused tier-2 registration claiming the bootstrap admin address");
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Email already registered");
         }
-        // A staff address is never written by a self-service path (V44) —
-        // checked before anything is loaded, so tier-2 cannot confirm which
-        // staff addresses exist.
-        staffEligibility.requireEmailNotReserved(request.getEmail(), null, "customer_tier2");
         CustomerProfile profile = loadProfile(request.getMsisdn(), 1);
         requireRecentlyVerified(profile);
         // ...and a staff account's email is never changed here (it is the JWT
         // subject and the address its invite was bound to).
-        staffEligibility.requireNotStaffAccount(profile.getUser(), null, "customer_tier2");
+        staffEligibility.requireNotStaffAccount(profile.getUser(), null, "customer_tier2",
+                com.innbucks.userservice.exception.StaffPolicyException.STAFF_ACCOUNT_NOT_A_CUSTOMER_MESSAGE);
 
         // Strip any HTML from the free-text name fields before they land on the
         // persisted profile + user (OWASP A03 / stored-XSS). The raw request

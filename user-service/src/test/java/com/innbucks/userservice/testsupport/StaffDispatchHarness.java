@@ -283,6 +283,7 @@ public class StaffDispatchHarness {
 
     private void stubUsers() {
         when(users.findById(any())).thenAnswer(inv -> Optional.ofNullable(userRows.get((Long) inv.getArgument(0))));
+        when(users.lockById(any())).thenAnswer(inv -> Optional.ofNullable(userRows.get((Long) inv.getArgument(0))));
         when(users.findByEmail(any())).thenAnswer(inv -> userRows.values().stream()
                 .filter(u -> Objects.equals(u.getEmail(), inv.getArgument(0))).findFirst());
         when(users.findByPhoneNumber(any())).thenAnswer(inv -> userRows.values().stream()

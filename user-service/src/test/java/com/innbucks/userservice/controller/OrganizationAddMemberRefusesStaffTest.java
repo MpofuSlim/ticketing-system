@@ -13,7 +13,9 @@ import static com.innbucks.userservice.testsupport.StaffDispatchHarness.OWNER;
 import static com.innbucks.userservice.testsupport.StaffDispatchHarness.as;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
@@ -21,9 +23,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * A staff account never joins a business (V44): adding one, or changing the
- * role of one already in, is 409 {@code staff_account_not_eligible} — a support
- * agent must never also be a merchant or a seller. And the platform resolution
+ * A staff account never joins a business (V44). Adding one — or naming any
+ * staff-domain address — is answered exactly like an unknown email (404
+ * {@code account_not_found}), so a business owner cannot probe which addresses
+ * are InnBucks staff; the refusal is still audited. Changing the role of one
+ * already in (a legacy row) is 409 {@code staff_account_not_eligible}. And the platform resolution
  * for an organization console-created "staff" own: suspend it.
  */
 class OrganizationAddMemberRefusesStaffTest {
@@ -31,19 +35,29 @@ class OrganizationAddMemberRefusesStaffTest {
     private final StaffDispatchHarness h = new StaffDispatchHarness();
 
     @Test
-    @DisplayName("adding a staff-role holder or a profiled account: 409; a customer is added as before")
+    @DisplayName("adding a staff account, or any staff-domain address: the same 404 as an unknown email, still audited")
     void addMember() throws Exception {
         User owner = h.account("rudo@shop.co.zw", "MERCHANT_ADMIN");
         Organization org = h.organizationOf(owner, OrganizationMember.Role.OWNER);
         h.eligibleStaff("tariro.moyo@innbucks.co.zw", "CALL_CENTER_AGENT");
-        h.mvc.perform(post("/organizations/{id}/members", org.getId()).principal(StaffDispatchHarness.asUser(owner))
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"email\":\"tariro.moyo@innbucks.co.zw\",\"role\":\"STAFF\"}"))
-                .andExpect(status().isConflict())
-                .andExpect(jsonPath("$.message").value("InnBucks staff accounts can't join a business or request products."))
-                .andExpect(jsonPath("$.data.errorCode").value("staff_account_not_eligible"));
-        verify(h.audit).recordFailure(eq(AuditEventType.STAFF_GRANT_REFUSED), eq(owner.getEmail()), any(), any(),
-                any(), eq("staff_account_not_eligible"), any(), any());
+        h.account("legacy.po@gmail.com", "PRODUCT_OFFICER");   // an off-domain staff-role holder
+
+        // A staff account, an unknown staff-domain address, an off-domain staff
+        // account and a plain unknown address all read identically.
+        for (String email : new String[]{"tariro.moyo@innbucks.co.zw", "nobody@innbucks.co.ke",
+                "legacy.po@gmail.com", "nobody@example.com"}) {
+            h.mvc.perform(post("/organizations/{id}/members", org.getId()).principal(StaffDispatchHarness.asUser(owner))
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"email\":\"" + email + "\",\"role\":\"STAFF\"}"))
+                    .andExpect(status().isNotFound())
+                    .andExpect(jsonPath("$.message").value(
+                            "There's no account with that email. Ask them to register first, then add them."))
+                    .andExpect(jsonPath("$.data.errorCode").value("account_not_found"));
+        }
+        // ...but the three staff cases are on the audit chain; the plain unknown one is not.
+        verify(h.audit, times(3)).recordFailure(eq(AuditEventType.STAFF_GRANT_REFUSED),
+                eq(owner.getEmail()), any(), any(), any(), eq("staff_account_not_eligible"), any(), any());
+        assertThat(h.memberRows).hasSize(1);
 
         h.account("colleague@example.com", "CUSTOMER");
         h.mvc.perform(post("/organizations/{id}/members", org.getId()).principal(StaffDispatchHarness.asUser(owner))
@@ -74,6 +88,7 @@ class OrganizationAddMemberRefusesStaffTest {
         User owner = h.account("farai@innbucks.co.zw", "PRODUCT_OFFICER");
         Organization org = h.organizationOf(owner, OrganizationMember.Role.OWNER);
         h.mvc.perform(post("/admin/organizations/{id}/suspend", org.getId()).principal(as(OWNER))
+                        .header("X-Forwarded-For", "41.79.10.22, 10.0.0.5")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"note\":\"Created by mistake through the console (OPS-1187).\"}"))
                 .andExpect(status().isOk())
@@ -85,8 +100,10 @@ class OrganizationAddMemberRefusesStaffTest {
         assertThat(h.eligibility.hasActiveOrganization(owner)).isFalse();
         // ...so the legacy account is now adoptable.
         assertThat(h.eligibility.adoptionBlocker(owner)).isEmpty();
+        // The audit row records the CLIENT's address (leftmost X-Forwarded-For), not the gateway pod's.
         verify(h.audit).recordRequired(eq(AuditEventType.ORGANIZATION_SUSPENDED), eq(OWNER), any(),
-                eq(org.getId().toString()), eq("ORGANIZATION"), any(), any());
+                eq(org.getId().toString()), eq("ORGANIZATION"), any(),
+                argThat(c -> "41.79.10.22".equals(c.ipAddress())));
 
         h.mvc.perform(post("/admin/organizations/{id}/suspend", org.getId()).principal(as(OWNER))
                         .contentType(MediaType.APPLICATION_JSON).content("{\"note\":\"again\"}"))

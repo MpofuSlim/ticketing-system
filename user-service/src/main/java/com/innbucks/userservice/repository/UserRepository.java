@@ -200,6 +200,17 @@ public interface UserRepository extends JpaRepository<User, Long> {
      * the same reason as {@link #markCredentialDelivered}: the sign-in path must
      * never write a stale snapshot of any other column back.
      */
+    /**
+     * {@code SELECT … FOR UPDATE} on one account (V44). The staff lifecycle —
+     * resend/adopt, deactivate, reactivate — and invite acceptance take it FIRST,
+     * before any other read or write, so they serialise on the account in one
+     * order (users, then staff_invites): two concurrent resends cannot leave two
+     * live links, and an accept racing a deactivation cannot deadlock.
+     */
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT u FROM User u WHERE u.id = :id")
+    Optional<User> lockById(@Param("id") Long id);
+
     @Modifying
     @Query("UPDATE User u SET u.lastSignInAt = :at WHERE u.id = :id")
     int stampLastSignIn(@Param("id") Long id, @Param("at") LocalDateTime at);

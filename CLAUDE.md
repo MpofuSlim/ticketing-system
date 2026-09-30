@@ -561,11 +561,24 @@ staff address.
   created under a name orphan `user_roles` strings already hold. REMOVING is
   never refused on these grounds. Every refusal is audited
   `STAFF_GRANT_REFUSED`. SUPER_ADMIN is exempt from all of it.
+- **A business built-in never becomes a staff role**: a PLATFORM code (or `*`)
+  on EVENT_ORGANIZER, MERCHANT_ADMIN, SHOP_ADMIN, SHOP_USER, TEAM_MEMBER or
+  CUSTOMER is 400 `permission_not_assignable` (`business_role`), whoever asks.
+  Registration + approval, shop-staff and team-member create and the OTP /
+  federation creators hand those roles out with NO eligibility check, so the
+  staff rules only hold while they grant nothing platform-wide.
 - **Both halves of a grant lock the `roles` rows first** (`RoleRepository
-  .lockAllByNameIn`, `SELECT … FOR UPDATE` in name order) — `setRoles`, role edits
-  and staff create. Without it, "give X role R" and "add a PLATFORM code to R"
-  each pass against the state the other has not committed yet.
-  `RoleGrantRaceIT` fails in its first round with the locks removed.
+  .lockAllByNameIn`, `SELECT … FOR UPDATE` in name order) — `setRoles`, role edits,
+  staff create and service-request approval. Without it, "give X role R" and "add
+  a PLATFORM code to R" each pass against the state the other has not committed
+  yet. `RoleGrantRaceIT` fails in its first round with the locks removed.
+- **The staff lifecycle locks the ACCOUNT row first** (`UserRepository.lockById`):
+  resend/adopt, deactivate, reactivate — and invite accept, which reads the
+  invite unlocked only to learn whose row to lock, THEN consumes it. One order
+  everywhere (users, then `staff_invites`), so two resends cannot leave two live
+  links (`StaffInviteLinkLifecycleIT`: four without the lock, one with it) and an
+  accept racing a deactivation cannot deadlock. Consuming first would invert the
+  order against a resend.
 - **The invite**: `STI-` + 32 random bytes, only the SHA-256 stored
   (`staff_invites`), bound to the address it was sent to, 72h
   (`STAFF_INVITE_TTL`), one use (a conditional `UPDATE … WHERE used_at IS NULL
@@ -582,12 +595,13 @@ staff address.
   `staff_invites_unconfigured` plus a HALF-PROVISIONED boot ERROR; no domains is
   503 `staff_domains_unconfigured`.
 - **INVITED (profiled, `invite_accepted_at IS NULL`) cannot hold a session.**
-  The password step is 401 `staff_invite_pending` (reachable only with a
-  matching password — an adopted account's); refresh and organization switch
-  are 401 `staff_invite_pending` from the rotation itself, ahead of replay
-  detection (same reason as `account_inactive`); the mint refuses it; forgot
-  and reset-password are no-ops for it by ANY identifier (this also closes the
-  shared-OTP-row path).
+  Creation, adoption and reactivation all leave it an unusable password, so the
+  password step is the ordinary 400 (401 `staff_invite_pending` there is only a
+  backstop); refresh and organization switch are 401 `staff_invite_pending`
+  from the rotation itself, ahead of replay detection (same reason as
+  `account_inactive`) and in its own transaction — nothing outside it writes;
+  the mint refuses it; forgot and reset-password are no-ops for it by ANY
+  identifier (this also closes the shared-OTP-row path).
 - **Accepting strips the old sign-in material**: `users.phone_number` becomes
   NULL (moved to `staff_profiles.contact_phone`), TOTP/backup codes/device trust
   cleared, every session ended. **A staff account has no sign-in phone —
@@ -595,8 +609,10 @@ staff address.
   null-safe.** Phone-based reset and the CUSTOMER creators (OTP, `/auth/exchange`)
   match by phone, so they cannot reach a profiled account.
 - **Legacy staff are ADOPTED, not re-created**: `POST /admin/staff/{id}/resend-invite`
-  on a profile-less account creates the profile (INVITED at once, sessions
-  ended) and emails an invite — the squatter lockout. Refused 409
+  on a profile-less account creates the profile (INVITED at once), ends every
+  session AND replaces the password, clears the TOTP, backup codes and trusted
+  devices, then emails an invite — the squatter lockout: nothing the old holder
+  knew works again, even past the profile check. Refused 409
   `adoption_blocked` (`holds_non_staff_roles` → remove them with `setRoles`;
   `organization_member` → `POST /admin/organizations/{id}/suspend`,
   `organizations:manage`; `off_domain` → demote). Reactivation also returns an
@@ -604,16 +620,21 @@ staff address.
   restores the old credentials. **`PUT /admin/users/{id}/active` with `true` on
   staff is 409 `use_staff_endpoints`**, and `reset-temp-password` on a profiled
   or adoptable account is 409 `use_staff_invite`.
-- **Staff never belong to a business.** `addMember`/`changeRole` and service
-  request submit/approve refuse a staff account (409
-  `staff_account_not_eligible`), and the mint never puts `orgId`/`orgRole`/
+- **Staff never belong to a business.** `changeRole` and service request
+  submit/approve refuse a staff account (409 `staff_account_not_eligible`);
+  `addMember` answers a staff account, or ANY staff-domain address, exactly like
+  an unknown email (404 `account_not_found`, still audited
+  `STAFF_GRANT_REFUSED`) so a business owner cannot probe which addresses are
+  staff; tier-2 refuses a staff account's phone in its own words. The mint
+  never puts `orgId`/`orgRole`/
   `products` on a profiled account's token whatever `organization_members`
   holds (`ProfiledAccountNeverGetsOrgClaimsIT`). Service-request approval that
   adds a role now records `USER_ROLES_CHANGED`.
 - **A staff address is reserved** at every other `User.email` writer —
   register, tier-2, shop-staff and team-member create, and the FIRST approval of
-  a registration — 400 `email_domain_reserved`, checked BEFORE the duplicate
-  check so none of them is an oracle for which staff addresses exist. Reserved
+  a registration — 400 `email_domain_reserved`, checked FIRST (before the
+  bootstrap-admin and duplicate checks) so none of them is an oracle for which
+  staff addresses exist, the platform admin's among them. Reserved
   means the domain or any subdomain. `RoleWriterInventoryTest` lists every
   writer of `User.roles`, `User.email`, memberships and products and fails on a
   new one — decide guarded or unreachable, and write the reason there.
@@ -630,13 +651,26 @@ staff address.
   `STAFF_CONSOLE_BASE_URL` (`https://foundry.innbucks.co.zw`),
   `STAFF_INVITE_PATH`, `STAFF_INVITE_TTL`, `STAFF_INVITE_RESEND_LIMIT` (5/24h,
   429 `invite_resend_limited`), `STAFF_CREATE_DAILY_LIMIT` (20/24h per creator,
-  429 `staff_create_limited`), `STAFF_ELIGIBILITY_ENFORCEMENT`. The public
+  429 `staff_create_limited`), `STAFF_ELIGIBILITY_ENFORCEMENT`. On a live cell
+  add them to the `cell-zw` ConfigMap ONE KEY AT A TIME (`kubectl patch` /
+  `jq`), never a `--from-env-file` rebuild — see
+  `~/ticketing-system/deploy/PROD_UPGRADE_RUNBOOK.md` §5. **No mail change is
+  needed:** invites use the normal email path (SES where `MAIL_ENABLED=true`,
+  else the notification API — `BANK_API_*` must be configured). The public
   `/auth/staff-invite/{inspect,accept}` ride the gateway's
   `auth-staff-invite-route` (POST, IP-keyed fail-safe limiter, before
   `user-auth-route`).
-- **Rollback caveat:** V44 is additive and the old image boots, but it can NPE
-  on a staff row whose `phone_number` is NULL — staff sign-in 500s until you
-  roll forward. Non-staff accounts are unaffected.
+- **Rollback caveat — a security regression, not a crash.** V44 is additive and
+  the previous image boots and signs in accounts with a NULL `phone_number`
+  (its sign-in paths are null-safe on the phone). What it does is IGNORE
+  `staff_profiles` and `email_verified_at`: an INVITED account — new, adopted or
+  reactivated — can set a password through forgot-password BY EMAIL without ever
+  redeeming its invite; the mint filter and every staff refusal (reserved
+  domain, eligibility, business role, no-business-for-staff) stop; and `/auth/staff-invite/**` is a 404, so pending
+  invites cannot be redeemed. Adopted accounts do NOT reopen to their previous
+  holder — adoption already replaced the password and cleared the TOTP. Roll
+  back only as an emergency, and re-invite the INVITED accounts after rolling
+  forward.
 
 ## Bookings carry WHO is coming (booking-service V22)
 

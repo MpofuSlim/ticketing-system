@@ -95,8 +95,38 @@ class ReservedDomainAtEveryEmailWriterTest {
         dto.setMsisdn("+263770000001");
         dto.setEmail(STAFF_EMAIL);
         assertReserved(() -> service.registerTier2(dto));
+        // The platform admin's own address answers exactly like any other staff
+        // address — the reserved check runs BEFORE the bootstrap-admin check.
+        ReflectionTestUtils.setField(service, "bootstrapAdminEmail",
+                com.innbucks.userservice.util.BootstrapAdminEmail.DEFAULT_ADDRESS);
+        dto.setEmail(com.innbucks.userservice.util.BootstrapAdminEmail.DEFAULT_ADDRESS);
+        assertReserved(() -> service.registerTier2(dto));
         verifyNoInteractions(profiles);
         verify(users, never()).findByPhoneNumber(anyString());
+    }
+
+    @Test
+    @DisplayName("tier-2 for a phone whose account is staff, with an off-domain email: 409 in tier-2's own words")
+    void tier2_staffAccount_offDomainEmail() {
+        CustomerProfileRepository profiles = mock(CustomerProfileRepository.class);
+        CustomerService service = new CustomerService(users, profiles, mock(DeviceRepository.class),
+                mock(PendingRegistrationRepository.class), mock(PasswordEncoder.class), mock(OtpService.class),
+                new NationalIdHasher("test-secret"), eligibility);
+        // A legacy staff account that is ALSO a customer (tier-2 only serves customer rows).
+        User legacy = User.builder().id(42L).email("farai@innbucks.co.zw").phoneNumber("+263770000042")
+                .roles(User.roleNames(User.Role.PRODUCT_OFFICER, User.Role.CUSTOMER)).active(true).build();
+        when(users.findByPhoneNumber("+263770000042")).thenReturn(Optional.of(legacy));
+        when(profiles.findByUserId(42L)).thenReturn(Optional.of(com.innbucks.userservice.entity.CustomerProfile
+                .builder().user(legacy).registrationTier(1)
+                .phoneVerifiedAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC)).build()));
+        CustomerTier2RegisterDTO dto = new CustomerTier2RegisterDTO();
+        dto.setMsisdn("+263770000042");
+        dto.setEmail("farai.personal@gmail.com");
+        assertThatThrownBy(() -> service.registerTier2(dto))
+                .isInstanceOf(StaffPolicyException.class)
+                .hasMessage("This number belongs to an InnBucks staff account, which can't be registered as a customer.")
+                .extracting("errorCode").isEqualTo("staff_account_not_eligible");
+        assertThat(legacy.getEmail()).isEqualTo("farai@innbucks.co.zw");
     }
 
     @Test
@@ -127,6 +157,10 @@ class ReservedDomainAtEveryEmailWriterTest {
         dto.setPhoneNumber("+263771234567");
         dto.setShopId(shopId);
         assertReserved(() -> service.createShopAdmin(dto));
+        ReflectionTestUtils.setField(service, "bootstrapAdminEmail",
+                com.innbucks.userservice.util.BootstrapAdminEmail.DEFAULT_ADDRESS);
+        dto.setEmail(com.innbucks.userservice.util.BootstrapAdminEmail.DEFAULT_ADDRESS);
+        assertReserved(() -> service.createShopAdmin(dto));
         verify(users, never()).existsByEmail(anyString());
         verify(users, never()).save(any(User.class));
     }
@@ -152,6 +186,8 @@ class ReservedDomainAtEveryEmailWriterTest {
         dto.setLastName("Moyo");
         dto.setEmail("Tariro.Moyo@InnBucks.co.ke");
         dto.setPhoneNumber("+263773456789");
+        assertReserved(() -> service.createTeamMember(dto));
+        dto.setEmail(com.innbucks.userservice.util.BootstrapAdminEmail.DEFAULT_ADDRESS);
         assertReserved(() -> service.createTeamMember(dto));
         verify(users, never()).existsByEmail(anyString());
         verify(users, never()).save(any(User.class));

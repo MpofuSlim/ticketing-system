@@ -131,6 +131,46 @@ class StaffLifecycleTest {
     }
 
     @Test
+    @DisplayName("reactivate: live invites revoked REACTIVATED and the token version bumped")
+    void reactivateRevokesInvitesAndBumps() throws Exception {
+        User agent = h.eligibleStaff("tariro.moyo@innbucks.co.zw", "CALL_CENTER_AGENT");
+        act(OWNER, agent.getId(), "deactivate", NOTE).andExpect(status().isOk());
+        long afterDeactivate = agent.getTokenVersion();
+        // A live invite on a deactivated account (written by a racing resend).
+        h.inviteRows.put(77L, StaffInvite.builder().id(77L).userId(agent.getId()).tokenHash("h77")
+                .sentToEmail(agent.getEmail()).createdByEmail(OWNER)
+                .createdAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC))
+                .expiresAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).plusHours(1)).build());
+        act(OWNER, agent.getId(), "reactivate", NOTE).andExpect(status().isOk());
+        assertThat(h.inviteRows.get(77L).getRevokedReason()).isEqualTo(StaffInvite.REVOKED_REACTIVATED);
+        assertThat(h.inviteRows.get(77L).getRevokedAt()).isNotNull();
+        assertThat(agent.getTokenVersion()).isEqualTo(afterDeactivate + 1);
+    }
+
+    @Test
+    @DisplayName("reactivate: 400 for a profiled account now off the staff domains; 409 adoption_blocked for a legacy one with business roles")
+    void reactivateRefusals() throws Exception {
+        User offDomain = h.account("tariro.moyo@gmail.com", "CALL_CENTER_AGENT");
+        offDomain.setActive(false);
+        h.profileRows.put(offDomain.getId(), com.innbucks.userservice.entity.StaffProfile.builder()
+                .userId(offDomain.getId()).createdAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC))
+                .inviteAcceptedAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC)).build());
+        act(OWNER, offDomain.getId(), "reactivate", NOTE)
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.data.errorCode").value("email_domain_not_allowed"));
+        assertThat(offDomain.isActive()).isFalse();
+
+        User mixed = h.account("mixed.legacy@innbucks.co.zw", "PRODUCT_OFFICER", "MERCHANT_ADMIN");
+        mixed.setActive(false);
+        act(OWNER, mixed.getId(), "reactivate", NOTE)
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.data.errorCode").value("adoption_blocked"))
+                .andExpect(jsonPath("$.data.reason").value("holds_non_staff_roles"));
+        assertThat(mixed.isActive()).isFalse();
+        assertThat(h.profileRows).doesNotContainKey(mixed.getId());
+    }
+
+    @Test
     @DisplayName("resend: a new invite supersedes the old; 409 once accepted; 409 while deactivated; 429 over quota")
     void resend() throws Exception {
         User invited = h.account("tariro.moyo@innbucks.co.zw", "CALL_CENTER_AGENT");
@@ -172,9 +212,23 @@ class StaffLifecycleTest {
     void adopt() throws Exception {
         User legacy = h.account("farai.chikwanha@innbucks.co.zw", "PRODUCT_OFFICER");
         legacy.setPhoneNumber("+263772000111");
+        legacy.setPassword("{x}the-squatters-password");
+        legacy.setMfaEnabled(true);
+        legacy.setMfaSecret("JBSWY3DPEHPK3PXP");
         act(OWNER, legacy.getId(), "resend-invite", null)
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.data.status").value("INVITED"));
+                .andExpect(jsonPath("$.data.status").value("INVITED"))
+                .andExpect(jsonPath("$.data.mfaEnrolled").value(false));
+        // Defence in depth: the old credentials go at adoption, not only at accept.
+        assertThat(legacy.getPassword()).startsWith("{x}!INVITE-");
+        assertThat(legacy.isMfaEnabled()).isFalse();
+        assertThat(legacy.getMfaSecret()).isNull();
+        verify(h.backupCodes).deleteAllForUser(legacy.getId());
+        verify(h.deviceTrust).clearTrustForUser(legacy.getId());
+        // The account row was locked before anything else was read.
+        var order = org.mockito.Mockito.inOrder(h.users, h.profiles);
+        order.verify(h.users).lockById(legacy.getId());
+        order.verify(h.profiles, org.mockito.Mockito.atLeastOnce()).findById(legacy.getId());
         assertThat(h.profileRows.get(legacy.getId()).isAdopted()).isTrue();
         assertThat(h.profileRows.get(legacy.getId()).getInviteAcceptedAt()).isNull();
         assertThat(legacy.getTokenVersion()).isEqualTo(4L);

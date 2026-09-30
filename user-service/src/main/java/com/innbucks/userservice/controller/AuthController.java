@@ -211,8 +211,10 @@ public class AuthController {
                             })),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "Invalid credentials or missing identifier"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "401",
-                    description = "A staff account whose invite has not been redeemed (only reachable with the right "
-                            + "password — an adopted legacy account). Send the person to their invite email.",
+                    description = "A staff account whose invite has not been redeemed. A backstop: creation, "
+                            + "adoption and reactivation all leave such an account with no usable password, so the "
+                            + "password step normally answers the ordinary 400 first. Send the person to their "
+                            + "invite email.",
                     content = @Content(mediaType = "application/json",
                             examples = @ExampleObject(name = "Staff invite not yet redeemed", value = """
                                     {
@@ -1160,7 +1162,7 @@ public class AuthController {
                             examples = @ExampleObject(name = "Staff account", value = """
                                     {
                                       "code": "409 CONFLICT",
-                                      "message": "InnBucks staff accounts can't join a business or request products.",
+                                      "message": "This number belongs to an InnBucks staff account, which can't be registered as a customer.",
                                       "data": { "errorCode": "staff_account_not_eligible" }
                                     }
                                     """)))

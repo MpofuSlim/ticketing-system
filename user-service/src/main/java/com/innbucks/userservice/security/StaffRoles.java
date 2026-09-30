@@ -57,7 +57,39 @@ public final class StaffRoles {
             User.Role.CALL_CENTER_SUPERVISOR.name(),
             User.Role.FRAUD_DESK.name());
 
+    /**
+     * The business built-ins (V35) — the roles non-staff writers hand out with
+     * NO staff-eligibility check: registration + approval (EVENT_ORGANIZER,
+     * MERCHANT_ADMIN), shop-staff create (SHOP_ADMIN, SHOP_USER), team-member
+     * create (TEAM_MEMBER), and the OTP / federation creators (CUSTOMER). They
+     * must therefore never become staff roles: a PLATFORM code on one would be
+     * handed to every account those paths create. {@code RoleGrantGuard}
+     * refuses one (400 {@code permission_not_assignable}, {@code business_role}).
+     */
+    public static final Set<String> BUSINESS_BUILT_INS = Set.of(
+            User.Role.EVENT_ORGANIZER.name(),
+            User.Role.MERCHANT_ADMIN.name(),
+            User.Role.SHOP_ADMIN.name(),
+            User.Role.SHOP_USER.name(),
+            User.Role.TEAM_MEMBER.name(),
+            User.Role.CUSTOMER.name());
+
     private StaffRoles() {}
+
+    /** True when {@code name} is one of the {@link #BUSINESS_BUILT_INS}. */
+    public static boolean isBusinessBuiltIn(String name) {
+        return name != null && BUSINESS_BUILT_INS.contains(name);
+    }
+
+    /**
+     * True when a token's roles and permissions carry staff authority: a NAMED
+     * role name, or any PLATFORM code (an unknown code classifies as PLATFORM).
+     */
+    public static boolean carriesStaffAuthority(Collection<String> roles, Collection<String> permissions) {
+        if (roles != null && roles.stream().anyMatch(StaffRoles::isNamed)) return true;
+        return permissions != null && permissions.stream()
+                .anyMatch(code -> PermissionCatalog.scopeOf(code) == PermissionCatalog.Scope.PLATFORM);
+    }
 
     /** True when {@code name} is a staff role by name alone. */
     public static boolean isNamed(String name) {

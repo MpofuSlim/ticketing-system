@@ -342,6 +342,10 @@ public class RoleAdminController {
                     **No escalation.** Every code ADDED must be one the caller holds (read from their \
                     current roles) and must not be reserved to SUPER_ADMIN (`roles:write`, \
                     `users:roles:write`) — otherwise `400 permission_not_assignable` naming each code. \
+                    **A business built-in** (EVENT_ORGANIZER, MERCHANT_ADMIN, SHOP_ADMIN, SHOP_USER, \
+                    TEAM_MEMBER, CUSTOMER) **never takes a PLATFORM code**, whoever asks (reason \
+                    `business_role`): registration, shop-staff and team-member create and the customer \
+                    sign-ups hand those roles out with no staff check, so one could never become a staff role. \
                     **Removing codes is never refused on those grounds**, including on a role that \
                     still holds a code reserved today — but a role must keep at least one code \
                     (`400`, "permissions must contain at least one permission…"); delete the role \
@@ -420,6 +424,16 @@ public class RoleAdminController {
                                               "data": {
                                                 "errorCode": "permission_not_assignable",
                                                 "codes": { "service-requests:approve": "exceeds_your_authority" }
+                                              }
+                                            }
+                                            """),
+                                    @ExampleObject(name = "A platform code on a business role", value = """
+                                            {
+                                              "code": "400 BAD_REQUEST",
+                                              "message": "These permissions can't be granted here: users:read (a business role can't hold platform permissions).",
+                                              "data": {
+                                                "errorCode": "permission_not_assignable",
+                                                "codes": { "users:read": "business_role" }
                                               }
                                             }
                                             """),

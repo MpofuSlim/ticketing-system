@@ -624,10 +624,9 @@ public class AuthService implements ApplicationEventPublisherAware {
             refuseInactiveLogin(user, auditContext);
         }
         // An INVITED staff account signs in only after redeeming its invite
-        // (V44) — refused here, before any mfaToken is handed out. Reached only
-        // with the right password, which a freshly created account does not
-        // have; an adopted legacy account does, and this is what locks a
-        // squatter holding it out from the moment of adoption.
+        // (V44) — refused here, before any mfaToken is handed out. A backstop:
+        // creation, adoption and reactivation all leave the account with an
+        // unusable password, so a correct one should never reach this line.
         if (staffEligibility != null && staffEligibility.isInvitePending(user)) {
             auditService.recordFailure(
                     AuditEventType.AUTH_LOGIN_FAILURE,
@@ -1127,7 +1126,7 @@ public class AuthService implements ApplicationEventPublisherAware {
             // customer added to an organization as STAFF — and the super app
             // has no enrolment flow to send them to.
             User rotated = rotation.user();
-            refuseInvitePendingRefresh(rotated, auditContext);
+            refuseInvitePendingRefresh(rotated);
             if (mfaPolicy != null
                     && !rotation.phoneProof()
                     && mfaPolicy.required(rotated, com.innbucks.userservice.security.AuthChannel.WEB)
@@ -1220,7 +1219,7 @@ public class AuthService implements ApplicationEventPublisherAware {
             RefreshTokenService.Rotation rotation =
                     refreshTokenService.rotateInto(refreshToken, deviceId, organizationId);
             User rotated = rotation.user();
-            refuseInvitePendingRefresh(rotated, auditContext);
+            refuseInvitePendingRefresh(rotated);
             if (mfaPolicy != null
                     && mfaPolicy.required(rotated, com.innbucks.userservice.security.AuthChannel.WEB)
                     && (!rotated.isMfaEnabled() || rotated.getMfaSecret() == null)) {
@@ -1268,24 +1267,25 @@ public class AuthService implements ApplicationEventPublisherAware {
 
     /**
      * A refresh (or organization switch) for an account whose staff invite is
-     * pending (V44) — reached when a legacy account is ADOPTED while a session
-     * is live. The rotation has already issued a successor, so the whole family
-     * is revoked here: adoption must lock the old holder out, not merely refuse
-     * one refresh.
+     * pending (V44). The authoritative check is inside the rotation
+     * ({@code RefreshTokenService}), ahead of replay detection and in its own
+     * writable transaction, where it also revokes every family; this one only
+     * makes sure no later check (the MFA guard below it) answers first where no
+     * rotation guard is wired. It writes NOTHING: this method runs outside any
+     * transaction, where a {@code @Modifying} revoke fails and the client would
+     * get a generic 400 instead of 401 {@code staff_invite_pending}.
      */
-    private void refuseInvitePendingRefresh(User rotated, AuditContext auditContext) {
+    private void refuseInvitePendingRefresh(User rotated) {
         if (staffEligibility == null || !staffEligibility.isInvitePending(rotated)) return;
-        int revoked = refreshTokenRepository.revokeAllForUser(rotated.getId(), Instant.now());
-        log.warn("Refresh refused — staff invite pending userId={} revokedRefreshTokens={}",
-                rotated.getId(), revoked);
+        log.warn("Refresh refused — staff invite pending userId={}", rotated.getId());
         throw new com.innbucks.userservice.exception.StaffInvitePendingException();
     }
 
     /**
      * Audit row for a refresh or organization switch refused because the
      * account is an INVITED staff account (V44). Raised by the rotation itself
-     * (ahead of replay detection) or, where no rotation guard is wired, by
-     * {@link #refuseInvitePendingRefresh} — either way the family is revoked.
+     * (ahead of replay detection, revoking every family), by
+     * {@link #refuseInvitePendingRefresh}, or by the mint.
      */
     private void recordInvitePendingRefresh(String subject, boolean organizationSwitch, AuditContext auditContext) {
         auditService.recordFailure(
@@ -1370,18 +1370,21 @@ public class AuthService implements ApplicationEventPublisherAware {
     /**
      * {@code users.last_sign_in_at} (V44), by a targeted UPDATE so the sign-in
      * never writes a stale snapshot of any other column back; the entity is
-     * updated in memory too. Best-effort: a failure here must not refuse a
-     * sign-in that has otherwise succeeded.
+     * updated in memory too.
+     *
+     * <p>Part of the sign-in's own transaction, NOT best-effort: a failure fails
+     * the sign-in like any other write in it. It cannot be split into a
+     * {@code REQUIRES_NEW} to make it best-effort — every path here has already
+     * bumped {@code token_version} on this same row (the password step's
+     * {@code bumpIfActive}, the second factor's {@code bumpIfCurrent}), so the
+     * caller holds the row lock and a second transaction updating the row would
+     * wait on its own caller forever.
      */
     private void stampLastSignIn(User user) {
         if (user == null || user.getId() == null) return;
         java.time.LocalDateTime now = java.time.LocalDateTime.now(java.time.ZoneOffset.UTC);
-        try {
-            userRepository.stampLastSignIn(user.getId(), now);
-            user.setLastSignInAt(now);
-        } catch (RuntimeException ex) {
-            log.warn("Could not stamp last_sign_in_at userId={}: {}", user.getId(), ex.toString());
-        }
+        userRepository.stampLastSignIn(user.getId(), now);
+        user.setLastSignInAt(now);
     }
 
     private AuthResponseDTO buildResponse(User user, String refreshToken) {

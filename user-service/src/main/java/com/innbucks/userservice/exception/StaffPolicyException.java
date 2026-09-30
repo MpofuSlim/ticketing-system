@@ -75,6 +75,12 @@ public class StaffPolicyException extends RuntimeException {
      * given to an account, a role that stores one (a legacy grant).
      */
     public static final String REASON_RESERVED_TO_SUPER_ADMIN = "reserved_to_super_admin";
+    /**
+     * {@code reason}: a PLATFORM code on a business built-in (EVENT_ORGANIZER,
+     * MERCHANT_ADMIN, SHOP_ADMIN, SHOP_USER, TEAM_MEMBER, CUSTOMER) — roles
+     * handed out by paths that never check staff eligibility.
+     */
+    public static final String REASON_BUSINESS_ROLE = "business_role";
 
     /** {@code errorCode} for a role the caller may not give to this account. */
     public static final String ROLE_NOT_ASSIGNABLE = "role_not_assignable";
@@ -262,6 +268,15 @@ public class StaffPolicyException extends RuntimeException {
                 STAFF_ACCOUNT_NOT_ELIGIBLE_MESSAGE, Map.of());
     }
 
+    /** Tier-2 for a staff account's phone: the same code, a message that fits it. */
+    public static final String STAFF_ACCOUNT_NOT_A_CUSTOMER_MESSAGE =
+            "This number belongs to an InnBucks staff account, which can't be registered as a customer.";
+
+    public static StaffPolicyException staffAccountNotEligible(String message) {
+        return new StaffPolicyException(HttpStatus.CONFLICT, STAFF_ACCOUNT_NOT_ELIGIBLE,
+                message == null ? STAFF_ACCOUNT_NOT_ELIGIBLE_MESSAGE : message, Map.of());
+    }
+
     public static StaffPolicyException useStaffInvite() {
         return new StaffPolicyException(HttpStatus.CONFLICT, USE_STAFF_INVITE, USE_STAFF_INVITE_MESSAGE, Map.of());
     }
@@ -311,6 +326,7 @@ public class StaffPolicyException extends RuntimeException {
     private static String readable(String reason) {
         return switch (reason) {
             case REASON_RESERVED_TO_SUPER_ADMIN -> "reserved to SUPER_ADMIN";
+            case REASON_BUSINESS_ROLE -> "a business role can't hold platform permissions";
             case REASON_EXCEEDS_YOUR_AUTHORITY -> "grants more than you hold";
             case REASON_NAMED_ROLE_NOT_HELD -> "only someone who holds this role can give it";
             default -> reason.replace('_', ' ');

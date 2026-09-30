@@ -600,9 +600,10 @@ public class AdminStaffController {
                     * **An INVITED account**: earlier links stop working and a new one is emailed.
                     * **A legacy staff account** (holds staff roles but has no staff profile — created before
                       staff accounts existed): it is **adopted**. It becomes INVITED at once, so it cannot sign
-                      in until the new invite is redeemed; every session it holds ends now (whoever held it is
-                      locked out); the invite is emailed. On redemption its sign-in phone becomes its contact
-                      number and its two-step verification starts again.
+                      in until the new invite is redeemed; every session it holds ends now and its password,
+                      two-step verification and trusted devices are cleared (whoever held it is locked out); the
+                      invite is emailed. On redemption its sign-in phone becomes its contact number and it enrols
+                      two-step verification afresh.
 
                     A legacy account must hold ONLY staff roles, be on a staff domain and belong to no active
                     business organization — otherwise 409 `adoption_blocked` with `reason`:
@@ -667,7 +668,7 @@ public class AdminStaffController {
                                         "status": "INVITED",
                                         "emailVerified": false,
                                         "emailDomainAllowed": true,
-                                        "mfaEnrolled": true,
+                                        "mfaEnrolled": false,
                                         "lockedOut": false,
                                         "lastSignInAt": "2026-09-28T16:02:44+02:00",
                                         "createdAt": "2026-03-11T09:00:00+02:00",
@@ -677,7 +678,7 @@ public class AdminStaffController {
                                           "expiresAt": "2026-10-03T09:02:40+02:00",
                                           "deliveryStatus": "PENDING"
                                         },
-                                        "whatHappensNext": "Farai's existing sessions were ended. We're emailing a link to set a new password; they can't sign in until they use it. It works once and expires at 09.02 on 3 Oct."
+                                        "whatHappensNext": "Farai's existing sessions were ended and the old password no longer works. We're emailing a link to set a new password; they can't sign in until they use it. It works once and expires at 09.02 on 3 Oct."
                                       }
                                     }
                                     """)

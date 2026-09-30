@@ -77,5 +77,10 @@ class ServiceRequestRefusesStaffTest {
         assertThat(customer.getRoles()).contains("MERCHANT_ADMIN");
         verify(h.audit).recordRequired(eq(AuditEventType.USER_ROLES_CHANGED), eq(OWNER), any(),
                 eq(String.valueOf(customer.getId())), eq("USER"), any(), any());
+        // The granted role's row is locked (FOR UPDATE) before it is read to
+        // decide whether it is a staff role — §2.4's row-lock rule.
+        var order = org.mockito.Mockito.inOrder(h.roles);
+        order.verify(h.roles).lockAllByNameIn(eq(new java.util.TreeSet<>(java.util.Set.of("MERCHANT_ADMIN"))));
+        order.verify(h.roles, org.mockito.Mockito.atLeastOnce()).findAllByNameIn(org.mockito.ArgumentMatchers.anyCollection());
     }
 }

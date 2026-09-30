@@ -356,8 +356,18 @@ public class OrganizationService {
         if (me.getRole() != OrganizationMember.Role.OWNER && role != OrganizationMember.Role.STAFF) {
             throw OrganizationException.roleInsufficient("Only an owner can add an owner or an admin.");
         }
+        // A staff address, or a staff account, is answered exactly like an
+        // address with no account (404 account_not_found) — a business owner must
+        // not be able to probe which addresses are InnBucks staff. The refusal is
+        // still audited as STAFF_GRANT_REFUSED.
+        if (staffEligibility.refusedAsUnknownAccount(req.getEmail(), null, caller.getEmail(),
+                "organization_add_member")) {
+            throw accountNotFound();
+        }
         User person = resolveAccount(req.getEmail());
-        staffEligibility.requireNotStaffAccount(person, caller.getEmail(), "organization_add_member");
+        if (staffEligibility.refusedAsUnknownAccount(null, person, caller.getEmail(), "organization_add_member")) {
+            throw accountNotFound();
+        }
         if (members.findByOrganizationIdAndUserId(orgId, person.getId()).isPresent()) {
             throw new OrganizationException(HttpStatus.CONFLICT, "already_member",
                     "That person is already a member of this organization.");
@@ -680,7 +690,11 @@ public class OrganizationService {
         Optional<User> exact = matches.stream().filter(u -> wanted.equals(u.getEmail())).findFirst();
         if (exact.isPresent()) return exact.get();
         if (matches.size() == 1) return matches.get(0);
-        throw new OrganizationException(HttpStatus.NOT_FOUND, "account_not_found",
+        throw accountNotFound();
+    }
+
+    private static OrganizationException accountNotFound() {
+        return new OrganizationException(HttpStatus.NOT_FOUND, "account_not_found",
                 "There's no account with that email. Ask them to register first, then add them.");
     }
 

@@ -338,8 +338,16 @@ public class RoleGrantGuard {
     /** As {@link #requireMayGrant(Caller, Collection)}, naming the role for the refusal's audit row. */
     public void requireMayGrant(Caller caller, Collection<String> addedCodes, String roleName) {
         Map<String, String> refused = new LinkedHashMap<>();
+        // A business built-in is handed out by writers that never check staff
+        // eligibility (register + approval, shop-staff and team-member create,
+        // the OTP and federation creators), so it must never become a staff
+        // role — whoever asks, SUPER_ADMIN included.
+        boolean businessRole = StaffRoles.isBusinessBuiltIn(roleName);
         for (String code : new TreeSet<>(addedCodes)) {
-            if (PermissionCatalog.isReservedToWildcard(code)) {
+            if (businessRole && (PermissionCatalog.WILDCARD.equals(code)
+                    || PermissionCatalog.scopeOf(code) == PermissionCatalog.Scope.PLATFORM)) {
+                refused.put(code, StaffPolicyException.REASON_BUSINESS_ROLE);
+            } else if (PermissionCatalog.isReservedToWildcard(code)) {
                 refused.put(code, StaffPolicyException.REASON_RESERVED_TO_SUPER_ADMIN);
             } else if (!caller.permissions().contains(code)) {
                 refused.put(code, StaffPolicyException.REASON_EXCEEDS_YOUR_AUTHORITY);
@@ -360,6 +368,14 @@ public class RoleGrantGuard {
      * wildcard or a PLATFORM code. A name with no row and not NAMED is not
      * (it grants nothing).
      */
+    /**
+     * {@code SELECT … FOR UPDATE} on the named role rows, in name order (V44
+     * §2.4) — for a grant site that has no role repository of its own.
+     */
+    public void lockRoles(Collection<String> names) {
+        roleRepository.lockAllByNameIn(new TreeSet<>(names));
+    }
+
     public boolean isStaffRoleName(String name) {
         if (StaffRoles.isNamed(name)) return true;
         List<Role> rows = roleRepository.findAllByNameIn(List.of(name));

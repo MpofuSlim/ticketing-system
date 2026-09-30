@@ -20,9 +20,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * shape: an on-domain account holding a staff role, a sign-in phone and a TOTP —
  * which may be the real person's, or whoever registered the address and had it
  * approved. Adoption (a resend-invite on a profile-less account) creates the
- * profile, which ends every session at once; accepting the invite then moves the
- * phone to the contact number and clears the second factor, so nothing the
- * squatter held — password, TOTP, phone — opens the account again.
+ * profile (ending every session at once) and replaces the password and clears
+ * the TOTP; accepting the invite then moves the phone to the contact number, so
+ * nothing the squatter held — session, password, TOTP, phone — opens it again.
  */
 class LegacyAdoptionStripsPhoneAndMfaIT extends StaffItSupport {
 
@@ -60,10 +60,15 @@ class LegacyAdoptionStripsPhoneAndMfaIT extends StaffItSupport {
                         .header("X-Device-Id", DEVICE))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.data.errorCode").value("staff_invite_pending"));
-        // The squatter's password still matches, and is refused before any mfaToken.
+        // Adoption also replaced the password and cleared the TOTP (defence in
+        // depth): the squatter's password no longer matches at all.
         passwordStep(legacy.getEmail())
-                .andExpect(status().isUnauthorized())
-                .andExpect(jsonPath("$.data.errorCode").value("staff_invite_pending"));
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.data.mfaToken").doesNotExist());
+        User adopted = users.findById(legacy.getId()).orElseThrow();
+        assertThat(passwordEncoder.matches(PASSWORD, adopted.getPassword())).isFalse();
+        assertThat(adopted.isMfaEnabled()).isFalse();
+        assertThat(adopted.getMfaSecret()).isNull();
 
         // 3. The mailbox owner accepts: no sign-in phone, no TOTP.
         accept(inviteTokenSentTo(legacy.getEmail()), NEW_PASSWORD).andExpect(status().isOk());

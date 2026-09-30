@@ -277,7 +277,9 @@ public class OrganizationController {
                                     }
                                     """)})),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "404",
-                    description = "No account with that email, or the caller is not a member of the organization",
+                    description = "No account with that email — which is also the answer for an InnBucks staff "
+                            + "address or staff account (staff never join a business, and the answer does not "
+                            + "reveal which addresses are staff) — or the caller is not a member of the organization",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "No such account", value = """
                                     {
@@ -294,20 +296,13 @@ public class OrganizationController {
                                     }
                                     """)})),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "409",
-                    description = "Already a member, or an InnBucks staff account (staff never join a business)",
+                    description = "Already a member",
                     content = @Content(mediaType = "application/json", examples = {
                             @ExampleObject(name = "Already a member", value = """
                             {
                               "code": "409 CONFLICT",
                               "message": "That person is already a member of this organization.",
                               "data": { "errorCode": "already_member" }
-                            }
-                            """),
-                            @ExampleObject(name = "Staff account", value = """
-                            {
-                              "code": "409 CONFLICT",
-                              "message": "InnBucks staff accounts can't join a business or request products.",
-                              "data": { "errorCode": "staff_account_not_eligible" }
                             }
                             """)}))
     })

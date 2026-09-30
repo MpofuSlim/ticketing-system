@@ -234,6 +234,12 @@ public class ServiceRequestService {
         user.getDefaultServices().add(req.getService());
         User.Role grantedRole = Services.BUNDLE_ROLES.get(req.getService());
         boolean roleAdded = grantedRole != null && !user.getRoles().contains(grantedRole.name());
+        if (roleAdded && roleGrantGuard != null) {
+            // Row lock FIRST, before the role is read (V44 §2.4): a concurrent
+            // permission edit on this role waits for this grant (and then sees
+            // this account among its holders), or this waits for it.
+            roleGrantGuard.lockRoles(java.util.Set.of(grantedRole.name()));
+        }
         if (roleAdded && staffEligibility != null && roleGrantGuard != null
                 && roleGrantGuard.isStaffRoleName(grantedRole.name())) {
             // Only reachable if an operator has given a business built-in a

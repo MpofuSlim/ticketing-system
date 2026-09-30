@@ -111,8 +111,14 @@ public class StaffInviteService {
         String hash = StaffInviteTokens.hash(rawToken);
         LocalDateTime now = LocalDateTime.now(ZoneOffset.UTC);
 
-        // Consume FIRST — nothing is read before this, so the persistence context
-        // it clears holds nothing yet.
+        // The account row lock FIRST, in the same order every lifecycle action
+        // takes it (users, then staff_invites — UserRepository.lockById). Consuming
+        // first would hold the invite row while waiting for the account, the
+        // reverse of a resend (account, then its invites), and the two could
+        // deadlock. The invite is only READ here, to learn whose row to lock; the
+        // claim is still the conditional UPDATE below, which also clears the
+        // persistence context, so everything after it is re-read under the lock.
+        invites.findByTokenHash(hash).ifPresent(unlocked -> users.lockById(unlocked.getUserId()));
         if (invites.consume(hash, now) != 1) {
             invites.findByTokenHash(hash).ifPresent(spent -> recordReplay(spent, now, context));
             throw StaffPolicyException.inviteInvalid();

@@ -181,7 +181,18 @@ public class AdminOrganizationController {
             jakarta.servlet.http.HttpServletRequest httpRequest) {
         return ResponseEntity.ok(ApiResult.ok("Organization suspended",
                 organizationService.suspend(id, request.note(), authentication.getName(),
-                        new com.innbucks.userservice.service.AuditContext(httpRequest.getRemoteAddr(),
+                        new com.innbucks.userservice.service.AuditContext(clientIp(httpRequest),
                                 httpRequest.getHeader("User-Agent")))));
+    }
+
+    /** Leftmost {@code X-Forwarded-For} entry behind the gateway, else the remote address. */
+    private static String clientIp(jakarta.servlet.http.HttpServletRequest request) {
+        String forwarded = request.getHeader("X-Forwarded-For");
+        if (forwarded != null && !forwarded.isBlank()) {
+            int comma = forwarded.indexOf(',');
+            String first = (comma < 0 ? forwarded : forwarded.substring(0, comma)).trim();
+            if (!first.isEmpty()) return first;
+        }
+        return request.getRemoteAddr();
     }
 }
