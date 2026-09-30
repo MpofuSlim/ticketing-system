@@ -135,6 +135,17 @@ public class LoyaltyVoucherOrderClient {
      * paymentRef or non-positive amount never reaches the network.
      */
     public void confirmPayment(String orderRef, String paymentRef, long amountCents) {
+        confirmPayment(orderRef, paymentRef, amountCents, null);
+    }
+
+    /**
+     * {@link #confirmPayment(String, String, long)} plus the rail the money
+     * came in on ({@code INNBUCKS_CODE} / {@code ZIMSWITCH_CARD} /
+     * {@code ECOCASH}), sent as {@code paymentRail} so loyalty records the
+     * voucher's payment type. Omitted from the body when null; loyalty treats
+     * a missing rail as "electronic, rail unknown".
+     */
+    public void confirmPayment(String orderRef, String paymentRef, long amountCents, String paymentRail) {
         requireRef(orderRef);
         if (paymentRef == null || paymentRef.isBlank()) {
             throw new VoucherOrderException(
@@ -150,7 +161,7 @@ public class LoyaltyVoucherOrderClient {
                     .uri("/loyalty/internal/voucher-orders/{ref}/confirm-payment", orderRef)
                     .header("X-Internal-Token", internalToken)
                     .header("Content-Type", "application/json")
-                    .body(Map.of("paymentRef", paymentRef, "amountCents", amountCents))
+                    .body(confirmBody(paymentRef, amountCents, paymentRail))
                     .retrieve()
                     .body(String.class);
             log.info("voucher order confirmed orderRef={} paymentRef={} amountCents={}",
@@ -162,6 +173,16 @@ public class LoyaltyVoucherOrderClient {
         } catch (Exception e) {
             throw unreachable("confirm-payment", orderRef, e);
         }
+    }
+
+    private static Map<String, Object> confirmBody(String paymentRef, long amountCents, String paymentRail) {
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("paymentRef", paymentRef);
+        body.put("amountCents", amountCents);
+        if (paymentRail != null && !paymentRail.isBlank()) {
+            body.put("paymentRail", paymentRail);
+        }
+        return body;
     }
 
     // ---------------------------------------------------------------------

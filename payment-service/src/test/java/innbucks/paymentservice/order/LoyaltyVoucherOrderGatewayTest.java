@@ -111,7 +111,7 @@ class LoyaltyVoucherOrderGatewayTest {
         // Loyalty issues the voucher IN the confirm transaction — a 500 can
         // mean the issue rolled back, so the retry sweep must get another go.
         doThrow(new VoucherOrderException("issue failed", 500, null))
-                .when(client).confirmPayment(REF, "TKZ-VCH-ABC", 500L);
+                .when(client).confirmPayment(REF, "TKZ-VCH-ABC", 500L, null);
 
         ConfirmOutcome outcome = gateway.confirm(REF, "TKZ-VCH-ABC", 500L);
 

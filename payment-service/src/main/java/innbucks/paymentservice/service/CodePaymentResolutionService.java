@@ -77,7 +77,8 @@ public class CodePaymentResolutionService {
                     // Our stable payment reference doubles as the product
                     // side's idempotency handle for the confirm.
                     p.getPaymentReference(),
-                    ledgerAmountCents(p));
+                    ledgerAmountCents(p),
+                    p.getPaymentRail());
         } catch (RuntimeException e) {
             log.warn("Order confirm errored paymentReference={} orderType={} orderRef={} cause={}",
                     p.getPaymentReference(), orderTypeOf(p), orderRefOf(p), e.toString());
