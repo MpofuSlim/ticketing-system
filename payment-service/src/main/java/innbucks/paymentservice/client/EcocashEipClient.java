@@ -195,15 +195,20 @@ public class EcocashEipClient {
      *                         ledger row
      * @param referenceCode    our TKZ-… payment reference (the doc's
      *                         "your reference code")
+     * @param description      the line the customer reads on the PIN prompt —
+     *                         names the product they are paying for, so it is
+     *                         the caller's (it knows the order type), never a
+     *                         constant here
      */
     public EcocashChargeStatus charge(String clientCorrelator,
                                       String endUserMsisdn,
                                       long amountCents,
                                       String currency,
-                                      String referenceCode) {
+                                      String referenceCode,
+                                      String description) {
         requireConfigured();
         Supplier<EcocashChargeStatus> call =
-                () -> doCharge(clientCorrelator, endUserMsisdn, amountCents, currency, referenceCode);
+                () -> doCharge(clientCorrelator, endUserMsisdn, amountCents, currency, referenceCode, description);
         try {
             return CircuitBreaker.decorateSupplier(circuitBreaker, call).get();
         } catch (CallNotPermittedException e) {
@@ -213,13 +218,14 @@ public class EcocashEipClient {
     }
 
     private EcocashChargeStatus doCharge(String clientCorrelator, String endUserMsisdn,
-                                         long amountCents, String currency, String referenceCode) {
+                                         long amountCents, String currency, String referenceCode,
+                                         String description) {
         Map<String, Object> chargingInformation = new LinkedHashMap<>();
         // The one cents -> major-units rendering for this rail; a JSON
         // NUMBER (3.00), not a string — Jackson serializes BigDecimal as one.
         chargingInformation.put("amount", BigDecimal.valueOf(amountCents, 2));
         chargingInformation.put("currency", currency);
-        chargingInformation.put("description", "Ticketize online payment");
+        chargingInformation.put("description", description);
 
         Map<String, Object> chargeMetaData = new LinkedHashMap<>();
         chargeMetaData.put("channel", "WEB");
@@ -236,7 +242,7 @@ public class EcocashEipClient {
         body.put("referenceCode", referenceCode);
         body.put("tranType", "MER");
         body.put("endUserId", normalizeMsisdn(endUserMsisdn));
-        body.put("remarks", "Ticketize online payment");
+        body.put("remarks", description);
         body.put("transactionOperationStatus", "Charged");
         body.put("paymentAmount", paymentAmount);
         body.put("merchantCode", properties.getMerchantCode());

@@ -119,7 +119,7 @@ class EcocashPaymentServiceTest {
         payableGateway();
         Payment opened = openEcocashRow(null);
         when(records.openPending(any(Payment.class))).thenReturn(opened);
-        when(client.charge(anyString(), anyString(), anyLong(), anyString(), anyString()))
+        when(client.charge(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString()))
                 .thenReturn(status(EcocashChargeStatus.Outcome.PENDING, "0.0", "3.00", "USD"));
 
         var outcome = service.startCharge(OrderType.BOOKING, UUID.randomUUID().toString());
@@ -128,7 +128,7 @@ class EcocashPaymentServiceTest {
         InOrder inOrder = inOrder(records, client);
         inOrder.verify(records).openPending(any(Payment.class));
         inOrder.verify(records).markEcocashChargeIssued(eq(opened.getId()), anyString(), any(Instant.class));
-        inOrder.verify(client).charge(anyString(), anyString(), anyLong(), anyString(), anyString());
+        inOrder.verify(client).charge(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString());
         // The draft row itself carries the correlator (persisted at open).
         verify(records).openPending(org.mockito.ArgumentMatchers.argThat(
                 d -> d.getEcocashClientCorrelator() != null && !d.getEcocashClientCorrelator().isBlank()));
@@ -143,7 +143,7 @@ class EcocashPaymentServiceTest {
         payableGateway();
         Payment opened = openEcocashRow(null);
         when(records.openPending(any(Payment.class))).thenReturn(opened);
-        when(client.charge(anyString(), anyString(), anyLong(), anyString(), anyString()))
+        when(client.charge(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString()))
                 .thenThrow(new EcocashApiTransientException("read timeout", 502));
 
         var outcome = service.startCharge(OrderType.BOOKING, UUID.randomUUID().toString());
@@ -164,13 +164,35 @@ class EcocashPaymentServiceTest {
         payableGateway();
         Payment opened = openEcocashRow(null);
         when(records.openPending(any(Payment.class))).thenReturn(opened);
-        when(client.charge(anyString(), anyString(), anyLong(), anyString(), anyString()))
+        when(client.charge(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString()))
                 .thenThrow(new EcocashApiException("EcoCash refused the charge: HTTP 400", 400));
 
         var outcome = service.startCharge(OrderType.BOOKING, UUID.randomUUID().toString());
 
         assertThat(outcome.failed()).isTrue();
         verify(records).markFailed(eq(opened.getId()), eq("ecocash_refused"), anyString());
+    }
+
+    @Test
+    @DisplayName("the PIN prompt names the product: a voucher reads InnRewards, a ticket reads Ticketize")
+    void startCharge_promptNamesTheProduct() {
+        properties.setNotifyUrl("https://x.example/foundry/payments/ecocash/notify");
+        when(client.canStartCharge()).thenReturn(true);
+        when(client.isConfigured()).thenReturn(true);
+        OrderGateway gateway = mock(OrderGateway.class);
+        when(gateways.forType(OrderType.LOYALTY_VOUCHER)).thenReturn(gateway);
+        when(gateway.fetch("VCH-E46F12CF3C1E")).thenReturn(new OrderSnapshot(
+                "VCH-E46F12CF3C1E", 100, "USD", "+263777222093", "VCH", "Gift voucher E46F12CF3C1E", true));
+        when(records.openPending(any(Payment.class))).thenReturn(openEcocashRow(null));
+        when(client.charge(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString()))
+                .thenReturn(status(EcocashChargeStatus.Outcome.PENDING, "0.0", "1.00", "USD"));
+
+        service.startCharge(OrderType.LOYALTY_VOUCHER, "VCH-E46F12CF3C1E");
+
+        verify(client).charge(anyString(), anyString(), anyLong(), anyString(), anyString(),
+                eq("InnRewards voucher payment"));
+        assertThat(EcocashPaymentService.promptDescription(OrderType.BOOKING))
+                .isEqualTo("Ticketize online payment");
     }
 
     @Test
@@ -188,7 +210,7 @@ class EcocashPaymentServiceTest {
                 .isInstanceOf(InvalidPaymentRequestException.class)
                 .hasMessageContaining("already in progress")
                 .extracting("statusCode").isEqualTo(409);
-        verify(client, never()).charge(anyString(), anyString(), anyLong(), anyString(), anyString());
+        verify(client, never()).charge(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -206,7 +228,7 @@ class EcocashPaymentServiceTest {
 
         assertThatThrownBy(() -> service.startCharge(OrderType.BOOKING, UUID.randomUUID().toString()))
                 .isSameAs(checkRefusal);
-        verify(client, never()).charge(anyString(), anyString(), anyLong(), anyString(), anyString());
+        verify(client, never()).charge(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -256,7 +278,7 @@ class EcocashPaymentServiceTest {
 
         verify(gateway, never()).extendHold(anyString());
         verify(records, never()).openPending(any());
-        verify(client, never()).charge(anyString(), anyString(), anyLong(), anyString(), anyString());
+        verify(client, never()).charge(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -308,7 +330,7 @@ class EcocashPaymentServiceTest {
         ReflectionTestUtils.setField(service, "cellCurrency", "usd");
         Payment opened = openEcocashRow(null);
         when(records.openPending(any(Payment.class))).thenReturn(opened);
-        when(client.charge(anyString(), anyString(), anyLong(), anyString(), anyString()))
+        when(client.charge(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString()))
                 .thenReturn(status(EcocashChargeStatus.Outcome.PENDING, "0.0", "3.00", "USD"));
 
         var outcome = service.startCharge(OrderType.BOOKING, UUID.randomUUID().toString());
@@ -329,14 +351,14 @@ class EcocashPaymentServiceTest {
         gatewayPricedIn(" usd ");
         Payment opened = openEcocashRow(null);
         when(records.openPending(any(Payment.class))).thenReturn(opened);
-        when(client.charge(anyString(), anyString(), anyLong(), anyString(), anyString()))
+        when(client.charge(anyString(), anyString(), anyLong(), anyString(), anyString(), anyString()))
                 .thenReturn(status(EcocashChargeStatus.Outcome.PENDING, "0.0", "3.00", "USD"));
 
         service.startCharge(OrderType.BOOKING, UUID.randomUUID().toString());
 
         verify(records).openPending(org.mockito.ArgumentMatchers.argThat(
                 d -> "USD".equals(d.getCurrency())));
-        verify(client).charge(anyString(), anyString(), anyLong(), eq("USD"), anyString());
+        verify(client).charge(anyString(), anyString(), anyLong(), eq("USD"), anyString(), anyString());
     }
 
     @Test
