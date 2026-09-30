@@ -58,8 +58,10 @@ public final class SupportDTOs {
                     + "that owns it. Null for a phone or email search.")
             FocusView focus,
             @Schema(example = "[]", description = "Sections that exist but that you can't see.") List<String> notShown,
-            @Schema(example = "false", description = "True when this customer matches an InnBucks staff account. "
-                    + "Writes then need a supervisor, and the lookup is alerted.")
+            @Schema(example = "false", description = "True when this customer matches an InnBucks staff account AND "
+                    + "you can see the console section; always false for an agent who can't see it, even when the "
+                    + "match exists. The lookup is alerted either way, and a write that reaches a staff account "
+                    + "needs a supervisor whatever this flag says (checked afresh at write time).")
             boolean staffAccount) {
     }
 

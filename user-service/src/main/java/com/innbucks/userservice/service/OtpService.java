@@ -152,13 +152,21 @@ public class OtpService {
     }
 
     /**
-     * Where {@link #sendPasswordResetOtpToEmailAfterCommit} sends from. Field
+     * Where {@link #sendPasswordResetOtpToEmailAfterCommit} sends from. Setter
      * injection keeps the plain-{@code new} unit tests' construction unchanged;
-     * absent there, the send runs inline in the after-commit callback.
+     * absent there, the send runs inline in the after-commit callback. A setter,
+     * not a qualified field: Lombok's {@code @RequiredArgsConstructor} does not
+     * copy {@code @Qualifier} from fields, so the qualifier sits on the
+     * parameter, where Spring reads it whoever builds the constructor.
      */
-    @org.springframework.beans.factory.annotation.Autowired(required = false)
-    @org.springframework.beans.factory.annotation.Qualifier("notificationExecutor")
     private java.util.concurrent.Executor notificationExecutor;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    void setNotificationExecutor(
+            @org.springframework.beans.factory.annotation.Qualifier("notificationExecutor")
+            java.util.concurrent.Executor notificationExecutor) {
+        this.notificationExecutor = notificationExecutor;
+    }
 
     /**
      * Customer support's password reset: the code is issued in the CALLER's

@@ -296,19 +296,31 @@ public class GlobalExceptionHandler {
                 .body(ApiResult.of(ex.getStatus(), ex.getMessage(), data));
     }
 
+    /** Where {@link #handleStaffPolicy} answers {@code no-store}: the customer-support surface. */
+    static final String SUPPORT_PATH_PREFIX = "/admin/support/";
+
     /**
      * Refusals of an administrative action on an account (e.g. 403
      * {@code target_not_manageable}). Same envelope as the organization
      * refusals: a stable errorCode plus any extra detail such as {@code reason}.
+     *
+     * <p>On {@code /admin/support/**} the answer is also {@code no-store}, like
+     * every other support response: a support write whose seal fails raises
+     * {@link AuditUnavailableException} (a StaffPolicyException) through here,
+     * not through {@link #handleSupportPolicy}. Other paths are unchanged.
      */
     @ExceptionHandler(StaffPolicyException.class)
-    public ResponseEntity<ApiResult<Map<String, Object>>> handleStaffPolicy(StaffPolicyException ex) {
+    public ResponseEntity<ApiResult<Map<String, Object>>> handleStaffPolicy(StaffPolicyException ex,
+                                                                            jakarta.servlet.http.HttpServletRequest request) {
         log.info("Account administration refused status={} errorCode={} detail={}",
                 ex.getStatus().value(), ex.getErrorCode(), ex.getExtra());
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("errorCode", ex.getErrorCode());
         data.putAll(ex.getExtra());
         ResponseEntity.BodyBuilder response = ResponseEntity.status(ex.getStatus());
+        if (request.getRequestURI().startsWith(SUPPORT_PATH_PREFIX)) {
+            response.header(org.springframework.http.HttpHeaders.CACHE_CONTROL, "no-store");
+        }
         if (ex.getRetryAfterSeconds() != null) {
             // A quota refusal (429): the header for clients that read it, and
             // data.retryAfterSeconds for a browser client that cannot (the
