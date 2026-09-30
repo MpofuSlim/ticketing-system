@@ -162,8 +162,10 @@ public final class DeviceSignInDTOs {
 
     @Schema(name = "DtxLimits")
     public record LimitsView(
-            @Schema(example = "false", description = "true = show the new-phone notice (§8.6).") boolean cooling,
-            @Schema(example = "2026-09-30T11:58:12+02:00", nullable = true) LocalDateTime coolingUntil) {
+            @Schema(example = "false", description = "Always false for now: no reduced new-phone limits are enforced yet, "
+                    + "so show no limits notice. Kept so the shape does not change when they are.") boolean cooling,
+            @Schema(example = "null", nullable = true, description = "Always null while cooling is false.")
+            LocalDateTime coolingUntil) {
     }
 
     @Schema(name = "DtxOtpRequiredDecision", description = "decision=OTP_REQUIRED (§7.3).")

@@ -545,11 +545,15 @@ public class DeviceSignInService {
         TrustView trust = device == null ? null
                 : new TrustView(device.getPublicId(), device.getState().name(), device.getTrustedUntil(),
                 device.getBoundAt() == null);
-        boolean cooling = device != null && device.coolingAt(now);
-        LimitsView limits = new LimitsView(cooling, cooling ? device.getCoolingUntil() : null);
+        // Limits are reported as NOT reduced, because nothing reduces them: no service
+        // that moves money reads the cooling period yet, so cooling=true would tell the
+        // app to show a "lower limits" notice that is false. coolingUntil is still
+        // stored on the row and shown to support. Report it here again only in the
+        // change that makes the money path enforce it.
+        LimitsView limits = new LimitsView(false, null);
         TokenDecision body = new TokenDecision(Decision.TOKEN,
                 new ClientServiceTokenView(token.accessToken(), token.expiresAt()), ticket, trust, limits);
-        return new Answer<>(body, messages.tokenLine(cooling, limits.coolingUntil(), now));
+        return new Answer<>(body, messages.tokenLine());
     }
 
     // =====================================================================================

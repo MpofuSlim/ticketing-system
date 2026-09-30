@@ -1058,6 +1058,14 @@ and blocks phones on `/device-security/ussd/**`; the call center works it from
   exempt for the full 90-day window after enforcement began. Revoke and
   trust-reset clear the proof. Pinned by
   `watchModeTrust_isProvisional_untilACodeIsVerified`.
+- **The new-phone cooling period is RECORDED, not ENFORCED — so it is not announced.**
+  A phone's first confirmed bind sets `cooling_until` (24h, §8.6), but no service
+  that moves money reads it (the middleware applies its usual step-up thresholds),
+  so the sign-in answer reports `limits.cooling: false` and the plain "Enter your
+  PIN to continue." line. It used to say "Some limits are lower until 11.58" — a
+  protection that did not exist. Support still sees the period, worded as "no
+  lower limits apply". **Re-announce it only in the change that makes the money
+  path lower limits for it** (DTX → broker → middleware claim), never on its own.
 - **A trusted phone is never re-asked for a STANDING condition** (`RiskEngine.AMBIENT`:
   `APP_CHECK_ABSENT`, `INTEGRITY_UNAVAILABLE`, `OUTSIDE_KNOWN_PLACES`,
   `PIN_RECENTLY_ISSUED`, `TOO_MANY_DEVICES`, `LOCATION_REFUSED`). They are the same on
