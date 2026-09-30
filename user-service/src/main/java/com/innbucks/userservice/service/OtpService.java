@@ -38,7 +38,8 @@ public class OtpService {
 
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
-    static final Duration OTP_TTL = Duration.ofMinutes(5);
+    /** How long an OTP works. Public: customer support tells the agent the same number the email states. */
+    public static final Duration OTP_TTL = Duration.ofMinutes(5);
     static final Duration RETRY_WINDOW = Duration.ofMinutes(10);
     static final int RETRY_LIMIT = 3;
     static final Duration LOCKOUT_DURATION = Duration.ofMinutes(30);
@@ -138,11 +139,84 @@ public class OtpService {
         enforceRetryQuota(email, now);
         String code = generateCode();
         replaceOtp(email, now, code);
-        emailNotificationClient.sendEmail(email,
-                "Your InnBucks password reset code",
+        sendResetEmail(email, code);
+    }
+
+    static final String RESET_EMAIL_SUBJECT = "Your InnBucks password reset code";
+
+    private void sendResetEmail(String email, String code) {
+        emailNotificationClient.sendEmail(email, RESET_EMAIL_SUBJECT,
                 "Your password reset code is " + code + ". It expires in " + OTP_TTL.toMinutes()
                         + " minutes. If you didn't request this, you can ignore this message.",
                 "PWDRESET-OTP-" + System.currentTimeMillis());
+    }
+
+    /**
+     * Where {@link #sendPasswordResetOtpToEmailAfterCommit} sends from. Field
+     * injection keeps the plain-{@code new} unit tests' construction unchanged;
+     * absent there, the send runs inline in the after-commit callback.
+     */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.beans.factory.annotation.Qualifier("notificationExecutor")
+    private java.util.concurrent.Executor notificationExecutor;
+
+    /**
+     * Customer support's password reset: the code is issued in the CALLER's
+     * transaction (quota counted, OTP row written) and emailed only once that
+     * transaction COMMITS, on the notification executor. The support action locks
+     * the account row and seals the action on the audit chain in that transaction,
+     * so sending inside it would hold the row lock across the email gateway, and
+     * would send a code for an action whose seal then failed and rolled back.
+     * The code never leaves this class; {@code onDelivery} hears only whether the
+     * send succeeded, and never throws into it.
+     *
+     * @throws OtpRateLimitException the address has had too many codes recently
+     */
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.MANDATORY)
+    public void sendPasswordResetOtpToEmailAfterCommit(String email, java.util.function.Consumer<Boolean> onDelivery) {
+        Instant now = Instant.now();
+        enforceRetryQuota(email, now);
+        String code = generateCode();
+        replaceOtp(email, now, code);
+        org.springframework.transaction.support.TransactionSynchronizationManager.registerSynchronization(
+                new org.springframework.transaction.support.TransactionSynchronization() {
+                    @Override
+                    public void afterCommit() {
+                        Runnable send = () -> {
+                            boolean delivered;
+                            try {
+                                sendResetEmail(email, code);
+                                delivered = true;
+                            } catch (RuntimeException e) {
+                                // Never the address or the code.
+                                log.warn("Password-reset email (support) failed after commit: {}",
+                                        e.getClass().getSimpleName());
+                                delivered = false;
+                            }
+                            report(onDelivery, delivered);
+                        };
+                        java.util.concurrent.Executor executor = notificationExecutor;
+                        if (executor == null) {
+                            send.run();
+                            return;
+                        }
+                        try {
+                            executor.execute(send);
+                        } catch (java.util.concurrent.RejectedExecutionException e) {
+                            log.warn("Password-reset email (support) not queued: the notification executor refused it");
+                            report(onDelivery, false);
+                        }
+                    }
+                });
+    }
+
+    private static void report(java.util.function.Consumer<Boolean> onDelivery, boolean delivered) {
+        if (onDelivery == null) return;
+        try {
+            onDelivery.accept(delivered);
+        } catch (RuntimeException ignored) {
+            // a meter must never matter
+        }
     }
 
     /**

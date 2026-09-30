@@ -33,6 +33,19 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
+      # Bounded, because Redis sits on request paths that must not hang and every
+      # caller already has an answer for "Redis didn't reply": the login and
+      # customer-support limiters fall back to a per-replica window, the
+      # token-version and logout-denylist publishes log (and count) a failure —
+      # Postgres stays this service's truth and JwtFilter reads it, not Redis —
+      # and /auth/exchange's replay check refuses with a retryable 503. Lettuce's default is 60s — a minute of a
+      # request thread per call before any of those fallbacks runs. Nothing here
+      # issues a blocking command (no BLPOP/WAIT/SUBSCRIBE); the longest call is a
+      # pipelined batch of <= 500 tiny EVALs (TokenVersionPublisher.publishAll),
+      # well inside the bound, and a batch that does time out is counted as a
+      # failed publish, never an error.
+      timeout: ${REDIS_COMMAND_TIMEOUT:500ms}
+      connect-timeout: ${REDIS_CONNECT_TIMEOUT:1s}
       repositories:
         enabled: false
 
@@ -235,6 +248,23 @@ staff:
   # enforce: withhold platform permissions and named staff roles from holders
   # who are not staff-eligible.
   eligibility-enforcement: ${STAFF_ELIGIBILITY_ENFORCEMENT:watch}
+
+# Unified customer support (/admin/support/**, V45/V46). Keys live in
+# deploy/cells/cell.<iso>.env (k3s envFrom) — EXCEPT the assertion private key,
+# which comes only from the dedicated user-service-support-signing Secret.
+support:
+  enabled: ${SUPPORT_ENABLED:true}
+  # How long a lookup can back a detail read or a write.
+  lookup-binding-ttl: ${SUPPORT_LOOKUP_BINDING_TTL:PT30M}
+  limiter:
+    short-window: ${SUPPORT_LIMIT_SHORT_WINDOW:PT10M}
+    short-window-max: ${SUPPORT_LIMIT_SHORT_WINDOW_MAX:60}
+    daily-max: ${SUPPORT_LIMIT_DAILY_MAX:400}
+  assertion:
+    # RSA PKCS#8 PEM. Blank = HALF-PROVISIONED (boot ERROR); malformed = boot fails.
+    private-key: ${SUPPORT_ASSERTION_PRIVATE_KEY:}
+    key-id: ${SUPPORT_ASSERTION_KEY_ID:support-assertion-1}
+    ttl: ${SUPPORT_ASSERTION_TTL:PT60S}
 
 whatsapp:
   base-url: ${WHATSAPP_GATEWAY_URL:http://localhost:8089}

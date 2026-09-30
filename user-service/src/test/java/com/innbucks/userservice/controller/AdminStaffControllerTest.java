@@ -82,7 +82,8 @@ class AdminStaffControllerTest {
                 .andExpect(jsonPath("$.data.mfaEnrolled").value(false))
                 .andExpect(jsonPath("$.data.roles[0]").value("CALL_CENTER_AGENT"))
                 .andExpect(jsonPath("$.data.permissions", containsInAnyOrder(
-                        "device-security:read", "device-security:manage")))
+                        "device-security:read", "device-security:manage",
+                        "support-console:read", "support-console:manage")))
                 .andExpect(jsonPath("$.data.manageable").value(true))
                 .andExpect(jsonPath("$.data.invite.sentTo").value("tariro.moyo@innbucks.co.zw"))
                 .andExpect(jsonPath("$.data.invite.deliveryStatus").value("PENDING"))

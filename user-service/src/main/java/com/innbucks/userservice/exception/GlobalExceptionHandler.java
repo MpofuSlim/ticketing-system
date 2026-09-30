@@ -320,6 +320,29 @@ public class GlobalExceptionHandler {
     }
 
     /**
+     * Customer-support refusals ({@code /admin/support/**}, and the lookup
+     * limiter on {@code GET /admin/device-security/**}). Same envelope as
+     * {@link #handleStaffPolicy}, but the log line carries the status and
+     * errorCode ONLY — never {@code extra}, never the message — because this
+     * surface sits next to customer data and nothing about a customer reaches
+     * a log unmasked.
+     */
+    @ExceptionHandler(SupportPolicyException.class)
+    public ResponseEntity<ApiResult<Map<String, Object>>> handleSupportPolicy(SupportPolicyException ex) {
+        log.info("Support request refused status={} errorCode={}", ex.getStatus().value(), ex.getErrorCode());
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("errorCode", ex.getErrorCode());
+        data.putAll(ex.getExtra());
+        ResponseEntity.BodyBuilder response = ResponseEntity.status(ex.getStatus())
+                .header(org.springframework.http.HttpHeaders.CACHE_CONTROL, "no-store");
+        if (ex.getRetryAfterSeconds() != null) {
+            response.header(org.springframework.http.HttpHeaders.RETRY_AFTER,
+                    String.valueOf(ex.getRetryAfterSeconds()));
+        }
+        return response.body(ApiResult.of(ex.getStatus(), ex.getMessage(), data));
+    }
+
+    /**
      * A sign-in or refresh for a staff account whose invite has not been
      * redeemed (V44). 401 like {@link AccountInactiveException} — the credential
      * no longer admits anyone until the person uses the invite link — with its

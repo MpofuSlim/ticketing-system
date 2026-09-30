@@ -69,7 +69,8 @@ class StaffFirstSignInIT extends StaffItSupport {
         JsonNode claims = claims(session.at("/token").asText());
         assertThat(strings(claims.get("roles"))).containsExactly("CALL_CENTER_AGENT");
         assertThat(strings(claims.get("perms")))
-                .containsExactlyInAnyOrder("device-security:read", "device-security:manage");
+                .containsExactlyInAnyOrder("device-security:read", "device-security:manage",
+                        "support-console:read", "support-console:manage");
         assertThat(claims.has("orgId")).isFalse();
         assertThat(session.at("/organizationId").isMissingNode() || session.at("/organizationId").isNull()).isTrue();
 

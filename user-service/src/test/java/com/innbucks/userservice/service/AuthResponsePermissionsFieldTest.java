@@ -76,7 +76,8 @@ class AuthResponsePermissionsFieldTest {
         AuthResponseDTO response = authService.issueToken(staff("CALL_CENTER_AGENT"), "d");
 
         assertThat(response.getPermissions())
-                .containsExactlyInAnyOrder("device-security:read", "device-security:manage");
+                .containsExactlyInAnyOrder("device-security:read", "device-security:manage",
+                        "support-console:read", "support-console:manage");
         assertThat(response.getPermissions()).isEqualTo(jwt.extractPermissions(response.getToken()));
     }
 

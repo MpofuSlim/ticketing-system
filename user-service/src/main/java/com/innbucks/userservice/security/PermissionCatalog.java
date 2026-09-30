@@ -105,6 +105,21 @@ public final class PermissionCatalog {
     public static final String DEVICE_SECURITY_FRAUD = "device-security:fraud";
 
     /**
+     * Unified customer support (V46) — the Foundry console section of
+     * {@code /admin/support/**}. Tiered like device security: an agent reads and
+     * does the routine things (unlock, send a reset code); resetting a second
+     * factor is the classic help-desk takeover step (stolen password + a phone
+     * call), so it is a SUPERVISOR code of its own. {@code support-staff-targets:manage}
+     * is what lets a supervisor act at all when a lookup matches an InnBucks
+     * staff account. None is wildcard-reserved: they are granted to the
+     * CALL_CENTER built-ins by migration, and an operator may compose them.
+     */
+    public static final String SUPPORT_CONSOLE_READ = "support-console:read";
+    public static final String SUPPORT_CONSOLE_MANAGE = "support-console:manage";
+    public static final String SUPPORT_CONSOLE_MFA_RESET = "support-console:mfa:reset";
+    public static final String SUPPORT_STAFF_TARGETS_MANAGE = "support-staff-targets:manage";
+
+    /**
      * Who a permission's authority reaches — the half of a permission's meaning
      * the no-escalation and staff rules read.
      *
@@ -193,7 +208,15 @@ public final class PermissionCatalog {
                 entry(DEVICE_SECURITY_MANAGE,
                         "Block, unlock, remove or reset a customer's phone, and cancel open codes", Scope.PLATFORM),
                 entry(DEVICE_SECURITY_FRAUD, "Ban a phone for fraud (including every account on it), lift such bans, "
-                        + "and fraud-flag a customer", Scope.PLATFORM))) {
+                        + "and fraud-flag a customer", Scope.PLATFORM),
+                entry(SUPPORT_CONSOLE_READ, "Look customers up in customer support and see their Foundry console "
+                        + "account: status, roles, organizations, 2FA, lockout and service requests", Scope.PLATFORM),
+                entry(SUPPORT_CONSOLE_MANAGE, "Unlock a Foundry console account and send it a password-reset code "
+                        + "from customer support", Scope.PLATFORM),
+                entry(SUPPORT_CONSOLE_MFA_RESET, "Reset a Foundry console account's two-factor sign-in from customer "
+                        + "support (supervisor)", Scope.PLATFORM),
+                entry(SUPPORT_STAFF_TARGETS_MANAGE, "Act in customer support when a lookup matches an InnBucks staff "
+                        + "account (supervisor)", Scope.PLATFORM))) {
             if (all.put(e.code(), e) != null) {
                 throw new IllegalStateException("Duplicate permission code in the catalog: " + e.code());
             }

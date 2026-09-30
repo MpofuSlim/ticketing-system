@@ -21,9 +21,9 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * V43 on a fresh database: the three customer-support built-ins exist, are
- * built in, and resolve to exactly the device-security permissions the design
- * gives them — and a call-center agent's sign-in carries those, and only those,
+ * V43 + V46 on a fresh database: the three customer-support built-ins exist,
+ * are built in, and resolve to exactly the permissions the design gives them
+ * (device security from V43, the support-console codes from V46) — and a call-center agent's sign-in carries those, and only those,
  * in both the token and the response's {@code permissions}.
  */
 class CallCenterRoleGrantsIT extends SessionRevocationItSupport {
@@ -34,15 +34,21 @@ class CallCenterRoleGrantsIT extends SessionRevocationItSupport {
 
     @Test
     void theThreeRolesResolveToExactlyTheirGrants() {
+        // V43's device-security grants, plus V46's customer-support console codes.
         assertThat(resolver.resolve(List.of("CALL_CENTER_AGENT")))
-                .containsExactlyInAnyOrder("device-security:read", "device-security:manage");
+                .containsExactlyInAnyOrder("device-security:read", "device-security:manage",
+                        "support-console:read", "support-console:manage");
+        // The supervisor diverges in V46: the MFA reset and acting on staff targets.
         assertThat(resolver.resolve(List.of("CALL_CENTER_SUPERVISOR")))
-                .containsExactlyInAnyOrder("device-security:read", "device-security:manage");
+                .containsExactlyInAnyOrder("device-security:read", "device-security:manage",
+                        "support-console:read", "support-console:manage",
+                        "support-console:mfa:reset", "support-staff-targets:manage");
         assertThat(resolver.resolve(List.of("FRAUD_DESK")))
                 .containsExactlyInAnyOrder("device-security:read", "device-security:fraud");
         // The add-on composes with an agent role: the union.
         assertThat(resolver.resolve(List.of("CALL_CENTER_AGENT", "FRAUD_DESK")))
-                .containsExactlyInAnyOrder("device-security:read", "device-security:manage", "device-security:fraud");
+                .containsExactlyInAnyOrder("device-security:read", "device-security:manage", "device-security:fraud",
+                        "support-console:read", "support-console:manage");
     }
 
     @Test
@@ -69,7 +75,8 @@ class CallCenterRoleGrantsIT extends SessionRevocationItSupport {
         // signIn is password + TOTP: an agent is a system user, challenged like staff.
         JsonNode session = signIn(agent.getEmail());
 
-        Set<String> expected = Set.of("device-security:read", "device-security:manage");
+        Set<String> expected = Set.of("device-security:read", "device-security:manage",
+                "support-console:read", "support-console:manage");
         List<String> listed = objectMapper.convertValue(session.at("/permissions"),
                 objectMapper.getTypeFactory().constructCollectionType(List.class, String.class));
         assertThat(listed).containsExactlyInAnyOrderElementsOf(expected);

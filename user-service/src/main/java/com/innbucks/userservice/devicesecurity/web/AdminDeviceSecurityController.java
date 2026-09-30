@@ -16,6 +16,8 @@ import com.innbucks.userservice.devicesecurity.dto.SupportDTOs.SupportRefLookup;
 import com.innbucks.userservice.dto.ApiResult;
 import com.innbucks.userservice.security.PermissionCatalog;
 import com.innbucks.userservice.service.AuditContext;
+import com.innbucks.userservice.support.DeviceSecurityReadAccess;
+import com.innbucks.userservice.support.SupportCustomerKeys;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
@@ -70,6 +72,15 @@ import java.util.UUID;
 public class AdminDeviceSecurityController {
 
     private final DeviceSupportService service;
+    /**
+     * Customer support's rules for these READS (V45): each counts against the
+     * agent's lookup limit and is recorded in support_access_log (fail-closed:
+     * 503 support_log_unavailable). The contract is otherwise unchanged — no
+     * lookupId is required here. Applied whether or not SUPPORT_ENABLED is on:
+     * that switch turns the new /admin/support surface off, not the record of who
+     * looked at a customer through these existing tools.
+     */
+    private final DeviceSecurityReadAccess access;
 
     // ---- look up -------------------------------------------------------------------
 
@@ -114,10 +125,22 @@ public class AdminDeviceSecurityController {
             @ApiResponse(responseCode = "403", description = "Missing device-security:read",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             { "code": "403 FORBIDDEN", "message": "Forbidden - insufficient role", "data": null }
+                            """))),
+            @ApiResponse(responseCode = "429", description = "The agent's customer-lookup limit (shared with /admin/support)",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "429 TOO_MANY_REQUESTS", "message": "You've looked up a lot of customers in a short time. Try again in 4 minutes.", "data": { "errorCode": "lookup_rate_limited", "retryAfterSeconds": 212, "window": "10m" } }
+                            """))),
+            @ApiResponse(responseCode = "503", description = "The read could not be recorded in the support access log, so it is not shown",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "503 SERVICE_UNAVAILABLE", "message": "We couldn't record this lookup, so it wasn't shown. Try again.", "data": { "errorCode": "support_log_unavailable" } }
                             """)))
     })
-    public ResponseEntity<ApiResult<CustomerOverview>> overview(@PathVariable String msisdn) {
-        return ResponseEntity.ok(ApiResult.ok("Customer device overview", service.overview(msisdn)));
+    public ResponseEntity<ApiResult<CustomerOverview>> overview(@PathVariable String msisdn, Authentication auth,
+                                                                HttpServletRequest request) {
+        CustomerOverview overview = access.read(auth, DeviceSecurityRequests.clientIp(request),
+                DeviceSecurityReadAccess.OP_OVERVIEW, DeviceSecurityReadAccess.Subject.phone(msisdn),
+                () -> service.overview(msisdn), o -> phoneKeys(o.msisdn()));
+        return ResponseEntity.ok(ApiResult.ok("Customer device overview", overview));
     }
 
     @GetMapping("/customers/{msisdn}/events")
@@ -140,13 +163,26 @@ public class AdminDeviceSecurityController {
                                 "totalElements": 2, "totalPages": 1, "number": 0, "size": 50
                               }
                             }
+                            """))),
+            @ApiResponse(responseCode = "429", description = "The agent's customer-lookup limit (shared with /admin/support)",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "429 TOO_MANY_REQUESTS", "message": "You've looked up a lot of customers in a short time. Try again in 4 minutes.", "data": { "errorCode": "lookup_rate_limited", "retryAfterSeconds": 212, "window": "10m" } }
+                            """))),
+            @ApiResponse(responseCode = "503", description = "The read could not be recorded in the support access log, so it is not shown",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "503 SERVICE_UNAVAILABLE", "message": "We couldn't record this lookup, so it wasn't shown. Try again.", "data": { "errorCode": "support_log_unavailable" } }
                             """)))
     })
     public ResponseEntity<ApiResult<PageView<EventView>>> events(@PathVariable String msisdn,
                                                                  @RequestParam(defaultValue = "0") int page,
                                                                  @RequestParam(defaultValue = "50") int size,
-                                                                 @RequestParam(required = false) List<String> type) {
-        return ResponseEntity.ok(ApiResult.ok("Device-security events", service.events(msisdn, page, size, type)));
+                                                                 @RequestParam(required = false) List<String> type,
+                                                                 Authentication auth, HttpServletRequest request) {
+        PageView<EventView> events = access.read(auth, DeviceSecurityRequests.clientIp(request),
+                DeviceSecurityReadAccess.OP_EVENTS, DeviceSecurityReadAccess.Subject.phone(msisdn),
+                () -> service.events(msisdn, page, size, type),
+                p -> access.typedPhoneKeys(msisdn));
+        return ResponseEntity.ok(ApiResult.ok("Device-security events", events));
     }
 
     @GetMapping("/support-refs/{supportRef}")
@@ -172,10 +208,24 @@ public class AdminDeviceSecurityController {
             @ApiResponse(responseCode = "404", description = "No such reference",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             { "code": "404 NOT_FOUND", "message": "No block, ban or unlock carries reference SEC-8F2KQ9. Check the spelling with the caller.", "data": { "errorCode": "support_ref_not_found" } }
+                            """))),
+            @ApiResponse(responseCode = "429", description = "The agent's customer-lookup limit (shared with /admin/support)",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "429 TOO_MANY_REQUESTS", "message": "You've looked up a lot of customers in a short time. Try again in 4 minutes.", "data": { "errorCode": "lookup_rate_limited", "retryAfterSeconds": 212, "window": "10m" } }
+                            """))),
+            @ApiResponse(responseCode = "503", description = "The read could not be recorded in the support access log, so it is not shown",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "503 SERVICE_UNAVAILABLE", "message": "We couldn't record this lookup, so it wasn't shown. Try again.", "data": { "errorCode": "support_log_unavailable" } }
                             """)))
     })
-    public ResponseEntity<ApiResult<SupportRefLookup>> bySupportRef(@PathVariable String supportRef) {
-        return ResponseEntity.ok(ApiResult.ok("Reference found", service.bySupportRef(supportRef)));
+    public ResponseEntity<ApiResult<SupportRefLookup>> bySupportRef(@PathVariable String supportRef, Authentication auth,
+                                                                    HttpServletRequest request) {
+        SupportRefLookup found = access.read(auth, DeviceSecurityRequests.clientIp(request),
+                DeviceSecurityReadAccess.OP_SUPPORT_REF, DeviceSecurityReadAccess.Subject.reference(supportRef),
+                () -> service.bySupportRef(supportRef),
+                r -> new SupportCustomerKeys(r.msisdn() == null ? List.of() : List.of(r.msisdn()), List.of(),
+                        List.of(), List.of(), r.supportRef()));
+        return ResponseEntity.ok(ApiResult.ok("Reference found", found));
     }
 
     @GetMapping("/devices")
@@ -190,12 +240,26 @@ public class AdminDeviceSecurityController {
             @ApiResponse(responseCode = "400", description = "Unknown state",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             { "code": "400 BAD_REQUEST", "message": "state must be TEMP_BLOCKED or BANNED.", "data": { "errorCode": "invalid_request", "field": "state" } }
+                            """))),
+            @ApiResponse(responseCode = "429", description = "The agent's customer-lookup limit (shared with /admin/support)",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "429 TOO_MANY_REQUESTS", "message": "You've looked up a lot of customers in a short time. Try again in 4 minutes.", "data": { "errorCode": "lookup_rate_limited", "retryAfterSeconds": 212, "window": "10m" } }
+                            """))),
+            @ApiResponse(responseCode = "503", description = "The read could not be recorded in the support access log, so it is not shown",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "503 SERVICE_UNAVAILABLE", "message": "We couldn't record this lookup, so it wasn't shown. Try again.", "data": { "errorCode": "support_log_unavailable" } }
                             """)))
     })
     public ResponseEntity<ApiResult<PageView<SupportDeviceView>>> stopped(@RequestParam(required = false) String state,
                                                                           @RequestParam(defaultValue = "0") int page,
-                                                                          @RequestParam(defaultValue = "20") int size) {
-        return ResponseEntity.ok(ApiResult.ok("Stopped phones", service.stopped(state, page, size)));
+                                                                          @RequestParam(defaultValue = "20") int size,
+                                                                          Authentication auth,
+                                                                          HttpServletRequest request) {
+        PageView<SupportDeviceView> stopped = access.read(auth, DeviceSecurityRequests.clientIp(request),
+                DeviceSecurityReadAccess.OP_STOPPED, DeviceSecurityReadAccess.Subject.none(),
+                () -> service.stopped(state, page, size),
+                p -> phoneKeys(p.content().stream().map(SupportDeviceView::msisdn).toList()));
+        return ResponseEntity.ok(ApiResult.ok("Stopped phones", stopped));
     }
 
     @GetMapping("/devices/{deviceId}/same-handset")
@@ -206,10 +270,24 @@ public class AdminDeviceSecurityController {
             @ApiResponse(responseCode = "200", description = "Pairs on the same handset",
                     content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
                             { "code": "200 OK", "message": "Accounts on this handset", "data": [] }
+                            """))),
+            @ApiResponse(responseCode = "429", description = "The agent's customer-lookup limit (shared with /admin/support)",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "429 TOO_MANY_REQUESTS", "message": "You've looked up a lot of customers in a short time. Try again in 4 minutes.", "data": { "errorCode": "lookup_rate_limited", "retryAfterSeconds": 212, "window": "10m" } }
+                            """))),
+            @ApiResponse(responseCode = "503", description = "The read could not be recorded in the support access log, so it is not shown",
+                    content = @Content(mediaType = "application/json", examples = @ExampleObject(value = """
+                            { "code": "503 SERVICE_UNAVAILABLE", "message": "We couldn't record this lookup, so it wasn't shown. Try again.", "data": { "errorCode": "support_log_unavailable" } }
                             """)))
     })
-    public ResponseEntity<ApiResult<List<SupportDeviceView>>> sameHandset(@PathVariable UUID deviceId) {
-        return ResponseEntity.ok(ApiResult.ok("Accounts on this handset", service.sameHandset(deviceId)));
+    public ResponseEntity<ApiResult<List<SupportDeviceView>>> sameHandset(@PathVariable UUID deviceId,
+                                                                         Authentication auth,
+                                                                         HttpServletRequest request) {
+        List<SupportDeviceView> pairs = access.read(auth, DeviceSecurityRequests.clientIp(request),
+                DeviceSecurityReadAccess.OP_SAME_HANDSET, DeviceSecurityReadAccess.Subject.target(deviceId.toString()),
+                () -> service.sameHandset(deviceId),
+                l -> phoneKeys(l.stream().map(SupportDeviceView::msisdn).toList()));
+        return ResponseEntity.ok(ApiResult.ok("Accounts on this handset", pairs));
     }
 
     // ---- act -----------------------------------------------------------------------
@@ -382,6 +460,14 @@ public class AdminDeviceSecurityController {
         int n = service.voidCodes(msisdn, body.note(), auth.getName(), audit(request));
         return ResponseEntity.ok(ApiResult.ok(n + (n == 1 ? " open code" : " open codes") + " cancelled",
                 Map.of("cancelled", n)));
+    }
+
+    private static SupportCustomerKeys phoneKeys(String msisdn) {
+        return phoneKeys(msisdn == null ? List.of() : List.of(msisdn));
+    }
+
+    private static SupportCustomerKeys phoneKeys(List<String> msisdns) {
+        return new SupportCustomerKeys(msisdns, List.of(), List.of(), List.of(), null);
     }
 
     private static AuditContext audit(HttpServletRequest request) {

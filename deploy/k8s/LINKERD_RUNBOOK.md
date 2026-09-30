@@ -184,9 +184,10 @@ twice. Check each one first:
         the same resolvers concurrently with the poller — that was already
         true on one replica, and the per-row money rules handle it.
       - **user-service**: no locks, deliberately. `TokenRevocationService`,
-        `OtpService`, `RefreshTokenService` and `DeviceSecurityRetentionJob`
-        are bulk `DELETE … WHERE <expiry> < now` sweeps — a second replica's
-        run deletes nothing. `LoginRateLimiter.purgeFallbackWindows` clears
+        `OtpService`, `RefreshTokenService`, `DeviceSecurityRetentionJob` and
+        `SupportAccessLogRetentionJob` (the 12-month `support_access_log`
+        sweep) are bulk `DELETE … WHERE <expiry> < now` sweeps — a second
+        replica's run deletes nothing. `LoginRateLimiter.purgeFallbackWindows` clears
         each pod's OWN in-memory map and must run on every replica; locking
         it would let the other replicas' maps grow unbounded during a Redis
         outage. `AuditIntegrityVerifier` is read-only (a double run is a
@@ -195,8 +196,12 @@ twice. Check each one first:
       idempotent.
 - [ ] **In-memory state**: user-service's `LoginRateLimiter` falls back to an
       in-memory counter when Redis is unavailable (per-replica limits during a
-      Redis outage — acceptable, but know it); short caches such as
-      `TicketScanService`'s event-window cache are per replica by design.
+      Redis outage — acceptable, but know it), and so does the customer-support
+      lookup limit (`SupportLookupLimiter`: a per-replica Caffeine window, so an
+      agent's 60 / 10 min and 400 / day become N× that across N replicas while
+      `user.support.limiter.degraded` is counting — alerted, never fail-open);
+      short caches such as `TicketScanService`'s event-window cache are per
+      replica by design.
 - [ ] **Anything that assumes one instance** — e.g. a future notifications SSE
       stream needs Redis pub/sub fan-out (CLAUDE.md, Notifications).
 - [ ] **Single node**: replicas protect against a pod crash, not the box going
