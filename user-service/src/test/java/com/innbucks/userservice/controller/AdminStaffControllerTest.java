@@ -1,5 +1,6 @@
 package com.innbucks.userservice.controller;
 
+import com.innbucks.userservice.testsupport.BuiltInRoleRows;
 import com.innbucks.userservice.entity.StaffInvite;
 import com.innbucks.userservice.entity.StaffProfile;
 import com.innbucks.userservice.entity.User;
@@ -82,7 +83,7 @@ class AdminStaffControllerTest {
                 .andExpect(jsonPath("$.data.mfaEnrolled").value(false))
                 .andExpect(jsonPath("$.data.roles[0]").value("CALL_CENTER_AGENT"))
                 .andExpect(jsonPath("$.data.permissions", containsInAnyOrder(
-                        "device-security:read", "device-security:manage")))
+                        BuiltInRoleRows.GRANTS.get("CALL_CENTER_AGENT").toArray())))
                 .andExpect(jsonPath("$.data.manageable").value(true))
                 .andExpect(jsonPath("$.data.invite.sentTo").value("tariro.moyo@innbucks.co.zw"))
                 .andExpect(jsonPath("$.data.invite.deliveryStatus").value("PENDING"))

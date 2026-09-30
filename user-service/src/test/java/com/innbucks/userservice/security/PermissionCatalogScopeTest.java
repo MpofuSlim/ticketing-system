@@ -60,7 +60,10 @@ class PermissionCatalogScopeTest {
         for (String code : Set.of("users:read", "users:merchants:read", "users:activation:write",
                 "users:roles:write", "users:mfa:reset", "users:password:reset", "roles:read", "roles:write",
                 "service-requests:read", "service-requests:approve", "organizations:read",
-                "device-security:read", "device-security:manage", "device-security:fraud")) {
+                "device-security:read", "device-security:manage", "device-security:fraud",
+                "marketplace-support:read", "marketplace-support:manage", "marketplace-support:supervise",
+                "loyalty-support:read", "loyalty-support:manage", "loyalty-support:supervise",
+                "customer-messages:send")) {
             assertThat(PermissionCatalog.scopeOf(code)).as(code).isEqualTo(Scope.PLATFORM);
         }
         assertThat(PermissionCatalog.scopeOf(PermissionCatalog.WILDCARD)).isEqualTo(Scope.PLATFORM);

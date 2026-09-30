@@ -59,7 +59,8 @@ class RoleGrantGuardTest {
         when(users.findByPhoneNumber("+263771234567")).thenReturn(Optional.of(u));
 
         RoleGrantGuard.Caller caller = guard.resolveCaller("+263771234567");
-        assertThat(caller.permissions()).containsExactlyInAnyOrder("device-security:read", "device-security:manage");
+        assertThat(caller.permissions())
+                .containsExactlyInAnyOrderElementsOf(BuiltInRoleRows.GRANTS.get("CALL_CENTER_AGENT"));
         assertThat(caller.holdsRole("CALL_CENTER_AGENT")).isTrue();
         verify(users).findByPhoneNumber("+263771234567");
     }

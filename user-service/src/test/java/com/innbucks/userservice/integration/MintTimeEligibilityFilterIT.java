@@ -1,5 +1,6 @@
 package com.innbucks.userservice.integration;
 
+import com.innbucks.userservice.testsupport.BuiltInRoleRows;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.innbucks.userservice.config.StaffAccountProperties;
 import com.innbucks.userservice.entity.User;
@@ -70,7 +71,7 @@ class MintTimeEligibilityFilterIT extends StaffItSupport {
         // An eligible staff account keeps its authority.
         JsonNode staff = claims(signIn(agent.getEmail()).at("/token").asText());
         assertThat(strings(staff.get("roles"))).containsExactly("CALL_CENTER_AGENT");
-        assertThat(strings(staff.get("perms"))).containsExactlyInAnyOrder("device-security:read",
-                "device-security:manage");
+        assertThat(strings(staff.get("perms")))
+                .containsExactlyInAnyOrderElementsOf(BuiltInRoleRows.GRANTS.get("CALL_CENTER_AGENT"));
     }
 }

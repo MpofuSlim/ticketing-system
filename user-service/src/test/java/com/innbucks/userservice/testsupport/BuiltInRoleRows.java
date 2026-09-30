@@ -20,7 +20,7 @@ import static org.mockito.Mockito.when;
 
 /**
  * The built-in role rows exactly as the migrations seed them (V35's grants plus
- * V43's call-center roles), for unit tests that mock {@link RoleRepository}.
+ * V43's call-center roles and V45's support grants), for unit tests that mock {@link RoleRepository}.
  * {@code BuiltInRoleSeedTest}'s Postgres half migrates a fresh database and
  * asserts its built-in {@code role_permissions} EQUAL {@link #GRANTS}, so this
  * copy cannot drift from the migrations unnoticed.
@@ -41,8 +41,13 @@ public final class BuiltInRoleRows {
         g.put("SHOP_ADMIN", Set.of("shop-users:write", "shop-staff:read", "shop-staff:password:reset"));
         g.put("SHOP_USER", Set.of());
         g.put("CUSTOMER", Set.of());
-        g.put("CALL_CENTER_AGENT", Set.of("device-security:read", "device-security:manage"));
-        g.put("CALL_CENTER_SUPERVISOR", Set.of("device-security:read", "device-security:manage"));
+        g.put("CALL_CENTER_AGENT", Set.of("device-security:read", "device-security:manage",
+                "marketplace-support:read", "marketplace-support:manage",
+                "loyalty-support:read", "loyalty-support:manage", "customer-messages:send"));
+        g.put("CALL_CENTER_SUPERVISOR", Set.of("device-security:read", "device-security:manage",
+                "marketplace-support:read", "marketplace-support:manage", "marketplace-support:supervise",
+                "loyalty-support:read", "loyalty-support:manage", "loyalty-support:supervise",
+                "customer-messages:send"));
         g.put("FRAUD_DESK", Set.of("device-security:read", "device-security:fraud"));
         GRANTS = java.util.Collections.unmodifiableMap(g);
     }

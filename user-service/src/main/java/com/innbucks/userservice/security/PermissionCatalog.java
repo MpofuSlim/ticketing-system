@@ -105,6 +105,29 @@ public final class PermissionCatalog {
     public static final String DEVICE_SECURITY_FRAUD = "device-security:fraud";
 
     /**
+     * Customer support for the marketplace and loyalty products (V45). These are
+     * ENFORCED IN OTHER SERVICES — marketplace-service ({@code /marketplace/support/**})
+     * and loyalty-service ({@code /loyalty/support/**}) read the {@code perms} claim
+     * and gate on {@code hasAuthority}. Nothing in user-service checks them; they
+     * live here because this catalog is the fleet's one permission vocabulary and
+     * {@code role_permissions} can only reference a code it defines.
+     *
+     * <p>Three tiers per product, the device-security split again: {@code read}
+     * looks a customer up, {@code manage} performs routine actions on their behalf,
+     * {@code supervise} holds the actions that move money or override a block, and
+     * reviews every agent's support activity. {@link #CUSTOMER_MESSAGES_SEND} is one
+     * code for both products: typing a message to a customer is the same power
+     * whichever product the customer came through, and the owner grants it once.
+     */
+    public static final String MARKETPLACE_SUPPORT_READ = "marketplace-support:read";
+    public static final String MARKETPLACE_SUPPORT_MANAGE = "marketplace-support:manage";
+    public static final String MARKETPLACE_SUPPORT_SUPERVISE = "marketplace-support:supervise";
+    public static final String LOYALTY_SUPPORT_READ = "loyalty-support:read";
+    public static final String LOYALTY_SUPPORT_MANAGE = "loyalty-support:manage";
+    public static final String LOYALTY_SUPPORT_SUPERVISE = "loyalty-support:supervise";
+    public static final String CUSTOMER_MESSAGES_SEND = "customer-messages:send";
+
+    /**
      * Who a permission's authority reaches — the half of a permission's meaning
      * the no-escalation and staff rules read.
      *
@@ -193,7 +216,21 @@ public final class PermissionCatalog {
                 entry(DEVICE_SECURITY_MANAGE,
                         "Block, unlock, remove or reset a customer's phone, and cancel open codes", Scope.PLATFORM),
                 entry(DEVICE_SECURITY_FRAUD, "Ban a phone for fraud (including every account on it), lift such bans, "
-                        + "and fraud-flag a customer", Scope.PLATFORM))) {
+                        + "and fraud-flag a customer", Scope.PLATFORM),
+                entry(MARKETPLACE_SUPPORT_READ, "Look up marketplace buyers, orders, parcels and sellers, "
+                        + "with their support notes and messages", Scope.PLATFORM),
+                entry(MARKETPLACE_SUPPORT_MANAGE, "Routine marketplace support: notes, resend notices and "
+                        + "collection codes, cancel an unpaid order, open a dispute for a buyer", Scope.PLATFORM),
+                entry(MARKETPLACE_SUPPORT_SUPERVISE, "Cancel a paid, undispatched parcel for a buyer (refund "
+                        + "queued) and review every agent's marketplace support activity", Scope.PLATFORM),
+                entry(LOYALTY_SUPPORT_READ, "Look up a loyalty customer across every tenant: balance, "
+                        + "history, vouchers, orders, notes and messages", Scope.PLATFORM),
+                entry(LOYALTY_SUPPORT_MANAGE, "Routine loyalty support: notes, resend a voucher to its holder, "
+                        + "sign a customer out everywhere", Scope.PLATFORM),
+                entry(LOYALTY_SUPPORT_SUPERVISE, "Adjust or reverse a customer's points, unblock a membership, "
+                        + "and review every agent's loyalty support activity", Scope.PLATFORM),
+                entry(CUSTOMER_MESSAGES_SEND, "Type and send an SMS or WhatsApp message to a customer on "
+                        + "record from a support screen", Scope.PLATFORM))) {
             if (all.put(e.code(), e) != null) {
                 throw new IllegalStateException("Duplicate permission code in the catalog: " + e.code());
             }

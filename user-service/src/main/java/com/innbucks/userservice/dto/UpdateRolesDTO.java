@@ -46,7 +46,8 @@ public class UpdateRolesDTO {
                             * `PRODUCT_MANAGER` — internal platform staff, same shape as `PRODUCT_OFFICER`.
                             * `CALL_CENTER_AGENT` — customer support: looks customers up and performs \
                             routine support actions.
-                            * `CALL_CENTER_SUPERVISOR` — customer-support supervisor; the agent's grants for now.
+                            * `CALL_CENTER_SUPERVISOR` — customer-support supervisor: the agent's grants plus \
+                            points adjustments, parcel refunds for buyers and oversight of every agent.
                             * `FRAUD_DESK` — add-on held with an agent or supervisor role: bans, fraud holds \
                             and lifting them.
                             * `EVENT_ORGANIZER` — runs ticketed events; owns events, invoices and team members.

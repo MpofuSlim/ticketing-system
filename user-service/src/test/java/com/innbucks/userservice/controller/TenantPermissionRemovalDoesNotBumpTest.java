@@ -1,5 +1,6 @@
 package com.innbucks.userservice.controller;
 
+import com.innbucks.userservice.testsupport.BuiltInRoleRows;
 import com.innbucks.userservice.service.AuditEventType;
 import com.innbucks.userservice.service.AuditService;
 import com.innbucks.userservice.testsupport.AdminDispatchHarness;
@@ -83,8 +84,12 @@ class TenantPermissionRemovalDoesNotBumpTest {
     @Test
     @DisplayName("ADDING a code signs nobody out")
     void additionDoesNotBump() throws Exception {
-        setPermissions("CALL_CENTER_AGENT",
-                "{\"permissions\":[\"device-security:read\",\"device-security:manage\",\"users:read\"]}");
+        // Everything the role already holds, plus one more code.
+        java.util.List<String> grown = new java.util.ArrayList<>(BuiltInRoleRows.GRANTS.get("CALL_CENTER_AGENT"));
+        grown.add("users:read");
+        setPermissions("CALL_CENTER_AGENT", "{\"permissions\":["
+                + grown.stream().map(c -> "\"" + c + "\"").collect(java.util.stream.Collectors.joining(","))
+                + "]}");
         assertThat(h.bumper.bumpedRoles).isEmpty();
     }
 
