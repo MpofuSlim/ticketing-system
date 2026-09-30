@@ -46,7 +46,8 @@ class SwaggerPublicPrefixTest {
 
     private static final String[] SERVICES = {
             "user-service", "event-service", "seat-service",
-            "booking-service", "payment-service", "loyalty-service"};
+            "booking-service", "payment-service", "loyalty-service",
+            "marketplace-service", "loans-service"};
 
     @Nested
     @SpringBootTest(properties = "PUBLIC_API_PREFIX=/foundry")

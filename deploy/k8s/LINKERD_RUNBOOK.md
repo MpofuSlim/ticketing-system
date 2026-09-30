@@ -105,7 +105,9 @@ kubectl -n ticketing patch statefulset redis --type merge \
 # opt the namespace in, then restart the Deployments ONE AT A TIME
 kubectl annotate ns ticketing linkerd.io/inject=enabled --overwrite
 for d in user-service event-service seat-service booking-service payment-service \
-         loyalty-service marketplace-service api-gateway; do
+         loyalty-service marketplace-service loans-service api-gateway; do
+  # loans-service exists only where deploy/k8s/loans/ was applied (staging)
+  kubectl -n ticketing get deployment/$d >/dev/null 2>&1 || { echo "skip: no $d here"; continue; }
   kubectl -n ticketing rollout restart deployment/$d
   kubectl -n ticketing rollout status  deployment/$d --timeout=5m || { echo "STOP: $d"; break; }
 done

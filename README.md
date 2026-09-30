@@ -15,6 +15,8 @@ other by Kubernetes Service name and communicate over REST.
 | `booking-service`  | 8084 | Booking creation, idempotency, payment hand-off. |
 | `payment-service`  | 8085 | Booking/order payments — InnBucks 2D code + ZimSwitch card rails. Opt-in (`payments` profile). |
 | `loyalty-service`  | 8086 | Loyalty & merchant platform: merchants, shops, vouchers, invoices, QR, points. |
+| `marketplace-service` | 8087 | Marketplace: listings, catalogue, cart, orders (repo `MpofuSlim/market-place`). |
+| `loans-service`    | 8088 | Lending API at `/lending/**`, with its own sign-in (repo `MpofuSlim/innbucks-loans`; staging only). |
 
 Shared infrastructure: PostgreSQL 16 (one database per service, schema owned by
 Flyway migrations), Redis 7 (distributed locks, idempotency, and the gateway's

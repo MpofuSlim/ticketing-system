@@ -18,7 +18,7 @@
 # names must resolve to this host, so either run with the `local` profile
 # (which maps them to localhost, but also relaxes the production-secrets
 # guard) or alias them in /etc/hosts:
-#     127.0.0.1 user-service event-service seat-service booking-service payment-service loyalty-service marketplace-service
+#     127.0.0.1 user-service event-service seat-service booking-service payment-service loyalty-service marketplace-service loans-service
 #
 # Usage:  ./run-all.sh start | stop
 set -euo pipefail

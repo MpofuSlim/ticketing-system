@@ -173,6 +173,93 @@ cell ConfigMap/Secret** — a pod referencing a missing key is
 `CreateContainerConfigError`, not a warning. The FreeMarker CVE override went
 with it: nothing else in the reactor pulls FreeMarker.
 
+## loans-service joins behind the gateway (MpofuSlim/innbucks-loans)
+
+**The lending API runs in the cell as `loans-service` (image
+`ghcr.io/mpofuslim/loans-api`, port 8088), routed at `/lending/**` and listed in
+the aggregated Swagger via `/loans-service/v3/api-docs`.** It joined like
+marketplace-service did, with one difference that drives everything below:
+**loans is its own identity provider, by design** (own users table, own login at
+`/lending/v1/auth/login`, own HS256 key, `iss innbucks-loans`): lending has its
+own portal and its own auth (owner's decision, 2026-09-30), so it is NOT a
+user-service fleet-token consumer. The gateway needs nothing for
+that — it never validates a bearer, only keys the limiter on it. The two repos
+are kept in lock-step per `docs/fleet-wiring.md` in the innbucks-loans repo.
+
+- **Never share the fleet `JWT_SECRET` with loans.** A holder of an HS256 key can
+  MINT, so one shared key would let a compromise of either system forge tokens
+  for both — and loans books with InnBucks, which pays on booking. Loans' key
+  lives only in the Secret `loans-service-secrets` (template
+  `deploy/cells/loans.example.env`, real file `loans.<iso>.local.env` on the host).
+- **The loans Deployment has NO `envFrom` of `cell-zw` / `cell-zw-secrets`.**
+  Spring binds env vars onto properties by name, ahead of any yml, so the cell's
+  `JWT_SECRET`, `SPRING_PROFILES_ACTIVE=prod,json`, `BOOTSTRAP_ADMIN_PASSWORD` and
+  `INNBUCKS_GATEWAY_URL` (a retired host) would land on loans' own settings.
+  It gets `envFrom` of its own Secret only, plus explicit `env:` entries that
+  name each cell key it needs (`POSTGRES_*`, `INNBUCKS_COUNTRY`,
+  `PUBLIC_API_PREFIX`, `WHATSAPP_GATEWAY_URL`). Don't "simplify" it into the
+  fleet shape, and never put a loans key in the cell files — every pod gets those.
+- **That Secret carries ONLY the keys `loans.example.env` lists** — never a
+  `SPRING_*`, `SERVER_*`, `DB_*` or `JAVA_*` key. An explicit `env:` entry beats
+  envFrom for the SAME key only, and relaxed binding reaches a property through
+  several names: `SPRING_DATASOURCE_URL` there beats the manifest's `DB_URL`
+  (and the pod holds the cell postgres superuser), and
+  `SPRING_PROFILES_GROUP_API=scheduled-tasks` switches the paying jobs on beside
+  `api`. The manifest pins `SPRING_PROFILES_INCLUDE` and
+  `SPRING_APPLICATION_JSON` empty, the likeliest spellings of that mistake, but
+  no list of pins covers every name — the rule is the guard, not the pins.
+- **Production containment by directory.** `deploy/k8s` is applied to BOTH ZW
+  hosts. Only the `Service loans-service` is top-level (`04-services.yaml` —
+  `FleetServiceMapTest` needs it there). The Deployment is
+  `deploy/k8s/loans/loans-service.yaml`, which the non-recursive apply never
+  touches; staging applies it on purpose (`deploy/k8s/README.md` §6). Taking
+  loans to production is its own decision. Until then production's Service has
+  no endpoints, and that is expected, not an incident: every `/lending/**` call
+  is a **500** from the gateway (connection refused, logged there as an ERROR
+  per call), and the Swagger dropdown's `loans-service` entry fails to load.
+- **Loans' anonymous `forgot-password` is edge-denied** (`loans-forgot-password-deny`,
+  before the `/lending/**` route). It takes a username alone and replaces the
+  password BEFORE sending the new one by SMS — and loans has no SMS rail in the
+  cell (`INNBUCKS_GATEWAY_URL` is left out of its Secret on purpose), so
+  published it is a one-request lockout of any known account, `admin` first; no
+  rate limit stops a single request. A super-admin hands out passwords through
+  loans' authenticated `POST /lending/v1/users/{id}/password-reset` over EMAIL or
+  WHATSAPP. Lift the deny only once loans' SMS reaches people in the cell, and
+  then give the path an IP-keyed, fail-safe route shaped like
+  `auth-password-reset-route`, not the bearer-keyed catch-all. Sign-in stays on
+  the catch-all, like the fleet's own login: loans locks an account after seven
+  wrong passwords, and a Redis outage must not stop sign-in.
+- **Its scheduled jobs stay OFF: `SPRING_PROFILES_ACTIVE=api`, never
+  `scheduled-tasks`.** Every loans job (Ndasenda lodgement, InnBucks booking —
+  which pays —, the saga, …) is `@Profile("scheduled-tasks")` and acts on the
+  whole backlog at its first tick. Enabling them is a separate go-live step. The
+  Deployment is `replicas: 1` + `strategy: Recreate` so two loans processes never
+  overlap, not even mid-rollout; keep both when the jobs come on.
+- **Port 8088 is in lock-step everywhere**: loans' packaged `server.port`, the
+  explicit `SERVER_PORT`, containerPort, probes, the Service, and the
+  `loans-service` line in every copy of the discovery map IN THIS REPO (the six
+  services, default and `local`), which `FleetServiceMapTest` pins.
+  **Still open, in the other two repos:** market-place (its map plus the `FLEET`
+  constant in its `FleetServiceMapTest`) and InnRewards carry their own copies,
+  each pinned only against itself, so no build here or there flags the missing
+  line. Neither calls loans, so nothing breaks meanwhile — but the fleet rule is
+  "one line in every copy of the map", so add it there, and a service that
+  starts calling loans must have it first.
+- **Loans sends no CORS headers of its own.** The gateway's `globalcors` is the
+  only CORS authority, and Spring Cloud Gateway ADDS a backend's response
+  headers to its own — a second `Access-Control-Allow-Origin` makes the browser
+  refuse the response. A new browser origin for loans goes in
+  `CORS_ALLOWED_ORIGINS`, never back into loans — on staging in the host's own
+  `cell.zw.local.env`, as the whole list (`deploy/k8s/README.md` §6, step 5).
+- **The docs proxy segment must end in `-service`.** `SwaggerSecurityConfig`
+  gates `/*-service/v3/api-docs`; a prefix like `/lending-docs` would publish the
+  spec with no Basic login. Pinned by `GatewayRouteTableTest` and
+  `SwaggerSecurityConfigTest`.
+- **Deploys pin like the fleet**: loans' Release tags `sha-<full sha>` too
+  (innbucks-loans #116), so `kubectl -n ticketing set image deployment/loans-service
+  '*=ghcr.io/mpofuslim/loans-api:sha-<full sha>'`. Loans has no metrics endpoint yet,
+  so it has no Prometheus job and `ServiceDown` does not watch it.
+
 ## External-service contract tests (WireMock)
 
 **Every client that calls an external HTTP service (the

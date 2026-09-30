@@ -61,10 +61,11 @@ class GatewayRouteTableTest {
             "loyalty-internal-deny", "loyalty-partner-registration-route",
             "loyalty-session-refresh-route", "loyalty-service-route",
             "marketplace-internal-deny", "marketplace-service-route",
+            "loans-forgot-password-deny", "loans-service-route",
             "user-service-proxy-route", "event-service-proxy-route",
             "seat-service-proxy-route", "booking-service-proxy-route",
             "payment-service-proxy-route", "loyalty-service-proxy-route",
-            "marketplace-service-proxy-route");
+            "marketplace-service-proxy-route", "loans-service-proxy-route");
 
     // Single-prefix routes whose loss or typo = a silent 404 for real clients.
     // Map.of caps at 10 entries — switched to Map.ofEntries when we added
@@ -86,7 +87,8 @@ class GatewayRouteTableTest {
             Map.entry("booking-tickets-route", "/tickets/**"),
             Map.entry("scans-route", "/scans/**"),
             Map.entry("loyalty-service-route", "/loyalty/**"),
-            Map.entry("marketplace-service-route", "/marketplace/**"));
+            Map.entry("marketplace-service-route", "/marketplace/**"),
+            Map.entry("loans-service-route", "/lending/**"));
 
     private static final List<String> RATE_LIMITED_ROUTES = List.of(
             "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
@@ -102,13 +104,13 @@ class GatewayRouteTableTest {
             "payment-service-read-route", "payments-innbucks-write-route",
             "ecocash-notify-write-route", "payment-service-write-route",
             "loyalty-partner-registration-route", "loyalty-session-refresh-route",
-            "loyalty-service-route", "marketplace-service-route");
+            "loyalty-service-route", "marketplace-service-route", "loans-service-route");
 
     private static final List<String> API_DOCS_PROXY_ROUTES = List.of(
             "user-service-proxy-route", "event-service-proxy-route",
             "seat-service-proxy-route", "booking-service-proxy-route",
             "payment-service-proxy-route", "loyalty-service-proxy-route",
-            "marketplace-service-proxy-route");
+            "marketplace-service-proxy-route", "loans-service-proxy-route");
 
     // OWASP A04: the SMS-cost / payment abuse surfaces that MUST keep throttling
     // when Redis is down, so they are pinned to the in-memory-fallback limiter
@@ -204,6 +206,12 @@ class GatewayRouteTableTest {
         assertThat(order.indexOf("marketplace-internal-deny"))
                 .as("marketplace-internal-deny must match before /marketplace/**")
                 .isBetween(0, order.indexOf("marketplace-service-route") - 1);
+        // loans' anonymous forgot-password replaces a password it cannot
+        // deliver in the cell; behind the /lending/** catch-all it would be a
+        // one-request lockout of any known username.
+        assertThat(order.indexOf("loans-forgot-password-deny"))
+                .as("loans-forgot-password-deny must match before /lending/**")
+                .isBetween(0, order.indexOf("loans-service-route") - 1);
         assertThat(order.indexOf("user-internal-deny"))
                 .as("user-internal-deny must match before /users/**")
                 .isBetween(0, order.indexOf("user-self-route") - 1);
@@ -415,6 +423,9 @@ class GatewayRouteTableTest {
         assertThat(predicateArgs("booking-internal-deny", "Path")).containsExactly("/bookings/internal/**");
         assertThat(route("marketplace-internal-deny").getUri()).hasToString("forward:/__edge_deny__");
         assertThat(predicateArgs("marketplace-internal-deny", "Path")).containsExactly("/marketplace/internal/**");
+        assertThat(route("loans-forgot-password-deny").getUri()).hasToString("forward:/__edge_deny__");
+        assertThat(predicateArgs("loans-forgot-password-deny", "Path"))
+                .containsExactly("/lending/*/auth/forgot-password", "/lending/*/auth/forgot-password/");
     }
 
     @Test
@@ -425,6 +436,45 @@ class GatewayRouteTableTest {
         // instead of a runtime 404 the FE only notices in WhatsApp / email.
         assertThat(route("brand-assets-route").getUri()).hasToString("lb://booking-service");
         assertThat(predicateArgs("brand-assets-route", "Path")).containsExactly("/brand/**");
+    }
+
+    @Test
+    void loansRoutesTargetLoansServiceAndItsDocsStayBehindTheSwaggerGate() {
+        // loans-service lives in MpofuSlim/innbucks-loans. Both routes resolve
+        // through the fleet discovery map (FleetServiceMapTest pins the entry
+        // and its k8s Service).
+        assertThat(route("loans-service-route").getUri()).hasToString("lb://loans-service");
+        assertThat(route("loans-service-proxy-route").getUri()).hasToString("lb://loans-service");
+        // The docs segment must end in -service: SwaggerSecurityConfig gates
+        // /*-service/v3/api-docs, so a prefix like /lending-docs would serve
+        // the loans spec with no Basic login (and not 404 it under prod).
+        assertThat(predicateArgs("loans-service-proxy-route", "Path"))
+                .containsExactly("/loans-service/v3/api-docs", "/loans-service/v3/api-docs/**");
+    }
+
+    @Test
+    void loansForgotPasswordIsDeniedButTheRestOfLendingReachesLoans() {
+        // forgot-password replaces the password before an SMS the cell cannot
+        // deliver; it must be the deny route that answers, for any API version.
+        // Sign-in and everything else still reach loans through the catch-all.
+        assertThat(firstRouteMatching("/lending/v1/auth/forgot-password")).isEqualTo("loans-forgot-password-deny");
+        assertThat(firstRouteMatching("/lending/v2/auth/forgot-password")).isEqualTo("loans-forgot-password-deny");
+        assertThat(firstRouteMatching("/lending/v1/auth/forgot-password/")).isEqualTo("loans-forgot-password-deny");
+        assertThat(firstRouteMatching("/lending/v1/auth/login")).isEqualTo("loans-service-route");
+        assertThat(firstRouteMatching("/lending/v1/users/7/password-reset")).isEqualTo("loans-service-route");
+    }
+
+    private String firstRouteMatching(String path) {
+        org.springframework.web.util.pattern.PathPatternParser parser =
+                new org.springframework.web.util.pattern.PathPatternParser();
+        org.springframework.http.server.PathContainer container =
+                org.springframework.http.server.PathContainer.parsePath(path);
+        return routes().stream()
+                .filter(r -> r.getPredicates().stream()
+                        .filter(p -> "Path".equals(p.getName()))
+                        .flatMap(p -> p.getArgs().values().stream())
+                        .anyMatch(pattern -> parser.parse(pattern).matches(container)))
+                .findFirst().map(RouteDefinition::getId).orElse(null);
     }
 
     @Test

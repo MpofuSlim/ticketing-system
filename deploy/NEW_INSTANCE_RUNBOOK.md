@@ -14,7 +14,7 @@ On a fresh host the stack builds most of itself:
 
 | Self-provisions (do nothing) | You must supply |
 |---|---|
-| The 6 per-service databases (`docker/postgres/init-databases.sql` runs once on the empty volume) | Secrets → `cell.<iso>.local.env` |
+| The per-service databases (`docker/postgres/init-databases.sql` runs once on the empty volume) | Secrets → `cell.<iso>.local.env` |
 | Every table schema (Flyway runs per service on first boot, `ddl-auto=validate`) | This host's IP in `cell.<iso>.env` (`INNBUCKS_GATEWAY_URL`) |
 | Redis state (start empty) | A GHCR login to pull the private images |
 | The first `SUPER_ADMIN` row (only if `BOOTSTRAP_ADMIN_PASSWORD` is set) | DNS + TLS/edge cutover to the new host |
@@ -59,9 +59,11 @@ echo "<GHCR_PAT_with_read:packages>" | docker login ghcr.io -u <ghcr-owner> --pa
 
 Edit `deploy/cells/cell.<iso>.env`.
 
-> The `innbucks-core-gateway` spike (Boot 3.2.4) was retired — nothing serves
-> :8088 in the cell anymore, so `INNBUCKS_GATEWAY_URL` is an inert placeholder
-> you can leave as-is (kept only so the existing client config resolves).
+> The `innbucks-core-gateway` spike (Boot 3.2.4) was retired — nothing answers
+> at the address in `INNBUCKS_GATEWAY_URL` anymore, so it is an inert
+> placeholder you can leave as-is (kept only so the existing client config
+> resolves). Its `:8088` is a port on an off-cluster host IP and has nothing to
+> do with the in-cluster `loans-service` Service, which also listens on 8088.
 
 Confirm (change only if they differ for this deploy):
 `IMAGE_TAG` (`latest`, or pin a `sha-<commit>` for a real release),
