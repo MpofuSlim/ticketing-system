@@ -1769,61 +1769,69 @@ consumers* (and consumer-side idempotency), not a publish-only spike.
 > the operator ask.
 
 The ZW cell runs on single-node **k3s** on the EC2 box (`10.0.146.246`), so
-**deploys are manual via `kubectl`**. (The Release workflow used to carry a
-`Deploy to EC2` job — a legacy docker-compose-over-SSH deploy that predated the
-k3s migration and failed on every run at "Prepare SSH". It has been **removed**;
-the Release workflow now ends at build → scan → push → attest, which is all we
-need since `kubectl` pulls the freshly-pushed `:latest` image.) After a merge,
-the routine on the box is:
+**deploys are manual via `kubectl`**. The Release workflow ends at build → scan →
+push → attest and pushes every image twice: `:latest` and `:sha-<full commit>`.
+(Its old `Deploy to EC2` job — a docker-compose-over-SSH deploy that predated
+k3s and failed on every run at "Prepare SSH" — has been removed.)
+
+> [!IMPORTANT]
+> **The cell runs PINNED images, not `:latest`.** Every deployment's image is a
+> `sha-<commit>` tag or an `@sha256:` digest (check with the `get deploy`
+> command below). So **`kubectl rollout restart` deploys nothing new** — it
+> re-runs the exact build already pinned, whatever was merged since. Measured
+> 2026-09-30: loyalty-service was restarted after a merge, rolled out
+> "successfully", and kept running the previous build (Flyway still reported the
+> old schema version). A deploy is a `set image` to the merge's tag.
+
+After a merge, once the merge commit's `Build, scan, push (<service>)` job in
+the **Release** workflow is green:
 
 ```sh
 git -C ~/ticketing-system pull
-# only matters if deploy/k8s manifests changed (harmless no-op otherwise):
-kubectl apply -f ~/ticketing-system/deploy/k8s/
-# restart ONLY the service(s) whose code changed — images are :latest with the
-# default Always pull policy, so a restart re-pulls the freshly-built image:
-kubectl -n ticketing rollout restart deployment/<service>
-kubectl -n ticketing rollout status  deployment/<service>
-```
-
-- `<service>` = the owning module(s) of the merged diff (e.g. `loyalty-service`,
-  `user-service`, `api-gateway`). Restart just those, not the whole fleet.
-- **`kubectl rollout restart` has NO `--all` flag** — it errors
-  `unknown flag: --all` and nothing restarts. To roll the whole fleet use:
-  `kubectl -n ticketing get deploy -o name | xargs kubectl -n ticketing rollout restart`
-- A restart only helps once the new image is pushed: confirm the merge commit's
-  `Build, scan, push (<service>)` job in the **Release** workflow is green before
-  rolling.
-- Verify through the edge after the rollout — e.g. an unauthenticated call to a
-  secured endpoint returns `401` (new image present) rather than `404` (old).
-
-### Rolling back
-
-There is no rollback workflow — a version rollback on k3s is a one-liner. The
-Release build pushes every image as both `:latest` and `:sha-<commit>`, so roll
-a service back by pinning it to a known-good SHA tag:
-
-```sh
+# pin ONLY the service(s) whose code changed to the merge commit's tag
+# (full 40-char SHA; a short SHA is not a tag that exists):
 kubectl -n ticketing set image deployment/<service> \
-  '*=ghcr.io/mpofuslim/<service>:sha-<good-commit>'
+  '*=ghcr.io/mpofuslim/<service>:sha-<merge commit sha>'
 kubectl -n ticketing rollout status deployment/<service>
 ```
 
-Return to the tip by re-pinning `:latest` (then restart to re-pull it):
+- `set image` starts the rollout by itself — no restart needed after it.
+- `<service>` = the owning module(s) of the merged diff (e.g. `user-service`,
+  `api-gateway`). Pin just those.
+- **See what each service is running:**
+  `kubectl -n ticketing get deploy -o custom-columns='NAME:.metadata.name,IMAGE:.spec.template.spec.containers[0].image'`
+- **Manifests still say `:latest`, so `kubectl apply -f deploy/k8s/` UN-PINS
+  every Deployment it touches** back to whatever `:latest` is. Only apply when a
+  manifest actually changed, apply the one file, and re-run the `set image` for
+  each service in it afterwards so the cell is pinned again.
+- Verify through the edge after the rollout — e.g. an unauthenticated call to a
+  secured endpoint returns `401` (new image present) rather than `404` (old). A
+  service with Flyway migrations can also be checked by its
+  `flyway_schema_history` top row.
+- InnRewards (`MpofuSlim/innrewards`) builds `loyalty-service` in its own repo
+  and pins it the same way, with its own merge commit's SHA.
+
+### Rolling back
+
+There is no rollback workflow; a rollback is the same `set image`, to the
+previous known-good pin (note it BEFORE you deploy — the `get deploy` output
+above is the list):
 
 ```sh
-kubectl -n ticketing set image deployment/<service> '*=ghcr.io/mpofuslim/<service>:latest'
-kubectl -n ticketing rollout restart deployment/<service>
+kubectl -n ticketing set image deployment/<service> \
+  '*=ghcr.io/mpofuslim/<service>:sha-<good-commit>'   # or @sha256:<digest>
+kubectl -n ticketing rollout status deployment/<service>
 ```
 
-- `kubectl rollout undo` does **not** help here: every revision runs the mutable
-  `:latest`, so undo reverts the pod spec but not the image version — pin the SHA
-  tag instead.
+- `kubectl rollout undo` also works now that images are pinned (each revision
+  records its own tag), but an explicit `set image` says exactly which build you
+  landed on — prefer it.
+- A rollback across a Flyway migration is safe only if the migration was
+  additive (new nullable column / table). The old build ignores columns it does
+  not map; it cannot un-apply a migration.
 - The old `Rollback` GitHub Action was a docker-compose-over-SSH deploy from
-  before the k3s migration (it SSH'd to the box and ran `docker compose ... up`,
-  failing at "Prepare SSH" the same way the retired `Deploy to EC2` job did). It
-  never worked against the k3s cell and has been **removed**; use the `kubectl`
-  procedure above.
+  before the k3s migration and never worked against the k3s cell; it has been
+  **removed**.
 
 ## InnBucks Merchant API — the primary ticket-payment rail (2D code)
 
