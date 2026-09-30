@@ -926,6 +926,20 @@ and blocks phones on `/device-security/ussd/**`; the call center works it from
   exempt for the full 90-day window after enforcement began. Revoke and
   trust-reset clear the proof. Pinned by
   `watchModeTrust_isProvisional_untilACodeIsVerified`.
+- **A trusted phone is never re-asked for a STANDING condition** (`RiskEngine.AMBIENT`:
+  `APP_CHECK_ABSENT`, `INTEGRITY_UNAVAILABLE`, `OUTSIDE_KNOWN_PLACES`,
+  `PIN_RECENTLY_ISSUED`, `TOO_MANY_DEVICES`, `LOCATION_REFUSED`). They are the same on
+  every request from that phone, so as step-up reasons they asked for a code on EVERY
+  sign-in — found on staging 2026-09-30, where the broker reports app check `absent`
+  on every call and every login cost an SMS. Inside the trust window they are logged
+  and scored but never a reason on their own, and never count toward the block score
+  (a traveller must not be tipped into a block by the same missing app check).
+  A phone not yet trusted still counts them (that is the one time they matter); a
+  CHANGE still asks — different handset, impossible travel, mocked location,
+  emulator/debugger, wrong-PIN burst, dormancy, PIN issue. Adding a signal: decide
+  which kind it is, and put a standing one in `AMBIENT`. Pinned by
+  `trustedPhone_standingConditions_neverAskAgain` and
+  `trustedPhone_appCheckAbsent_signsInWithoutACode`.
 - **Permissions**: `device-security:read` / `:manage` / `:fraud`. Lifting a
   SHARED_DEVICE / CONFIRMED_FRAUD / SIM_SWAP / device-wide ban needs `:fraud` —
   checked in the service too, so the call center cannot undo the fraud desk on a
