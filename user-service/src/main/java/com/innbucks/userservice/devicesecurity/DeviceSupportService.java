@@ -347,7 +347,8 @@ public class DeviceSupportService {
                     : "Trust has expired; the next sign-in asks for a code. Nothing to do.")
                     + (d.possessionVerified() ? "" : " Trusted while DTX was only watching: never confirmed with a "
                             + "code, so it will be asked for one once codes are switched on.")
-                    + (d.coolingAt(now) ? " New phone: lower limits until " + messages.time(d.getCoolingUntil(), now, false) + "." : "")
+                    + (d.coolingAt(now) ? " First confirmed on this phone in the last day (new-phone period ends "
+                            + messages.time(d.getCoolingUntil(), now, false) + "); no lower limits apply." : "")
                     + sharedNote;
             case NEW -> "This phone tried to sign in but was never confirmed. If the customer doesn't recognise it, "
                     + "block it (UNTIL_UNLOCKED)." + sharedNote;

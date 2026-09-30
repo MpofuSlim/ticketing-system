@@ -169,8 +169,13 @@ class DeviceSecurityFlowTest {
         String second = clientService(msisdn, install, "SIGN_IN", "{}");
         assertThat((String) JsonPath.read(second, "$.data.decision")).isEqualTo("TOKEN");
         assertThat((String) JsonPath.read(second, "$.data.trust.state")).isEqualTo("TRUSTED");
-        assertThat((Boolean) JsonPath.read(second, "$.data.limits.cooling")).isTrue();
-        assertThat((String) JsonPath.read(second, "$.message")).startsWith("You're on a new phone.");
+        // The new-phone period is running on the row, but no service lowers limits
+        // for it yet, so the app is told nothing about reduced limits.
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM customer_devices WHERE msisdn = ? AND cooling_until IS NOT NULL",
+                Integer.class, msisdn)).isEqualTo(1);
+        assertThat((Boolean) JsonPath.read(second, "$.data.limits.cooling")).isFalse();
+        assertThat((Object) JsonPath.read(second, "$.data.limits.coolingUntil")).isNull();
+        assertThat((String) JsonPath.read(second, "$.message")).isEqualTo("Enter your PIN to continue.");
         assertThat((String) JsonPath.read(clientService(msisdn, install, "RENEW", "{}"), "$.data.decision"))
                 .isEqualTo("TOKEN");
     }

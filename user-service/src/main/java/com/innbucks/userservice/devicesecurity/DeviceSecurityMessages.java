@@ -83,10 +83,14 @@ public class DeviceSecurityMessages {
 
     // ---- What the app shows for each decision (§7) --------------------------------
 
-    public String tokenLine(boolean cooling, LocalDateTime coolingUntil, LocalDateTime nowUtc) {
-        if (cooling && coolingUntil != null) {
-            return "You're on a new phone. Some limits are lower until " + time(coolingUntil, nowUtc, false) + ".";
-        }
+    /**
+     * The same line on every TOKEN, new phone or not. It used to read "You're on a
+     * new phone. Some limits are lower until 11.58." during the cooling period, but
+     * nothing that moves money reads cooling (the middleware applies its usual
+     * step-up thresholds), so the line promised a protection that did not exist.
+     * Bring it back in the change that makes a service actually lower the limits.
+     */
+    public String tokenLine() {
         return "Enter your PIN to continue.";
     }
 
