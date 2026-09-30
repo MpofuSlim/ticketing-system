@@ -127,6 +127,24 @@ public class EcocashPaymentService {
         }
     }
 
+    /**
+     * The line the customer reads on the EcoCash PIN prompt (the charge's
+     * {@code description} and {@code remarks}). It names the product being
+     * paid for: a voucher bought at an InnRewards till used to read "Ticketize
+     * online payment", which a customer approving a PIN has every reason to
+     * distrust. An exhaustive switch, so a new {@link OrderType} cannot ship
+     * without deciding its wording. Kept within the length of EcoCash's own
+     * sample ("Online Merchant Payment Request").
+     */
+    static String promptDescription(OrderType orderType) {
+        return switch (orderType) {
+            // MARKETPLACE keeps the historical wording until the marketplace
+            // brand for the prompt is decided — this change is about vouchers.
+            case BOOKING, MARKETPLACE -> "Ticketize online payment";
+            case LOYALTY_VOUCHER -> "InnRewards voucher payment";
+        };
+    }
+
     /** Whether the rail can talk to its gateway (poller predicate). */
     public boolean isRailConfigured() {
         return ecocashClient.isConfigured();
@@ -273,7 +291,8 @@ public class EcocashPaymentService {
 
         try {
             EcocashChargeStatus accepted = ecocashClient.charge(
-                    clientCorrelator, customerMsisdn, amountCents, currency, paymentReference);
+                    clientCorrelator, customerMsisdn, amountCents, currency, paymentReference,
+                    promptDescription(orderType));
             paymentRecordService.recordEcocashReference(opened.getId(), accepted.ecocashReference());
             metrics.incEcocashCharge("charged");
             log.info("[ecocash] charge issued paymentReference={} orderType={} clientCorrelator={} promptExpiresAt={}",
