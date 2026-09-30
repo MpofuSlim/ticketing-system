@@ -71,15 +71,16 @@ class RoleRemovalAuthorityTest {
     @DisplayName("removing a role from an account holding a permission the caller lacks: 403, nothing changes")
     void removalNeedsAuthorityOverTheWholeAccount() throws Exception {
         // users:read — the lead does not hold it. The role being removed is one
-        // the lead could give; the refusal is about the ACCOUNT.
-        User auditor = h.account(41L, "auditor@innbucks.co.zw", "ACCOUNT_AUDITOR", "CUSTOMER");
+        // the lead could give; the refusal is about the ACCOUNT. (DEVICE_VIEWER,
+        // not CUSTOMER: an omitted CUSTOMER is kept, so it is no removal at all.)
+        User auditor = h.account(41L, "auditor@innbucks.co.zw", "ACCOUNT_AUDITOR", "DEVICE_VIEWER");
         long before = auditor.getTokenVersion();
 
         assertRefused(h.mvc.perform(put("/admin/users/41/roles").principal(as(LEAD, "users:roles:write"))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"roles\":[\"ACCOUNT_AUDITOR\"]}")));
 
-        assertThat(auditor.getRoles()).containsExactlyInAnyOrder("ACCOUNT_AUDITOR", "CUSTOMER");
+        assertThat(auditor.getRoles()).containsExactlyInAnyOrder("ACCOUNT_AUDITOR", "DEVICE_VIEWER");
         assertThat(auditor.getTokenVersion()).isEqualTo(before);
         verify(h.audit, never()).recordRequired(any(), any(), any(), any(), any(), any(), any());
     }
@@ -182,13 +183,15 @@ class RoleRemovalAuthorityTest {
     @Test
     @DisplayName("removing ANY role from a PRODUCT_MANAGER's account is refused, not only the named one")
     void productManagerAccountIsProtectedWhole() throws Exception {
-        User pm = h.account(51L, "pm2@innbucks.co.zw", "PRODUCT_MANAGER", "CUSTOMER");
+        // DEVICE_VIEWER is the role removed, not CUSTOMER: an omitted CUSTOMER
+        // is kept, so leaving it out would be no removal at all.
+        User pm = h.account(51L, "pm2@innbucks.co.zw", "PRODUCT_MANAGER", "DEVICE_VIEWER");
 
         assertRefused(h.mvc.perform(put("/admin/users/51/roles").principal(as(LEAD, "users:roles:write"))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{\"roles\":[\"PRODUCT_MANAGER\"]}")));
 
-        assertThat(pm.getRoles()).containsExactlyInAnyOrder("PRODUCT_MANAGER", "CUSTOMER");
+        assertThat(pm.getRoles()).containsExactlyInAnyOrder("PRODUCT_MANAGER", "DEVICE_VIEWER");
     }
 
     @Test

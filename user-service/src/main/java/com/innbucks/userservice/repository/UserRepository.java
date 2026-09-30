@@ -60,21 +60,25 @@ public interface UserRepository extends JpaRepository<User, Long> {
     List<User> findByCreatedByOrganizerUuid(UUID organizerUuid);
 
     /**
-     * "System users" projection — every row except those whose roles
-     * include the supplied value. Used by the SUPER_ADMIN portal to list
-     * administrators / staff while keeping the (much larger) customer
-     * population off the page. `NOT MEMBER OF` is the JPA-standard way to
-     * filter an @ElementCollection without dropping to a native query.
+     * "System users" projection — every row except those whose ONLY role is
+     * the supplied one. Used by the SUPER_ADMIN portal to list administrators /
+     * staff while keeping the (much larger) customer-only population off the
+     * page.
+     *
+     * <p>ONLY, not "holds": it used to drop every account holding the role at
+     * all, so a merchant admin or organizer who also shops in the super app
+     * (and so holds CUSTOMER) vanished from the console. An account with no
+     * roles at all is still listed — it is broken, and an admin needs to see it.
      *
      * <p>Takes a role NAME rather than the {@code User.Role} enum as of V35:
      * {@code u.roles} is a {@code Set<String>} now, so an enum parameter would
      * compile and then fail to match anything at runtime.
      */
-    @Query("SELECT u FROM User u WHERE :role NOT MEMBER OF u.roles")
-    List<User> findAllExcludingRole(@Param("role") String role);
+    @Query("SELECT u FROM User u WHERE NOT (SIZE(u.roles) = 1 AND :role MEMBER OF u.roles)")
+    List<User> findAllExceptOnlyRole(@Param("role") String role);
 
-    @Query("SELECT u FROM User u WHERE u.active = :active AND :role NOT MEMBER OF u.roles")
-    List<User> findByActiveExcludingRole(@Param("active") boolean active, @Param("role") String role);
+    @Query("SELECT u FROM User u WHERE u.active = :active AND NOT (SIZE(u.roles) = 1 AND :role MEMBER OF u.roles)")
+    List<User> findByActiveExceptOnlyRole(@Param("active") boolean active, @Param("role") String role);
 
     /**
      * Users carrying ANY of the supplied roles. Backs the SUPER_ADMIN
