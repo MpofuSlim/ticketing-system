@@ -335,6 +335,14 @@ public class ShopStaffService {
                     .map(UserResponseDTO::from)
                     .toList();
         }
+        // SUPER_ADMIN has no shop or organization of its own; "its" staff is
+        // every shop's staff.
+        if (isPlatformOwner(caller)) {
+            return userRepository.findByAnyRole(
+                            User.roleNames(User.Role.SHOP_ADMIN, User.Role.SHOP_USER)).stream()
+                    .map(UserResponseDTO::from)
+                    .toList();
+        }
         // SHOP_ADMIN (and any other shop-scoped caller): staff at their own shop.
         UUID shopId = caller.getLoyaltyShopId();
         if (shopId == null) {

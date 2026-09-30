@@ -1228,7 +1228,9 @@ vacuously false and the platform owner is refused everywhere — found on the
 console's Shop Users screen ("Shop does not belong to your merchant").
 `ShopStaffService.isPlatformOwner` bypasses them for reads and for
 `createShopAdmin` (the merchant is still taken from the SHOP, never from the
-caller). A new ownership-scoped read must do the same, keyed on the built-in
+caller); `/admin/shop-staff/mine` gives it every shop's staff, and
+`OrganizationService.get` / `listMembers` read any organization for it
+(`yourRole: null`) — its writes still go through membership. A new ownership-scoped read must do the same, keyed on the built-in
 role — a custom role holding the same permission stays scoped. This is about
 reads: writes keep their own rules, and SUPER_ADMIN's write powers are decided
 per endpoint.

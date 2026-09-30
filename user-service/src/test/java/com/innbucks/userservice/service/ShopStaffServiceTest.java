@@ -558,6 +558,18 @@ class ShopStaffServiceTest {
     }
 
     @Test
+    void listForCallerShop_superAdmin_returnsEveryShopsStaff_notA400() {
+        authenticateAs(superAdmin());
+        User cashier = User.builder().email("cashier@shop.co.zw")
+                .roles(User.roleNames(User.Role.SHOP_USER)).build();
+        when(userRepository.findByAnyRole(User.roleNames(User.Role.SHOP_ADMIN, User.Role.SHOP_USER)))
+                .thenReturn(List.of(cashier));
+
+        assertThat(service.listForCallerShop()).hasSize(1);
+        verify(userRepository, never()).findByLoyaltyShopId(any());
+    }
+
+    @Test
     void createShopAdmin_superAdmin_provisionsIntoAnyMerchantsShop_boundToTheShopsMerchant() {
         UUID shopId = UUID.randomUUID();
         UUID merchantId = UUID.randomUUID();
