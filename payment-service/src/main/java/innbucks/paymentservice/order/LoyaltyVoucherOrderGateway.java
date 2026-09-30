@@ -112,8 +112,16 @@ public class LoyaltyVoucherOrderGateway implements OrderGateway {
 
     @Override
     public ConfirmOutcome confirm(String orderRef, String confirmationRef, long amountCents) {
+        return confirm(orderRef, confirmationRef, amountCents, null);
+    }
+
+    /** Passes the rail on, so loyalty can report a voucher's payment type
+     *  (EcoCash / InnBucks / online card) rather than just "electronic". */
+    @Override
+    public ConfirmOutcome confirm(String orderRef, String confirmationRef, long amountCents,
+                                  innbucks.paymentservice.entity.PaymentRail rail) {
         try {
-            client.confirmPayment(orderRef, confirmationRef, amountCents);
+            client.confirmPayment(orderRef, confirmationRef, amountCents, rail == null ? null : rail.name());
             // 200 covers both a fresh confirm and the idempotent same-ref
             // replay — indistinguishable on the wire, identical to the caller.
             return ConfirmOutcome.confirmed(orderRef);

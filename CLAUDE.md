@@ -1999,6 +1999,10 @@ units and PLAIN-MAP bodies (no ApiResult envelope; a bad internal token is a
 bodyless 401), so the gateway owns the cents conversion and the client's
 parsing deliberately differs from `MarketplaceOrderClient`'s. Cash voucher
 payments never touch payment-service (staff confirm them in loyalty).
+The voucher confirm also sends `paymentRail` (`INNBUCKS_CODE` / `ZIMSWITCH_CARD` /
+`ECOCASH`) through `OrderGateway.confirm(…, rail)` — a default method, so only
+the loyalty gateway uses it — so loyalty's voucher report can filter by payment
+type; it is omitted when null and loyalty treats a missing rail as "electronic".
 **A new `OrderType`, `PaymentRail` or `PaymentStatus` needs a migration that
 re-creates its CHECK** (`chk_payment_order_type` / `_rail` / `_status`):
 `LOYALTY_VOUCHER` shipped without one and Postgres refused every voucher

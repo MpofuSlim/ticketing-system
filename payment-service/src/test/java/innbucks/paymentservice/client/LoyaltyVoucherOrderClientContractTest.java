@@ -251,6 +251,42 @@ class LoyaltyVoucherOrderClientContractTest {
     }
 
     @Test
+    @DisplayName("confirm carries the rail as paymentRail, so loyalty reports the voucher's payment type")
+    void confirm_withRail_sendsPaymentRail() {
+        wireMock.stubFor(patch(urlEqualTo(BASE + REF + "/confirm-payment"))
+                .willReturn(okJson("""
+                        {"orderRef":"VCH-4F9A1C22B7D3","status":"PAID","amount":5.0000,
+                         "currency":"USD","payerMsisdn":"+263782608767",
+                         "expiresAt":"2026-09-17T20:15:00Z","payable":false}
+                        """)));
+
+        ConfirmOutcome outcome = gateway(wireMock.port())
+                .confirm(REF, "TKZ-VCH-4F3A2B1C0D9E", 500L, innbucks.paymentservice.entity.PaymentRail.ECOCASH);
+
+        assertThat(outcome.succeeded()).isTrue();
+        wireMock.verify(patchRequestedFor(urlEqualTo(BASE + REF + "/confirm-payment"))
+                .withRequestBody(matchingJsonPath("$.paymentRef", equalTo("TKZ-VCH-4F3A2B1C0D9E")))
+                .withRequestBody(matchingJsonPath("$.amountCents", equalTo("500")))
+                .withRequestBody(matchingJsonPath("$.paymentRail", equalTo("ECOCASH"))));
+    }
+
+    @Test
+    @DisplayName("confirm without a rail omits paymentRail rather than sending null")
+    void confirm_withoutRail_omitsPaymentRail() {
+        wireMock.stubFor(patch(urlEqualTo(BASE + REF + "/confirm-payment"))
+                .willReturn(okJson("""
+                        {"orderRef":"VCH-4F9A1C22B7D3","status":"PAID","amount":5.0000,
+                         "currency":"USD","payerMsisdn":"+263782608767",
+                         "expiresAt":"2026-09-17T20:15:00Z","payable":false}
+                        """)));
+
+        gateway(wireMock.port()).confirm(REF, "TKZ-VCH-4F3A2B1C0D9E", 500L);
+
+        wireMock.verify(patchRequestedFor(urlEqualTo(BASE + REF + "/confirm-payment"))
+                .withRequestBody(com.github.tomakehurst.wiremock.client.WireMock.notContaining("paymentRail")));
+    }
+
+    @Test
     @DisplayName("confirm 422 AMOUNT_MISMATCH (the 100x guard's confirm leg): gateway maps to REJECTED, never success")
     void confirm_422AmountMismatch_mapsRejected() {
         wireMock.stubFor(patch(urlEqualTo(BASE + REF + "/confirm-payment"))

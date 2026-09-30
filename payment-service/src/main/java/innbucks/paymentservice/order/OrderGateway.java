@@ -62,4 +62,15 @@ public interface OrderGateway {
      * the product service (the 100x guard on the confirm leg).
      */
     ConfirmOutcome confirm(String orderRef, String confirmationRef, long amountCents);
+
+    /**
+     * {@link #confirm(String, String, long)} carrying the rail the money came
+     * in on, for a product that records it (loyalty's voucher report filters
+     * by payment type). The default ignores it, so a gateway that has no use
+     * for the rail need not change.
+     */
+    default ConfirmOutcome confirm(String orderRef, String confirmationRef, long amountCents,
+                                   innbucks.paymentservice.entity.PaymentRail rail) {
+        return confirm(orderRef, confirmationRef, amountCents);
+    }
 }
