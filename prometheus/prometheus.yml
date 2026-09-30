@@ -102,3 +102,8 @@ scrape_configs:
         files: [ /etc/prometheus/secrets/metrics-scrape-token ]
     static_configs:
       - targets: [ "marketplace-service:8087" ]
+
+  # loans-service (MpofuSlim/innbucks-loans, staging-only today) has NO job yet:
+  # it exposes /actuator/health and nothing else — no /actuator/prometheus, no
+  # X-Metrics-Token filter — so a target here would read DOWN forever. Add one
+  # in the same change that gives loans a metrics endpoint.

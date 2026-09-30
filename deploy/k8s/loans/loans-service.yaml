@@ -1,0 +1,129 @@
+# =============================================================================
+# loans-service — the lending API (MpofuSlim/innbucks-loans) in the cell. OPT-IN.
+# =============================================================================
+# Image ghcr.io/mpofuslim/loans-api, found by its Service name `loans-service`
+# (the Service itself is in ../04-services.yaml; the gateway routes /lending/**
+# and serves the spec at /loans-service/v3/api-docs for the aggregated Swagger).
+#
+# WHY A SUBDIRECTORY: deploy/k8s is applied to BOTH ZW hosts, and loans runs on
+# the staging box only until a separate go-live decision. The routine
+# `kubectl apply -f deploy/k8s/` is non-recursive, so it never creates this
+# Deployment; staging applies it deliberately (deploy/k8s/README.md, "loans-
+# service"). Without it the Service has no endpoints: every /lending/** call
+# is a 500 from the gateway (connection refused, logged there as an ERROR per
+# call), never another service's answer.
+#
+# WHY NO envFrom OF THE CELL: loans is its OWN identity provider, by design
+# (own users table, own HS256 key, iss innbucks-loans; lending has its own
+# portal and auth, not user-service's fleet tokens). Spring binds env vars onto properties by NAME
+# (relaxed binding), ahead of any yml or placeholder, and the cell's sources
+# carry names loans reads for other things:
+#   JWT_SECRET               -> jwt.secret: loans would sign with the FLEET key,
+#                               so a holder of either system's key could mint
+#                               tokens for both (loans books with InnBucks,
+#                               which pays on booking).
+#   SPRING_PROFILES_ACTIVE   -> prod,json would replace `api` below.
+#   BOOTSTRAP_ADMIN_PASSWORD -> would seed the loans SUPER_ADMIN.
+#   INNBUCKS_GATEWAY_URL     -> points at a retired host; loans' SMS would send
+#                               its bearer and API key there over plain HTTP.
+#   WHATSAPP_API_KEY, and every other fleet secret, would sit in this process
+#   for nothing.
+# So the pod gets exactly two sources: its own Secret `loans-service-secrets`
+# (loans-only keys, deploy/cells/loans.example.env) and the explicit `env:`
+# below, which names the few cell values it needs key by key.
+#
+# THE SECRET HOLDS ONLY THE KEYS loans.example.env LISTS. An explicit `env:`
+# entry wins over envFrom for the SAME key only, and relaxed binding reaches
+# one property through several names: SPRING_DATASOURCE_URL in the Secret
+# would beat DB_URL below (and this pod holds the cell postgres superuser), and
+# SPRING_PROFILES_GROUP_API=scheduled-tasks switches the jobs on beside `api`.
+# So a SPRING_*, SERVER_*, DB_* or JAVA_* key there can override what this file
+# sets. SPRING_PROFILES_INCLUDE and SPRING_APPLICATION_JSON, the likeliest
+# spellings of that mistake, are pinned empty below; no list of pins covers
+# every name, so they are no substitute for the rule.
+#
+# WHY THE JOBS ARE OFF: SPRING_PROFILES_ACTIVE is `api` only. Every loans
+# @Scheduled job (Ndasenda lodgement, InnBucks booking — which PAYS on the
+# apply call —, disbursement status, the saga, draft expiry, escalation) is
+# @Profile("scheduled-tasks"). Turning them on acts on whatever backlog the
+# database holds at the first tick, so it is its own go-live step, reviewed
+# on its own — never a line added here in passing.
+#
+# WHY Recreate: never two loans pods, not even for the seconds a RollingUpdate
+# overlaps them. The jobs are only safe run serially in ONE process (no
+# ShedLock), and a Recreate rollout keeps that true the day they are enabled.
+# The cost is a short gap while the new pod starts.
+#
+# Needs a loans-api image with the fleet-member change (DB_* and SERVER_PORT
+# placeholders, /actuator/health, console-only logging, no CORS of its own,
+# the gateway-relative OpenAPI server). An older image writes log files under
+# the read-only root and has no health endpoint, so it never becomes Ready.
+# -----------------------------------------------------------------------------
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: loans-service, namespace: ticketing }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: loans-service } }
+  template:
+    metadata: { labels: { app: loans-service } }
+    spec:
+      imagePullSecrets: [ { name: ghcr } ]
+      # OWASP A05 hardening, as every fleet Deployment (rationale in
+      # ../03-user-service.yaml). /tmp is the only writable path.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: loans-service
+          # :latest like every fleet manifest, but the cell runs PINNED images:
+          # apply this file through the README's pinned form (or `set image` to
+          # a loans commit right after). Loans tags are sha-<full commit SHA>.
+          image: ghcr.io/mpofuslim/loans-api:latest
+          ports: [ { containerPort: 8088 } ]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          envFrom: [ { secretRef: { name: loans-service-secrets } } ]
+          env:
+            # user.home and the PDFBox font cache on /tmp: the root filesystem
+            # is read-only and PDF checks on uploaded documents may build a cache.
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0 -Duser.home=/tmp -Dpdfbox.fontcache=/tmp" }
+            - { name: SPRING_PROFILES_ACTIVE, value: "api" }
+            # Pinned empty so a Secret line of the same name cannot add
+            # scheduled-tasks (or override anything else: SPRING_APPLICATION_JSON
+            # outranks every environment variable). See the header.
+            - { name: SPRING_PROFILES_INCLUDE, value: "" }
+            - { name: SPRING_APPLICATION_JSON, value: "{}" }
+            - { name: SERVER_PORT, value: "8088" }
+            # Its own database on the cell postgres, with the fleet's credentials.
+            - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/loans_service" }
+            - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
+            - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
+            # Small pool: the cell postgres allows 150 connections and the
+            # fleet's pools already come close to that between them.
+            - { name: DB_POOL_MAX, value: "10" }
+            - { name: DB_POOL_MIN, value: "2" }
+            # The market clock, the same value every fleet service reads.
+            - { name: INNBUCKS_COUNTRY, valueFrom: { configMapKeyRef: { name: cell-zw, key: INNBUCKS_COUNTRY } } }
+            # The edge prefix (/foundry) for the spec's "Gateway relative server".
+            - { name: PUBLIC_API_PREFIX, valueFrom: { configMapKeyRef: { name: cell-zw, key: PUBLIC_API_PREFIX } } }
+            # The cell's WhatsApp gateway (the key is loans' own, in its Secret).
+            # This reads the ConfigMap: if a host ever overrides the URL in its
+            # cell.<iso>.local.env, point this ref at cell-zw-secrets instead.
+            - { name: WHATSAPP_GATEWAY_URL, valueFrom: { configMapKeyRef: { name: cell-zw, key: WHATSAPP_GATEWAY_URL, optional: true } } }
+          # Documents arrive as base64 inside JSON (up to 5 MB each), so one
+          # application holds the JSON, the decoded bytes and image buffers at
+          # once — more headroom than the fleet's 640-768Mi.
+          resources: { requests: { memory: 512Mi }, limits: { memory: 1Gi } }
+          readinessProbe: { httpGet: { path: /actuator/health, port: 8088 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
+          livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8088 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
+          volumeMounts: [ { name: tmp, mountPath: /tmp } ]
+      volumes: [ { name: tmp, emptyDir: {} } ]

@@ -1,4 +1,5 @@
-# Backend services: event, seat, booking, payment, loyalty.
+# Backend services: event, seat, booking, payment, loyalty, marketplace, and
+# the Service (only) of loans — its Deployment is opt-in, see the end of file.
 # All carry the OWASP A05 workload-hardening block (see 03-user-service.yaml for
 # the rationale): no SA token, non-root UID 10001, seccomp RuntimeDefault,
 # no-priv-escalation, read-only root fs + /tmp emptyDir, all caps dropped.
@@ -273,10 +274,10 @@ spec:
 ---
 # marketplace-service lives in the MpofuSlim/market-place repo but runs in
 # this cell (same cross-repo pattern as loyalty-service/InnRewards): it
-# publishes ghcr.io/mpofuslim/marketplace-service and registers on this
-# stack's Eureka as `marketplace-service`; the gateway routes /marketplace/**
-# to it by name. Keep the two repos in lock-step per docs/fleet-wiring.md in
-# the market-place repo.
+# publishes ghcr.io/mpofuslim/marketplace-service and is found by its Service
+# name `marketplace-service` (the fleet discovery map); the gateway routes
+# /marketplace/** to it by name. Keep the two repos in lock-step per
+# docs/fleet-wiring.md in the market-place repo.
 apiVersion: v1
 kind: Service
 metadata: { name: marketplace-service, namespace: ticketing }
@@ -324,3 +325,28 @@ spec:
           livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8087 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
           volumeMounts: [ { name: tmp, mountPath: /tmp } ]
       volumes: [ { name: tmp, emptyDir: {} } ]
+---
+# loans-service lives in the MpofuSlim/innbucks-loans repo (image
+# ghcr.io/mpofuslim/loans-api); the gateway routes /lending/** to it by name.
+# Keep the two repos in lock-step per docs/fleet-wiring.md in the
+# innbucks-loans repo.
+#
+# ONLY the Service is here. The Deployment is opt-in, in deploy/k8s/loans/,
+# because this directory is applied to BOTH ZW hosts and loans runs on the
+# staging box only until a separate decision takes it to production. The
+# routine non-recursive `kubectl apply -f deploy/k8s/` therefore creates this
+# Service everywhere (FleetServiceMapTest needs it top-level, and its port must
+# equal the discovery map's 8088), but the pod only where an operator applied
+# deploy/k8s/loans/ on purpose. On a host without that Deployment the Service
+# has no endpoints: the gateway's connection to it is refused at once, so a
+# /lending/** caller gets a 500 (never another service's answer), the gateway
+# logs an ERROR for each such call, and the Swagger dropdown's loans-service
+# entry fails to load. That is production's expected state until go-live.
+#
+# The label lets a running cell apply THIS object alone
+# (`kubectl apply -f 04-services.yaml -l app=loans-service`): a plain apply of
+# the file would un-pin every pinned Deployment above it.
+apiVersion: v1
+kind: Service
+metadata: { name: loans-service, namespace: ticketing, labels: { app: loans-service } }
+spec: { selector: { app: loans-service }, ports: [ { port: 8088, targetPort: 8088 } ] }

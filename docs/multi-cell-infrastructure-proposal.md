@@ -69,6 +69,8 @@ The ticketing-system fleet is a 7-service Spring Boot deployment:
   resolve by k8s Service name)
 - `user-service`, `event-service`, `seat-service`, `booking-service`,
   `payment-service`, `loyalty-service`
+- since joined from their own repos: `marketplace-service` (market-place) and
+  `loans-service` (innbucks-loans, staging only, with its own sign-in)
 
 > **Note (retired):** `innbucks-core-gateway` — the standalone Spring Boot 3.2.4
 > adapter that prototyped bridging ticketing services to InnBucks **veengu**

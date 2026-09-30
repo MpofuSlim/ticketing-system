@@ -66,6 +66,15 @@ class SwaggerSecurityConfigTest {
     }
 
     @Test
+    void loansServiceDocs_withoutCredentials_areUnauthorized() {
+        // loans-service's spec is proxied under the same /*-service/v3/api-docs
+        // shape, so the gate covers it with no loans-specific entry.
+        client.get().uri("/loans-service/v3/api-docs")
+                .exchange()
+                .expectStatus().isUnauthorized();
+    }
+
+    @Test
     void swaggerDocs_withCorrectCredentials_passSecurity() {
         // Correct Basic creds clear the security filter; springdoc serves the
         // swagger-config in-process, so this is a 200 (not a 401).
@@ -82,6 +91,15 @@ class SwaggerSecurityConfigTest {
         // service, but the key assertion is that Swagger's Basic gate does NOT
         // turn it into a 401.
         client.get().uri("/auth/login")
+                .exchange()
+                .expectStatus().value(status -> assertThat(status).isNotEqualTo(401));
+    }
+
+    @Test
+    void lendingPath_isNotChallengedBySwaggerAuth() {
+        // loans signs in on its own /lending/v1/auth/login, not user-service's;
+        // the Basic gate must leave that path to loans as well.
+        client.get().uri("/lending/v1/auth/login")
                 .exchange()
                 .expectStatus().value(status -> assertThat(status).isNotEqualTo(401));
     }

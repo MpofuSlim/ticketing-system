@@ -8,3 +8,4 @@ CREATE DATABASE booking_service;
 CREATE DATABASE payment_service;
 CREATE DATABASE loyalty_service;
 CREATE DATABASE marketplace_service;
+CREATE DATABASE loans_service;

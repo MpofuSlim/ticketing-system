@@ -552,6 +552,53 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
+            # loans-service (MpofuSlim/innbucks-loans, image
+            # ghcr.io/mpofuslim/loans-api). Every loans controller lives under
+            # /lending/v1; the predicate is /lending/** so a /lending/v2 shipped
+            # beside it (loans' own versioning rule) needs no gateway change.
+            #
+            # Loans signs its OWN tokens, by design (own users table, own HS256
+            # key, iss innbucks-loans): lending has its own portal and its own
+            # auth, not user-service's fleet tokens. That needs nothing here: the gateway never validates a
+            # bearer, it only keys the limiter on it, so a loans token passes
+            # through untouched and loans stays the authority on it.
+            #
+            # No *-internal-deny route: loans has no internal S2S surface. One
+            # added later needs its deny route BEFORE this one, per the
+            # three-files-must-agree rule.
+            #
+            # Loans' anonymous forgot-password is edge-denied (404) while loans
+            # has no working SMS rail in the cell. It takes a username only and
+            # REPLACES that account's password at once, before the SMS carrying
+            # the new one is sent — and in the cell that SMS can never arrive
+            # (loans.example.env leaves INNBUCKS_GATEWAY_URL out on purpose). So
+            # published, it is a one-request lockout of any account whose
+            # username is known, `admin` first, and no rate limit stops a single
+            # request. A super-admin resets another user's password through
+            # loans' authenticated password-reset instead, over EMAIL or
+            # WHATSAPP. Remove this route only once loans' SMS reaches people in
+            # the cell, and then give the path an IP-keyed, fail-safe route
+            # before the catch-all (auth-password-reset-route's shape) rather
+            # than the bearer-keyed limiter below. The trailing-slash spelling is
+            # listed too: it would otherwise fall through to the catch-all, and
+            # it must never depend on loans refusing to match it.
+            - id: loans-forgot-password-deny
+              uri: forward:/__edge_deny__
+              predicates:
+                - Path=/lending/*/auth/forgot-password,/lending/*/auth/forgot-password/
+
+            - id: loans-service-route
+              uri: lb://loans-service
+              predicates:
+                - Path=/lending/**
+              filters:
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
+
             - id: loyalty-internal-deny
               uri: forward:/__edge_deny__
               predicates:
@@ -741,6 +788,23 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
+            # The segment must stay `loans-service`: SwaggerSecurityConfig's
+            # Basic-auth gate (and its prod 404) matches /*-service/v3/api-docs,
+            # so a docs prefix not ending in -service would publish the loans
+            # spec with no password.
+            - id: loans-service-proxy-route
+              uri: lb://loans-service
+              predicates:
+                - Path=/loans-service/v3/api-docs,/loans-service/v3/api-docs/**
+              filters:
+                - StripPrefix=1
+                - name: RequestRateLimiter
+                  args:
+                    redis-rate-limiter.replenishRate: ${RATE_LIMIT_REPLENISH_PER_SECOND:50}
+                    redis-rate-limiter.burstCapacity: ${RATE_LIMIT_BURST_CAPACITY:100}
+                    redis-rate-limiter.requestedTokens: 1
+                    key-resolver: "#{@gatewayKeyResolver}"
+
           globalcors:
             add-to-simple-url-handler-mapping: true
             cors-configurations:
@@ -879,6 +943,11 @@ springdoc:
         url: ${PUBLIC_API_PREFIX:}/loyalty-service/v3/api-docs
       - name: marketplace-service
         url: ${PUBLIC_API_PREFIX:}/marketplace-service/v3/api-docs
+      # Listed on every host, but only a host running the opt-in loans
+      # Deployment (deploy/k8s/loans/) can serve it. Elsewhere — production,
+      # until loans goes live there — picking it fails to load with a 500.
+      - name: loans-service
+        url: ${PUBLIC_API_PREFIX:}/loans-service/v3/api-docs
 
 # HTTP Basic credentials guarding the Swagger UI above (see
 # SwaggerSecurityConfig). With a blank password Swagger fails closed under the
@@ -917,6 +986,7 @@ spring:
             payment-service:     [{ uri: "http://payment-service:8085" }]
             loyalty-service:     [{ uri: "http://loyalty-service:8086" }]
             marketplace-service: [{ uri: "http://marketplace-service:8087" }]
+            loans-service:       [{ uri: "http://loans-service:8088" }]
 
 ---
 # Running the jars directly on one machine (no compose, no k8s): same names,
@@ -938,3 +1008,4 @@ spring:
             payment-service:     [{ uri: "http://localhost:8085" }]
             loyalty-service:     [{ uri: "http://localhost:8086" }]
             marketplace-service: [{ uri: "http://localhost:8087" }]
+            loans-service:       [{ uri: "http://localhost:8088" }]
