@@ -76,8 +76,11 @@ public class RoleAdminController {
 
     @GetMapping
     @PreAuthorize("hasAuthority('" + PermissionCatalog.ROLES_READ + "')")
-    @Operation(summary = "List all roles",
-            description = "Built-in roles first, then custom roles, each alphabetical.")
+    @Operation(summary = "List the roles the console assigns",
+            description = "Built-in roles first, then custom roles, each alphabetical. **CUSTOMER is not "
+                    + "listed**: it is the super-app side of an account, not a console role, and "
+                    + "`PUT /admin/users/{id}/roles` keeps it on an account that holds it. "
+                    + "`GET /admin/roles/CUSTOMER` still reads it.")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Roles listed",
                     content = @Content(mediaType = "application/json",
@@ -126,7 +129,11 @@ public class RoleAdminController {
                                     """)))
     })
     public ResponseEntity<ApiResult<List<RoleDTOs.RoleResponse>>> list() {
+        // CUSTOMER is left out of the picker: the console is for staff and
+        // business roles, and a customer's role comes from the super app.
+        // Same rule as UserResponseDTO.consoleRoles on the user rows.
         List<RoleDTOs.RoleResponse> roles = roleAdminService.list().stream()
+                .filter(r -> !com.innbucks.userservice.entity.User.Role.CUSTOMER.name().equals(r.getName()))
                 .map(RoleDTOs.RoleResponse::of)
                 .toList();
         return ResponseEntity.ok(ApiResult.ok("Roles retrieved", roles));
