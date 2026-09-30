@@ -87,7 +87,9 @@ class SwaggerResponseCodeUniquenessTest {
     /**
      * Handlers allowed to keep a duplicate while it is being merged, as
      * {@code "Controller.method responseCode"}. EMPTY, and it should stay that
-     * way: an entry here is documentation that is known not to render.
+     * way: an entry here is documentation that is known not to render. Applied
+     * as a subset check on the collected duplicates (not a per-duplicate skip),
+     * so an entry that no longer matches a real duplicate fails too.
      */
     private static final Set<String> ALLOWED = Set.of();
 
@@ -106,11 +108,8 @@ class SwaggerResponseCodeUniquenessTest {
 
                 Set<String> seen = new HashSet<>();
                 for (ApiResponse r : responses.value()) {
-                    if (!seen.add(r.responseCode())
-                            && !ALLOWED.contains(controller.getSimpleName() + "." + m.getName() + " "
-                                    + r.responseCode())) {
-                        offenders.add(controller.getSimpleName() + "." + m.getName()
-                                + " declares responseCode \"" + r.responseCode() + "\" more than once");
+                    if (!seen.add(r.responseCode())) {
+                        offenders.add(controller.getSimpleName() + "." + m.getName() + " " + r.responseCode());
                     }
                 }
             }
@@ -118,9 +117,12 @@ class SwaggerResponseCodeUniquenessTest {
 
         offenders.sort(Comparator.naturalOrder());
         assertThat(offenders)
-                .as("OpenAPI keys responses by status, so a duplicate silently drops one block "
-                        + "from the published spec — merge them into one @ApiResponse with several "
-                        + "named @ExampleObjects instead")
-                .isEmpty();
+                .as("these handlers declare the same responseCode more than once. OpenAPI keys responses "
+                        + "by status, so a duplicate silently drops one block from the published spec — merge "
+                        + "them into one @ApiResponse with several named @ExampleObjects instead")
+                .isSubsetOf(ALLOWED);
+        assertThat(ALLOWED)
+                .as("an allow-list entry that no longer matches a real duplicate — remove it")
+                .isSubsetOf(offenders);
     }
 }

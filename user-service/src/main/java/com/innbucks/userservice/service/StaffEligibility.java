@@ -201,7 +201,7 @@ public class StaffEligibility {
         Map<String, String> refused = new TreeMap<>();
         for (String name : requested) {
             Role row = rows.get(name);
-            if (!StaffRoles.isNamed(name) && (row == null || !StaffRoles.isStaffRole(row))) {
+            if (!StaffRoles.isNamed(name) && !StaffRoles.isStaffRole(row)) {
                 refused.put(name, StaffPolicyException.REASON_NOT_A_STAFF_ROLE);
             }
         }
@@ -217,16 +217,13 @@ public class StaffEligibility {
      * agent must never also be a merchant or a seller.
      */
     public void requireNotStaffAccount(User target, String actor, String site) {
-        if (target == null || !isStaffAccount(target)) return;
-        roleGrantGuard.recordRefusal(actor, target, StaffPolicyException.STAFF_ACCOUNT_NOT_ELIGIBLE,
-                Map.of("site", site));
-        log.warn("Refused {} for a staff account userId={} by={}", site, target.getId(), actor);
-        throw StaffPolicyException.staffAccountNotEligible();
+        requireNotStaffAccount(target, actor, site, null);
     }
 
     /**
      * As {@link #requireNotStaffAccount(User, String, String)}, with a message
-     * that fits the site (tier-2 is not "joining a business").
+     * that fits the site (tier-2 is not "joining a business"); a null message
+     * is the default one.
      */
     public void requireNotStaffAccount(User target, String actor, String site, String message) {
         if (target == null || !isStaffAccount(target)) return;

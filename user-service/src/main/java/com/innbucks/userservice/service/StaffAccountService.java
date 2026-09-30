@@ -579,7 +579,7 @@ public class StaffAccountService {
     }
 
     private static boolean sameAccount(User user, String callerEmail) {
-        return callerEmail != null && user.getEmail() != null && user.getEmail().equalsIgnoreCase(callerEmail);
+        return user.getEmail() != null && user.getEmail().equalsIgnoreCase(callerEmail);
     }
 
     /** How the create quota recognises the caller: JPA auditing stamps their uuid, else their email. */

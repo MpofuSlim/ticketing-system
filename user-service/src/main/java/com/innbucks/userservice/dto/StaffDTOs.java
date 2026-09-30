@@ -164,7 +164,7 @@ public final class StaffDTOs {
     public record InviteTokenRequest(
             @NotBlank(message = "token is required")
             @Size(max = 128, message = "token is invalid")
-            @Schema(example = "STI-Q2hlY2tpbmcgdGhhdCB0aGlzIGlzIG5vdCBhIHJlYWwgdG9rZW4x",
+            @Schema(example = "STI-dGhpcy1pcy1ub3QtYS1yZWFsLWludml0ZS10b2tlbgA",
                     requiredMode = Schema.RequiredMode.REQUIRED,
                     description = "The token from the invite link's fragment (#token=…).")
             String token) {
@@ -180,7 +180,7 @@ public final class StaffDTOs {
     public record AcceptRequest(
             @NotBlank(message = "token is required")
             @Size(max = 128, message = "token is invalid")
-            @Schema(example = "STI-Q2hlY2tpbmcgdGhhdCB0aGlzIGlzIG5vdCBhIHJlYWwgdG9rZW4x",
+            @Schema(example = "STI-dGhpcy1pcy1ub3QtYS1yZWFsLWludml0ZS10b2tlbgA",
                     requiredMode = Schema.RequiredMode.REQUIRED)
             String token,
             @NotBlank(message = "New password is required")
