@@ -262,8 +262,8 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
     public ResponseEntity<ApiResult<Void>> handleUnreadable(
             org.springframework.http.converter.HttpMessageNotReadableException ex) {
-        log.warn("Unreadable request body ({})",
-                ex.getMostSpecificCause() == null ? "unknown" : ex.getMostSpecificCause().getClass().getSimpleName());
+        // getMostSpecificCause() never returns null: the root cause, else the exception itself.
+        log.warn("Unreadable request body ({})", ex.getMostSpecificCause().getClass().getSimpleName());
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .body(ApiResult.error(HttpStatus.BAD_REQUEST,
                         "We couldn't process your request. Please try again."));

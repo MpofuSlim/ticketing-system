@@ -408,7 +408,7 @@ public class RoleGrantGuard {
         for (String name : held) {
             if (StaffRoles.isNamed(name)) continue;
             Role row = rows.get(name);
-            if (row == null || !StaffRoles.isStaffRole(row)) nonStaff.add(name);
+            if (!StaffRoles.isStaffRole(row)) nonStaff.add(name);
         }
         return nonStaff;
     }
