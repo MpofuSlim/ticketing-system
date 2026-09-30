@@ -376,6 +376,33 @@ class GatewayRouteTableTest {
                 .hasToString("lb://booking-service");
     }
 
+    /**
+     * Customer support (user-service V45/V46) adds no route of its own: every
+     * /admin/support/** path must be matched FIRST by user-admin-route — the
+     * bearer-keyed, rate-limited route to user-service — never by an earlier
+     * route that would send it elsewhere or past the limiter.
+     */
+    @Test
+    void adminSupportRidesUserAdminRoute() {
+        org.springframework.web.util.pattern.PathPatternParser parser =
+                new org.springframework.web.util.pattern.PathPatternParser();
+        for (String path : List.of("/admin/support/customers/search", "/admin/support/console-users/1042",
+                "/admin/support/console-users/1042/mfa/reset")) {
+            org.springframework.http.server.PathContainer container =
+                    org.springframework.http.server.PathContainer.parsePath(path);
+            String first = routes().stream()
+                    .filter(r -> r.getPredicates().stream()
+                            .filter(p -> "Path".equals(p.getName()))
+                            .flatMap(p -> p.getArgs().values().stream())
+                            .anyMatch(pattern -> parser.parse(pattern).matches(container)))
+                    .map(RouteDefinition::getId)
+                    .findFirst().orElse(null);
+            assertThat(first).as(path).isEqualTo("user-admin-route");
+        }
+        assertThat(route("user-admin-route").getUri()).hasToString("lb://user-service");
+        assertThat(filterNames("user-admin-route")).contains("RequestRateLimiter");
+    }
+
     @Test
     void edgeDenyRoutesForwardToTheDenyHandler() {
         assertThat(route("event-availability-deny").getUri()).hasToString("forward:/__edge_deny__");

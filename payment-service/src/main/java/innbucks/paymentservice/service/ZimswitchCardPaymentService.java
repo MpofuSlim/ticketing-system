@@ -175,8 +175,9 @@ public class ZimswitchCardPaymentService {
             throw new InvalidPaymentRequestException(
                     capitalize(noun) + " has no positive amount; cannot request payment", 422);
         }
-        String currency = snapshot.currency();
-        if (currency == null || currency.isBlank()) currency = cellCurrency;
+        // The rail settles in the cell currency only — refuse anything else
+        // BEFORE the hold, the ledger row and the wire (see SettlementCurrency).
+        String currency = SettlementCurrency.requireCellCurrency(snapshot.currency(), cellCurrency, "Card");
         String customerMsisdn = snapshot.payerMsisdn();
         if (customerMsisdn == null || customerMsisdn.isBlank()) {
             throw new InvalidPaymentRequestException(

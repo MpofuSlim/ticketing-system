@@ -144,7 +144,7 @@ class EcocashEipClientContractTest {
                 .willReturn(okJson(CHARGE_PENDING_PDF)));
 
         EcocashChargeStatus status = newClient(wireMock.baseUrl())
-                .charge(CORRELATOR, "+263777222093", 300, "USD", "TKZ-TEST-REF");
+                .charge(CORRELATOR, "+263777222093", 300, "USD", "TKZ-TEST-REF", "Ticketize online payment");
 
         assertThat(status.outcome()).isEqualTo(EcocashChargeStatus.Outcome.PENDING);
         assertThat(status.rawStatus()).isEqualTo("PENDING SUBSCRIBER VALIDATION");
@@ -177,6 +177,21 @@ class EcocashEipClientContractTest {
     }
 
     @Test
+    @DisplayName("charge: the caller's description is what the PIN prompt reads — both description and remarks")
+    void charge_description_isTheCallersProductLine() {
+        wireMock.stubFor(post(urlEqualTo(CHARGE_PATH))
+                .willReturn(okJson(CHARGE_PENDING_PDF)));
+
+        newClient(wireMock.baseUrl())
+                .charge(CORRELATOR, MSISDN, 100, "USD", "TKZ-VCH-0674A5B29EF9", "InnRewards voucher payment");
+
+        wireMock.verify(postRequestedFor(urlEqualTo(CHARGE_PATH))
+                .withRequestBody(matchingJsonPath("$.paymentAmount.charginginformation.description",
+                        equalTo("InnRewards voucher payment")))
+                .withRequestBody(matchingJsonPath("$.remarks", equalTo("InnRewards voucher payment"))));
+    }
+
+    @Test
     @DisplayName("charge: a 4xx refusal throws EcocashApiException and is NEVER retried")
     void charge_refused_neverRetried() {
         wireMock.stubFor(post(urlEqualTo(CHARGE_PATH))
@@ -186,7 +201,7 @@ class EcocashEipClientContractTest {
                                  "message":"Duplicate clientCorrelator"}""")));
 
         assertThatThrownBy(() -> newClient(wireMock.baseUrl())
-                .charge(CORRELATOR, MSISDN, 300, "USD", "TKZ-TEST-REF"))
+                .charge(CORRELATOR, MSISDN, 300, "USD", "TKZ-TEST-REF", "Ticketize online payment"))
                 .isInstanceOf(EcocashApiException.class)
                 .hasMessageContaining("Duplicate clientCorrelator");
 
@@ -200,7 +215,7 @@ class EcocashEipClientContractTest {
                 .willReturn(aResponse().withStatus(502)));
 
         assertThatThrownBy(() -> newClient(wireMock.baseUrl())
-                .charge(CORRELATOR, MSISDN, 300, "USD", "TKZ-TEST-REF"))
+                .charge(CORRELATOR, MSISDN, 300, "USD", "TKZ-TEST-REF", "Ticketize online payment"))
                 .isInstanceOf(EcocashApiTransientException.class);
 
         // THE money guard of this rail: one attempt only — a retried charge
@@ -353,7 +368,7 @@ class EcocashEipClientContractTest {
         // caller logged "charge issued", telling the customer to approve a
         // prompt that was never pushed.
         assertThatThrownBy(() -> newClient(wireMock.baseUrl())
-                .charge(CORRELATOR, MSISDN, 300L, "USD", "TKZ-TEST-0001"))
+                .charge(CORRELATOR, MSISDN, 300L, "USD", "TKZ-TEST-0001", "Ticketize online payment"))
                 .isInstanceOf(EcocashApiTransientException.class);
 
         // Still exactly one attempt — the charge is NEVER retried.
@@ -393,7 +408,7 @@ class EcocashEipClientContractTest {
         // port would change and break other tests).
         EcocashEipClient client = newClient("http://127.0.0.1:1");
 
-        assertThatThrownBy(() -> client.charge(CORRELATOR, MSISDN, 300, "USD", "TKZ-TEST-REF"))
+        assertThatThrownBy(() -> client.charge(CORRELATOR, MSISDN, 300, "USD", "TKZ-TEST-REF", "Ticketize online payment"))
                 .isInstanceOf(EcocashApiTransientException.class);
     }
 
@@ -404,7 +419,7 @@ class EcocashEipClientContractTest {
         EcocashEipClient unconfigured = new EcocashEipClient(blank, new ObjectMapper(),
                 RetryRegistry.ofDefaults(), CircuitBreakerRegistry.ofDefaults());
         assertThat(unconfigured.isConfigured()).isFalse();
-        assertThatThrownBy(() -> unconfigured.charge(CORRELATOR, MSISDN, 300, "USD", "X"))
+        assertThatThrownBy(() -> unconfigured.charge(CORRELATOR, MSISDN, 300, "USD", "X", "Ticketize online payment"))
                 .isInstanceOf(EcocashApiException.class);
 
         // A corrupted stored correlator must not be spliced into a URL.

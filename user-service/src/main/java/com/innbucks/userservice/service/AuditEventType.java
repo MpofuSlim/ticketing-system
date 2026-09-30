@@ -275,5 +275,29 @@ public enum AuditEventType {
      * on a device-security partner endpoint — the same S2S-boundary signal as
      * {@link #AUTH_INTERNAL_TOKEN_FAILURE}, for the two external callers.
      */
-    DEVICE_SECURITY_PARTNER_KEY_FAILURE
+    DEVICE_SECURITY_PARTNER_KEY_FAILURE,
+
+    /**
+     * Customer support (V45/V46) — a support agent changing a customer's
+     * Foundry console account through {@code /admin/support/console-users/**}.
+     * Sealed FAIL-CLOSED ({@code recordRequired}, the transaction's last
+     * statement): an in-process support write that cannot be recorded is not
+     * made. Actor = the agent ({@code authentication.getName()}); target = the
+     * account's {@code users.id}; metadata carries the masked customer key,
+     * {@code lookupId}, {@code idempotencyKey}, the cleaned note and
+     * {@code outcome}. Lookups themselves are NOT on the chain — they go to
+     * {@code support_access_log} (D10: the chain's head lock would serialise
+     * every search).
+     */
+    SUPPORT_CONSOLE_ACCOUNT_UNLOCKED,
+    SUPPORT_CONSOLE_PASSWORD_RESET_SENT,
+    SUPPORT_CONSOLE_MFA_RESET,
+    /**
+     * A support write refused for who it was aimed at — the agent's own account
+     * ({@code support_self_action}) or an InnBucks staff account
+     * ({@code staff_target_requires_supervisor}, {@code console_staff_account}).
+     * A FAILURE row, fail-open like every refusal: these are the attempts an
+     * insider-threat review looks for.
+     */
+    SUPPORT_ACTION_REFUSED
 }

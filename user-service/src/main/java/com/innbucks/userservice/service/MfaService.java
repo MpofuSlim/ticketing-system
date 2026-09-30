@@ -311,15 +311,9 @@ public class MfaService {
                     com.innbucks.userservice.exception.StaffPolicyException.REASON_SUPER_ADMIN);
         }
         roleGrantGuard.requireMayManage(roleGrantGuard.resolveCaller(adminEmail), user);
-        user.setMfaEnabled(false);
-        user.setMfaSecret(null);
-        userRepository.save(user);
-        backupCodeRepository.deleteAllForUser(userId);
-        clearDeviceTrust(userId);
-        long newVersion = tokenVersionBumper.bump(user);
+        long newVersion = wipeSecondFactor(user);
         log.info("MFA reset by admin userId={} by={} newTokenVersion={}",
                 userId, adminEmail == null ? "system" : adminEmail, newVersion);
-        publishSecurityAlert(user, com.innbucks.userservice.event.AccountSecurityAlertEvent.Type.MFA_DISABLED);
         if (auditService != null) {
             java.util.Map<String, Object> metadata = new java.util.LinkedHashMap<>();
             metadata.put("targetEmail", user.getEmail() == null ? "" : user.getEmail());
@@ -335,6 +329,38 @@ public class MfaService {
                     metadata,
                     auditContext == null ? AuditContext.none() : auditContext);
         }
+    }
+
+    /**
+     * Customer support's MFA reset ({@code POST /admin/support/console-users/{id}/mfa/reset}):
+     * the same wipe as {@link #adminReset} — secret, backup codes and trusted
+     * devices gone, {@code tokenVersion} bumped (every access token and pending
+     * mfaToken dies now), and the account told by the usual security alert. The
+     * caller ({@code ConsoleSupportActions}) has already refused staff and
+     * SUPER_ADMIN targets and applied caller ⊇ target, and it seals the change
+     * FAIL-CLOSED as {@code SUPPORT_CONSOLE_MFA_RESET} as its last statement —
+     * so this method writes no audit row of its own. Joins the caller's
+     * transaction: the account row is already locked there.
+     *
+     * @return the account's new token version
+     */
+    @Transactional
+    public long resetForSupport(User user) {
+        long newVersion = wipeSecondFactor(user);
+        log.info("MFA reset by customer support userId={} newTokenVersion={}", user.getId(), newVersion);
+        return newVersion;
+    }
+
+    /** The one wipe both administrative resets share. */
+    private long wipeSecondFactor(User user) {
+        user.setMfaEnabled(false);
+        user.setMfaSecret(null);
+        userRepository.save(user);
+        backupCodeRepository.deleteAllForUser(user.getId());
+        clearDeviceTrust(user.getId());
+        long newVersion = tokenVersionBumper.bump(user);
+        publishSecurityAlert(user, com.innbucks.userservice.event.AccountSecurityAlertEvent.Type.MFA_DISABLED);
+        return newVersion;
     }
 
     /** Longest admin-reset note kept — the same bound {@code AdminMfaResetRequestDTO} validates at the edge. */

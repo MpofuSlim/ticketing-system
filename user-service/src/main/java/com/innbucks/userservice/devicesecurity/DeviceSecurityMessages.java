@@ -187,8 +187,12 @@ public class DeviceSecurityMessages {
 
     // ---- helpers -----------------------------------------------------------------------
 
-    /** "14:30" today, "14:30 on 30 Sep" otherwise; SMS uses "14.30". */
-    String time(LocalDateTime utc, LocalDateTime nowUtc, boolean sms) {
+    /**
+     * "14:30" today, "14:30 on 30 Sep" otherwise; SMS uses "14.30". Public for
+     * customer support's server-rendered sentences (design §3.1.6), which state
+     * times the same way.
+     */
+    public String time(LocalDateTime utc, LocalDateTime nowUtc, boolean sms) {
         if (utc == null) return "";
         ZonedDateTime at = market(utc);
         LocalDate today = market(nowUtc).toLocalDate();

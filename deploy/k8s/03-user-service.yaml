@@ -52,6 +52,17 @@ spec:
             - { name: JWT_EXPIRATION_MS, value: "900000" }
             - { name: BANK_API_READ_TIMEOUT_MS, value: "30000" }
             - { name: MFA_ISSUER, value: "InnBucks" }
+            # Customer support: the RS256 key that signs X-Support-Assertion (design
+            # §3.0). A DEDICATED Secret referenced by this Deployment ONLY — never a
+            # key in cell-zw-secrets, which every pod receives through envFrom, so a
+            # compromised sibling could mint assertions. optional: true, so a cell
+            # without the Secret still starts (support logs HALF-PROVISIONED and the
+            # product sections render UNAVAILABLE) instead of CreateContainerConfigError.
+            # Create it per host: see the PR's Rollout notes. If the key ever does land in
+            # a shared source, api-gateway and booking/event/seat/payment refuse to boot
+            # under a deployment profile (their secrets guards) — remove it and rotate.
+            - name: SUPPORT_ASSERTION_PRIVATE_KEY
+              valueFrom: { secretKeyRef: { name: user-service-support-signing, key: SUPPORT_ASSERTION_PRIVATE_KEY, optional: true } }
           resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }
           readinessProbe: { httpGet: { path: /actuator/health, port: 8081 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8081 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }

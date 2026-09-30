@@ -1,0 +1,58 @@
+{
+  "_comment": [
+    "Customer-support assertion (X-Support-Assertion) TEST VECTOR, signed by user-service's SupportAssertionSigner.",
+    "TEST-ONLY KEY PAIR, generated for this file; the private half was discarded after signing (it is not committed, and nothing can re-sign this vector). NEVER provision the public key on any cell.",
+    "Verifiers (booking/payment in ticketing-system common, InnRewards, market-place) pin this file: the compact must",
+    "verify with publicKeyPem under RS256 at verifyAt, yield exactly expectedClaims, and a verifier configured for",
+    "any audience other than expectedAudience must refuse it. Every mutation in 'mustReject' must be refused."
+  ],
+  "alg": "RS256",
+  "kid": "support-assertion-test-1",
+  "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAwgRoKD24Z/qqu6Ax+a+/\nPWgKfOe1KUS9nbz/h2c8NCE5Ex1HxVg7LNQ/a+BJaEtvjwg8i3t9WZr4hQZQsqbg\nM0BVL7K4oHXQh3/bBuyIg1niFST8dhvOBIdu77hJqSdxWEx2prd0m/oVvZGsPRI/\nQEz6VrLLpvg54w2cdsIk8ZNH00Ft5L8SaY4i5rkbEDKndniriIyCW+mXm/imWdXN\nvtihNPpZ0Y5SRhXJf8uePRL4/V3hH0DsxV434hm0PhfjpyReKd/4qIiKrFm86PQI\niova4EXhx8qRhCuqSO2rH+U57R/Z0RkPcxn1+I7JJBIodGtTNVr1OjYaep6dXHYX\nrwIDAQAB\n-----END PUBLIC KEY-----\n",
+  "issuedAt": "2026-09-30T10:00:00Z",
+  "verifyAt": "2026-09-30T10:00:30Z",
+  "expiredAt": "2026-09-30T10:01:06Z",
+  "clockSkewSeconds": 5,
+  "expectedAudience": "loyalty-support",
+  "compact": "eyJraWQiOiJzdXBwb3J0LWFzc2VydGlvbi10ZXN0LTEiLCJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJ1c2VyLXNlcnZpY2UiLCJhdWQiOlsibG95YWx0eS1zdXBwb3J0Il0sInN1YiI6IjdkMWUyZjNhLTRiNWMtNGQ2ZS04ZjcwLTlhMWIyYzNkNGU1ZiIsImp0aSI6InNhX3Rlc3QtdmVjdG9yLTAwMDEiLCJpYXQiOjE3OTA3NjI0MDAsImV4cCI6MTc5MDc2MjQ2MCwiYWdlbnQiOiJhZ2VudC5vbmVAaW5uYnVja3MuY28uenciLCJwZXJtIjoic3VwcG9ydC1sb3lhbHR5Om1hbmFnZSIsIm9wIjoiTE9ZQUxUWV9WT1VDSEVSX1JFU0VORCIsImxrIjoiU0xLLTdRMk05WCIsImNrIjp7InBob25lcyI6WyIrMjYzNzcxMjM0NTY3Il0sImVtYWlscyI6WyJ0YXJpcm9AZXhhbXBsZS5jb20iXSwidXNlclV1aWRzIjpbIjliMmY0YzFlLTZhN2QtNGUwYi04YzNmLTJkNWUxYTdiOWM0MCJdLCJidXllclV1aWRzIjpbXSwicmVmZXJlbmNlIjpudWxsfSwidGd0IjoiNWYwYzdiMmUtOGQxYS00YzNiLTllNmYtMGExYjJjM2Q0ZTVmIiwiaWRlbSI6IjNmNmMxYTUyLTdiMGUtNGQ4YS05YzIxLTVlNGY3YThiOWMwZCJ9.ci6_GFpdF2LVfYAf7NjjR-kIGTRM5e-_poP-lPaJ6qjpYbnVVjIUSUcdw3DHu5eeriF7D5pnkBxMbrqFKgYH1pxMa8T32slBhaFvI31Sz00rsMs1tAvQLbfM5BTW1yW7cij2XwAqDIAsqHiJwyxCSs2bQXzbzfH9hpXk4K4Nunf8Asvfj_PCEwN5RSW2-LzNPSeJvWo_iXpRNi7r0i6LSeIA9xO6SdlVHZoFa1tLtsWiVL2HYz075uuLZMXy-VaNJLCPxHxInHlGRSQMILdoh3PXSbo4rskbmI3rQMNd61Sl_xnAB7UCLZSrydfrqb1qQBIeFX9IjYY1fjfqvcMX2A",
+  "expectedHeader": {
+    "kid": "support-assertion-test-1",
+    "alg": "RS256"
+  },
+  "expectedClaims": {
+    "iss": "user-service",
+    "aud": [
+      "loyalty-support"
+    ],
+    "sub": "7d1e2f3a-4b5c-4d6e-8f70-9a1b2c3d4e5f",
+    "jti": "sa_test-vector-0001",
+    "iat": 1790762400,
+    "exp": 1790762460,
+    "agent": "agent.one@innbucks.co.zw",
+    "perm": "support-loyalty:manage",
+    "op": "LOYALTY_VOUCHER_RESEND",
+    "lk": "SLK-7Q2M9X",
+    "ck": {
+      "phones": [
+        "+263771234567"
+      ],
+      "emails": [
+        "tariro@example.com"
+      ],
+      "userUuids": [
+        "9b2f4c1e-6a7d-4e0b-8c3f-2d5e1a7b9c40"
+      ],
+      "buyerUuids": [],
+      "reference": null
+    },
+    "tgt": "5f0c7b2e-8d1a-4c3b-9e6f-0a1b2c3d4e5f",
+    "idem": "3f6c1a52-7b0e-4d8a-9c21-5e4f7a8b9c0d"
+  },
+  "mustReject": [
+    "the compact verified at expiredAt (past exp + skew)",
+    "the compact verified by a verifier whose audience is booking-support, payment-support or marketplace-support",
+    "the compact with any payload byte changed (signature fails)",
+    "the same header and payload re-signed with alg HS256 using the public key bytes as the secret (alg confusion)",
+    "the same header and payload with alg none and an empty signature"
+  ]
+}

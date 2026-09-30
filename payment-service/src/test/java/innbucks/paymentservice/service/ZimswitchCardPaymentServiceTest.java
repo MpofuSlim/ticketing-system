@@ -252,6 +252,32 @@ class ZimswitchCardPaymentServiceTest {
     }
 
     @Test
+    @DisplayName("an order priced in a currency the merchant account does not settle in is refused before any checkout")
+    void startCheckout_foreignCurrencyOrder_isRefusedBeforeTheSlot() {
+        // The staging case: a ZAR voucher on the USD cell. Nothing may be
+        // opened upstream or in the ledger for money the account cannot take.
+        OrderGatewayRegistry registry = mock(OrderGatewayRegistry.class);
+        innbucks.paymentservice.order.OrderGateway gateway = mock(innbucks.paymentservice.order.OrderGateway.class);
+        when(registry.forType(innbucks.paymentservice.order.OrderType.LOYALTY_VOUCHER)).thenReturn(gateway);
+        when(gateway.fetch("VCH-4F9A1C22B7D3")).thenReturn(new innbucks.paymentservice.order.OrderSnapshot(
+                "VCH-4F9A1C22B7D3", 10000, "ZAR", "+263771234567", "VCH", "Gift voucher 4F9A1C22B7D3", true));
+        ZimswitchCardPaymentService usdCell = new ZimswitchCardPaymentService(
+                records, client, properties, registry, resolution, metrics);
+        org.springframework.test.util.ReflectionTestUtils.setField(usdCell, "cellCurrency", "USD");
+        when(client.canStartCheckout()).thenReturn(true);
+
+        assertThatThrownBy(() -> usdCell.startCheckout(
+                innbucks.paymentservice.order.OrderType.LOYALTY_VOUCHER, "VCH-4F9A1C22B7D3"))
+                .isInstanceOf(InvalidPaymentRequestException.class)
+                .hasMessage("Card cannot take payment in ZAR — please use another payment method")
+                .satisfies(e -> assertThat(((InvalidPaymentRequestException) e).getStatusCode()).isEqualTo(422));
+
+        verify(gateway, never()).extendHold(anyString());
+        verify(records, never()).openPending(any());
+        verify(client, never()).prepareCheckout(anyString(), anyLong(), anyString());
+    }
+
+    @Test
     @DisplayName("HALF-PROVISIONED rail (credentials but no shopperResultUrl): 503 and NO payment slot burned")
     void startCheckout_halfProvisionedNeverClaimsTheSlot() {
         // The exact state a cell is in after credentials land but the FE's

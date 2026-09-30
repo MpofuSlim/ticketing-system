@@ -13,6 +13,9 @@ public interface StaffProfileRepository extends JpaRepository<StaffProfile, Long
 
     List<StaffProfile> findAllByUserIdIn(Collection<Long> userIds);
 
+    /** Staff whose CONTACT number is one of these — customer support's staff-target check. */
+    List<StaffProfile> findAllByContactPhoneIn(Collection<String> contactPhones);
+
     /**
      * Staff accounts a caller created in the window — the per-caller create
      * quota. {@code users.created_by} is stamped by JPA auditing with the

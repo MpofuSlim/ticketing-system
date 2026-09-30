@@ -105,7 +105,7 @@ public final class PermissionCatalog {
     public static final String DEVICE_SECURITY_FRAUD = "device-security:fraud";
 
     /**
-     * Customer support for the marketplace and loyalty products (V45). These are
+     * Customer support for the marketplace and loyalty products (V47). These are
      * ENFORCED IN OTHER SERVICES — marketplace-service ({@code /marketplace/support/**})
      * and loyalty-service ({@code /loyalty/support/**}) read the {@code perms} claim
      * and gate on {@code hasAuthority}. Nothing in user-service checks them; they
@@ -126,6 +126,21 @@ public final class PermissionCatalog {
     public static final String LOYALTY_SUPPORT_MANAGE = "loyalty-support:manage";
     public static final String LOYALTY_SUPPORT_SUPERVISE = "loyalty-support:supervise";
     public static final String CUSTOMER_MESSAGES_SEND = "customer-messages:send";
+
+    /**
+     * Unified customer support (V46) — the Foundry console section of
+     * {@code /admin/support/**}. Tiered like device security: an agent reads and
+     * does the routine things (unlock, send a reset code); resetting a second
+     * factor is the classic help-desk takeover step (stolen password + a phone
+     * call), so it is a SUPERVISOR code of its own. {@code support-staff-targets:manage}
+     * is what lets a supervisor act at all when a lookup matches an InnBucks
+     * staff account. None is wildcard-reserved: they are granted to the
+     * CALL_CENTER built-ins by migration, and an operator may compose them.
+     */
+    public static final String SUPPORT_CONSOLE_READ = "support-console:read";
+    public static final String SUPPORT_CONSOLE_MANAGE = "support-console:manage";
+    public static final String SUPPORT_CONSOLE_MFA_RESET = "support-console:mfa:reset";
+    public static final String SUPPORT_STAFF_TARGETS_MANAGE = "support-staff-targets:manage";
 
     /**
      * Who a permission's authority reaches — the half of a permission's meaning
@@ -230,7 +245,15 @@ public final class PermissionCatalog {
                 entry(LOYALTY_SUPPORT_SUPERVISE, "Adjust or reverse a customer's points, unblock a membership, "
                         + "and review every agent's loyalty support activity", Scope.PLATFORM),
                 entry(CUSTOMER_MESSAGES_SEND, "Type and send an SMS or WhatsApp message to a customer on "
-                        + "record from a support screen", Scope.PLATFORM))) {
+                        + "record from a support screen", Scope.PLATFORM),
+                entry(SUPPORT_CONSOLE_READ, "Look customers up in customer support and see their Foundry console "
+                        + "account: status, roles, organizations, 2FA, lockout and service requests", Scope.PLATFORM),
+                entry(SUPPORT_CONSOLE_MANAGE, "Unlock a Foundry console account and send it a password-reset code "
+                        + "from customer support", Scope.PLATFORM),
+                entry(SUPPORT_CONSOLE_MFA_RESET, "Reset a Foundry console account's two-factor sign-in from customer "
+                        + "support (supervisor)", Scope.PLATFORM),
+                entry(SUPPORT_STAFF_TARGETS_MANAGE, "Act in customer support when a lookup matches an InnBucks staff "
+                        + "account (supervisor)", Scope.PLATFORM))) {
             if (all.put(e.code(), e) != null) {
                 throw new IllegalStateException("Duplicate permission code in the catalog: " + e.code());
             }
