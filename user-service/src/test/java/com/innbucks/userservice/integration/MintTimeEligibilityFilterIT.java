@@ -71,6 +71,6 @@ class MintTimeEligibilityFilterIT extends StaffItSupport {
         JsonNode staff = claims(signIn(agent.getEmail()).at("/token").asText());
         assertThat(strings(staff.get("roles"))).containsExactly("CALL_CENTER_AGENT");
         assertThat(strings(staff.get("perms"))).containsExactlyInAnyOrder("device-security:read",
-                "device-security:manage");
+                "device-security:manage", "support-console:read", "support-console:manage");
     }
 }

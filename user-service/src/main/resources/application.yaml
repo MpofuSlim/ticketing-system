@@ -236,6 +236,23 @@ staff:
   # who are not staff-eligible.
   eligibility-enforcement: ${STAFF_ELIGIBILITY_ENFORCEMENT:watch}
 
+# Unified customer support (/admin/support/**, V45/V46). Keys live in
+# deploy/cells/cell.<iso>.env (k3s envFrom) — EXCEPT the assertion private key,
+# which comes only from the dedicated user-service-support-signing Secret.
+support:
+  enabled: ${SUPPORT_ENABLED:true}
+  # How long a lookup can back a detail read or a write.
+  lookup-binding-ttl: ${SUPPORT_LOOKUP_BINDING_TTL:PT30M}
+  limiter:
+    short-window: ${SUPPORT_LIMIT_SHORT_WINDOW:PT10M}
+    short-window-max: ${SUPPORT_LIMIT_SHORT_WINDOW_MAX:60}
+    daily-max: ${SUPPORT_LIMIT_DAILY_MAX:400}
+  assertion:
+    # RSA PKCS#8 PEM. Blank = HALF-PROVISIONED (boot ERROR); malformed = boot fails.
+    private-key: ${SUPPORT_ASSERTION_PRIVATE_KEY:}
+    key-id: ${SUPPORT_ASSERTION_KEY_ID:support-assertion-1}
+    ttl: ${SUPPORT_ASSERTION_TTL:PT60S}
+
 whatsapp:
   base-url: ${WHATSAPP_GATEWAY_URL:http://localhost:8089}
   api-key: ${WHATSAPP_API_KEY:change-me-whatsapp-api-key}

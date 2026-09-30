@@ -38,7 +38,8 @@ public class OtpService {
 
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
-    static final Duration OTP_TTL = Duration.ofMinutes(5);
+    /** How long an OTP works. Public: customer support tells the agent the same number the email states. */
+    public static final Duration OTP_TTL = Duration.ofMinutes(5);
     static final Duration RETRY_WINDOW = Duration.ofMinutes(10);
     static final int RETRY_LIMIT = 3;
     static final Duration LOCKOUT_DURATION = Duration.ofMinutes(30);

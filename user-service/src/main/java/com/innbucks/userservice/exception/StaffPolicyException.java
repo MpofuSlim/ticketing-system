@@ -304,6 +304,11 @@ public class StaffPolicyException extends RuntimeException {
                 Map.of("retryAfterSeconds", seconds), seconds);
     }
 
+    /** {@link #humanDuration} for the other refusal types in this package's callers. */
+    public static String humanDurationPublic(long seconds) {
+        return humanDuration(seconds);
+    }
+
     /** "3 hours", "12 minutes", "1 minute" — rounded UP, so the wait is never understated. */
     static String humanDuration(long seconds) {
         if (seconds >= 3600) {

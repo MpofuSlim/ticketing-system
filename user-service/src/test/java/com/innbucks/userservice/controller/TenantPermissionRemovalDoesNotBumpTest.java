@@ -84,7 +84,8 @@ class TenantPermissionRemovalDoesNotBumpTest {
     @DisplayName("ADDING a code signs nobody out")
     void additionDoesNotBump() throws Exception {
         setPermissions("CALL_CENTER_AGENT",
-                "{\"permissions\":[\"device-security:read\",\"device-security:manage\",\"users:read\"]}");
+                "{\"permissions\":[\"device-security:read\",\"device-security:manage\","
+                        + "\"support-console:read\",\"support-console:manage\",\"users:read\"]}");
         assertThat(h.bumper.bumpedRoles).isEmpty();
     }
 
