@@ -480,15 +480,34 @@ class InnbucksPaymentServiceTest {
     }
 
     @Test
-    void bookingWithExplicitCurrency_winsOverCellCurrency() {
+    void orderPricedInAnotherCurrency_isRefused_beforeAnyCodeOrLedgerRow() {
+        // The code API takes cents and NO currency: the code is charged in the
+        // merchant account's currency (the cell's). A USD-priced booking on a
+        // KES cell used to mint a code for 4000 KES-account cents and confirm
+        // it as "USD 40.00 paid". Refused now, with nothing opened upstream.
         service = serviceWith("KES");
         when(bookings.getBooking(bookingId)).thenReturn(Map.of(
                 "totalAmount", new BigDecimal("40.00"), "currency", "USD"));
+
+        InvalidPaymentRequestException ex = assertThrows(InvalidPaymentRequestException.class,
+                () -> processBooking("+254712345678"));
+
+        assertEquals(422, ex.getStatusCode());
+        assertEquals("InnBucks cannot take payment in USD — please use another payment method", ex.getMessage());
+        verify(records, never()).openPending(any());
+        verifyNoInteractions(innbucksApi);
+    }
+
+    @Test
+    void orderCurrency_matchingTheCell_isAcceptedCaseInsensitively() {
+        service = serviceWith("KES");
+        when(bookings.getBooking(bookingId)).thenReturn(Map.of(
+                "totalAmount", new BigDecimal("40.00"), "currency", " kes "));
         when(innbucksApi.generatePaymentCode(anyString(), anyString(), anyLong()))
                 .thenReturn(approved("701285660", "1616800", 4000L));
 
         InnbucksPaymentResponse resp = processBooking("+254712345678");
 
-        assertEquals("USD", resp.getCurrency(), "an explicit booking currency must win over the cell default");
+        assertEquals("KES", resp.getCurrency(), "the ledger stores the canonical code");
     }
 }
