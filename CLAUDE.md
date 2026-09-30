@@ -406,6 +406,23 @@ permission, where "holds everything it holds" would be vacuously true.
   `PLATFORM_STAFF_ROLES`, and never name a support role in a `hasRole()`**:
   support reaches customer data only through user-service endpoints that check a
   permission.
+- **Support permissions enforced OUTSIDE user-service (V47).**
+  - **The codes:**
+    - `marketplace-support:read|manage|supervise`;
+    - `loyalty-support:read|manage|supervise`;
+    - `customer-messages:send`.
+  - **Where they are checked:**
+    - marketplace-service (`/marketplace/support/**`) and loyalty-service (`/loyalty/support/**`) read the token's `perms` claim and gate on `hasAuthority`.
+    - Nothing in user-service checks them. They live in `PermissionCatalog` only because it is the fleet's one vocabulary, and `role_permissions` can reference nothing else.
+    - "Support reaches customer data only through endpoints that check a permission" now covers those two services too. They still never name a support role in a `hasRole()`.
+  - **The grants:**
+    - AGENT: `read` + `manage` for both products, plus `customer-messages:send`.
+    - SUPERVISOR: the agent's grants plus both `supervise` codes.
+    - FRAUD_DESK: nothing new (it is an add-on).
+    - SUPER_ADMIN: all of them through `*`.
+  - **Marketplace dispute DECISIONS stay with SUPER_ADMIN/finance** (owner's call, 2026-09-30). Resolving a dispute as REFUND records a transfer reference, i.e. asserts money already left. So V43's "dispute decisions" for the supervisor does not reach marketplace until a decide-then-pay step exists.
+  - **A new code grants nothing until the other service ships its endpoint.** A grant is also picked up only at the agent's next sign-in or refresh: a grant does not bump `tokenVersion`.
+  - **Deploy order:** either repo can deploy first. The support endpoints simply 403 until tokens carry the codes.
 - **Staff reset their password by EMAIL only.** `PasswordResetService` makes both
   phone steps no-ops (the generic 200 / "Invalid or expired code") for any
   staff-role holder — a phone on a staff account is a takeover path.

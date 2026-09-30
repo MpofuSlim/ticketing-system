@@ -1,5 +1,6 @@
 package com.innbucks.userservice.integration;
 
+import com.innbucks.userservice.testsupport.BuiltInRoleRows;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.innbucks.userservice.testsupport.StaffItSupport;
 import org.junit.jupiter.api.Test;
@@ -69,8 +70,7 @@ class StaffFirstSignInIT extends StaffItSupport {
         JsonNode claims = claims(session.at("/token").asText());
         assertThat(strings(claims.get("roles"))).containsExactly("CALL_CENTER_AGENT");
         assertThat(strings(claims.get("perms")))
-                .containsExactlyInAnyOrder("device-security:read", "device-security:manage",
-                        "support-console:read", "support-console:manage");
+                .containsExactlyInAnyOrderElementsOf(BuiltInRoleRows.GRANTS.get("CALL_CENTER_AGENT"));
         assertThat(claims.has("orgId")).isFalse();
         assertThat(session.at("/organizationId").isMissingNode() || session.at("/organizationId").isNull()).isTrue();
 

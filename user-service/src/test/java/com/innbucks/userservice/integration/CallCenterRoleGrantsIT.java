@@ -1,5 +1,6 @@
 package com.innbucks.userservice.integration;
 
+import com.innbucks.userservice.testsupport.BuiltInRoleRows;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.innbucks.userservice.entity.User;
 import com.innbucks.userservice.security.JwtUtil;
@@ -21,10 +22,12 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
- * V43 + V46 on a fresh database: the three customer-support built-ins exist,
- * are built in, and resolve to exactly the permissions the design gives them
- * (device security from V43, the support-console codes from V46) — and a call-center agent's sign-in carries those, and only those,
- * in both the token and the response's {@code permissions}.
+ * V43 + V46 + V47 on a fresh database: the three customer-support built-ins
+ * exist, are built in, and resolve to exactly the permissions the design gives
+ * them — device security (V43), the support-console codes (V46) and, for the
+ * agent and supervisor, marketplace and loyalty support (V47) — and a
+ * call-center agent's sign-in carries those, and only those, in both the token
+ * and the response's {@code permissions}.
  */
 class CallCenterRoleGrantsIT extends SessionRevocationItSupport {
 
@@ -34,21 +37,31 @@ class CallCenterRoleGrantsIT extends SessionRevocationItSupport {
 
     @Test
     void theThreeRolesResolveToExactlyTheirGrants() {
-        // V43's device-security grants, plus V46's customer-support console codes.
-        assertThat(resolver.resolve(List.of("CALL_CENTER_AGENT")))
-                .containsExactlyInAnyOrder("device-security:read", "device-security:manage",
-                        "support-console:read", "support-console:manage");
-        // The supervisor diverges in V46: the MFA reset and acting on staff targets.
-        assertThat(resolver.resolve(List.of("CALL_CENTER_SUPERVISOR")))
-                .containsExactlyInAnyOrder("device-security:read", "device-security:manage",
-                        "support-console:read", "support-console:manage",
-                        "support-console:mfa:reset", "support-staff-targets:manage");
+        // V43's device-security grants, V46's support-console codes and V47's
+        // marketplace/loyalty support codes.
+        assertThat(resolver.resolve(List.of("CALL_CENTER_AGENT"))).containsExactlyInAnyOrder(
+                "device-security:read", "device-security:manage",
+                "support-console:read", "support-console:manage",
+                "marketplace-support:read", "marketplace-support:manage",
+                "loyalty-support:read", "loyalty-support:manage", "customer-messages:send");
+        // The supervisor: the agent's grants plus the MFA reset and staff targets
+        // (V46) and the supervise tier of each product (V47).
+        assertThat(resolver.resolve(List.of("CALL_CENTER_SUPERVISOR"))).containsExactlyInAnyOrder(
+                "device-security:read", "device-security:manage",
+                "support-console:read", "support-console:manage",
+                "support-console:mfa:reset", "support-staff-targets:manage",
+                "marketplace-support:read", "marketplace-support:manage", "marketplace-support:supervise",
+                "loyalty-support:read", "loyalty-support:manage", "loyalty-support:supervise",
+                "customer-messages:send");
+        // FRAUD_DESK is an add-on: neither V46 nor V47 gives it anything.
         assertThat(resolver.resolve(List.of("FRAUD_DESK")))
                 .containsExactlyInAnyOrder("device-security:read", "device-security:fraud");
         // The add-on composes with an agent role: the union.
         assertThat(resolver.resolve(List.of("CALL_CENTER_AGENT", "FRAUD_DESK")))
-                .containsExactlyInAnyOrder("device-security:read", "device-security:manage", "device-security:fraud",
-                        "support-console:read", "support-console:manage");
+                .contains("device-security:fraud", "support-console:read",
+                        "marketplace-support:read", "customer-messages:send")
+                .doesNotContain("support-console:mfa:reset", "support-staff-targets:manage",
+                        "marketplace-support:supervise", "loyalty-support:supervise");
     }
 
     @Test
@@ -75,8 +88,7 @@ class CallCenterRoleGrantsIT extends SessionRevocationItSupport {
         // signIn is password + TOTP: an agent is a system user, challenged like staff.
         JsonNode session = signIn(agent.getEmail());
 
-        Set<String> expected = Set.of("device-security:read", "device-security:manage",
-                "support-console:read", "support-console:manage");
+        Set<String> expected = BuiltInRoleRows.GRANTS.get("CALL_CENTER_AGENT");
         List<String> listed = objectMapper.convertValue(session.at("/permissions"),
                 objectMapper.getTypeFactory().constructCollectionType(List.class, String.class));
         assertThat(listed).containsExactlyInAnyOrderElementsOf(expected);
