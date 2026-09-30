@@ -369,6 +369,33 @@ class OrganizationServiceTest {
         }
 
         @Test
+        @DisplayName("SUPER_ADMIN reads any organization and its members without belonging to it")
+        void superAdminReadsEveryOrganization() {
+            User root = person(9, "root@innbucks.co.zw");
+            root.setRoles(User.roleNames(User.Role.SUPER_ADMIN));
+
+            assertThat(service.get(root, o.getId()).name()).isEqualTo("Chikwanha Traders");
+            assertThat(service.get(root, o.getId()).yourRole()).isNull();
+            assertThat(service.listMembers(root, o.getId())).hasSize(3);
+            // An unknown id is still the ordinary 404.
+            assertThatThrownBy(() -> service.get(root, UUID.randomUUID()))
+                    .satisfies(t -> assertCode(t, "organization_not_found"));
+            assertThatThrownBy(() -> service.listMembers(root, UUID.randomUUID()))
+                    .satisfies(t -> assertCode(t, "organization_not_found"));
+        }
+
+        @Test
+        @DisplayName("the SUPER_ADMIN read bypass does not reach writes")
+        void superAdminBypassIsReadOnly() {
+            User root = person(9, "root@innbucks.co.zw");
+            root.setRoles(User.roleNames(User.Role.SUPER_ADMIN));
+
+            assertThatThrownBy(() -> service.addMember(root, o.getId(),
+                    add("chipo@example.com", OrganizationMember.Role.STAFF)))
+                    .satisfies(t -> assertCode(t, "organization_not_found"));
+        }
+
+        @Test
         @DisplayName("an owner can add any role; the new member exists afterwards")
         void ownerAddsAdmin() {
             service.addMember(owner, o.getId(), add("chipo@example.com", OrganizationMember.Role.ADMIN));

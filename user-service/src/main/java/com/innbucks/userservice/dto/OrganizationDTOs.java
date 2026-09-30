@@ -39,7 +39,8 @@ public final class OrganizationDTOs {
             @Schema(example = "BR-2024-0417", nullable = true) String registrationNumber,
             @Schema(example = "ACTIVE") String status,
             @Schema(example = "[\"marketplace\"]") List<String> products,
-            @Schema(example = "OWNER", description = "The caller's role in this organization.") String yourRole) {}
+            @Schema(example = "OWNER", nullable = true, description = "The caller's role in this organization. "
+                    + "Null for a SUPER_ADMIN reading a business it does not belong to.") String yourRole) {}
 
     @Data
     @Schema(name = "UpdateOrganizationRequest",

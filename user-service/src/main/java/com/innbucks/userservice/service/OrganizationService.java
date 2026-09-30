@@ -294,6 +294,11 @@ public class OrganizationService {
 
     @Transactional(readOnly = true)
     public OrganizationDTOs.OrganizationResponse get(User caller, UUID orgId) {
+        // SUPER_ADMIN oversees every business and never belongs to one, so the
+        // membership lookup would answer it 404 for every organization.
+        if (isPlatformOwner(caller)) {
+            return toResponse(requireOrganization(orgId), null);
+        }
         OrganizationMember me = membershipOf(caller, orgId);
         return toResponse(requireOrganization(orgId), me);
     }
@@ -330,8 +335,12 @@ public class OrganizationService {
     /** OWNER and ADMIN only: a member list is colleagues' contact details. */
     @Transactional(readOnly = true)
     public List<OrganizationDTOs.MemberResponse> listMembers(User caller, UUID orgId) {
-        OrganizationMember me = membershipOf(caller, orgId);
-        requireAtLeast(me, OrganizationMember.Role.ADMIN, "Only an owner or admin can see the member list.");
+        if (isPlatformOwner(caller)) {
+            requireOrganization(orgId);   // an unknown id is still a 404
+        } else {
+            OrganizationMember me = membershipOf(caller, orgId);
+            requireAtLeast(me, OrganizationMember.Role.ADMIN, "Only an owner or admin can see the member list.");
+        }
         List<OrganizationMember> all = members.findByOrganizationIdOrderByCreatedAtAsc(orgId);
         Map<Long, User> people = users.findAllById(all.stream().map(OrganizationMember::getUserId).toList())
                 .stream().collect(Collectors.toMap(User::getId, u -> u));
@@ -626,6 +635,14 @@ public class OrganizationService {
                         .orElse(false);
     }
 
+    /**
+     * SUPER_ADMIN READS every organization (owner decision, 2026-09-30: no GET
+     * may scope the platform owner out). Writes keep {@link #membershipOf}.
+     */
+    private static boolean isPlatformOwner(User caller) {
+        return caller != null && caller.hasRole(User.Role.SUPER_ADMIN);
+    }
+
     private OrganizationMember membershipOf(User caller, UUID orgId) {
         if (caller == null || caller.getId() == null || orgId == null) {
             throw OrganizationException.notFound();
@@ -701,7 +718,7 @@ public class OrganizationService {
     private OrganizationDTOs.OrganizationResponse toResponse(Organization o, OrganizationMember me) {
         return new OrganizationDTOs.OrganizationResponse(o.getId(), o.getName(), o.getContactEmail(),
                 o.getContactPhone(), o.getAddress(), o.getRegistrationNumber(), o.getStatus().name(),
-                activeProducts(o.getId()), me.getRole().name());
+                activeProducts(o.getId()), me == null ? null : me.getRole().name());
     }
 
     private static OrganizationDTOs.MemberResponse toMember(OrganizationMember m, User u) {
