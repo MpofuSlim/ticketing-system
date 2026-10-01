@@ -65,6 +65,7 @@ class JwtFilterTokenVersionTest {
         JwtBuilder builder = Jwts.builder()
                 .subject("user@example.com")
                 .claim("phoneNumber", "+263771234567")
+                .claim("roles", java.util.List.of("CUSTOMER"))
                 .issuer(JwtUtil.TOKEN_ISSUER)
                 .audience().add(JwtUtil.TOKEN_AUDIENCE).and()
                 .issuedAt(new Date())
