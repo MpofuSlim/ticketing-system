@@ -219,13 +219,13 @@ are kept in lock-step per `docs/fleet-wiring.md` in the innbucks-loans repo.
   per call), and the Swagger dropdown's `loans-service` entry fails to load.
 - **Loans' anonymous `forgot-password` is edge-denied** (`loans-forgot-password-deny`,
   before the `/lending/**` route). It takes a username alone and replaces the
-  password BEFORE sending the new one by SMS — and loans has no SMS rail in the
-  cell (`INNBUCKS_GATEWAY_URL` is left out of its Secret on purpose), so
-  published it is a one-request lockout of any known account, `admin` first; no
-  rate limit stops a single request. A super-admin hands out passwords through
-  loans' authenticated `POST /lending/v1/users/{id}/password-reset` over EMAIL or
-  WHATSAPP. Lift the deny only once loans' SMS reaches people in the cell, and
-  then give the path an IP-keyed, fail-safe route shaped like
+  password BEFORE sending the new one by SMS (loans' SMS goes through the
+  InnBucks notification API on its own `INNBUCKS_NOTIFY_*` keys), so published
+  behind only the bearer-keyed limiter, which an anonymous caller picks for
+  itself, it lets anyone change any known account's password, `admin` first. A
+  super-admin hands out passwords through loans' authenticated
+  `POST /lending/v1/users/{id}/password-reset` over EMAIL or WHATSAPP. Lift the
+  deny only by giving the path an IP-keyed, fail-safe route shaped like
   `auth-password-reset-route`, not the bearer-keyed catch-all. Sign-in stays on
   the catch-all, like the fleet's own login: loans locks an account after seven
   wrong passwords, and a Redis outage must not stop sign-in.
