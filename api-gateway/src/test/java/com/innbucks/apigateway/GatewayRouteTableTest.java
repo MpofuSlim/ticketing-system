@@ -42,7 +42,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class GatewayRouteTableTest {
 
     private static final List<String> EXPECTED_ROUTE_IDS = List.of(
-            "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
+            "auth-customer-lookup-route", "auth-customer-register-route", "auth-customer-route", "auth-register-route",
             "auth-otp-route", "auth-exchange-route", "auth-mfa-route", "auth-password-reset-route",
             "auth-device-security-route", "auth-staff-invite-route",
             "user-auth-route", "device-security-partner-route",
@@ -91,7 +91,7 @@ class GatewayRouteTableTest {
             Map.entry("loans-service-route", "/lending/**"));
 
     private static final List<String> RATE_LIMITED_ROUTES = List.of(
-            "auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
+            "auth-customer-lookup-route", "auth-customer-register-route", "auth-customer-route", "auth-register-route",
             "auth-otp-route", "auth-exchange-route", "auth-mfa-route", "auth-password-reset-route",
             "auth-device-security-route", "auth-staff-invite-route", "device-security-partner-route",
             "user-admin-route", "user-notifications-route", "user-organizations-route",
@@ -123,6 +123,8 @@ class GatewayRouteTableTest {
             // Unauthenticated and session-minting: the per-IP cap is the only
             // brake on hammering the replay guard and the find-or-create write.
             "auth-exchange-route",
+            // Unauthenticated and sends a real SMS OTP on every call.
+            "auth-customer-register-route",
             "payment-service-read-route", "payments-innbucks-write-route",
             "ecocash-notify-write-route", "payment-service-write-route",
             // Not SMS-cost or payment, but the same fail-open hazard: this route
@@ -496,7 +498,7 @@ class GatewayRouteTableTest {
     void authSensitiveSubRoutesPrecedeTheAuthCatchAll() {
         List<String> order = orderedIds();
         int catchAll = order.indexOf("user-auth-route");
-        List.of("auth-customer-lookup-route", "auth-customer-route", "auth-register-route",
+        List.of("auth-customer-lookup-route", "auth-customer-register-route", "auth-customer-route", "auth-register-route",
                         "auth-otp-route", "auth-exchange-route", "auth-mfa-route", "auth-password-reset-route",
                         "auth-device-security-route", "auth-staff-invite-route")
                 .forEach(id -> assertThat(order.indexOf(id))
@@ -506,6 +508,9 @@ class GatewayRouteTableTest {
         // must be listed first or the broader route would swallow it.
         assertThat(order.indexOf("auth-customer-lookup-route"))
                 .as("send-money lookup must precede the broader /auth/customer/**")
+                .isLessThan(order.indexOf("auth-customer-route"));
+        assertThat(order.indexOf("auth-customer-register-route"))
+                .as("tier-1 registration must precede the broader /auth/customer/**")
                 .isLessThan(order.indexOf("auth-customer-route"));
     }
 
@@ -517,6 +522,11 @@ class GatewayRouteTableTest {
                 .containsExactly("/auth/customer/**");
         assertThat(predicateArgs("auth-register-route", "Path"))
                 .containsExactly("/auth/register");
+        // Exact path + POST-only: the tier 2-4 steps under
+        // /auth/customer/register/tier* send no SMS and keep the catch-all.
+        assertThat(predicateArgs("auth-customer-register-route", "Path"))
+                .containsExactly("/auth/customer/register");
+        assertThat(predicateArgs("auth-customer-register-route", "Method")).containsExactly("POST");
         // Exact path + POST-only: anything else added under /auth later must
         // fall through to the catch-all rather than inherit a route shaped for
         // one unauthenticated session-minting call.
@@ -577,7 +587,7 @@ class GatewayRouteTableTest {
         // bucket per request and the per-IP cap never engages. Pin the
         // hardcoded-IP resolver on all three routes so a refactor that swaps
         // the resolver back fails CI instead of reopening the bypass.
-        List.of("auth-otp-route", "auth-mfa-route", "auth-password-reset-route",
+        List.of("auth-otp-route", "auth-customer-register-route", "auth-mfa-route", "auth-password-reset-route",
                 "auth-device-security-route", "auth-staff-invite-route",
                 "device-security-partner-route").forEach(id -> {
             boolean usesPreAuthIpResolver = route(id).getFilters().stream()
