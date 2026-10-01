@@ -24,8 +24,6 @@
 #                               which pays on booking).
 #   SPRING_PROFILES_ACTIVE   -> prod,json would replace `api` below.
 #   BOOTSTRAP_ADMIN_PASSWORD -> would seed the loans SUPER_ADMIN.
-#   INNBUCKS_GATEWAY_URL     -> points at a retired host; loans' SMS would send
-#                               its bearer and API key there over plain HTTP.
 #   WHATSAPP_API_KEY, and every other fleet secret, would sit in this process
 #   for nothing.
 # So the pod gets exactly two sources: its own Secret `loans-service-secrets`

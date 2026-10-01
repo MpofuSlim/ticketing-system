@@ -282,18 +282,18 @@ Once the admin exists, remove `BOOTSTRAP_ADMIN_PASSWORD` from
 `loans.zw.local.env` and re-run step 2 (with its restart).
 
 **Passwords in the cell.** Loans sends passwords by SMS — the one a new user is
-created with, and the one forgot-password sets — and it has no working SMS rail
-here (`loans.example.env` leaves `INNBUCKS_GATEWAY_URL` out on purpose), so
-those never reach anyone. That is why the gateway edge-denies
-`/lending/*/auth/forgot-password` (`loans-forgot-password-deny`, an empty 404):
-the endpoint takes a username alone and replaces the password BEFORE sending
-it, so published it would lock any known account, `admin` first, out with a
-single request. To hand a user a password, a super-admin creates the user and
-then calls `POST /lending/v1/users/{id}/password-reset` with
-`{"channel":"EMAIL"}` or `{"channel":"WHATSAPP"}` (it delivers first and changes
-nothing if delivery fails), which needs the `INNBUCKS_NOTIFY_*` or
-`WHATSAPP_API_KEY` keys in `loans.zw.local.env`. Lift the deny only once loans'
-SMS works here, and then move the path onto an IP-keyed, fail-safe route like
+created with, and the one forgot-password sets — through the InnBucks
+notification API, with loans' own `INNBUCKS_NOTIFY_*` keys in
+`loans.zw.local.env` (without them those messages reach nobody). The gateway
+still edge-denies `/lending/*/auth/forgot-password` (`loans-forgot-password-deny`,
+an empty 404): the endpoint takes a username alone and replaces the password
+BEFORE sending it, so published without a limiter it would let one request per
+attempt change any known account's password, `admin` first. To hand a user a
+password, a super-admin creates the user and then calls
+`POST /lending/v1/users/{id}/password-reset` with `{"channel":"EMAIL"}` or
+`{"channel":"WHATSAPP"}` (it delivers first and changes nothing if delivery
+fails), which needs the `INNBUCKS_NOTIFY_*` or `WHATSAPP_API_KEY` keys. Lift the
+deny only by moving the path onto an IP-keyed, fail-safe route like
 `auth-password-reset-route` instead of the `/lending/**` catch-all.
 
 **After a loans merge** (that commit's innbucks-loans Release run green), pin it —
