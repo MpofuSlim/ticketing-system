@@ -83,6 +83,17 @@ public class JwtFilter extends OncePerRequestFilter {
                 writeUnauthorized(response, "INVALID_TOKEN", "Token is invalid or expired");
                 return;
             }
+            // Signature-valid is not enough: user-service signs refresh, MFA and
+            // phone-scoped OTP/loyalty tokens with the same key, issuer and
+            // audience. Only an ACCESS token is a login here — a refresh token
+            // used to work as a 7-day one, and a roles-empty OTP token
+            // authenticated its holder on every "logged in" endpoint. Same
+            // response as an expired token: the client's answer is to sign in.
+            if (!jwtUtil.isAccessToken(token)) {
+                log.warn("Rejected non-access token path={}", request.getRequestURI());
+                writeUnauthorized(response, "INVALID_TOKEN", "Token is invalid or expired");
+                return;
+            }
 
             // Shared logout denylist. The token is signature/claim-valid but may
             // have been explicitly revoked on logout (user-service publishes the
