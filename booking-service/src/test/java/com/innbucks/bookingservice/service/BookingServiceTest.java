@@ -1035,7 +1035,7 @@ class BookingServiceTest {
                 .thenReturn(Optional.of(confirmedBooking("alice@example.com", "+263782606983")));
 
         BookingResponseDTO dto = service.getByConfirmationNumber(
-                "INN-20260502-AB12CD", "alice@example.com", null, false);
+                "INN-20260502-AB12CD", "alice@example.com", null, false, null);
 
         assertEquals("INN-20260502-AB12CD", dto.getConfirmationNumber());
         assertEquals(1, dto.getItems().size());
@@ -1054,7 +1054,7 @@ class BookingServiceTest {
                 .thenReturn(Optional.of(confirmedBooking(null, "+263782606983")));
 
         BookingResponseDTO dto = service.getByConfirmationNumber(
-                "INN-20260502-AB12CD", null, "+263782606983", false);
+                "INN-20260502-AB12CD", null, "+263782606983", false, null);
 
         assertEquals("INN-20260502-AB12CD", dto.getConfirmationNumber());
     }
@@ -1071,7 +1071,7 @@ class BookingServiceTest {
         // caller can't even tell the confirmation number is real.
         assertThrows(com.innbucks.bookingservice.exception.NotFoundException.class,
                 () -> service.getByConfirmationNumber(
-                        "INN-20260502-AB12CD", "mallory@example.com", "+263770000000", false));
+                        "INN-20260502-AB12CD", "mallory@example.com", "+263770000000", false, null));
     }
 
     @Test
@@ -1082,9 +1082,9 @@ class BookingServiceTest {
         when(bookingRepo.findByConfirmationNumber("INN-20260502-AB12CD"))
                 .thenReturn(Optional.of(confirmedBooking("alice@example.com", "+263782606983")));
 
-        // Admin identity matches neither email nor phone, but isAdmin=true wins.
+        // Staff identity matches neither email nor phone, but platformWide=true wins.
         BookingResponseDTO dto = service.getByConfirmationNumber(
-                "INN-20260502-AB12CD", "support@innbucks.com", null, true);
+                "INN-20260502-AB12CD", "support@innbucks.com", null, true, null);
 
         assertEquals("INN-20260502-AB12CD", dto.getConfirmationNumber());
     }
@@ -1098,7 +1098,99 @@ class BookingServiceTest {
                 .thenReturn(Optional.empty());
 
         assertThrows(com.innbucks.bookingservice.exception.NotFoundException.class,
-                () -> service.getByConfirmationNumber("INN-UNKNOWN", "alice@example.com", null, false));
+                () -> service.getByConfirmationNumber("INN-UNKNOWN", "alice@example.com", null, false, null));
+    }
+
+    // ---- organizer scope: an organizer is not an admin (cross-business BOLA) ----
+    // EVENT_ORGANIZER used to bypass the ownership check here and on the phone
+    // lookup, so any approved organizer could read every customer's bookings at
+    // every business — full contact details and the scannable QR. An organizer
+    // now sees a booking only when it was made for one of their own events.
+
+    private static Booking confirmedBookingFor(UUID organizerUuid, String email, String phone) {
+        Booking booking = confirmedBooking(email, phone);
+        booking.setTenantUserUuid(organizerUuid);
+        return booking;
+    }
+
+    @Test
+    void getByConfirmationNumber_organizer_ownEvent_returnsBooking() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+        UUID organizer = UUID.randomUUID();
+        when(bookingRepo.findByConfirmationNumber("INN-20260502-AB12CD"))
+                .thenReturn(Optional.of(confirmedBookingFor(organizer, "alice@example.com", "+263782606983")));
+
+        BookingResponseDTO dto = service.getByConfirmationNumber(
+                "INN-20260502-AB12CD", "org@showtime.co.zw", null, false, organizer);
+
+        assertEquals("INN-20260502-AB12CD", dto.getConfirmationNumber());
+    }
+
+    @Test
+    void getByConfirmationNumber_organizer_anotherBusinessesBooking_isNotFound() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+        when(bookingRepo.findByConfirmationNumber("INN-20260502-AB12CD"))
+                .thenReturn(Optional.of(confirmedBookingFor(UUID.randomUUID(), "alice@example.com", "+263782606983")));
+
+        // Same 404 as any other non-owner: an organizer cannot even learn that
+        // another business's confirmation number exists.
+        assertThrows(com.innbucks.bookingservice.exception.NotFoundException.class,
+                () -> service.getByConfirmationNumber(
+                        "INN-20260502-AB12CD", "org@showtime.co.zw", null, false, UUID.randomUUID()));
+    }
+
+    @Test
+    void getByConfirmationNumber_organizer_bookingWithNoTenant_failsClosed() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+        when(bookingRepo.findByConfirmationNumber("INN-20260502-AB12CD"))
+                .thenReturn(Optional.of(confirmedBookingFor(null, "alice@example.com", "+263782606983")));
+
+        assertThrows(com.innbucks.bookingservice.exception.NotFoundException.class,
+                () -> service.getByConfirmationNumber(
+                        "INN-20260502-AB12CD", "org@showtime.co.zw", null, false, UUID.randomUUID()));
+    }
+
+    @Test
+    void getActiveByPhoneNumberForOrganizer_returnsOnlyThatOrganizersConfirmedBookings() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+        UUID organizer = UUID.randomUUID();
+        Booking mine = confirmedBookingFor(organizer, null, "+263782606983");
+        mine.setConfirmationNumber("INN-20260502-MINE01");
+        Booking theirs = confirmedBookingFor(UUID.randomUUID(), null, "+263782606983");
+        theirs.setConfirmationNumber("INN-20260502-THEIRS");
+        Booking untenanted = confirmedBookingFor(null, null, "+263782606983");
+        untenanted.setConfirmationNumber("INN-20260502-NULL01");
+        Booking minePending = confirmedBookingFor(organizer, null, "+263782606983");
+        minePending.setConfirmationNumber("INN-20260502-PEND01");
+        minePending.setStatus(Booking.BookingStatus.PENDING);
+        when(bookingRepo.findByPhoneNumberOrderByCreatedAtDesc("+263782606983"))
+                .thenReturn(List.of(mine, theirs, untenanted, minePending));
+
+        List<BookingResponseDTO> result =
+                service.getActiveByPhoneNumberForOrganizer("+263782606983", organizer);
+
+        assertEquals(List.of("INN-20260502-MINE01"),
+                result.stream().map(BookingResponseDTO::getConfirmationNumber).toList(),
+                "only this organizer's CONFIRMED bookings; another business's and an untenanted one are withheld");
+    }
+
+    @Test
+    void getActiveByPhoneNumberForOrganizer_nullOrganizer_returnsNothing() {
+        BookingRepository bookingRepo = mock(BookingRepository.class);
+        BookingService service = newService(bookingRepo,
+                mock(BookingItemRepository.class), mock(SeatServiceClient.class));
+        when(bookingRepo.findByPhoneNumberOrderByCreatedAtDesc("+263782606983"))
+                .thenReturn(List.of(confirmedBookingFor(null, null, "+263782606983")));
+
+        assertTrue(service.getActiveByPhoneNumberForOrganizer("+263782606983", null).isEmpty());
     }
 
     @Test

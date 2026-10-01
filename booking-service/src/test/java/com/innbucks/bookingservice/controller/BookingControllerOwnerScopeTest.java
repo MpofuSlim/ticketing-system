@@ -39,11 +39,17 @@ import static org.mockito.Mockito.when;
  *
  * <ul>
  *   <li>{@code GET /bookings/phone/{phoneNumber}} — a CUSTOMER may only query
- *       the phone number on their own JWT (403 otherwise); admins query any.</li>
+ *       the phone number on their own JWT (403 otherwise); platform staff
+ *       query any; an EVENT_ORGANIZER queries any number but sees only that
+ *       customer's bookings for the organizer's OWN events.</li>
  *   <li>{@code GET /bookings/confirmation/{number}} — the controller delegates
- *       with the caller's identity + an isAdmin flag so the service can
- *       owner-scope (404 for a non-owner); admins bypass.</li>
+ *       with the caller's identity, a platform-wide flag and (for an
+ *       organizer) their organizer uuid, so the service can owner-scope
+ *       (404 for a non-owner, another business's organizer included).</li>
  * </ul>
+ *
+ * <p>An organizer is NOT an admin on either path. Treating them as one let any
+ * approved organizer read every customer's bookings at every business.
  *
  * <p>Both endpoints now require authentication (SecurityConfig no longer
  * permitAll's the paths), so an unauthenticated call is a Spring-Security 401
@@ -75,6 +81,14 @@ class BookingControllerOwnerScopeTest {
                 .collect(Collectors.toList());
         var token = new UsernamePasswordAuthenticationToken(email, null, authorities);
         token.setDetails(new JwtAuthDetails(email, phone, null, null, null, null));
+        return token;
+    }
+
+    /** An organizer's token: the organizerUuid claim scopes them to their own events. */
+    private static Authentication organizer(String email, String phone, UUID organizerUuid) {
+        var token = new UsernamePasswordAuthenticationToken(email, null,
+                List.of(new SimpleGrantedAuthority("ROLE_EVENT_ORGANIZER")));
+        token.setDetails(new JwtAuthDetails(email, phone, organizerUuid, organizerUuid, null, null));
         return token;
     }
 
@@ -139,18 +153,51 @@ class BookingControllerOwnerScopeTest {
     }
 
     @Test
-    void phone_eventOrganizer_mayQueryAnyPhone() {
+    void phone_eventOrganizer_seesOnlyTheirOwnEventsBookings_forAnotherNumber() {
         BookingService bookingService = mock(BookingService.class);
-        when(bookingService.getActiveByPhoneNumber(OTHER_PHONE_E164))
+        UUID organizerUuid = UUID.randomUUID();
+        when(bookingService.getActiveByPhoneNumberForOrganizer(OTHER_PHONE_E164, organizerUuid))
                 .thenReturn(List.of(bookingWithQr()));
 
-        // Organizer (support) queries a customer's number that is NOT their own.
+        // Organizer (support) queries a customer's number that is NOT their own:
+        // scoped to their own events, never the unscoped cross-business list.
         ResponseEntity<ApiResult<List<BookingResponseDTO>>> resp =
                 controller(bookingService).getBookingsByPhoneNumber(
-                        OTHER_PHONE_E164, auth("org@example.com", OWNER_PHONE_E164, "ROLE_EVENT_ORGANIZER"));
+                        OTHER_PHONE_E164, organizer("org@example.com", OWNER_PHONE_E164, organizerUuid));
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
-        verify(bookingService).getActiveByPhoneNumber(OTHER_PHONE_E164);
+        verify(bookingService).getActiveByPhoneNumberForOrganizer(OTHER_PHONE_E164, organizerUuid);
+        verify(bookingService, never()).getActiveByPhoneNumber(any());
+    }
+
+    @Test
+    void phone_eventOrganizer_withoutOrganizerClaim_is403_andNeverHitsTheService() {
+        BookingService bookingService = mock(BookingService.class);
+
+        assertThatThrownBy(() -> controller(bookingService).getBookingsByPhoneNumber(
+                OTHER_PHONE_E164, organizer("org@example.com", OWNER_PHONE_E164, null)))
+                .isInstanceOf(AccessDeniedException.class)
+                .hasMessage("Your session is missing organizer information. Please sign in again.");
+
+        verify(bookingService, never()).getActiveByPhoneNumber(any());
+        verify(bookingService, never()).getActiveByPhoneNumberForOrganizer(any(), any());
+    }
+
+    @Test
+    void phone_eventOrganizer_readingTheirOwnNumber_getsTheirOwnTickets() {
+        // An organizer who also buys tickets reads their OWN number as a
+        // customer would: every booking on it, not just their events'.
+        BookingService bookingService = mock(BookingService.class);
+        when(bookingService.getActiveByPhoneNumber(OWNER_PHONE_E164))
+                .thenReturn(List.of(bookingWithQr()));
+
+        ResponseEntity<ApiResult<List<BookingResponseDTO>>> resp =
+                controller(bookingService).getBookingsByPhoneNumber(
+                        OWNER_PHONE_LOCAL, organizer("org@example.com", OWNER_PHONE_E164, UUID.randomUUID()));
+
+        assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
+        verify(bookingService).getActiveByPhoneNumber(OWNER_PHONE_E164);
+        verify(bookingService, never()).getActiveByPhoneNumberForOrganizer(any(), any());
     }
 
     @Test
@@ -165,15 +212,16 @@ class BookingControllerOwnerScopeTest {
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         verify(bookingService).getActiveByPhoneNumber(OTHER_PHONE_E164);
+        verify(bookingService, never()).getActiveByPhoneNumberForOrganizer(any(), any());
     }
 
     // ---------------- GET /bookings/confirmation/{number} ----------------
 
     @Test
-    void confirmation_customer_delegatesWithCallerIdentity_andIsAdminFalse() {
+    void confirmation_customer_delegatesWithCallerIdentity_notPlatformWide_noOrganizerScope() {
         BookingService bookingService = mock(BookingService.class);
         when(bookingService.getByConfirmationNumber(
-                eq("INN-20260502-AB12CD"), eq(OWNER_EMAIL), eq(OWNER_PHONE_E164), eq(false)))
+                eq("INN-20260502-AB12CD"), eq(OWNER_EMAIL), eq(OWNER_PHONE_E164), eq(false), eq(null)))
                 .thenReturn(bookingWithQr());
 
         ResponseEntity<ApiResult<BookingResponseDTO>> resp =
@@ -183,10 +231,10 @@ class BookingControllerOwnerScopeTest {
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         assertThat(resp.getBody().getData().getItems().get(0).getQrCode())
                 .startsWith("data:image/png;base64,");
-        // Owner-scoped: the caller's identity + isAdmin=false reach the service,
-        // which is where the 404-for-non-owner decision is made.
+        // Owner-scoped: the caller's identity, platformWide=false and no
+        // organizer scope reach the service, which makes the 404 decision.
         verify(bookingService).getByConfirmationNumber(
-                "INN-20260502-AB12CD", OWNER_EMAIL, OWNER_PHONE_E164, false);
+                "INN-20260502-AB12CD", OWNER_EMAIL, OWNER_PHONE_E164, false, null);
     }
 
     @Test
@@ -194,7 +242,7 @@ class BookingControllerOwnerScopeTest {
         BookingService bookingService = mock(BookingService.class);
         // Service fail-quiets a non-owner with 404 (NotFoundException); the
         // controller must let it propagate to the 404 handler.
-        when(bookingService.getByConfirmationNumber(any(), any(), any(), eq(false)))
+        when(bookingService.getByConfirmationNumber(any(), any(), any(), eq(false), any()))
                 .thenThrow(new NotFoundException("Booking not found"));
 
         assertThatThrownBy(() -> controller(bookingService).getByConfirmationNumber(
@@ -204,9 +252,9 @@ class BookingControllerOwnerScopeTest {
     }
 
     @Test
-    void confirmation_superAdmin_delegatesWithIsAdminTrue() {
+    void confirmation_superAdmin_delegatesPlatformWide() {
         BookingService bookingService = mock(BookingService.class);
-        when(bookingService.getByConfirmationNumber(any(), any(), any(), eq(true)))
+        when(bookingService.getByConfirmationNumber(any(), any(), any(), eq(true), any()))
                 .thenReturn(bookingWithQr());
 
         ResponseEntity<ApiResult<BookingResponseDTO>> resp =
@@ -215,20 +263,22 @@ class BookingControllerOwnerScopeTest {
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
         verify(bookingService).getByConfirmationNumber(
-                eq("INN-20260502-AB12CD"), eq("admin@example.com"), any(), eq(true));
+                eq("INN-20260502-AB12CD"), eq("admin@example.com"), any(), eq(true), eq(null));
     }
 
     @Test
-    void confirmation_eventOrganizer_delegatesWithIsAdminTrue() {
+    void confirmation_eventOrganizer_isScopedToTheirOwnEvents_notPlatformWide() {
         BookingService bookingService = mock(BookingService.class);
-        when(bookingService.getByConfirmationNumber(any(), any(), any(), eq(true)))
+        UUID organizerUuid = UUID.randomUUID();
+        when(bookingService.getByConfirmationNumber(any(), any(), any(), eq(false), eq(organizerUuid)))
                 .thenReturn(bookingWithQr());
 
         ResponseEntity<ApiResult<BookingResponseDTO>> resp =
                 controller(bookingService).getByConfirmationNumber(
-                        "INN-20260502-AB12CD", auth("org@example.com", null, "ROLE_EVENT_ORGANIZER"));
+                        "INN-20260502-AB12CD", organizer("org@example.com", null, organizerUuid));
 
         assertThat(resp.getStatusCode()).isEqualTo(HttpStatus.OK);
-        verify(bookingService).getByConfirmationNumber(any(), any(), any(), eq(true));
+        // Never platform-wide: the service decides with the organizer's uuid.
+        verify(bookingService).getByConfirmationNumber(any(), any(), any(), eq(false), eq(organizerUuid));
     }
 }
