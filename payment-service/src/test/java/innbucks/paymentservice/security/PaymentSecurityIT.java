@@ -129,7 +129,7 @@ class PaymentSecurityIT extends PostgresIntegrationTestBase {
         // Mint with the wrong key → signature won't verify.
         SecretKey wrongKey = Keys.hmacShaKeyFor("not-the-right-secret-not-the-right-secret".getBytes(StandardCharsets.UTF_8));
         String token = Jwts.builder()
-                .claims(Map.of("phoneNumber", "0712345678", "roles", java.util.List.of("CUSTOMER")))
+                .claims(Map.of("phoneNumber", "0712345678"))
                 .issuer("innbucks-ticketing")
                 .audience().add("innbucks-app").and()
                 .issuedAt(new Date())
@@ -186,7 +186,7 @@ class PaymentSecurityIT extends PostgresIntegrationTestBase {
 
         SecretKey key = Keys.hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8));
         String token = Jwts.builder()
-                .claims(Map.of("phoneNumber", "0712345678", "roles", java.util.List.of("CUSTOMER")))
+                .claims(Map.of("phoneNumber", "0712345678"))
                 .issuer("innbucks-ticketing")
                 .audience().add("innbucks-app").and()
                 .issuedAt(new Date())

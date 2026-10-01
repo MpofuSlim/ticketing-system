@@ -27,32 +27,6 @@ spring:
                     redis-rate-limiter.requestedTokens: 1
                     key-resolver: "#{@gatewayKeyResolver}"
 
-            # Tier-1 customer registration sends a real SMS OTP on every call
-            # (CustomerService.registerTier1 → OtpService.sendOtp). Under the
-            # /auth/customer/** catch-all below it got 20/s keyed by the raw
-            # bearer — and an unauthenticated caller sends none, or rotates a
-            # garbage one per request for a fresh bucket — so the only brake on
-            # SMS spend was the per-number cap inside user-service, which a
-            # caller walking a list of numbers never trips. Same posture as
-            # /auth/otp/**, which sends the identical SMS: per-IP, 1/s burst 3,
-            # fail-SAFE. POST-only and the exact path, so the tier 2-4 steps
-            # (/auth/customer/register/tier*) keep the catch-all.
-            # MUST precede auth-customer-route.
-            - id: auth-customer-register-route
-              uri: lb://user-service
-              predicates:
-                - Path=/auth/customer/register
-                - Method=POST
-              filters:
-                - name: RequestRateLimiter
-                  args:
-                    redis-rate-limiter.replenishRate: ${AUTH_CUSTOMER_REGISTER_RATE_LIMIT_REPLENISH_PER_SECOND:1}
-                    redis-rate-limiter.burstCapacity: ${AUTH_CUSTOMER_REGISTER_RATE_LIMIT_BURST_CAPACITY:3}
-                    redis-rate-limiter.requestedTokens: 1
-                    key-resolver: "#{@preAuthIpKeyResolver}"
-                    # Fail-SAFE: every call sends an SMS — keep throttling if Redis is down.
-                    rate-limiter: "#{@resilientRedisRateLimiter}"
-
             - id: auth-customer-route
               uri: lb://user-service
               predicates:

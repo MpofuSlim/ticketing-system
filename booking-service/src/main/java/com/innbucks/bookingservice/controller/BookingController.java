@@ -1104,14 +1104,12 @@ public class BookingController {
                     "A CUSTOMER may only retrieve a booking they own — the booking's email or phone must " +
                     "match the identity on their JWT; a non-owner receives 404 (never 403), so the endpoint " +
                     "does not confirm whether a given confirmation number exists to someone who doesn't own it. " +
-                    "Platform staff (SUPER_ADMIN / PRODUCT_OFFICER / PRODUCT_MANAGER) may look up any booking " +
-                    "for support. An EVENT_ORGANIZER sees a booking only when it was made for one of their own " +
-                    "events — any other gets the same 404 as a non-owner. Returns the full " +
+                    "EVENT_ORGANIZER / SUPER_ADMIN may look up any booking for support. Returns the full " +
                     "booking including the scannable ticket QR / ticketNumber.")
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
-                    description = "Booking returned (caller owns it, it is for the organizer's own event, or caller is platform staff)",
+                    description = "Booking returned (caller owns it, or caller is an admin)",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = BookingResponseDTO.class),
@@ -1162,17 +1160,11 @@ public class BookingController {
             Authentication authentication) {
         String callerEmail = authentication.getName();
         String callerPhone = normalizePhone(extractPhoneNumber(authentication));
-        boolean platformWide = AuthenticatedCaller.isPlatformStaff(authentication);
-        // An organizer is NOT an admin here: they see a booking only when it was
-        // made for one of their own events (the service compares the booking's
-        // tenantUserUuid). Platform staff alone read across businesses.
-        UUID organizerScope = !platformWide && hasRole(authentication, "ROLE_EVENT_ORGANIZER")
-                ? AuthenticatedCaller.organizerUuid(authentication) : null;
-        log.debug("GET /bookings/confirmation/{} platformWide={} organizerScoped={}",
-                number, platformWide, organizerScope != null);
+        boolean isAdmin = hasRole(authentication, "ROLE_EVENT_ORGANIZER")
+                || AuthenticatedCaller.isPlatformStaff(authentication);
+        log.debug("GET /bookings/confirmation/{} isAdmin={}", number, isAdmin);
         return ResponseEntity.ok(ApiResult.ok("Booking retrieved successfully",
-                bookingService.getByConfirmationNumber(number, callerEmail, callerPhone,
-                        platformWide, organizerScope)));
+                bookingService.getByConfirmationNumber(number, callerEmail, callerPhone, isAdmin)));
     }
 
     @GetMapping("/phone/{phoneNumber}")
@@ -1181,10 +1173,8 @@ public class BookingController {
             description = "Authenticated, owner-scoped. Returns the CONFIRMED bookings attached to the given " +
                     "phone number, most recent first — i.e. the customer's paid, valid tickets. A CUSTOMER may " +
                     "only query THEIR OWN phone number: the path value (normalised to E.164) must equal the " +
-                    "phone claim on their JWT, otherwise the call is rejected with 403. Platform staff " +
-                    "(SUPER_ADMIN / PRODUCT_OFFICER / PRODUCT_MANAGER) may query any number for support. An " +
-                    "EVENT_ORGANIZER may query any number but sees only that customer's bookings for the " +
-                    "organizer's OWN events (an empty list when there are none). PENDING (awaiting-payment) and CANCELLED " +
+                    "phone claim on their JWT, otherwise the call is rejected with 403. EVENT_ORGANIZER / " +
+                    "SUPER_ADMIN may query any number for support. PENDING (awaiting-payment) and CANCELLED " +
                     "bookings are excluded, so a booking only appears here once payment is confirmed. Returns " +
                     "an empty list if no confirmed bookings exist for that phone. To track an in-flight booking " +
                     "through payment, poll GET /bookings/public/{id} instead — that endpoint surfaces the " +
@@ -1193,7 +1183,7 @@ public class BookingController {
     @ApiResponses({
             @io.swagger.v3.oas.annotations.responses.ApiResponse(
                     responseCode = "200",
-                    description = "Bookings returned (may be empty) — caller's own phone, the organizer's own events, or platform staff",
+                    description = "Bookings returned (may be empty) — caller's own phone, or caller is an admin",
                     content = @Content(
                             mediaType = "application/json",
                             schema = @Schema(implementation = BookingResponseDTO.class),
@@ -1246,49 +1236,33 @@ public class BookingController {
     public ResponseEntity<ApiResult<List<BookingResponseDTO>>> getBookingsByPhoneNumber(
             @PathVariable String phoneNumber,
             Authentication authentication) {
-        boolean platformWide = AuthenticatedCaller.isPlatformStaff(authentication);
+        boolean isAdmin = hasRole(authentication, "ROLE_EVENT_ORGANIZER")
+                || AuthenticatedCaller.isPlatformStaff(authentication);
         // Canonicalise the requested number to E.164 the same way createBooking
         // stores it, so the ownership compare and the lookup both use the stored
         // form (a customer may enter their number in local 07... form).
         String normalizedRequested = normalizePhone(phoneNumber);
-        String callerPhone = normalizePhone(extractPhoneNumber(authentication));
-        boolean ownNumber = normalizedRequested != null && normalizedRequested.equals(callerPhone);
-        // Fall back to the raw path value only when it wasn't parseable (staff or
-        // an organizer may legitimately query an oddly-formatted stored number);
-        // a caller reading their own number always has a valid normalizedRequested.
-        String lookupPhone = normalizedRequested != null ? normalizedRequested : phoneNumber;
-
-        if (platformWide || ownNumber) {
-            log.debug("GET /bookings/phone/{} platformWide={} ownNumber={}",
-                    MsisdnMasking.mask(lookupPhone), platformWide, ownNumber);
-            return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully",
-                    bookingService.getActiveByPhoneNumber(lookupPhone)));
-        }
-        if (hasRole(authentication, "ROLE_EVENT_ORGANIZER")) {
-            // An organizer looking up a customer sees that customer's bookings
-            // for THEIR OWN events only. They used to be treated as admins here
-            // and read every booking the number had made at any business, with
-            // full contact details and the ticket QR. A token without the
-            // organizer claim cannot be scoped, so it fails closed.
-            UUID organizerUuid = AuthenticatedCaller.organizerUuid(authentication);
-            if (organizerUuid == null) {
-                log.warn("Phone booking lookup denied — organizer token without organizerUuid requested={}",
+        if (!isAdmin) {
+            // CUSTOMER: BOLA guard — may only read bookings for the phone number
+            // on their own JWT. Compare in canonical E.164. A null on either side
+            // (unparseable path value, or a token with no phone claim) fails
+            // closed. AccessDeniedException -> 403 via the security handler.
+            String callerPhone = normalizePhone(extractPhoneNumber(authentication));
+            if (normalizedRequested == null || callerPhone == null
+                    || !normalizedRequested.equals(callerPhone)) {
+                log.warn("Phone booking lookup denied — caller phone does not match requested={}",
                         MsisdnMasking.mask(phoneNumber));
                 throw new org.springframework.security.access.AccessDeniedException(
-                        "Your session is missing organizer information. Please sign in again.");
+                        "You can only view bookings for your own phone number.");
             }
-            log.debug("GET /bookings/phone/{} organizer-scoped", MsisdnMasking.mask(lookupPhone));
-            return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully",
-                    bookingService.getActiveByPhoneNumberForOrganizer(lookupPhone, organizerUuid)));
         }
-        // CUSTOMER: BOLA guard — may only read bookings for the phone number on
-        // their own JWT. A null on either side (unparseable path value, or a
-        // token with no phone claim) fails closed. AccessDeniedException -> 403
-        // via the security handler.
-        log.warn("Phone booking lookup denied — caller phone does not match requested={}",
-                MsisdnMasking.mask(phoneNumber));
-        throw new org.springframework.security.access.AccessDeniedException(
-                "You can only view bookings for your own phone number.");
+        // Fall back to the raw path value only when it wasn't parseable (an admin
+        // may legitimately query an oddly-formatted stored number); a CUSTOMER
+        // never reaches here without a valid, matching normalizedRequested.
+        String lookupPhone = normalizedRequested != null ? normalizedRequested : phoneNumber;
+        log.debug("GET /bookings/phone/{} isAdmin={}", MsisdnMasking.mask(lookupPhone), isAdmin);
+        return ResponseEntity.ok(ApiResult.ok("Bookings retrieved successfully",
+                bookingService.getActiveByPhoneNumber(lookupPhone)));
     }
 
     @PatchMapping("/{id}/cancel")
