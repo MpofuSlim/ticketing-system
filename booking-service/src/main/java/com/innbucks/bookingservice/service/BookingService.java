@@ -550,30 +550,6 @@ public class BookingService {
     }
 
     /**
-     * The organizer's view of a customer: the CONFIRMED bookings for a phone
-     * number that were made for THIS organizer's events, and no others.
-     *
-     * <p>Organizers used to be treated as admins here and saw every booking
-     * the number had ever made, at any business, with the purchaser's full
-     * contact details and the scannable QR — so any approved organizer could
-     * harvest another business's customers and their tickets by walking phone
-     * numbers. A booking whose {@code tenantUserUuid} is null (written before
-     * the column was backfilled) is withheld: it cannot be shown to belong to
-     * this organizer, so it fails closed.
-     */
-    public List<BookingResponseDTO> getActiveByPhoneNumberForOrganizer(String phoneNumber,
-                                                                       UUID organizerUuid) {
-        log.debug("Fetching confirmed bookings for organizer phoneNumber={} organizerUuid={}",
-                MsisdnMasking.mask(phoneNumber), organizerUuid);
-        return bookingRepository.findByPhoneNumberOrderByCreatedAtDesc(phoneNumber)
-                .stream()
-                .filter(b -> b.getStatus() == Booking.BookingStatus.CONFIRMED)
-                .filter(b -> organizerUuid != null && organizerUuid.equals(b.getTenantUserUuid()))
-                .map(this::toDTO)
-                .collect(Collectors.toList());
-    }
-
-    /**
      * The customer's own ticket wallet: CONFIRMED bookings for a phone number,
      * each enriched with its event and classified UPCOMING / LIVE / PAST.
      *
@@ -722,25 +698,19 @@ public class BookingService {
      * booking gets a 404 ({@link NotFoundException}), NOT a 403 — the
      * confirmation number is a low-entropy identifier printed on tickets, so a
      * distinct "exists but forbidden" response would let a non-owner confirm
-     * that a given confirmation number is real. Platform staff
-     * ({@code platformWide=true}) see any booking, for support. An organizer
-     * ({@code organizerUuid} set) sees a booking only when it was made for one
-     * of their own events — the same 404 as any other non-owner otherwise.
+     * that a given confirmation number is real. Admins (EVENT_ORGANIZER /
+     * SUPER_ADMIN, {@code isAdmin=true}) bypass the ownership check for support.
      *
      * @param callerEmail    the caller's JWT email (principal); may be null
      * @param callerPhoneE164 the caller's JWT phone already canonicalised to
      *                        E.164 by the controller; may be null
-     * @param platformWide   true for platform staff (SUPER_ADMIN / PRODUCT_*)
-     * @param organizerUuid  the caller's organizer uuid when they act as an
-     *                       EVENT_ORGANIZER; null otherwise
      */
     public BookingResponseDTO getByConfirmationNumber(String confirmationNumber,
                                                       String callerEmail,
                                                       String callerPhoneE164,
-                                                      boolean platformWide,
-                                                      UUID organizerUuid) {
-        log.debug("Fetching booking by confirmation confirmation={} platformWide={} organizerScoped={}",
-                confirmationNumber, platformWide, organizerUuid != null);
+                                                      boolean isAdmin) {
+        log.debug("Fetching booking by confirmation confirmation={} isAdmin={}",
+                confirmationNumber, isAdmin);
         Booking booking = bookingRepository.findByConfirmationNumber(confirmationNumber)
                 .orElseThrow(() -> {
                     log.warn("Booking lookup by confirmation failed, not found confirmation={}",
@@ -748,11 +718,9 @@ public class BookingService {
                     return new NotFoundException("Booking not found");
                 });
 
-        boolean organizersOwn = organizerUuid != null && organizerUuid.equals(booking.getTenantUserUuid());
-        if (!platformWide && !organizersOwn && !ownedByCaller(booking, callerEmail, callerPhoneE164)) {
+        if (!isAdmin && !ownedByCaller(booking, callerEmail, callerPhoneE164)) {
             // 404, not 403: don't reveal that this confirmation number exists to
-            // a caller who doesn't own the booking — an organizer of another
-            // business included.
+            // a caller who doesn't own the booking.
             log.warn("Booking confirmation lookup denied — caller not owner confirmation={} bookingId={}",
                     confirmationNumber, booking.getId());
             throw new NotFoundException("Booking not found");

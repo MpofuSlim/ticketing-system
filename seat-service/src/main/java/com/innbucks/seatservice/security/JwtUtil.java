@@ -133,39 +133,6 @@ public class JwtUtil {
         return getClaims(token).get("phoneNumber", String.class);
     }
 
-
-    /**
-     * True only for a fleet ACCESS token — the one kind of bearer this service
-     * accepts. user-service signs several other kinds with the same key, issuer
-     * and audience, so a valid signature alone does not make a token a login:
-     * <ul>
-     *   <li>refresh tokens carry {@code type=refresh} and belong to
-     *       {@code /auth/refresh} only — accepted here they were a 7-day login;</li>
-     *   <li>MFA step tokens carry {@code kind=mfa};</li>
-     *   <li>phone-scoped OTP / loyalty session tokens carry an EMPTY
-     *       {@code roles} list by design, so that they are inert everywhere
-     *       except loyalty — accepted here they authenticated a caller on every
-     *       endpoint that only requires "logged in".</li>
-     * </ul>
-     * An access token carries no {@code type} (or {@code type=access}), no
-     * {@code kind}, and at least one role. Anything else is refused as an
-     * invalid token rather than authenticated with no authorities.
-     */
-    public boolean isAccessToken(String token) {
-        Claims claims;
-        try {
-            claims = getClaims(token);
-        } catch (JwtException | IllegalArgumentException e) {
-            return false;
-        }
-        if (claims == null) return false;
-        Object type = claims.get("type");
-        if (type != null && !"access".equals(type.toString())) return false;
-        if (claims.get("kind") != null) return false;
-        Object roles = claims.get("roles");
-        return roles instanceof Collection<?> c && !c.isEmpty();
-    }
-
     public boolean isTokenValid(String token) {
         try {
             getClaims(token);

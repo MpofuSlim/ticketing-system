@@ -65,8 +65,7 @@ class JwtFilterTokenVersionTest {
                 .issuer(JwtUtil.TOKEN_ISSUER)
                 .audience().add(JwtUtil.TOKEN_AUDIENCE).and()
                 .issuedAt(new Date())
-                .expiration(new Date(System.currentTimeMillis() + 60_000))
-                .claim("roles", java.util.List.of("CUSTOMER"));
+                .expiration(new Date(System.currentTimeMillis() + 60_000));
         if (userUuid != null) builder.claim("userUuid", userUuid.toString());
         if (tokenVersion != null) builder.claim("tokenVersion", tokenVersion);
         return builder.signWith(KEY, Jwts.SIG.HS256).compact();
