@@ -14,13 +14,15 @@ import com.innbucks.userservice.util.MsisdnCountryResolver;
 import com.innbucks.userservice.util.MsisdnMasking;
 import com.innbucks.userservice.util.MsisdnValidator;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.nio.charset.StandardCharsets;
@@ -148,11 +150,32 @@ public class FederatedLoginService {
         this.deploymentCountry = deploymentCountry;
     }
 
+    /**
+     * The account work and the mint commit in a transaction of their own, and
+     * loyalty is told after it — see {@link TransactionPhases}. A setter so the
+     * plain-{@code new} unit tests keep their construction; Spring always calls
+     * it, and with none set the phase runs inline.
+     */
+    private TransactionTemplate tx;
+
+    @Autowired
+    void setTransactionManager(PlatformTransactionManager transactionManager) {
+        this.tx = new TransactionTemplate(transactionManager);
+    }
+
     public boolean isEnabled() {
         return enabled;
     }
 
-    @Transactional
+    /**
+     * Not {@code @Transactional}, on purpose. The gates and the replay guard
+     * touch no table; the account work, the success audit and the mint commit
+     * together in ONE transaction ({@link #signIn}); and loyalty is told only
+     * after that has committed — synchronously, before the response, because
+     * the app's next call is to loyalty — so the loyalty round trip never holds
+     * the customer's rows locked, and a sign-in that failed to commit promotes
+     * nobody.
+     */
     public AuthResponseDTO exchange(String assertion, String deviceId, AuditContext auditContext) {
         // Off = the endpoint does not exist, same posture as loyalty's partner
         // registration. A 404 tells a prober nothing about the feature.
@@ -191,14 +214,59 @@ public class FederatedLoginService {
         // even touch the row.
         claimJtiOrReject(verified, phone, auditContext);
 
-        FoundOrCreated account = findOrCreateCustomer(phone, auditContext);
+        AuthResponseDTO response = signIn(phone, deviceId, auditContext);
 
         // The assertion is a phone proof — tell loyalty, exactly as an OTP verify
-        // does. Best-effort: a loyalty outage must not fail a login the customer
-        // legitimately completed; their projections activate on the next call.
+        // does, and only now that the sign-in has committed. Best-effort: a
+        // loyalty outage must not fail a login the customer legitimately
+        // completed; their projections activate on the next call.
         if (loyaltyServiceClient != null) {
             loyaltyServiceClient.promoteUserByPhone(phone);
         }
+        return response;
+    }
+
+    /**
+     * Thrown out of the sign-in transaction when the customer's row could not
+     * be created because a concurrent first login for the same phone created it
+     * first. Escaping the callback is what rolls that transaction back.
+     */
+    private static final class CreateRaceLost extends RuntimeException {
+        CreateRaceLost(DataIntegrityViolationException cause) {
+            super(cause.getMessage(), cause);
+        }
+
+        DataIntegrityViolationException violation() {
+            return (DataIntegrityViolationException) getCause();
+        }
+    }
+
+    /**
+     * Find or create the customer, audit the success and mint the session, in one
+     * transaction. Losing the create race to a concurrent first login is retried
+     * ONCE in a FRESH transaction, which finds the winner's committed row: on
+     * Postgres a transaction that hit the unique violation is aborted, so the
+     * re-read the old code made inside it could never have run.
+     */
+    private AuthResponseDTO signIn(String phone, String deviceId, AuditContext auditContext) {
+        try {
+            return TransactionPhases.inTransaction(tx, () -> signInOnce(phone, deviceId, auditContext));
+        } catch (CreateRaceLost raced) {
+            // Two first logins for the same new phone at once: the other one
+            // won the unique index. Use its row rather than failing the customer
+            // whose only mistake was a double tap.
+            log.info("Federated login lost a create race for phone={} — using the existing row",
+                    MsisdnMasking.mask(phone));
+            try {
+                return TransactionPhases.inTransaction(tx, () -> signInOnce(phone, deviceId, auditContext));
+            } catch (CreateRaceLost again) {
+                throw again.violation();
+            }
+        }
+    }
+
+    private AuthResponseDTO signInOnce(String phone, String deviceId, AuditContext auditContext) {
+        FoundOrCreated account = findOrCreateCustomer(phone, auditContext);
 
         auditService.recordSuccess(
                 AuditEventType.AUTH_FEDERATED_LOGIN_SUCCESS,
@@ -272,17 +340,11 @@ public class FederatedLoginService {
         try {
             return new FoundOrCreated(createCustomer(phone), true);
         } catch (DataIntegrityViolationException raced) {
-            // Two first logins for the same new phone at once: the other one
-            // won the unique index. Read its row rather than failing the
-            // customer whose only mistake was a double tap.
-            log.info("Federated login lost a create race for phone={} — using the existing row",
-                    MsisdnMasking.mask(phone));
-            User user = userRepository.findByPhoneNumber(phone)
-                    .orElseThrow(() -> raced);
-            if (!user.hasRole(User.Role.CUSTOMER)) {
-                throw reject("not_a_customer", phone, auditContext);
-            }
-            return new FoundOrCreated(user, false);
+            // Lost the create race: this transaction is now unusable (aborted on
+            // Postgres), so leave it — signIn retries in a fresh one, where the
+            // winner's row is found by the lookup above and goes through the
+            // same customer / active checks as any returning customer.
+            throw new CreateRaceLost(raced);
         }
     }
 

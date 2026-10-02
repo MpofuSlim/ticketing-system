@@ -15,11 +15,14 @@ import com.innbucks.userservice.util.MsisdnCountryResolver;
 import com.innbucks.userservice.util.MsisdnValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Duration;
@@ -73,11 +76,31 @@ public class CustomerService {
     private Duration verifyWindow = Duration.ofMinutes(30);
 
     /**
+     * {@link #registerTier1}'s write commits in a transaction of its own and the
+     * OTP is sent after it — see {@link TransactionPhases}. A setter so the
+     * plain-{@code new} unit tests keep their construction; with none set the
+     * write runs inline.
+     */
+    private TransactionTemplate tx;
+
+    @Autowired
+    void setTransactionManager(PlatformTransactionManager transactionManager) {
+        this.tx = new TransactionTemplate(transactionManager);
+    }
+
+    /**
      * Tier 1 no longer creates a User or CustomerProfile. It stashes the phone + hashed password
      * in a pending_registrations row and fires an OTP. The account is materialised later by
      * {@link OtpService#verifyOtp} once the customer submits a valid code.
+     *
+     * <p>Not {@code @Transactional}: the pending row commits first, and the OTP
+     * goes out after, with no transaction (and no lock on the pending row) held
+     * across the SMS / WhatsApp round trip. So when delivery fails the pending
+     * row now STAYS (it used to roll back with the send). That is harmless: a
+     * retry replaces any pending row for the phone, the row expires on its own
+     * after {@link #PENDING_REGISTRATION_TTL}, and without a code nobody can
+     * turn it into an account.
      */
-    @Transactional
     public CustomerRegistrationResponseDTO registerTier1(CustomerTier1RegisterDTO request) {
         // Canonicalise to E.164 up front so the pending row, the OTP challenge,
         // and the eventual User row all key off one format (phone is the lookup
@@ -92,19 +115,26 @@ public class CustomerService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Phone number already registered");
         }
 
-        // Replace any in-flight pending registration — lets users recover from a mistyped password.
-        pendingRegistrationRepository.deleteByPhoneNumber(phone);
-        pendingRegistrationRepository.flush();
+        // Argon2 is deliberately slow; hash before the transaction opens so the
+        // pending row's lock is not held across it.
+        String passwordHash = passwordEncoder.encode(request.getPassword());
+        TransactionPhases.runInTransaction(tx, () -> {
+            // Replace any in-flight pending registration — lets users recover from a mistyped password.
+            pendingRegistrationRepository.deleteByPhoneNumber(phone);
+            pendingRegistrationRepository.flush();
 
-        Instant now = Instant.now();
-        PendingRegistration pending = PendingRegistration.builder()
-                .phoneNumber(phone)
-                .passwordHash(passwordEncoder.encode(request.getPassword()))
-                .createdAt(now)
-                .expiresAt(now.plus(PENDING_REGISTRATION_TTL))
-                .build();
-        pendingRegistrationRepository.save(pending);
+            Instant now = Instant.now();
+            PendingRegistration pending = PendingRegistration.builder()
+                    .phoneNumber(phone)
+                    .passwordHash(passwordHash)
+                    .createdAt(now)
+                    .expiresAt(now.plus(PENDING_REGISTRATION_TTL))
+                    .build();
+            pendingRegistrationRepository.save(pending);
+        });
 
+        // After the commit, with no transaction open (OtpService runs its own
+        // short ones around the send).
         otpService.sendOtp(phone);
 
         return CustomerRegistrationResponseDTO.builder()

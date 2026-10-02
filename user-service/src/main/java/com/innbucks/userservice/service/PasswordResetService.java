@@ -6,10 +6,13 @@ import com.innbucks.userservice.repository.UserRepository;
 import com.innbucks.userservice.util.MsisdnValidator;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
 import java.util.Optional;
@@ -73,35 +76,37 @@ public class PasswordResetService {
     private String deploymentCountry = "ZW";
 
     /**
+     * {@link #requestReset}'s gates read in a read-only transaction of their
+     * own; the send follows it (see {@link TransactionPhases}). A setter so the
+     * plain-{@code new} unit tests keep their construction; with none set the
+     * gates run inline.
+     */
+    private TransactionTemplate readOnlyTx;
+
+    @Autowired
+    void setTransactionManager(PlatformTransactionManager transactionManager) {
+        TransactionTemplate template = new TransactionTemplate(transactionManager);
+        template.setReadOnly(true);
+        this.readOnlyTx = template;
+    }
+
+    /**
      * Step 1 — send the reset OTP to whichever channel the identifier names.
      * Silent no-op for unknown users, and for DEACTIVATED ones: a reset set
      * while the account is off would be live the moment an administrator
      * switched it back on — a password planted for after the reactivation,
      * chosen by whoever held the phone or mailbox at the time. The caller sees
      * the same 200 either way, so the account's state is not revealed.
+     *
+     * <p>Not {@code @Transactional}: every gate below is decided in a read-only
+     * transaction, and the code is issued and sent AFTER it, by
+     * {@link OtpService}, which commits the code before the message leaves and
+     * holds no transaction across the SMS / WhatsApp / email round trip. Only
+     * WHERE the send runs changed — every branch and every answer is as before.
      */
-    @Transactional
     public void requestReset(String phoneNumber, String email) {
         Identifier id = resolveIdentifier(phoneNumber, email);
-        Optional<User> user = id.email()
-                ? userRepository.findByEmail(id.value())
-                : userRepository.findByPhoneNumber(id.value());
-        if (user.isEmpty()) {
-            log.info("Password-reset requested for unknown {} — no-op", id.email() ? "email" : "phone");
-            return;
-        }
-        if (deactivated(user.get())) {
-            log.info("Password-reset requested for a deactivated account userId={} — no-op", user.get().getId());
-            return;
-        }
-        if (staffEligibility.isInvitePending(user.get())) {
-            log.info("Password-reset requested for an INVITED staff account userId={} — no-op (invite pending)",
-                    user.get().getId());
-            return;
-        }
-        if (!id.email() && (roleGrantGuard.holdsStaffRole(user.get()) || staffEligibility.isProfiled(user.get()))) {
-            log.info("Password-reset requested BY PHONE for a staff account userId={} — no-op (staff reset by email)",
-                    user.get().getId());
+        if (!Boolean.TRUE.equals(TransactionPhases.inTransaction(readOnlyTx, () -> mayReset(id)))) {
             return;
         }
         if (id.email()) {
@@ -109,6 +114,35 @@ public class PasswordResetService {
         } else {
             otpService.sendPasswordResetOtpToPhone(id.value());
         }
+    }
+
+    /**
+     * {@link #requestReset}'s gates. True = issue a code. Each refusal is the
+     * same silent no-op it always was.
+     */
+    private boolean mayReset(Identifier id) {
+        Optional<User> user = id.email()
+                ? userRepository.findByEmail(id.value())
+                : userRepository.findByPhoneNumber(id.value());
+        if (user.isEmpty()) {
+            log.info("Password-reset requested for unknown {} — no-op", id.email() ? "email" : "phone");
+            return false;
+        }
+        if (deactivated(user.get())) {
+            log.info("Password-reset requested for a deactivated account userId={} — no-op", user.get().getId());
+            return false;
+        }
+        if (staffEligibility.isInvitePending(user.get())) {
+            log.info("Password-reset requested for an INVITED staff account userId={} — no-op (invite pending)",
+                    user.get().getId());
+            return false;
+        }
+        if (!id.email() && (roleGrantGuard.holdsStaffRole(user.get()) || staffEligibility.isProfiled(user.get()))) {
+            log.info("Password-reset requested BY PHONE for a staff account userId={} — no-op (staff reset by email)",
+                    user.get().getId());
+            return false;
+        }
+        return true;
     }
 
     /**
