@@ -16,12 +16,23 @@ spring:
       max-lifetime: ${DB_MAX_LIFETIME_MS:1800000}
 
   jpa:
+    # Off: with Open Session in View on (Boot's default) every request holds a
+    # pooled DB connection until the response is written, including the time
+    # spent in remote calls and serialisation after the service layer returns.
+    open-in-view: false
     hibernate:
       ddl-auto: ${JPA_DDL_AUTO:validate}
     show-sql: ${JPA_SHOW_SQL:false}
     properties:
       hibernate:
         dialect: ${HIBERNATE_DIALECT:org.hibernate.dialect.PostgreSQLDialect}
+        # Group saveAll / save-in-a-loop writes into JDBC batches. Entities with
+        # an IDENTITY id cannot batch their INSERTs (Hibernate needs each row's
+        # key back), so this only helps UUID/sequence ids — harmless elsewhere.
+        jdbc:
+          batch_size: ${HIBERNATE_JDBC_BATCH_SIZE:50}
+        order_inserts: true
+        order_updates: true
 
   flyway:
     enabled: ${FLYWAY_ENABLED:true}
@@ -149,9 +160,22 @@ management:
       probes:
         enabled: true
       show-details: when-authorized
+      # The k8s readiness probe hits /actuator/health/readiness. Only the DB
+      # gates it: Redis-backed features already degrade without Redis, so a
+      # Redis blip must not pull the (single) pod out of its Service, which is
+      # what the aggregate /actuator/health did.
+      group:
+        readiness:
+          include: readinessState,db
   metrics:
     tags:
       application: ${spring.application.name}
+    # Fixed latency buckets so Prometheus can compute p95/p99 for every
+    # endpoint. A short, fixed list rather than percentiles-histogram, which
+    # emits ~70 buckets per uri/method/status and would swamp Prometheus.
+    distribution:
+      slo:
+        "[http.server.requests]": 50ms,100ms,250ms,500ms,1s,2s,5s
   tracing:
     enabled: ${TRACING_ENABLED:false}
     sampling:

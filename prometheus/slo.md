@@ -130,6 +130,20 @@ points for all of them. This is almost always a config error:
    to 0 (a UI bug allowed it once before).
 3. If no, restore the rule from the audit log.
 
+### `HttpP99Slow`
+
+A service's HTTP p99 has been above 2s for 15 minutes. The buckets stop at
+5s, so a value of `+Inf` means "slower than 5s", not a broken query.
+
+1. Break it down by endpoint:
+   `histogram_quantile(0.99, sum by (le, uri) (rate(http_server_requests_seconds_bucket{job="<svc>"}[5m])))`.
+   One `uri` dominating is the usual case — a CSV export or report is
+   expected to be slow; a hot read path is not.
+2. Cross-check `HikariPoolExhausted` (waiting for a connection shows up as
+   latency, not errors) and `JvmGcTimeHigh`.
+3. If every endpoint is slow at once, look at the dependency they share:
+   Postgres, Redis, or an upstream rail.
+
 ### `HikariPoolExhausted`
 
 All DB connections held for > 1 minute. Requests are queueing and will
@@ -154,6 +168,20 @@ seconds.
 3. Analyse the dump after the incident. Common offenders: caches with
    no eviction, log appenders queueing under back-pressure, Hibernate
    first-level cache on a long-running transaction.
+
+### `JvmGcTimeHigh`
+
+The JVM has spent more than 5% of wall time in GC pauses for 10 minutes.
+Usually the heap is too small for the live set, or something allocates
+heavily (a large export, a bulk issue).
+
+1. Check `JvmHeapPressure` for the same pod — high GC time with a nearly
+   full heap means the live set no longer fits.
+2. Confirm the collector: `kubectl -n ticketing exec deploy/<svc> -- java
+   -XX:+PrintFlagsFinal -version | grep -E ' Use(Serial|G1)GC '`. The pods
+   set `-XX:+UseG1GC`; SerialGC here means `JAVA_TOOL_OPTIONS` was lost.
+3. If one endpoint correlates (see `HttpP99Slow`), fix that allocation
+   before raising the memory limit.
 
 ### `OtelExportFailing`
 

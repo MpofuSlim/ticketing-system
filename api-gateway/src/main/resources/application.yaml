@@ -9,11 +9,28 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
       password: ${REDIS_PASSWORD:}
+      # Bound every rate-limiter round-trip. Lettuce's default is 60s, and the
+      # limiter runs on almost every route; on a hung Redis the fail-safe
+      # in-memory bucket can only take over once the call actually fails.
+      timeout: ${REDIS_COMMAND_TIMEOUT:500ms}
+      connect-timeout: ${REDIS_CONNECT_TIMEOUT:1s}
 
   cloud:
     gateway:
       server:
         webflux:
+          # Upstream timeouts. Without them Reactor Netty waits 45s to connect
+          # and FOREVER for a response, so a hung service holds the client's
+          # connection open indefinitely. 60s is deliberately generous: it is a
+          # ceiling for the slowest legitimate call (CSV exports, payment rails
+          # with a 20s upstream read), not a latency target.
+          httpclient:
+            connect-timeout: ${GATEWAY_CONNECT_TIMEOUT_MS:2000}
+            response-timeout: ${GATEWAY_RESPONSE_TIMEOUT:60s}
+            pool:
+              # Drop idle upstream connections before a peer or kube-proxy
+              # silently does, which otherwise surfaces as a reset on reuse.
+              max-idle-time: ${GATEWAY_POOL_MAX_IDLE_TIME:30s}
           routes:
             - id: auth-customer-lookup-route
               uri: lb://user-service
@@ -890,6 +907,10 @@ management:
   metrics:
     tags:
       application: ${spring.application.name}
+    # Fixed latency buckets so Prometheus can compute end-to-end p95/p99.
+    distribution:
+      slo:
+        "[http.server.requests]": 50ms,100ms,250ms,500ms,1s,2s,5s
   tracing:
     enabled: ${TRACING_ENABLED:false}
     sampling:
