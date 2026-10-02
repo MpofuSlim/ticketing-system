@@ -3,6 +3,17 @@
 # All carry the OWASP A05 workload-hardening block (see 03-user-service.yaml for
 # the rationale): no SA token, non-root UID 10001, seccomp RuntimeDefault,
 # no-priv-escalation, read-only root fs + /tmp emptyDir, all caps dropped.
+#
+# JVM + probes (same in 03-user-service.yaml and 05-gateway.yaml):
+#  - -XX:+UseG1GC is explicit because these pods' memory limits are below the
+#    JVM's 1792MB "server-class" line, where ergonomics silently pick SerialGC,
+#    which stops every thread for each collection.
+#  - -XX:+ExitOnOutOfMemoryError: an OOM leaves a JVM half-working; exiting
+#    lets the kubelet restart it cleanly.
+#  - Readiness uses /actuator/health/readiness (readinessState + db, set in
+#    each service's application.yaml), NOT the aggregate /actuator/health,
+#    which also includes Redis — with one replica per service a Redis blip
+#    used to take every service out of rotation at once. Liveness is unchanged.
 ---
 apiVersion: v1
 kind: Service
@@ -36,7 +47,7 @@ spec:
             capabilities: { drop: [ALL] }
           envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
           env:
-            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0" }
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError" }
             - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/event_service" }
             - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
             - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
@@ -47,7 +58,7 @@ spec:
             - { name: REDIS_HOST, value: "redis" }
             - { name: REDIS_PORT, value: "6379" }
           resources: { requests: { memory: 448Mi }, limits: { memory: 640Mi } }
-          readinessProbe: { httpGet: { path: /actuator/health, port: 8082 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
+          readinessProbe: { httpGet: { path: /actuator/health/readiness, port: 8082 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8082 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
           volumeMounts: [ { name: tmp, mountPath: /tmp } ]
       volumes: [ { name: tmp, emptyDir: {} } ]
@@ -84,7 +95,7 @@ spec:
             capabilities: { drop: [ALL] }
           envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
           env:
-            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0" }
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError" }
             - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/seat_service" }
             - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
             - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
@@ -96,7 +107,7 @@ spec:
             - { name: REDIS_PORT, value: "6379" }
             - { name: LOCK_STORE, value: "redis" }
           resources: { requests: { memory: 448Mi }, limits: { memory: 640Mi } }
-          readinessProbe: { httpGet: { path: /actuator/health, port: 8083 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
+          readinessProbe: { httpGet: { path: /actuator/health/readiness, port: 8083 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8083 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
           volumeMounts: [ { name: tmp, mountPath: /tmp } ]
       volumes: [ { name: tmp, emptyDir: {} } ]
@@ -133,7 +144,7 @@ spec:
             capabilities: { drop: [ALL] }
           envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
           env:
-            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0" }
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError" }
             - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/booking_service" }
             - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
             - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
@@ -171,7 +182,7 @@ spec:
             # commission back on does not also need this remembered.
             - { name: INVOICE_SETTLE_GRACE_DAYS, value: "7" }
           resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }
-          readinessProbe: { httpGet: { path: /actuator/health, port: 8084 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
+          readinessProbe: { httpGet: { path: /actuator/health/readiness, port: 8084 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8084 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
           volumeMounts: [ { name: tmp, mountPath: /tmp } ]
       volumes: [ { name: tmp, emptyDir: {} } ]
@@ -208,7 +219,7 @@ spec:
             capabilities: { drop: [ALL] }
           envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
           env:
-            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0" }
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError" }
             - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/payment_service" }
             - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
             - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
@@ -219,7 +230,7 @@ spec:
             - { name: IDEMPOTENCY_STORE, value: "redis" }
             - { name: PAYMENTS_INNBUCKS_ENABLED, value: "true" }
           resources: { requests: { memory: 512Mi }, limits: { memory: 768Mi } }
-          readinessProbe: { httpGet: { path: /actuator/health, port: 8085 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
+          readinessProbe: { httpGet: { path: /actuator/health/readiness, port: 8085 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8085 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
           volumeMounts: [ { name: tmp, mountPath: /tmp } ]
       volumes: [ { name: tmp, emptyDir: {} } ]
@@ -256,7 +267,7 @@ spec:
             capabilities: { drop: [ALL] }
           envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
           env:
-            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0" }
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError" }
             - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/loyalty_service" }
             - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
             - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
@@ -267,7 +278,7 @@ spec:
             - { name: REDIS_HOST, value: "redis" }
             - { name: REDIS_PORT, value: "6379" }
           resources: { requests: { memory: 448Mi }, limits: { memory: 640Mi } }
-          readinessProbe: { httpGet: { path: /actuator/health, port: 8086 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
+          readinessProbe: { httpGet: { path: /actuator/health/readiness, port: 8086 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8086 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
           volumeMounts: [ { name: tmp, mountPath: /tmp } ]
       volumes: [ { name: tmp, emptyDir: {} } ]
@@ -310,7 +321,7 @@ spec:
             capabilities: { drop: [ALL] }
           envFrom: [ { configMapRef: { name: cell-zw } }, { secretRef: { name: cell-zw-secrets } } ]
           env:
-            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0" }
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError" }
             - { name: DB_URL, value: "jdbc:postgresql://postgres:5432/marketplace_service" }
             - { name: DB_USERNAME, valueFrom: { configMapKeyRef: { name: cell-zw, key: POSTGRES_USER } } }
             - { name: DB_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: POSTGRES_PASSWORD } } }
@@ -321,7 +332,7 @@ spec:
             - { name: REDIS_HOST, value: "redis" }
             - { name: REDIS_PORT, value: "6379" }
           resources: { requests: { memory: 448Mi }, limits: { memory: 640Mi } }
-          readinessProbe: { httpGet: { path: /actuator/health, port: 8087 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
+          readinessProbe: { httpGet: { path: /actuator/health/readiness, port: 8087 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8087 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
           volumeMounts: [ { name: tmp, mountPath: /tmp } ]
       volumes: [ { name: tmp, emptyDir: {} } ]

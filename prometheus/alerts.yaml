@@ -5,7 +5,7 @@ groups:
     rules:
 
       - alert: ServiceDown
-        expr: up{job=~"api-gateway|user-service|event-service|seat-service|booking-service|payment-service|loyalty-service"} == 0
+        expr: up{job=~"api-gateway|user-service|event-service|seat-service|booking-service|payment-service|loyalty-service|marketplace-service"} == 0
         for: 2m
         labels:
           severity: page
@@ -56,6 +56,23 @@ groups:
           summary: "Shop checkout p99 latency > 3s"
           description: "payment-service /payments/shop-checkout p99 = {{ $value | humanizeDuration }}."
           runbook: "prometheus/slo.md#shopcheckoutp95slow"
+
+      # Fed by the fixed http.server.requests SLO buckets (50ms..5s) every
+      # service now publishes. Above 5s the quantile reads as +Inf — still a
+      # breach. Actuator scrapes are excluded so the probe traffic doesn't
+      # dilute a slow service.
+      - alert: HttpP99Slow
+        expr: |
+          histogram_quantile(0.99,
+            sum by (le, job) (rate(http_server_requests_seconds_bucket{uri!~"/actuator.*"}[5m]))
+          ) > 2
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.job }} p99 latency > 2s"
+          description: "{{ $labels.job }} HTTP p99 = {{ $value | humanizeDuration }} over the last 5m, for 15m."
+          runbook: "prometheus/slo.md#httpp99slow"
 
   - name: business
     interval: 30s
@@ -133,6 +150,16 @@ groups:
           summary: "{{ $labels.job }} heap > 85%"
           description: "Heap usage on {{ $labels.instance }} = {{ $value | humanizePercentage }} for 10m."
           runbook: "prometheus/slo.md#jvmheappressure"
+
+      - alert: JvmGcTimeHigh
+        expr: sum by (job, instance) (rate(jvm_gc_pause_seconds_sum[5m])) > 0.05
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.job }} spends > 5% of its time in GC pauses"
+          description: "{{ $labels.instance }} paused for GC {{ $value | humanizePercentage }} of wall time over 5m, for 10m."
+          runbook: "prometheus/slo.md#jvmgctimehigh"
 
       # (Removed) OtelExportFailing: it queried
       # otlp_exporter_exported_spans_failed_total, a series nothing in the
