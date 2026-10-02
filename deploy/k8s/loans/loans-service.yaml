@@ -93,7 +93,11 @@ spec:
           env:
             # user.home and the PDFBox font cache on /tmp: the root filesystem
             # is read-only and PDF checks on uploaded documents may build a cache.
-            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0 -Duser.home=/tmp -Dpdfbox.fontcache=/tmp" }
+            # G1 is explicit for the same reason as the fleet's (04-services.yaml
+            # header): under a 1792MB limit the JVM picks SerialGC by ergonomics.
+            # ExitOnOutOfMemoryError lets the kubelet restart a pod that ran out
+            # of heap instead of leaving it half-working.
+            - { name: JAVA_TOOL_OPTIONS, value: "-XX:MaxRAMPercentage=70.0 -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError -Duser.home=/tmp -Dpdfbox.fontcache=/tmp" }
             - { name: SPRING_PROFILES_ACTIVE, value: "api" }
             # Pinned empty so a Secret line of the same name cannot add
             # scheduled-tasks (or override anything else: SPRING_APPLICATION_JSON
@@ -135,7 +139,11 @@ spec:
           # application holds the JSON, the decoded bytes and image buffers at
           # once — more headroom than the fleet's 640-768Mi.
           resources: { requests: { memory: 512Mi }, limits: { memory: 1Gi } }
-          readinessProbe: { httpGet: { path: /actuator/health, port: 8088 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
+          # Readiness is the app's own state plus its database (loans' readiness
+          # group), not the aggregate health, whose disk-space check could take the
+          # only loans pod out of service. The path exists on every loans build
+          # (probes.enabled), so this can roll out before or after the loans image.
+          readinessProbe: { httpGet: { path: /actuator/health/readiness, port: 8088 }, initialDelaySeconds: 45, periodSeconds: 10, failureThreshold: 24 }
           livenessProbe:  { httpGet: { path: /actuator/health/liveness, port: 8088 }, initialDelaySeconds: 180, periodSeconds: 15, failureThreshold: 6 }
           volumeMounts: [ { name: tmp, mountPath: /tmp } ]
       volumes: [ { name: tmp, emptyDir: {} } ]
