@@ -619,14 +619,14 @@ public class EventService {
                 .active(false)
                 .build();
 
-        byte[] bannerBytes = validatedBanner(eventBanner);
-        if (bannerBytes != null) {
-            event.setBannerContentType(eventBanner.getContentType().toLowerCase());
+        ValidatedBanner banner = validatedBanner(eventBanner);
+        if (banner != null) {
+            event.setBannerContentType(banner.contentType());
         }
 
         Event saved = eventRepository.save(event);
-        if (bannerBytes != null) {
-            eventRepository.writeBannerImage(saved.getEventId(), bannerBytes);
+        if (banner != null) {
+            eventRepository.writeBannerImage(saved.getEventId(), banner.bytes());
         }
         log.info("Event created eventId={} tenantUserUuid={}",
                 saved.getEventId(), saved.getTenantUserUuid());
@@ -660,9 +660,9 @@ public class EventService {
             throw new BadRequestException("Please choose an image to upload.");
         }
         Event event = requireOwnedEvent(tenantUserUuid, role, eventId, "update");
-        byte[] bytes = validatedBanner(banner);
-        eventRepository.writeBannerImage(eventId, bytes);
-        event.setBannerContentType(banner.getContentType().toLowerCase());
+        ValidatedBanner validated = validatedBanner(banner);
+        eventRepository.writeBannerImage(eventId, validated.bytes());
+        event.setBannerContentType(validated.contentType());
         // The bytes are not a mapped field, so a replace with the same content
         // type would leave the entity clean: no flush, no @PreUpdate, and the
         // bannerUrl below would keep the previous ?v=. Stamp updatedAt here so
@@ -807,13 +807,16 @@ public class EventService {
                 .build();
     }
 
+    /** An upload that passed {@link #validatedBanner}: its bytes and its lower-cased content type. */
+    private record ValidatedBanner(byte[] bytes, String contentType) {}
+
     /**
-     * Validates an uploaded banner and returns its bytes, or null when no file
-     * was sent (the create path's "no banner"). The caller stores the bytes with
+     * Validates an uploaded banner and returns it, or null when no file was sent
+     * (the create path's "no banner"). The caller stores the bytes with
      * {@link EventRepository#writeBannerImage} and sets the content type on the
      * entity; nothing here touches the event.
      */
-    private static byte[] validatedBanner(MultipartFile file) {
+    private static ValidatedBanner validatedBanner(MultipartFile file) {
         if (file == null || file.isEmpty()) return null;
         if (file.getSize() > MAX_BANNER_BYTES) {
             throw new BadRequestException("That image is too large. Please use one under 10 MB.");
@@ -839,7 +842,7 @@ public class EventService {
         if (!isSupportedImageSignature(bytes)) {
             throw new BadRequestException("Please upload a valid image file (JPG, PNG, or WEBP).");
         }
-        return bytes;
+        return new ValidatedBanner(bytes, contentType.toLowerCase());
     }
 
     // Magic-byte sniff for the three banner formats we allow (GIF is rejected —
