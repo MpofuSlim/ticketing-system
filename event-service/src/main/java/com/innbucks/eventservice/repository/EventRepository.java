@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -514,4 +515,31 @@ public interface EventRepository extends JpaRepository<Event, UUID> {
           AND e.endDateTime < :to
     """)
     List<UUID> findEventIdsEndedBetween(@Param("from") LocalDateTime from, @Param("to") LocalDateTime to);
+
+    // The banner bytes live in events.banner_image but are not mapped on Event
+    // (see the note there), so these two native queries are the only way to
+    // read or write them. Native, because JPQL can only name mapped fields.
+    // Neither touches version or updated_at: callers change the mapped
+    // bannerContentType / updatedAt through the entity in the same
+    // transaction, which is what versions the banner URL.
+    @Query(value = "SELECT banner_image FROM events WHERE event_id = :eventId", nativeQuery = true)
+    Optional<byte[]> findBannerImage(@Param("eventId") UUID eventId);
+
+    // @Transactional joins the caller's transaction (every service path has one)
+    // and gives a test fixture calling it directly one of its own.
+    // flushAutomatically: on the create path the event's INSERT is still pending
+    // in the persistence context, and this UPDATE must run after it. Not
+    // clearAutomatically: that would detach the Event the caller goes on to save.
+    @Transactional
+    @Modifying(flushAutomatically = true)
+    @Query(value = "UPDATE events SET banner_image = :bytes WHERE event_id = :eventId", nativeQuery = true)
+    int writeBannerImage(@Param("eventId") UUID eventId, @Param("bytes") byte[] bytes);
+
+    // Its own statement rather than writeBannerImage(id, null): a null byte[]
+    // reaches the driver untyped, the same binding trap the CAST note at the top
+    // of this file describes.
+    @Transactional
+    @Modifying(flushAutomatically = true)
+    @Query(value = "UPDATE events SET banner_image = NULL WHERE event_id = :eventId", nativeQuery = true)
+    int clearBannerImage(@Param("eventId") UUID eventId);
 }

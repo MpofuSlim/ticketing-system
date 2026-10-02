@@ -315,7 +315,7 @@ class EventControllerTest {
     }
 
     private Event saveBannerEvent(UUID owner, byte[] banner, String contentType) {
-        return eventRepository.save(Event.builder()
+        Event saved = eventRepository.save(Event.builder()
                 .tenantUserUuid(owner)
                 .title("Event With Banner")
                 .description("d")
@@ -326,10 +326,18 @@ class EventControllerTest {
                 .endDateTime(LocalDateTime.of(2030, 1, 1, 12, 0))
                 .totalCapacity(100)
                 .availableTickets(100)
-                .bannerImage(banner)
                 .bannerContentType(contentType)
                 .deleted(false)
                 .build());
+        // The bytes are not mapped on Event; they go in the way the service writes them.
+        if (banner != null) {
+            eventRepository.writeBannerImage(saved.getEventId(), banner);
+        }
+        return saved;
+    }
+
+    private byte[] storedBanner(UUID eventId) {
+        return eventRepository.findBannerImage(eventId).orElse(null);
     }
 
     /**
@@ -470,7 +478,7 @@ class EventControllerTest {
                 .andExpect(status().isForbidden());
 
         Event reloaded = eventRepository.findById(saved.getEventId()).orElseThrow();
-        org.junit.jupiter.api.Assertions.assertArrayEquals(original, reloaded.getBannerImage(),
+        org.junit.jupiter.api.Assertions.assertArrayEquals(original, storedBanner(saved.getEventId()),
                 "a non-owner's rejected upload must not have touched the stored image");
     }
 
@@ -501,7 +509,7 @@ class EventControllerTest {
                 .andExpect(jsonPath("$.message", containsString("valid image file")));
 
         Event reloaded = eventRepository.findById(saved.getEventId()).orElseThrow();
-        org.junit.jupiter.api.Assertions.assertArrayEquals(original, reloaded.getBannerImage(),
+        org.junit.jupiter.api.Assertions.assertArrayEquals(original, storedBanner(saved.getEventId()),
                 "a rejected upload must leave the previous banner in place");
     }
 
@@ -565,7 +573,7 @@ class EventControllerTest {
                 .andExpect(jsonPath("$.data.bannerUrl").doesNotExist());
 
         Event reloaded = eventRepository.findById(saved.getEventId()).orElseThrow();
-        org.junit.jupiter.api.Assertions.assertNull(reloaded.getBannerImage());
+        org.junit.jupiter.api.Assertions.assertNull(storedBanner(saved.getEventId()));
         org.junit.jupiter.api.Assertions.assertNull(reloaded.getBannerContentType());
     }
 
@@ -591,7 +599,7 @@ class EventControllerTest {
                 .andExpect(status().isForbidden());
 
         Event reloaded = eventRepository.findById(saved.getEventId()).orElseThrow();
-        org.junit.jupiter.api.Assertions.assertArrayEquals(original, reloaded.getBannerImage());
+        org.junit.jupiter.api.Assertions.assertArrayEquals(original, storedBanner(saved.getEventId()));
     }
 
     @Test
