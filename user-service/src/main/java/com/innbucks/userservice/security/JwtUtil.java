@@ -146,9 +146,15 @@ public class JwtUtil {
         }
     }
 
-    /** Strip PEM armour + whitespace, leaving the base64 body. */
+    /**
+     * Strip PEM armour + whitespace, leaving the base64 body. A PEM kept on one
+     * line in an env file or a k8s Secret carries its line breaks as literal
+     * two-character "\n" escapes; a backslash is not Base64, so they are dropped
+     * first rather than failing the boot.
+     */
     private static String stripPem(String pem) {
-        return pem.replaceAll("-----BEGIN [^-]+-----", "")
+        return pem.replace("\\n", "").replace("\\r", "")
+                .replaceAll("-----BEGIN [^-]+-----", "")
                 .replaceAll("-----END [^-]+-----", "")
                 .replaceAll("\\s", "");
     }

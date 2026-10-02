@@ -1105,6 +1105,19 @@ no further change and cannot tell how the customer proved themselves.
   `AUTH_FEDERATION_ENABLED` / `_PUBLIC_KEY` / `_PREVIOUS_PUBLIC_KEY` / `_ISSUER` /
   `_AUDIENCE` / `_MAX_TTL_SECONDS` in `deploy/cells/cell.<iso>.env` (committed OFF,
   enabled per host in the gitignored local file).
+- **A malformed key FAILS THE BOOT, so the key's one-line form matters.** An
+  env-file value is one line, so the PEM arrives with its breaks as literal
+  two-character `\n` escapes (or none at all). Every PEM parser in the fleet
+  (this verifier and the five `JwtUtil`s here) drops those escapes before
+  Base64-decoding. Before that, the backslash was "Illegal base64 character 5c":
+  the first production enablement (2026-10-02) crash-looped user-service on
+  exactly that, and `JWT_PUBLIC_KEY` would have taken down every service at
+  step 1 of the RS256 migration. Only `\n`/`\r` are dropped; any other stray
+  character still fails the boot, on purpose. Pinned by
+  `FederationAssertionVerifierTest.provisionedKeyShapes_areAccepted`,
+  `JwtUtilRs256Test` and each service's `JwtUtilPublicKeyPemTest`. Before
+  restarting, check the value with the decode-and-fingerprint command beside
+  `AUTH_FEDERATION_PUBLIC_KEY` in `cell.zw.env`.
 - **Gateway: `auth-exchange-route`** — POST-only, exact path, IP-keyed fail-safe
   limiter (`AUTH_EXCHANGE_RATE_LIMIT_*`, 5/20), ordered before the limiter-free
   `/auth/**` catch-all; pinned in `GatewayRouteTableTest`.

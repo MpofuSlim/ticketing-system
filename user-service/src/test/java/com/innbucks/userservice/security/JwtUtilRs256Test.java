@@ -126,6 +126,27 @@ class JwtUtilRs256Test {
     }
 
     @Test
+    void rs256_keysKeptOnOneLineWithLiteralNewlineEscapes_parse() {
+        // The cell Secret shape: each PEM on one env-file line, its breaks written
+        // as literal two-character "\n" escapes. A backslash is not Base64, so this
+        // used to fail the boot - the federation key did, on production (2026-10-02).
+        JwtUtil u = hs256Util();
+        ReflectionTestUtils.setField(u, "publicKeyPem", oneLine(publicPem));
+        ReflectionTestUtils.setField(u, "privateKeyPem", oneLine(privatePem));
+        ReflectionTestUtils.setField(u, "signingAlgorithm", "RS256");
+
+        String token = u.generateToken("rs@example.com", "CUSTOMER", 1, true);
+        assertEquals("RS256", algHeader(token));
+        // Verified by a verifier holding the real-newline key: the same key pair.
+        assertTrue(dualVerifyUtil().isTokenValid(token));
+        assertEquals("rs@example.com", dualVerifyUtil().extractEmail(token));
+    }
+
+    private static String oneLine(String pem) {
+        return pem.replace("\r\n", "\n").replace("\n", "\\n");
+    }
+
+    @Test
     void rs256Signing_withoutPrivateKey_failsFast() {
         JwtUtil u = hs256Util();
         ReflectionTestUtils.setField(u, "publicKeyPem", publicPem);
