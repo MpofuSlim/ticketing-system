@@ -3,13 +3,13 @@ package com.innbucks.bookingservice.messaging;
 import com.innbucks.bookingservice.client.EmailNotificationClient;
 import com.innbucks.bookingservice.client.SmsNotificationClient;
 import com.innbucks.bookingservice.client.WhatsAppNotificationClient;
+import com.innbucks.bookingservice.config.AsyncConfig;
 import com.innbucks.bookingservice.entity.Booking;
 import com.innbucks.bookingservice.event.BookingDomainEvent;
 import com.innbucks.bookingservice.repository.BookingRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
 
@@ -33,6 +33,16 @@ import org.springframework.transaction.event.TransactionalEventListener;
  * message, and sending it twice is both confusing and billable. A failure on any
  * leg never affects the committed cancellation. No QR here — a cancellation
  * isn't a ticket.
+ *
+ * <p><b>Async, and deliberately NOT {@code @Transactional}</b> — same reason as
+ * {@link BookingConfirmedNotificationListener}. The hold-expiry sweep
+ * ({@code BookingExpirationService.expirePending}) cancels a whole batch in one
+ * transaction every 30s, and on commit this listener ran once per expired
+ * hold, back to back on the single scheduler thread — each one's email + SMS
+ * round trips paid there while holding two pooled connections (the committed
+ * one, plus the listener's {@code REQUIRES_NEW}).
+ * The read below is a single repository call; no connection is held while
+ * sending.
  */
 @Component
 @Slf4j
@@ -53,8 +63,8 @@ public class BookingCancelledNotificationListener {
         this.whatsApp = whatsApp;
     }
 
+    @Async(AsyncConfig.TICKET_DELIVERY_EXECUTOR)
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    @Transactional(propagation = Propagation.REQUIRES_NEW, readOnly = true)
     public void onBookingCancelled(BookingDomainEvent.BookingCancelled event) {
         Booking booking = bookingRepository.findById(event.bookingId()).orElse(null);
         if (booking == null) {

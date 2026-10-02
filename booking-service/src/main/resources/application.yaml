@@ -34,6 +34,14 @@ spring:
         order_inserts: true
         order_updates: true
 
+  # Keep Boot's applicationTaskExecutor (and its role as the default for a
+  # plain @Async) even though AsyncConfig declares its own ticketDeliveryExecutor.
+  # Without "force" any user-defined Executor bean switches Boot's off, and the
+  # event-change broadcast's plain @Async would silently move executors.
+  task:
+    execution:
+      mode: force
+
   flyway:
     enabled: ${FLYWAY_ENABLED:true}
     baseline-on-migrate: false

@@ -85,7 +85,7 @@ class BookingConfirmedNotificationListenerTest {
     void confirmed_sendsPlainTextEmail_andOneQrPerTicket_neverHitsCustomNotificationEndpoint() {
         Mocks m = mocks();
         Booking b = bookingFixture("+263771234567", "rufaro@example.com", 2);
-        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+        when(m.repo().findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
 
         m.listener().onBookingConfirmed(eventFor(b));
 
@@ -115,7 +115,7 @@ class BookingConfirmedNotificationListenerTest {
     void eventName_isSingleLineNounPhrase_withTitleSummaryAndTicketNumbers() {
         Mocks m = mocks();
         Booking b = bookingFixture("+263771234567", null, 2);
-        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+        when(m.repo().findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
 
         m.listener().onBookingConfirmed(eventFor(b));
 
@@ -144,7 +144,7 @@ class BookingConfirmedNotificationListenerTest {
     void eventName_singleTicket_saysOneTicket_notPlural() {
         Mocks m = mocks();
         Booking b = bookingFixture("+263771234567", null, 1);
-        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+        when(m.repo().findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
 
         m.listener().onBookingConfirmed(eventFor(b));
 
@@ -158,7 +158,7 @@ class BookingConfirmedNotificationListenerTest {
     void eventName_eventLookupFails_fallsBackButStaysSingleLineWithSummary() {
         Mocks m = mocks();
         Booking b = bookingFixture("+263771234567", null, 1);
-        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+        when(m.repo().findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
         when(m.events().getEvent(b.getEventId()))
                 .thenThrow(new RuntimeException("event-service circuit open"));
 
@@ -177,7 +177,7 @@ class BookingConfirmedNotificationListenerTest {
     void qrETicket_oneTicketFails_theOthersStillSend() {
         Mocks m = mocks();
         Booking b = bookingFixture("+263771234567", null, 3);
-        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+        when(m.repo().findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
         doThrow(new NotificationDeliveryException("media fetch 404"))
                 .doNothing()
                 .when(m.wa()).sendEventQrCode(anyString(), anyString(),
@@ -193,7 +193,7 @@ class BookingConfirmedNotificationListenerTest {
     void emailFailure_doesNotBlockWhatsApp() {
         Mocks m = mocks();
         Booking b = bookingFixture("+263771234567", "rufaro@example.com", 1);
-        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+        when(m.repo().findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
         doThrow(new NotificationDeliveryException("email gw down"))
                 .when(m.email()).sendEmail(anyString(), anyString(), anyString(), anyString());
 
@@ -205,7 +205,7 @@ class BookingConfirmedNotificationListenerTest {
     void whatsAppCompletelyDown_doesNotThrow_emailUnaffected() {
         Mocks m = mocks();
         Booking b = bookingFixture("+263771234567", "rufaro@example.com", 2);
-        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+        when(m.repo().findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
         doThrow(new NotificationDeliveryException("gw 503"))
                 .when(m.wa()).sendEventQrCode(anyString(), anyString(), anyString());
 
@@ -221,7 +221,7 @@ class BookingConfirmedNotificationListenerTest {
     void noPhone_emailStillDelivers_noWhatsAppCalls() {
         Mocks m = mocks();
         Booking b = bookingFixture(null, "rufaro@example.com", 1);
-        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+        when(m.repo().findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
 
         m.listener().onBookingConfirmed(eventFor(b));
 
@@ -233,7 +233,7 @@ class BookingConfirmedNotificationListenerTest {
     void noEmail_whatsAppStillDelivers_noEmailCalls() {
         Mocks m = mocks();
         Booking b = bookingFixture("+263771234567", null, 1);
-        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+        when(m.repo().findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
 
         m.listener().onBookingConfirmed(eventFor(b));
 
@@ -245,7 +245,7 @@ class BookingConfirmedNotificationListenerTest {
     void noEmailAndNoPhone_doesNothing_noThrow() {
         Mocks m = mocks();
         Booking b = bookingFixture(null, null, 1);
-        when(m.repo().findById(b.getId())).thenReturn(Optional.of(b));
+        when(m.repo().findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
 
         assertThatCode(() -> m.listener().onBookingConfirmed(eventFor(b))).doesNotThrowAnyException();
         verifyNoInteractions(m.wa(), m.email());
@@ -255,7 +255,7 @@ class BookingConfirmedNotificationListenerTest {
     void bookingMissing_logsAndReturns_noChannelTouched() {
         Mocks m = mocks();
         UUID bookingId = UUID.randomUUID();
-        when(m.repo().findById(bookingId)).thenReturn(Optional.empty());
+        when(m.repo().findByIdWithItems(bookingId)).thenReturn(Optional.empty());
 
         m.listener().onBookingConfirmed(new BookingDomainEvent.BookingConfirmed(
                 bookingId, "gone@example.com", "INN-MISSING", Instant.now()));

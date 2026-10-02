@@ -35,7 +35,8 @@ public interface EventServiceClient {
     );
 
     // Decrements the event's stored availableTickets atomically. Called from
-    // BookingService.confirmBooking once a booking transitions to CONFIRMED.
+    // EventAvailabilityConsumeListener, after the commit that transitions a
+    // booking to CONFIRMED (never inside that transaction).
     //
     // event-service enforces the X-Internal-Token shared secret on this path
     // as defence in depth on top of the gateway's event-availability-deny
