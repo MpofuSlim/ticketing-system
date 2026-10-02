@@ -117,6 +117,20 @@ spec:
             # This reads the ConfigMap: if a host ever overrides the URL in its
             # cell.<iso>.local.env, point this ref at cell-zw-secrets instead.
             - { name: WHATSAPP_GATEWAY_URL, valueFrom: { configMapKeyRef: { name: cell-zw, key: WHATSAPP_GATEWAY_URL, optional: true } } }
+            # Email over the cell's SES, as user-service sends Foundry's, from
+            # loans' own name ("InnBucks Lending", never MAIL_SENDER_NAME). Each is
+            # optional: without SES, loans email goes through the notification API.
+            # MAIL_ENABLED and the SMTP credentials read the SECRET because a host
+            # switches SES on in its cell.<iso>.local.env (cell.zw.env, shared with
+            # production, keeps it false); if that file ever sets it true, point
+            # MAIL_ENABLED at the ConfigMap too. Host, port and sender address are
+            # the committed ones.
+            - { name: MAIL_ENABLED, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: MAIL_ENABLED, optional: true } } }
+            - { name: MAIL_HOST, valueFrom: { configMapKeyRef: { name: cell-zw, key: MAIL_HOST, optional: true } } }
+            - { name: MAIL_PORT, valueFrom: { configMapKeyRef: { name: cell-zw, key: MAIL_PORT, optional: true } } }
+            - { name: MAIL_FROM, valueFrom: { configMapKeyRef: { name: cell-zw, key: MAIL_FROM, optional: true } } }
+            - { name: MAIL_USERNAME, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: MAIL_USERNAME, optional: true } } }
+            - { name: MAIL_PASSWORD, valueFrom: { secretKeyRef: { name: cell-zw-secrets, key: MAIL_PASSWORD, optional: true } } }
           # Documents arrive as base64 inside JSON (up to 5 MB each), so one
           # application holds the JSON, the decoded bytes and image buffers at
           # once — more headroom than the fleet's 640-768Mi.

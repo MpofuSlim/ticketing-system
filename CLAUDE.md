@@ -197,8 +197,17 @@ are kept in lock-step per `docs/fleet-wiring.md` in the innbucks-loans repo.
   `INNBUCKS_GATEWAY_URL` (a retired host) would land on loans' own settings.
   It gets `envFrom` of its own Secret only, plus explicit `env:` entries that
   name each cell key it needs (`POSTGRES_*`, `INNBUCKS_COUNTRY`,
-  `PUBLIC_API_PREFIX`, `WHATSAPP_GATEWAY_URL`). Don't "simplify" it into the
-  fleet shape, and never put a loans key in the cell files — every pod gets those.
+  `PUBLIC_API_PREFIX`, `WHATSAPP_GATEWAY_URL`, and the SES keys `MAIL_ENABLED` /
+  `_HOST` / `_PORT` / `_FROM` / `_USERNAME` / `_PASSWORD`, all optional). Don't
+  "simplify" it into the fleet shape, and never put a loans key in the cell
+  files — every pod gets those.
+- **Loans email goes the way user-service sends Foundry's**: branded HTML, over
+  the cell's SES when the host has it on, else the notification API. It sends
+  as `InnBucks Lending` (`LOANS_MAIL_SENDER_NAME`), so the Deployment never names
+  `MAIL_SENDER_NAME` ("Foundry"). `MAIL_ENABLED` and the SMTP credentials read
+  `cell-zw-secrets`, because a host switches SES on in its local file while
+  `cell.zw.env` (shared with production) keeps it false; if that file ever sets
+  it true, point `MAIL_ENABLED` at the ConfigMap too.
 - **That Secret carries ONLY the keys `loans.example.env` lists** — never a
   `SPRING_*`, `SERVER_*`, `DB_*` or `JAVA_*` key. An explicit `env:` entry beats
   envFrom for the SAME key only, and relaxed binding reaches a property through
