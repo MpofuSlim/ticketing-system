@@ -244,6 +244,12 @@ are kept in lock-step per `docs/fleet-wiring.md` in the innbucks-loans repo.
   whole backlog at its first tick. Enabling them is a separate go-live step. The
   Deployment is `replicas: 1` + `strategy: Recreate` so two loans processes never
   overlap, not even mid-rollout; keep both when the jobs come on.
+  **The Staff Grocery Loan jobs are the exception** (innbucks-loans #141): the
+  weekly offer run, the staff-message retry and voucher upkeep move no money, so
+  `STAFF_LOANS_JOBS_ENABLED=true` in loans' own Secret runs them without
+  `scheduled-tasks`. Turning it on starts the Monday run, which messages every
+  eligible staff member. Loans' `StaffLoanJobsWiringTest` fails the build if a
+  paying job is ever put behind that key.
 - **Port 8088 is in lock-step everywhere**: loans' packaged `server.port`, the
   explicit `SERVER_PORT`, containerPort, probes, the Service, and the
   `loans-service` line in every copy of the discovery map IN THIS REPO (the six
