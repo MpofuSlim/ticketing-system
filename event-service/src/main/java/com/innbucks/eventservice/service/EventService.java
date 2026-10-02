@@ -57,7 +57,7 @@ public class EventService {
     private static final Set<String> SORTABLE_FIELDS = Set.of(
             "eventId", "tenantUserUuid", "title", "description", "venue", "country",
             "category", "location", "startDateTime", "endDateTime", "totalCapacity",
-            "availableTickets", "bannerImage", "bannerContentType", "version",
+            "availableTickets", "bannerContentType", "version",
             "deleted", "active", "rejected", "createdAt", "updatedAt"
     );
 
@@ -619,9 +619,15 @@ public class EventService {
                 .active(false)
                 .build();
 
-        applyBanner(event, eventBanner);
+        byte[] bannerBytes = validatedBanner(eventBanner);
+        if (bannerBytes != null) {
+            event.setBannerContentType(eventBanner.getContentType().toLowerCase());
+        }
 
         Event saved = eventRepository.save(event);
+        if (bannerBytes != null) {
+            eventRepository.writeBannerImage(saved.getEventId(), bannerBytes);
+        }
         log.info("Event created eventId={} tenantUserUuid={}",
                 saved.getEventId(), saved.getTenantUserUuid());
         return toDtoWithAvailability(saved, fetchActiveCounts(saved.getEventId()));
@@ -630,7 +636,7 @@ public class EventService {
     /**
      * Replace an existing event's banner image.
      *
-     * <p>Exists because the banner was previously write-once: {@link #applyBanner}
+     * <p>Exists because the banner was previously write-once: {@link #validatedBanner}
      * ran only on the create path, so an organizer who uploaded the wrong poster
      * had no route back short of deleting the event — which would take its
      * bookings and seat categories with it.
@@ -640,10 +646,10 @@ public class EventService {
      * sends JSON, so widening it would be a breaking change. This is the write
      * twin of {@code GET /events/{id}/banner}.
      *
-     * <p>Validation is {@link #applyBanner}'s, unchanged — size cap, content-type
+     * <p>Validation is {@link #validatedBanner}'s, unchanged — size cap, content-type
      * allow-list and the magic-byte sniff that stops a script payload wearing an
      * {@code image/*} header. A missing/empty file is refused here rather than
-     * silently no-op'ing (applyBanner's create-path behaviour), because on a
+     * silently no-op'ing (the create path's behaviour), because on a
      * replace the caller plainly meant to change something; use
      * {@link #deleteEventBanner} to clear.
      */
@@ -654,7 +660,14 @@ public class EventService {
             throw new BadRequestException("Please choose an image to upload.");
         }
         Event event = requireOwnedEvent(tenantUserUuid, role, eventId, "update");
-        applyBanner(event, banner);
+        byte[] bytes = validatedBanner(banner);
+        eventRepository.writeBannerImage(eventId, bytes);
+        event.setBannerContentType(banner.getContentType().toLowerCase());
+        // The bytes are not a mapped field, so a replace with the same content
+        // type would leave the entity clean: no flush, no @PreUpdate, and the
+        // bannerUrl below would keep the previous ?v=. Stamp updatedAt here so
+        // the entity is always dirty.
+        event.setUpdatedAt(LocalDateTime.now(ZoneOffset.UTC));
         // saveAndFlush, NOT save: @PreUpdate runs at FLUSH, and inside this
         // @Transactional method the flush would otherwise happen at commit —
         // after the mapper has already read updatedAt. The DTO would then carry
@@ -679,7 +692,7 @@ public class EventService {
     public EventResponseDTO deleteEventBanner(UUID tenantUserUuid, String role, UUID eventId) {
         log.info("Clearing event banner eventId={} tenantUserUuid={} role={}", eventId, tenantUserUuid, role);
         Event event = requireOwnedEvent(tenantUserUuid, role, eventId, "update");
-        event.setBannerImage(null);
+        eventRepository.clearBannerImage(eventId);
         event.setBannerContentType(null);
         Event saved = eventRepository.save(event);
         log.info("Event banner cleared eventId={} tenantUserUuid={}", eventId, tenantUserUuid);
@@ -762,10 +775,11 @@ public class EventService {
         if (!published && !callerMayViewUnpublished(event)) {
             throw new NotFoundException("Event not found");
         }
-        if (event.getBannerImage() == null || event.getBannerImage().length == 0) {
+        byte[] bytes = eventRepository.findBannerImage(eventId).orElse(null);
+        if (bytes == null || bytes.length == 0 || event.getBannerContentType() == null) {
             throw new NotFoundException("No banner image has been uploaded for this event yet.");
         }
-        return new BannerImage(event.getBannerImage(), event.getBannerContentType());
+        return new BannerImage(bytes, event.getBannerContentType());
     }
 
     public record BannerImage(byte[] bytes, String contentType) {}
@@ -793,8 +807,14 @@ public class EventService {
                 .build();
     }
 
-    private static void applyBanner(Event event, MultipartFile file) {
-        if (file == null || file.isEmpty()) return;
+    /**
+     * Validates an uploaded banner and returns its bytes, or null when no file
+     * was sent (the create path's "no banner"). The caller stores the bytes with
+     * {@link EventRepository#writeBannerImage} and sets the content type on the
+     * entity; nothing here touches the event.
+     */
+    private static byte[] validatedBanner(MultipartFile file) {
+        if (file == null || file.isEmpty()) return null;
         if (file.getSize() > MAX_BANNER_BYTES) {
             throw new BadRequestException("That image is too large. Please use one under 10 MB.");
         }
@@ -819,8 +839,7 @@ public class EventService {
         if (!isSupportedImageSignature(bytes)) {
             throw new BadRequestException("Please upload a valid image file (JPG, PNG, or WEBP).");
         }
-        event.setBannerImage(bytes);
-        event.setBannerContentType(contentType.toLowerCase());
+        return bytes;
     }
 
     // Magic-byte sniff for the three banner formats we allow (GIF is rejected —

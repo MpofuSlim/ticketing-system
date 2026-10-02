@@ -81,15 +81,17 @@ public class Event {
     @Column(nullable = false)
     private Integer availableTickets;
 
-    // Banner image bytes. Declared as BYTEA — Postgres has no length cap that
-    // would truncate real-world images, unlike the default Hibernate varbinary
-    // mapping. Lazy-loaded so list endpoints don't pull bytes into memory;
-    // clients fetch the bytes via GET /events/{id}/banner using the bannerUrl
-    // on the response.
-    @Basic(fetch = FetchType.LAZY)
-    @Column(name = "banner_image", columnDefinition = "BYTEA")
-    private byte[] bannerImage;
-
+    // The banner's BYTES (events.banner_image, BYTEA, up to 10 MB) are
+    // deliberately NOT mapped here. A @Basic(fetch = LAZY) byte[] is only lazy
+    // with Hibernate bytecode enhancement, which this service does not run, so
+    // it used to be selected by every query that loads an Event, list pages
+    // included. They are read and written only through EventRepository's
+    // banner queries (findBannerImage / writeBannerImage). The column stays on
+    // events, where Postgres keeps large values out of line, so a query that
+    // does not name it never reads them. Don't map it back:
+    // EventBannerNotMappedTest fails if a field is bound to that column.
+    // The content type stays mapped: it is small, and bannerUrl is derived
+    // from it.
     @Column(name = "banner_content_type")
     private String bannerContentType;
 
