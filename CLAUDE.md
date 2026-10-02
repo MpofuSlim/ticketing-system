@@ -1198,6 +1198,16 @@ and blocks phones on `/device-security/ussd/**`; the call center works it from
   protection that did not exist. Support still sees the period, worded as "no
   lower limits apply". **Re-announce it only in the change that makes the money
   path lower limits for it** (DTX → broker → middleware claim), never on its own.
+- **`DEVICE_SECURITY_WAIVED_THREATS` is a temporary escape hatch, not a setting.**
+  A banning integrity finding listed there (e.g. `TAMPER`) is logged as
+  `INTEGRITY_<name>_WAIVED` (weight 0) and does not ban; every other check still
+  runs, and the findings NOT listed still ban. It exists because a production app
+  build shipped with a wrong freeRASP signing hash (2026-10-02): `appIntegrity` on
+  every launch banned every tester within seconds, and the only other lever was
+  switching ALL enforcement off. user-service WARNs at every boot while it is set.
+  Blank in the committed cell files; set per host and cleared when the fixed build
+  ships — the `_WAIVED` signal disappearing from `device_security_events.features`
+  is the proof. Pinned by the three `waived*` cases in `RiskEngineTest`.
 - **A trusted phone is never re-asked for a STANDING condition** (`RiskEngine.AMBIENT`:
   `APP_CHECK_ABSENT`, `INTEGRITY_UNAVAILABLE`, `OUTSIDE_KNOWN_PLACES`,
   `PIN_RECENTLY_ISSUED`, `TOO_MANY_DEVICES`, `LOCATION_REFUSED`). They are the same on

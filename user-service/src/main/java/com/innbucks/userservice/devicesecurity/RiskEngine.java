@@ -143,12 +143,21 @@ public class RiskEngine {
         Set<IntegrityThreat> threats = in.threats() == null ? EnumSet.noneOf(IntegrityThreat.class) : in.threats();
 
         // ---- Tier 1: hard triggers ------------------------------------------------
+        Set<IntegrityThreat> waived = in.risk() == null || in.risk().getWaivedThreats() == null
+                ? EnumSet.noneOf(IntegrityThreat.class) : in.risk().getWaivedThreats();
+        boolean ban = false;
         for (IntegrityThreat t : IntegrityThreat.BANNING) {
-            if (threats.contains(t)) {
+            if (!threats.contains(t)) continue;
+            if (waived.contains(t)) {
+                // Recorded (weight 0, so it moves no score) so the decision log still
+                // shows the finding, and its disappearance proves the app is fixed.
+                signals.put("INTEGRITY_" + t.name() + "_WAIVED", 0);
+            } else {
                 signals.put("INTEGRITY_" + t.name(), 100);
+                ban = true;
             }
         }
-        if (!signals.isEmpty()) {
+        if (ban) {
             return new Assessment(Verdict.BAN, null, null, BanReason.INTEGRITY, 100, signals);
         }
 

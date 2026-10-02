@@ -204,6 +204,9 @@ device-security:
     max-customers-per-device: ${DEVICE_SECURITY_MAX_CUSTOMERS_PER_DEVICE:2}
   risk:
     block-score: ${DEVICE_SECURITY_RISK_BLOCK_SCORE:90}
+    # Banning integrity findings to log but not act on (comma-separated
+    # IntegrityThreat names, e.g. TAMPER). Blank = all of them ban. Temporary only.
+    waived-threats: ${DEVICE_SECURITY_WAIVED_THREATS:}
 
 loyalty-service:
   base-url: http://loyalty-service

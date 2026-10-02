@@ -183,6 +183,16 @@ public class DeviceSecurityProperties {
         private int placeMinHistory = 5;
         private int numbersPerDeviceHourly = 3;
         private int wrongPinsPerDay = 3;
+        /**
+         * Banning integrity findings to record but NOT act on, by {@link IntegrityThreat}
+         * name ({@code DEVICE_SECURITY_WAIVED_THREATS=TAMPER}). Empty = every banning
+         * finding bans. A temporary escape hatch for a mis-configured app build (a wrong
+         * freeRASP signing hash reports {@code appIntegrity} on every launch), so the
+         * cell can keep OTP, blocks and bans enforced while the build is fixed, instead
+         * of switching all enforcement off. Only {@link IntegrityThreat#BANNING} members
+         * mean anything here. Clear it the moment the fixed build ships.
+         */
+        private java.util.Set<IntegrityThreat> waivedThreats = java.util.EnumSet.noneOf(IntegrityThreat.class);
     }
 
     /** *569# safeguards (§9.3). */
