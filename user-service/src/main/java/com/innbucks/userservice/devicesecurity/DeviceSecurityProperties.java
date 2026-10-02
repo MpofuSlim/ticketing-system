@@ -5,7 +5,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Configuration for DTX device security ({@code device-security.*}). Defaults
@@ -192,7 +194,7 @@ public class DeviceSecurityProperties {
          * of switching all enforcement off. Only {@link IntegrityThreat#BANNING} members
          * mean anything here. Clear it the moment the fixed build ships.
          */
-        private java.util.Set<IntegrityThreat> waivedThreats = java.util.EnumSet.noneOf(IntegrityThreat.class);
+        private Set<IntegrityThreat> waivedThreats = EnumSet.noneOf(IntegrityThreat.class);
     }
 
     /** *569# safeguards (§9.3). */

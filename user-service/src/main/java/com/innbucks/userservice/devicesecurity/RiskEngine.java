@@ -143,8 +143,7 @@ public class RiskEngine {
         Set<IntegrityThreat> threats = in.threats() == null ? EnumSet.noneOf(IntegrityThreat.class) : in.threats();
 
         // ---- Tier 1: hard triggers ------------------------------------------------
-        Set<IntegrityThreat> waived = in.risk() == null || in.risk().getWaivedThreats() == null
-                ? EnumSet.noneOf(IntegrityThreat.class) : in.risk().getWaivedThreats();
+        Set<IntegrityThreat> waived = in.risk().getWaivedThreats();
         boolean ban = false;
         for (IntegrityThreat t : IntegrityThreat.BANNING) {
             if (!threats.contains(t)) continue;
