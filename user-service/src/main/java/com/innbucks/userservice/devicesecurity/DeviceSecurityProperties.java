@@ -5,7 +5,9 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Configuration for DTX device security ({@code device-security.*}). Defaults
@@ -183,6 +185,16 @@ public class DeviceSecurityProperties {
         private int placeMinHistory = 5;
         private int numbersPerDeviceHourly = 3;
         private int wrongPinsPerDay = 3;
+        /**
+         * Banning integrity findings to record but NOT act on, by {@link IntegrityThreat}
+         * name ({@code DEVICE_SECURITY_WAIVED_THREATS=TAMPER}). Empty = every banning
+         * finding bans. A temporary escape hatch for a mis-configured app build (a wrong
+         * freeRASP signing hash reports {@code appIntegrity} on every launch), so the
+         * cell can keep OTP, blocks and bans enforced while the build is fixed, instead
+         * of switching all enforcement off. Only {@link IntegrityThreat#BANNING} members
+         * mean anything here. Clear it the moment the fixed build ships.
+         */
+        private Set<IntegrityThreat> waivedThreats = EnumSet.noneOf(IntegrityThreat.class);
     }
 
     /** *569# safeguards (§9.3). */

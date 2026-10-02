@@ -48,13 +48,14 @@ class RiskEngineTest {
         int numbersLastHour = 1;
         long wrongPins;
         boolean production = true;
+        DeviceSecurityProperties.Risk risk = new DeviceSecurityProperties.Risk();
 
         RiskEngine.Input build() {
             return new RiskEngine.Input(NOW, purpose, context, state, stateReason, trustedUntil, boundBefore, inPinGrace,
                     storedPlatform, storedManufacturer, storedModel, platform, manufacturer, model, threats,
                     integritySource, appCheck, locationStatus, lat, lng, mocked, fraudFlagged, pinIssuedAt,
                     lastSignInAt, lastFix, knownFixes, otherTrusted, otherBoundCustomers, numbersLastHour, wrongPins,
-                    production, new DeviceSecurityProperties.Trust(), new DeviceSecurityProperties.Risk());
+                    production, new DeviceSecurityProperties.Trust(), risk);
         }
     }
 
@@ -120,6 +121,45 @@ class RiskEngineTest {
             assertThat(a.verdict()).as(t.name()).isEqualTo(RiskEngine.Verdict.BAN);
             assertThat(a.banReason()).isEqualTo(BanReason.INTEGRITY);
         }
+    }
+
+    @Test
+    @DisplayName("a waived finding (DEVICE_SECURITY_WAIVED_THREATS=TAMPER) is logged, not banned — the rest of the engine still runs")
+    void waivedTamper_isRecordedButDoesNotBan() {
+        In in = new In();
+        in.threats = EnumSet.of(IntegrityThreat.TAMPER);
+        in.risk.setWaivedThreats(EnumSet.of(IntegrityThreat.TAMPER));
+        RiskEngine.Assessment a = assess(in);
+        assertThat(a.verdict()).isEqualTo(RiskEngine.Verdict.ALLOW);
+        assertThat(a.signals()).containsEntry("INTEGRITY_TAMPER_WAIVED", 0).doesNotContainKey("INTEGRITY_TAMPER");
+    }
+
+    @Test
+    @DisplayName("waiving TAMPER never waives the others: hooks / automation / malware still ban alongside it")
+    void waivingTamper_stillBansTheOthers() {
+        for (IntegrityThreat t : IntegrityThreat.BANNING) {
+            if (t == IntegrityThreat.TAMPER) continue;
+            In in = new In();
+            in.threats = EnumSet.of(IntegrityThreat.TAMPER, t);
+            in.risk.setWaivedThreats(EnumSet.of(IntegrityThreat.TAMPER));
+            RiskEngine.Assessment a = assess(in);
+            assertThat(a.verdict()).as(t.name()).isEqualTo(RiskEngine.Verdict.BAN);
+            assertThat(a.signals()).containsEntry("INTEGRITY_" + t.name(), 100);
+        }
+    }
+
+    @Test
+    @DisplayName("a waived TAMPER on a NEW phone still gets the new-device code — the waiver lifts the ban, not the other checks")
+    void waivedTamper_newPhone_stillStepsUp() {
+        In in = new In();
+        in.state = DeviceState.NEW;
+        in.boundBefore = false;
+        in.trustedUntil = null;
+        in.threats = EnumSet.of(IntegrityThreat.TAMPER);
+        in.risk.setWaivedThreats(EnumSet.of(IntegrityThreat.TAMPER));
+        RiskEngine.Assessment a = assess(in);
+        assertThat(a.verdict()).isEqualTo(RiskEngine.Verdict.STEP_UP);
+        assertThat(a.otpReason()).isEqualTo(OtpReason.NEW_DEVICE);
     }
 
     @Test

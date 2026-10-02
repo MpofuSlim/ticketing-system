@@ -7,6 +7,7 @@ import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Boot-time check for DTX device security. The failure it exists to catch is
@@ -57,6 +58,12 @@ public class DeviceSecurityProvisioningCheck {
         if (!blank(properties.getBrokerApiKey()) && properties.getBrokerApiKey().equals(properties.getUssdApiKey())) {
             log.error("DEVICE_SECURITY_BROKER_API_KEY and DEVICE_SECURITY_USSD_API_KEY are EQUAL: a leak of either "
                     + "partner's key would open the other's endpoints. Give each its own value.");
+        }
+        Set<IntegrityThreat> waived = properties.getRisk().getWaivedThreats();
+        if (!waived.isEmpty()) {
+            log.warn("Device security is NOT banning on integrity finding(s) {} (DEVICE_SECURITY_WAIVED_THREATS). "
+                    + "They are logged as INTEGRITY_<name>_WAIVED and ignored. This is a temporary waiver for a "
+                    + "mis-configured app build; clear it once the fixed build ships.", waived);
         }
         DeviceSecurityProperties.Enforce e = properties.getEnforce();
         if (!e.isOtp() && !e.isBlocks() && !e.isBans()) {
