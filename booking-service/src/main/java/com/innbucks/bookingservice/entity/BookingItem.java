@@ -18,8 +18,15 @@ public class BookingItem {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    @ManyToOne
+    // LAZY (a bare @ManyToOne is EAGER). Paths that read the parent fetch it:
+    // findByTicketNumberWithBooking / findBy*WithBooking JOIN FETCH it, and
+    // items reached through Booking.items resolve to the already-loaded
+    // booking. Excluded from Lombok's equals/hashCode/toString — see
+    // Booking.items.
+    @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "booking_id", nullable = false)
+    @ToString.Exclude
+    @EqualsAndHashCode.Exclude
     private Booking booking;
 
     @Column(nullable = false)

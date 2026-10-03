@@ -122,7 +122,7 @@ class GateLookupServiceTest {
     }
 
     private void bookingExists(Booking b) {
-        when(bookingRepository.findByConfirmationNumber("INN-20260901-3C8849")).thenReturn(Optional.of(b));
+        when(bookingRepository.findByConfirmationNumberWithItems("INN-20260901-3C8849")).thenReturn(Optional.of(b));
     }
 
     @Test
@@ -175,7 +175,7 @@ class GateLookupServiceTest {
     @Test
     void unknownNumber_isNotFound_andEchoesOnlyTheNumber() {
         authenticateAsTeamMember(organizerUuid);
-        when(bookingRepository.findByConfirmationNumber("INN-20260901-000000")).thenReturn(Optional.empty());
+        when(bookingRepository.findByConfirmationNumberWithItems("INN-20260901-000000")).thenReturn(Optional.empty());
 
         GateLookupResponseDTO r = service.lookup("INN-20260901-000000");
 

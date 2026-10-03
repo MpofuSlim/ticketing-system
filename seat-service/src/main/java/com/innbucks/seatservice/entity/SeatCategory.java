@@ -44,7 +44,13 @@ public class SeatCategory {
     @Column(nullable = false)
     private boolean deleted = false;
 
+    // LAZY (the @OneToMany default) and never walked: a category can hold up
+    // to 500,000 seats. Section counts come from SeatRepository.countSections.
+    // Excluded from Lombok's equals/hashCode/toString for the same reason as
+    // Seat.category.
     @OneToMany(mappedBy = "category", cascade = CascadeType.ALL)
+    @ToString.Exclude
+    @EqualsAndHashCode.Exclude
     private List<Seat> seats;
 
     private LocalDateTime createdAt;
