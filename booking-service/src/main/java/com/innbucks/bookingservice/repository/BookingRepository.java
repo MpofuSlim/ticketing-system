@@ -83,14 +83,28 @@ public interface BookingRepository extends JpaRepository<Booking, UUID> {
             """)
     long countConfirmedTickets(@Param("eventId") UUID eventId);
 
-    // Booking + items in one round trip, for the manual ticket-resend path:
-    // delivery reads the items OUTSIDE any transaction (no connection held
-    // across the WhatsApp/email network calls), so lazy loading is not an
-    // option there. DISTINCT collapses the fetch-join fan-out.
+    // Booking + items in one round trip. Booking.items is LAZY and
+    // open-in-view is off, so every single-booking path that renders tickets
+    // loads through here: the ticket delivery listener and the manual resend
+    // (which read the items OUTSIDE any transaction — no connection is held
+    // across the WhatsApp/email calls), the by-id views, and the
+    // confirm/cancel/reverse/extend-hold writes. DISTINCT collapses the
+    // fetch-join fan-out. Never add a fetch-joined collection to a PAGED
+    // query: Hibernate would page in memory (HHH90003004).
     @Query("""
         SELECT DISTINCT b FROM Booking b
         LEFT JOIN FETCH b.items
         WHERE b.id = :id
     """)
     Optional<Booking> findByIdWithItems(@Param("id") UUID id);
+
+    // Same, keyed by confirmation number: the owner lookup
+    // (GET /bookings/confirmation/{n}) and the gate lookup both render the
+    // booking's tickets.
+    @Query("""
+        SELECT DISTINCT b FROM Booking b
+        LEFT JOIN FETCH b.items
+        WHERE b.confirmationNumber = :confirmationNumber
+    """)
+    Optional<Booking> findByConfirmationNumberWithItems(@Param("confirmationNumber") String confirmationNumber);
 }

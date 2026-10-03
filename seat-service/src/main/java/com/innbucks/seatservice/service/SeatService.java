@@ -87,7 +87,9 @@ public class SeatService {
     // trusting client-supplied values.
     public SeatLookupResponseDTO lookupSeat(UUID seatId) {
         log.debug("Looking up seat seatId={}", seatId);
-        Seat seat = seatRepository.findById(seatId)
+        // Category fetched with the seat: this read runs outside any
+        // transaction and Seat.category is LAZY.
+        Seat seat = seatRepository.findWithCategoryById(seatId)
                 .orElseThrow(() -> {
                     log.warn("Lookup failed, seat not found seatId={}", seatId);
                     return new NotFoundException("Seat not found");
@@ -172,7 +174,8 @@ public class SeatService {
     @Transactional
     public SeatResponseDTO confirmSeat(UUID seatId, String userEmail) {
         log.info("Confirming seat seatId={} userEmail={}", seatId, userEmail);
-        Seat seat = seatRepository.findById(seatId)
+        // Category fetched with the seat: the response names it.
+        Seat seat = seatRepository.findWithCategoryById(seatId)
                 .orElseThrow(() -> {
                     log.warn("Confirm failed, seat not found seatId={}", seatId);
                     return new NotFoundException("Seat not found");

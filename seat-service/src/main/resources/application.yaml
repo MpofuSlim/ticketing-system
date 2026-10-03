@@ -33,6 +33,11 @@ spring:
           batch_size: ${HIBERNATE_JDBC_BATCH_SIZE:50}
         order_inserts: true
         order_updates: true
+        # Every association is LAZY (see CLAUDE.md, "JPA associations are
+        # LAZY"). When a transaction walks a list of entities and touches a
+        # lazy association on each, Hibernate initialises up to this many of
+        # them in ONE query instead of one query per entity.
+        default_batch_fetch_size: ${HIBERNATE_BATCH_FETCH_SIZE:100}
 
   flyway:
     enabled: ${FLYWAY_ENABLED:true}

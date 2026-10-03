@@ -27,8 +27,18 @@ public class Seat {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    @ManyToOne
+    // LAZY (a bare @ManyToOne is EAGER, which cost one category query per
+    // distinct category on every seat query, read or not). open-in-view is
+    // off, so a path that reads more than the category's id either fetches it
+    // in its query (the SeatRepository finders SeatService renders from) or
+    // reads it inside a transaction. getCategory().getId() never needs a
+    // query — the reference already holds the id. Excluded from Lombok's
+    // equals/hashCode/toString: they would initialise it (or throw outside a
+    // session), and SeatCategory.seats points straight back here.
+    @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "category_id", nullable = false)
+    @ToString.Exclude
+    @EqualsAndHashCode.Exclude
     private SeatCategory category;
 
     @Column(name = "row_label", nullable = false)

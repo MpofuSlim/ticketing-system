@@ -79,7 +79,19 @@ public class Booking {
     @Column(precision = 10, scale = 2)
     private BigDecimal cashAmount;
 
-    @OneToMany(mappedBy = "booking", cascade = CascadeType.ALL, fetch = FetchType.EAGER)
+    // LAZY, like every association in this service: open-in-view is off, so
+    // a path that renders the tickets either reads them inside a transaction
+    // (lists: one batched query, hibernate.default_batch_fetch_size) or
+    // fetches them in its query (findByIdWithItems /
+    // findByConfirmationNumberWithItems). EAGER made every booking query —
+    // reminders, the event-change broadcast, the cancel listener, the gate
+    // scan — pay one extra items query per booking whether it read them or not.
+    // Excluded from Lombok's equals/hashCode/toString: they would initialise
+    // the collection (or throw outside a session), and BookingItem points
+    // straight back here, so the pair recursed.
+    @OneToMany(mappedBy = "booking", cascade = CascadeType.ALL, fetch = FetchType.LAZY)
+    @ToString.Exclude
+    @EqualsAndHashCode.Exclude
     private List<BookingItem> items;
 
     private LocalDateTime createdAt;

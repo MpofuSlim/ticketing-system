@@ -48,6 +48,10 @@ public class BookingService {
     private final ObjectProvider<EventServiceClient> eventClientProvider;
     private final LoyaltyEarnRetryService loyaltyEarnRetryService;
     private final TransactionTemplate txTemplate;
+    // Read-only twin for the list reads (see loadWithItems): the bookings and
+    // their LAZY items are read inside it; mapping (QR rendering) and any
+    // remote call run after it has closed.
+    private final TransactionTemplate readTx;
 
     // CSPRNG for ticket-number generation. A ticket number IS the QR-code
     // payload a gate scanner validates, so it's an entry credential, not a
@@ -113,6 +117,8 @@ public class BookingService {
         // createBooking -> persistBooking). Mirrors the TransactionTemplate
         // pattern in loyalty-service ShopService / user-service AuditService.
         this.txTemplate = new TransactionTemplate(transactionManager);
+        this.readTx = new TransactionTemplate(transactionManager);
+        this.readTx.setReadOnly(true);
     }
 
     public BookingResponseDTO createBooking(
@@ -523,7 +529,7 @@ public class BookingService {
 
     public List<BookingResponseDTO> getMyBookings(String userEmail) {
         log.debug("Fetching bookings userEmail={}", userEmail);
-        return bookingRepository.findByUserEmail(userEmail)
+        return loadWithItems(() -> bookingRepository.findByUserEmail(userEmail))
                 .stream()
                 .map(this::toDTO)
                 .collect(Collectors.toList());
@@ -533,7 +539,7 @@ public class BookingService {
     // bookings; the caller decides how to render the list.
     public List<BookingResponseDTO> getByPhoneNumber(String phoneNumber) {
         log.debug("Fetching bookings phoneNumber={}", MsisdnMasking.mask(phoneNumber));
-        return bookingRepository.findByPhoneNumberOrderByCreatedAtDesc(phoneNumber)
+        return loadWithItems(() -> bookingRepository.findByPhoneNumberOrderByCreatedAtDesc(phoneNumber))
                 .stream()
                 .map(this::toDTO)
                 .collect(Collectors.toList());
@@ -543,7 +549,7 @@ public class BookingService {
     // CANCELLED so customers see only paid, valid tickets.
     public List<BookingResponseDTO> getActiveByPhoneNumber(String phoneNumber) {
         log.debug("Fetching confirmed bookings phoneNumber={}", MsisdnMasking.mask(phoneNumber));
-        return bookingRepository.findByPhoneNumberOrderByCreatedAtDesc(phoneNumber)
+        return loadWithItems(() -> bookingRepository.findByPhoneNumberOrderByCreatedAtDesc(phoneNumber))
                 .stream()
                 .filter(b -> b.getStatus() == Booking.BookingStatus.CONFIRMED)
                 .map(this::toDTO)
@@ -568,7 +574,9 @@ public class BookingService {
      * @param filter the bucket to return, or {@code null} for all of them
      */
     public List<CustomerTicketDTO> getPublicTicketsByPhoneNumber(String phoneNumber, TicketWindow filter) {
-        List<Booking> confirmed = bookingRepository.findByPhoneNumberOrderByCreatedAtDesc(phoneNumber)
+        // Items loaded in loadWithItems' short transaction; the event lookups
+        // below are remote calls and run after it has closed.
+        List<Booking> confirmed = loadWithItems(() -> bookingRepository.findByPhoneNumberOrderByCreatedAtDesc(phoneNumber))
                 .stream()
                 .filter(b -> b.getStatus() == Booking.BookingStatus.CONFIRMED)
                 .toList();
@@ -618,6 +626,24 @@ public class BookingService {
 
         tickets.sort(TICKET_ORDER);
         return tickets;
+    }
+
+    /**
+     * Runs a bookings query in a short read-only transaction and initialises
+     * every result's LAZY {@code items} before it closes, so the caller maps
+     * (QR rendering) and calls out with no connection held and no lazy load
+     * left to fail. The first collection touched loads the items of up to
+     * {@code hibernate.default_batch_fetch_size} bookings in ONE query, so a
+     * list costs two statements however many bookings it holds (one more per
+     * further 100). Not a fetch join, so it stays correct if the query is ever
+     * paged.
+     */
+    private List<Booking> loadWithItems(java.util.function.Supplier<List<Booking>> query) {
+        return Objects.requireNonNullElse(readTx.execute(status -> {
+            List<Booking> bookings = query.get();
+            bookings.forEach(b -> org.hibernate.Hibernate.initialize(b.getItems()));
+            return bookings;
+        }), List.of());
     }
 
     /**
@@ -677,7 +703,7 @@ public class BookingService {
 
     public BookingResponseDTO getBookingById(UUID bookingId, String userEmail, boolean isAdmin) {
         log.debug("Fetching booking bookingId={} userEmail={} isAdmin={}", bookingId, userEmail, isAdmin);
-        Booking booking = bookingRepository.findById(bookingId)
+        Booking booking = bookingRepository.findByIdWithItems(bookingId)
                 .orElseThrow(() -> {
                     log.warn("Booking lookup failed, not found bookingId={}", bookingId);
                     return new NotFoundException("Booking not found");
@@ -712,7 +738,7 @@ public class BookingService {
                                                       boolean isAdmin) {
         log.debug("Fetching booking by confirmation confirmation={} isAdmin={}",
                 confirmationNumber, isAdmin);
-        Booking booking = bookingRepository.findByConfirmationNumber(confirmationNumber)
+        Booking booking = bookingRepository.findByConfirmationNumberWithItems(confirmationNumber)
                 .orElseThrow(() -> {
                     log.warn("Booking lookup by confirmation failed, not found confirmation={}",
                             confirmationNumber);
@@ -757,7 +783,7 @@ public class BookingService {
      */
     public PublicBookingResponseDTO getBookingByIdPublic(UUID bookingId) {
         log.debug("Public fetch by id bookingId={}", bookingId);
-        return toPublicDTO(bookingRepository.findById(bookingId)
+        return toPublicDTO(bookingRepository.findByIdWithItems(bookingId)
                 .orElseThrow(() -> {
                     log.warn("Public booking lookup by id failed, not found bookingId={}", bookingId);
                     return new com.innbucks.bookingservice.exception.NotFoundException("Booking not found");
@@ -815,7 +841,7 @@ public class BookingService {
     @Transactional
     public BookingResponseDTO cancelBooking(UUID bookingId, String userEmail, boolean isAdmin) {
         log.info("Cancelling booking bookingId={} userEmail={} isAdmin={}", bookingId, userEmail, isAdmin);
-        Booking booking = bookingRepository.findById(bookingId)
+        Booking booking = bookingRepository.findByIdWithItems(bookingId)
                 .orElseThrow(() -> {
                     log.warn("Cancel failed, booking not found bookingId={}", bookingId);
                     return new NotFoundException("Booking not found");
@@ -871,7 +897,7 @@ public class BookingService {
     @Transactional
     public BookingResponseDTO reverseConfirmedBooking(UUID bookingId, String adminEmail) {
         log.info("Reversing confirmed booking bookingId={} adminEmail={}", bookingId, adminEmail);
-        Booking booking = bookingRepository.findById(bookingId)
+        Booking booking = bookingRepository.findByIdWithItems(bookingId)
                 .orElseThrow(() -> {
                     log.warn("Reverse failed, booking not found bookingId={}", bookingId);
                     return new NotFoundException("Booking not found");
@@ -950,7 +976,7 @@ public class BookingService {
     @Transactional
     public BookingResponseDTO extendHold(UUID bookingId, LocalDateTime holdUntil) {
         Objects.requireNonNull(holdUntil, "holdUntil");
-        Booking booking = bookingRepository.findById(bookingId)
+        Booking booking = bookingRepository.findByIdWithItems(bookingId)
                 .orElseThrow(() -> new NotFoundException("Booking not found"));
         if (booking.getStatus() != Booking.BookingStatus.PENDING) {
             throw new BookingConflictException(
@@ -1014,7 +1040,7 @@ public class BookingService {
             }
         }
 
-        Booking booking = bookingRepository.findById(bookingId)
+        Booking booking = bookingRepository.findByIdWithItems(bookingId)
                 .orElseThrow(() -> {
                     log.warn("Confirm failed, booking not found bookingId={}", bookingId);
                     return new NotFoundException("Booking not found");

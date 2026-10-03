@@ -160,7 +160,7 @@ class BookingServiceTest {
         Booking pending = Booking.builder().id(id).eventId(java.util.UUID.randomUUID())
                 .status(Booking.BookingStatus.PENDING).totalAmount(new java.math.BigDecimal("50.00"))
                 .items(java.util.List.of(item)).build();
-        when(repo.findById(id)).thenReturn(java.util.Optional.of(pending));
+        when(repo.findByIdWithItems(id)).thenReturn(java.util.Optional.of(pending));
 
         var pendingView = service.getBookingByIdPublic(id);
         assertEquals(1, pendingView.getItems().size());
@@ -171,7 +171,7 @@ class BookingServiceTest {
         Booking confirmed = Booking.builder().id(id).eventId(java.util.UUID.randomUUID())
                 .status(Booking.BookingStatus.CONFIRMED).totalAmount(new java.math.BigDecimal("50.00"))
                 .items(java.util.List.of(item)).build();
-        when(repo.findById(id)).thenReturn(java.util.Optional.of(confirmed));
+        when(repo.findByIdWithItems(id)).thenReturn(java.util.Optional.of(confirmed));
 
         var confirmedView = service.getBookingByIdPublic(id);
         assertEquals("20260619-48291X", confirmedView.getItems().get(0).getTicketNumber());
@@ -389,7 +389,7 @@ class BookingServiceTest {
                 .userEmail("alice@example.com").customerName("Alice Moyo")
                 .status(Booking.BookingStatus.CONFIRMED).totalAmount(new BigDecimal("50.00"))
                 .items(List.of(item)).build();
-        when(repo.findById(id)).thenReturn(Optional.of(confirmed));
+        when(repo.findByIdWithItems(id)).thenReturn(Optional.of(confirmed));
 
         var publicView = service.getBookingByIdPublic(id);
         assertEquals("Tendai Ncube", publicView.getItems().get(0).getAttendeeName());
@@ -531,7 +531,7 @@ class BookingServiceTest {
         UUID id = UUID.randomUUID();
         Booking booking = Booking.builder().id(id).userEmail("owner@example.com")
                 .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN).build();
-        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
                 () -> service.getBookingById(id, "intruder@example.com"));
@@ -541,7 +541,7 @@ class BookingServiceTest {
     @Test
     void getBookingById_throwsWhenMissing() {
         BookingRepository bookingRepo = mock(BookingRepository.class);
-        when(bookingRepo.findById(any())).thenReturn(Optional.empty());
+        when(bookingRepo.findByIdWithItems(any())).thenReturn(Optional.empty());
         BookingService service = newService(bookingRepo,
                 mock(BookingItemRepository.class), mock(SeatServiceClient.class));
 
@@ -553,7 +553,7 @@ class BookingServiceTest {
     @Test
     void getBookingById_missing_throwsTypedNotFound_so404NotBare500() {
         BookingRepository bookingRepo = mock(BookingRepository.class);
-        when(bookingRepo.findById(any())).thenReturn(Optional.empty());
+        when(bookingRepo.findByIdWithItems(any())).thenReturn(Optional.empty());
         BookingService service = newService(bookingRepo,
                 mock(BookingItemRepository.class), mock(SeatServiceClient.class));
 
@@ -576,7 +576,7 @@ class BookingServiceTest {
         // from booking.getUserEmail().equals(...).
         Booking booking = Booking.builder().id(id).userEmail(null)
                 .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN).build();
-        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
 
         org.springframework.security.access.AccessDeniedException ex = assertThrows(
                 org.springframework.security.access.AccessDeniedException.class,
@@ -593,7 +593,7 @@ class BookingServiceTest {
         UUID id = UUID.randomUUID();
         Booking booking = Booking.builder().id(id).userEmail("owner@example.com")
                 .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN).build();
-        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
 
         service.cancelBooking(id, "owner@example.com");
 
@@ -610,7 +610,7 @@ class BookingServiceTest {
         UUID id = UUID.randomUUID();
         Booking booking = Booking.builder().id(id).userEmail("owner@example.com")
                 .status(Booking.BookingStatus.CONFIRMED).totalAmount(BigDecimal.TEN).build();
-        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
                 () -> service.cancelBooking(id, "owner@example.com"));
@@ -627,7 +627,7 @@ class BookingServiceTest {
         UUID id = UUID.randomUUID();
         Booking booking = Booking.builder().id(id).userEmail("owner@example.com")
                 .status(Booking.BookingStatus.CANCELLED).totalAmount(BigDecimal.TEN).build();
-        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
                 () -> service.cancelBooking(id, "owner@example.com"));
@@ -643,7 +643,7 @@ class BookingServiceTest {
         UUID id = UUID.randomUUID();
         Booking booking = Booking.builder().id(id).userEmail("owner@example.com")
                 .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN).build();
-        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
                 () -> service.cancelBooking(id, "other@example.com"));
@@ -659,7 +659,7 @@ class BookingServiceTest {
         UUID id = UUID.randomUUID();
         Booking booking = Booking.builder().id(id).userEmail("owner@example.com")
                 .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN).build();
-        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
 
         service.confirmBooking(id);
 
@@ -683,7 +683,7 @@ class BookingServiceTest {
                 .confirmationNumber("INN-20260602-AB12CD")
                 .items(new ArrayList<>())
                 .build();
-        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
 
         BookingResponseDTO resp = service.confirmBooking(id);
 
@@ -704,7 +704,7 @@ class BookingServiceTest {
         UUID id = UUID.randomUUID();
         Booking booking = Booking.builder().id(id).status(Booking.BookingStatus.CANCELLED)
                 .userEmail("u@example.com").totalAmount(BigDecimal.TEN).build();
-        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
 
         RuntimeException ex = assertThrows(RuntimeException.class, () -> service.confirmBooking(id));
         assertTrue(ex.getMessage().toLowerCase().contains("pending"));
@@ -740,7 +740,7 @@ class BookingServiceTest {
         Booking booking = Booking.builder().id(id).userEmail("u@example.com")
                 .confirmationNumber("INN-X").status(Booking.BookingStatus.PENDING)
                 .totalAmount(BigDecimal.TEN).build();
-        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
 
         service.confirmBooking(id);
 
@@ -768,7 +768,7 @@ class BookingServiceTest {
                 .totalAmount(BigDecimal.TEN)
                 .items(new ArrayList<>(List.of(new BookingItem(), new BookingItem(), new BookingItem())))
                 .build();
-        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
 
         service.confirmBooking(id);
         service.confirmBooking(id); // replay — now CONFIRMED
@@ -818,7 +818,7 @@ class BookingServiceTest {
                 .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN)
                 .expiresAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).plusMinutes(3))
                 .build();
-        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
 
         BookingResponseDTO resp = service.confirmBooking(id);
 
@@ -838,7 +838,7 @@ class BookingServiceTest {
                 .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN)
                 .expiresAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusSeconds(1)) // already past on the UTC clock confirmBooking reads
                 .build();
-        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
 
         RuntimeException ex = assertThrows(RuntimeException.class, () -> service.confirmBooking(id));
         assertTrue(ex.getMessage().toLowerCase().contains("expired"));
@@ -863,7 +863,7 @@ class BookingServiceTest {
                 .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN)
                 .expiresAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).plusMinutes(3))
                 .build();
-        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
                 () -> service.extendHold(id, java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).minusMinutes(1)));
@@ -891,7 +891,7 @@ class BookingServiceTest {
                 () -> service.confirmBooking(UUID.randomUUID(), req));
         assertTrue(ex.getMessage().contains("cashAmount must be >= 0"),
                 "actual: " + ex.getMessage());
-        verify(bookingRepo, never()).findById(any(UUID.class));
+        verify(bookingRepo, never()).findByIdWithItems(any(UUID.class));
         verify(bookingRepo, never()).save(any());
     }
 
@@ -909,7 +909,7 @@ class BookingServiceTest {
                 () -> service.confirmBooking(UUID.randomUUID(), req));
         assertTrue(ex.getMessage().contains("pointsToUse must be >= 0"),
                 "actual: " + ex.getMessage());
-        verify(bookingRepo, never()).findById(any(UUID.class));
+        verify(bookingRepo, never()).findByIdWithItems(any(UUID.class));
         verify(bookingRepo, never()).save(any());
     }
 
@@ -928,7 +928,7 @@ class BookingServiceTest {
                 .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN)
                 .expiresAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).plusMinutes(5))
                 .build();
-        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
 
         ConfirmBookingRequestDTO req = ConfirmBookingRequestDTO.builder()
                 .pointsToUse(new BigDecimal("100"))
@@ -953,7 +953,7 @@ class BookingServiceTest {
                 .status(Booking.BookingStatus.PENDING).totalAmount(BigDecimal.TEN)
                 .expiresAt(java.time.LocalDateTime.now(java.time.ZoneOffset.UTC).plusMinutes(3))
                 .build();
-        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
 
         service.cancelBooking(id, "u@example.com");
 
@@ -1063,7 +1063,7 @@ class BookingServiceTest {
         BookingRepository bookingRepo = mock(BookingRepository.class);
         BookingService service = newService(bookingRepo,
                 mock(BookingItemRepository.class), mock(SeatServiceClient.class));
-        when(bookingRepo.findByConfirmationNumber("INN-20260502-AB12CD"))
+        when(bookingRepo.findByConfirmationNumberWithItems("INN-20260502-AB12CD"))
                 .thenReturn(Optional.of(confirmedBooking("alice@example.com", "+263782606983")));
 
         BookingResponseDTO dto = service.getByConfirmationNumber(
@@ -1082,7 +1082,7 @@ class BookingServiceTest {
         BookingRepository bookingRepo = mock(BookingRepository.class);
         BookingService service = newService(bookingRepo,
                 mock(BookingItemRepository.class), mock(SeatServiceClient.class));
-        when(bookingRepo.findByConfirmationNumber("INN-20260502-AB12CD"))
+        when(bookingRepo.findByConfirmationNumberWithItems("INN-20260502-AB12CD"))
                 .thenReturn(Optional.of(confirmedBooking(null, "+263782606983")));
 
         BookingResponseDTO dto = service.getByConfirmationNumber(
@@ -1096,7 +1096,7 @@ class BookingServiceTest {
         BookingRepository bookingRepo = mock(BookingRepository.class);
         BookingService service = newService(bookingRepo,
                 mock(BookingItemRepository.class), mock(SeatServiceClient.class));
-        when(bookingRepo.findByConfirmationNumber("INN-20260502-AB12CD"))
+        when(bookingRepo.findByConfirmationNumberWithItems("INN-20260502-AB12CD"))
                 .thenReturn(Optional.of(confirmedBooking("alice@example.com", "+263782606983")));
 
         // Different email AND different phone -> not the owner. 404, so the
@@ -1111,7 +1111,7 @@ class BookingServiceTest {
         BookingRepository bookingRepo = mock(BookingRepository.class);
         BookingService service = newService(bookingRepo,
                 mock(BookingItemRepository.class), mock(SeatServiceClient.class));
-        when(bookingRepo.findByConfirmationNumber("INN-20260502-AB12CD"))
+        when(bookingRepo.findByConfirmationNumberWithItems("INN-20260502-AB12CD"))
                 .thenReturn(Optional.of(confirmedBooking("alice@example.com", "+263782606983")));
 
         // Admin identity matches neither email nor phone, but isAdmin=true wins.
@@ -1126,7 +1126,7 @@ class BookingServiceTest {
         BookingRepository bookingRepo = mock(BookingRepository.class);
         BookingService service = newService(bookingRepo,
                 mock(BookingItemRepository.class), mock(SeatServiceClient.class));
-        when(bookingRepo.findByConfirmationNumber("INN-UNKNOWN"))
+        when(bookingRepo.findByConfirmationNumberWithItems("INN-UNKNOWN"))
                 .thenReturn(Optional.empty());
 
         assertThrows(com.innbucks.bookingservice.exception.NotFoundException.class,
@@ -1249,7 +1249,7 @@ class BookingServiceTest {
         Booking booking = Booking.builder().id(id).userEmail("u@example.com")
                 .confirmationNumber("INN-X").status(Booking.BookingStatus.PENDING)
                 .totalAmount(BigDecimal.TEN).build();
-        when(bookingRepo.findById(id)).thenReturn(Optional.of(booking));
+        when(bookingRepo.findByIdWithItems(id)).thenReturn(Optional.of(booking));
 
         service.cancelBooking(id, "u@example.com");
 
@@ -1396,7 +1396,7 @@ class BookingServiceTest {
 
         BookingService service = newServiceWithEventClient(bookingRepo, publisher, eventClient);
         Booking booking = confirmedBookingWith(3); // 3 items → release 3
-        when(bookingRepo.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepo.findByIdWithItems(booking.getId())).thenReturn(Optional.of(booking));
 
         service.reverseConfirmedBooking(booking.getId(), "admin@example.com");
 
@@ -1422,7 +1422,7 @@ class BookingServiceTest {
 
         Booking booking = confirmedBookingWith(2);
         booking.setAvailabilityReleased(true); // <- already released, but status still CONFIRMED
-        when(bookingRepo.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepo.findByIdWithItems(booking.getId())).thenReturn(Optional.of(booking));
 
         service.reverseConfirmedBooking(booking.getId(), "admin@example.com");
 
@@ -1441,7 +1441,7 @@ class BookingServiceTest {
         BookingService service = newServiceWithEventClient(bookingRepo,
                 mock(ApplicationEventPublisher.class), eventClient);
         Booking booking = confirmedBookingWith(2);
-        when(bookingRepo.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepo.findByIdWithItems(booking.getId())).thenReturn(Optional.of(booking));
 
         assertThrows(RuntimeException.class,
                 () -> service.reverseConfirmedBooking(booking.getId(), "admin@example.com"));
@@ -1466,7 +1466,7 @@ class BookingServiceTest {
         BookingService service = newServiceWithEventClient(bookingRepo,
                 mock(ApplicationEventPublisher.class), eventClient);
         Booking booking = confirmedBookingWith(2);
-        when(bookingRepo.findById(booking.getId())).thenReturn(Optional.of(booking));
+        when(bookingRepo.findByIdWithItems(booking.getId())).thenReturn(Optional.of(booking));
 
         assertThrows(RuntimeException.class,
                 () -> service.reverseConfirmedBooking(booking.getId(), "admin@example.com"));
@@ -1483,7 +1483,7 @@ class BookingServiceTest {
 
         Booking pending = confirmedBookingWith(1);
         pending.setStatus(Booking.BookingStatus.PENDING);
-        when(bookingRepo.findById(pending.getId())).thenReturn(Optional.of(pending));
+        when(bookingRepo.findByIdWithItems(pending.getId())).thenReturn(Optional.of(pending));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
                 () -> service.reverseConfirmedBooking(pending.getId(), "admin@example.com"));
@@ -1499,7 +1499,7 @@ class BookingServiceTest {
 
         Booking cancelled = confirmedBookingWith(1);
         cancelled.setStatus(Booking.BookingStatus.CANCELLED);
-        when(bookingRepo.findById(cancelled.getId())).thenReturn(Optional.of(cancelled));
+        when(bookingRepo.findByIdWithItems(cancelled.getId())).thenReturn(Optional.of(cancelled));
 
         RuntimeException ex = assertThrows(RuntimeException.class,
                 () -> service.reverseConfirmedBooking(cancelled.getId(), "admin@example.com"));
@@ -1509,7 +1509,7 @@ class BookingServiceTest {
     @Test
     void reverseBooking_rejectsMissingBooking() {
         BookingRepository bookingRepo = mock(BookingRepository.class);
-        when(bookingRepo.findById(any())).thenReturn(Optional.empty());
+        when(bookingRepo.findByIdWithItems(any())).thenReturn(Optional.empty());
         BookingService service = newServiceWithEventClient(bookingRepo,
                 mock(ApplicationEventPublisher.class), mock(EventServiceClient.class));
 

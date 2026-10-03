@@ -52,7 +52,7 @@ class TicketRenderingServiceTest {
     @Test
     void qr_confirmedBooking_returnsRealPngBytes() {
         Booking b = booking(Booking.BookingStatus.CONFIRMED);
-        when(repo.findById(b.getId())).thenReturn(Optional.of(b));
+        when(repo.findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
 
         Optional<byte[]> png = service.ticketQrPng(b.getId(), "20260610-T1");
 
@@ -69,7 +69,7 @@ class TicketRenderingServiceTest {
     @Test
     void qr_ticketNotOnBooking_isEmpty() {
         Booking b = booking(Booking.BookingStatus.CONFIRMED);
-        when(repo.findById(b.getId())).thenReturn(Optional.of(b));
+        when(repo.findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
 
         assertThat(service.ticketQrPng(b.getId(), "SOMEONE-ELSES-TICKET")).isEmpty();
     }
@@ -77,7 +77,7 @@ class TicketRenderingServiceTest {
     @Test
     void qr_pendingBooking_isEmpty_neverRendersUnpaidTicket() {
         Booking b = booking(Booking.BookingStatus.PENDING);
-        when(repo.findById(b.getId())).thenReturn(Optional.of(b));
+        when(repo.findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
 
         assertThat(service.ticketQrPng(b.getId(), "20260610-T1")).isEmpty();
     }
@@ -85,7 +85,7 @@ class TicketRenderingServiceTest {
     @Test
     void qr_unknownBooking_isEmpty() {
         UUID id = UUID.randomUUID();
-        when(repo.findById(id)).thenReturn(Optional.empty());
+        when(repo.findByIdWithItems(id)).thenReturn(Optional.empty());
 
         assertThat(service.ticketQrPng(id, "20260610-T1")).isEmpty();
     }
@@ -93,7 +93,7 @@ class TicketRenderingServiceTest {
     @Test
     void page_confirmed_carriesAbsoluteQrUrlAndDetails() {
         Booking b = booking(Booking.BookingStatus.CONFIRMED);
-        when(repo.findById(b.getId())).thenReturn(Optional.of(b));
+        when(repo.findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
 
         String html = service.ticketPageHtml(b.getId(), BASE).orElseThrow();
 
@@ -107,7 +107,7 @@ class TicketRenderingServiceTest {
     @Test
     void page_pending_isEmpty() {
         Booking b = booking(Booking.BookingStatus.PENDING);
-        when(repo.findById(b.getId())).thenReturn(Optional.of(b));
+        when(repo.findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
 
         assertThat(service.ticketPageHtml(b.getId(), BASE)).isEmpty();
     }
@@ -136,7 +136,7 @@ class TicketRenderingServiceTest {
         b.setCustomerName("Alice Moyo");
         b.getItems().get(0).setAttendeeName("Tendai Ncube");
         b.getItems().get(0).setBooking(b);
-        when(repo.findById(b.getId())).thenReturn(Optional.of(b));
+        when(repo.findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
 
         String html = service.ticketPageHtml(b.getId(), BASE).orElseThrow();
 
@@ -150,7 +150,7 @@ class TicketRenderingServiceTest {
         Booking b = booking(Booking.BookingStatus.CONFIRMED);
         b.setCustomerName("Alice Moyo");
         b.getItems().get(0).setBooking(b);
-        when(repo.findById(b.getId())).thenReturn(Optional.of(b));
+        when(repo.findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
 
         String html = service.ticketPageHtml(b.getId(), BASE).orElseThrow();
 
@@ -161,7 +161,7 @@ class TicketRenderingServiceTest {
     void page_omitsTheHolderLine_onPreV22BookingsWithNoName() {
         Booking b = booking(Booking.BookingStatus.CONFIRMED);
         b.getItems().get(0).setBooking(b);
-        when(repo.findById(b.getId())).thenReturn(Optional.of(b));
+        when(repo.findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
 
         String html = service.ticketPageHtml(b.getId(), BASE).orElseThrow();
 
@@ -183,7 +183,7 @@ class TicketRenderingServiceTest {
     void rendering_escapesInterpolatedValues() {
         Booking b = booking(Booking.BookingStatus.CONFIRMED);
         b.setConfirmationNumber("INN-<script>");
-        when(repo.findById(b.getId())).thenReturn(Optional.of(b));
+        when(repo.findByIdWithItems(b.getId())).thenReturn(Optional.of(b));
 
         String html = service.ticketPageHtml(b.getId(), BASE).orElseThrow();
 

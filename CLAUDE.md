@@ -1461,6 +1461,51 @@ to poll, had no read state, and **reached no non-admin at all**.
   A must reach a connection held by replica B). The ETag makes polling cheap
   enough that this is a clean follow-up rather than a prerequisite.
 
+## JPA associations are LAZY — fetch explicitly (booking-service, seat-service)
+
+**Every association is `FetchType.LAZY`; a read path that needs the other side
+says so in its query.** `spring.jpa.open-in-view` is false in every service, so
+a lazy association touched outside a transaction throws
+`LazyInitializationException` — a 500 on an endpoint, a silently dropped send on
+an `@Async` listener. `Booking.items`, `BookingItem.booking` and `Seat.category`
+were EAGER (the last two by `@ManyToOne`'s default), which made every query on
+those entities pay for the other side whether it read it or not: one items
+query per booking on `/bookings/my`, the phone lists, the guest list, the
+reminders, the event-change broadcast and the expiry sweep, and one category
+query per category under every seat query.
+
+- **Fetch explicitly.** A single row that renders the other side: a fetch-join
+  finder (`findByIdWithItems`, `findByConfirmationNumberWithItems`,
+  `findByTicketNumberWithBooking`, `findWithCategoryById` / `@EntityGraph`).
+  A list: load it in a short read-only transaction and initialise the
+  collection there — `hibernate.default_batch_fetch_size` (100) loads every
+  row's collection in ONE `IN` query (`BookingService.loadWithItems`); the
+  mapping (QR rendering) and any remote call run after it closes, never with a
+  connection held. Only DTOs reach Jackson — no endpoint returns an entity.
+- **Never `JOIN FETCH` a collection in a paged query.** Hibernate fetches every
+  row and pages in memory (HHH90003004). Page the parents, then batch-load the
+  children. A to-one fetch join is fine with a limit (the seat pivot queries).
+- **Lombok `@Data` on an entity must exclude its associations**
+  (`@ToString.Exclude @EqualsAndHashCode.Exclude`): otherwise `toString` /
+  `hashCode` initialise the lazy side, or throw outside a session, and the two
+  sides recurse into each other.
+- **Count, don't load.** seat-service's category listing (every public
+  `GET /events/{id}` reaches it) loaded every seat of the event to count
+  sections; `SeatRepository.countSections` groups in Postgres. Sections come
+  back in CREATION order (`MIN(created_at)`) — the old order was whatever plan
+  Postgres picked, and differed between the listing and the update response.
+- **Pinned by** `LazyAssociationsPostgresIT` in both modules: every read path
+  driven through MockMvc with a real JWT against real Postgres (a lazy-load
+  regression fails it), with statement counts from Hibernate `Statistics`
+  (`hibernate.generate_statistics` is on in the `it` profile only). The list
+  paths are measured at two sizes and must cost the same. Before → after:
+  `/bookings/my`, `/bookings/phone/{p}`, `/bookings/public/phone/{p}` 13 → 2
+  for 12 bookings; guest list `/bookings/by-event/{id}` and `/by-category`
+  13 → 1; gate lookup 2 → 1; scan 4 → 3; reminders (4 bookings) 14 → 6;
+  event-change broadcast (4 bookings) 5 → 1; expiry sweep (5 holds, with their
+  notices) 17 → 13; seat category listing 2 + one per category → 2. A new read
+  path that renders an association belongs in that IT.
+
 ## user-service fetch plan: what is lazy, what stays eager, and why
 
 Open-in-view is off, so a lazy relation touched outside a transaction throws

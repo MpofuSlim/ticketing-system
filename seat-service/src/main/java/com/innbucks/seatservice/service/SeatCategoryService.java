@@ -246,8 +246,6 @@ public class SeatCategoryService {
         return toCreateResponseDTO(category, sections, liveAvailableSeats(category, counts));
     }
 
-    /** Rebuild the per-section seat counts for a single category from its
-     *  persisted seat rows (section label → count), preserving insertion order. */
     /** Trim a section image URL; treat blank/empty as "no image" (null). */
     private static String normalizeImageUrl(String imageUrl) {
         if (imageUrl == null) {
@@ -297,24 +295,29 @@ public class SeatCategoryService {
     }
 
     private List<SectionSeatConfigDTO> sectionsForCategory(UUID categoryId) {
-        Map<String, Integer> bySection = new LinkedHashMap<>();
-        Map<String, String> imageBySection = new LinkedHashMap<>();
-        for (Seat seat : seatRepository.findByCategoryIdIn(List.of(categoryId))) {
-            bySection.merge(seat.getSectionLabel(), 1, Integer::sum);
-            // Same image on every seat in a section; capture the first non-null.
-            if (seat.getSectionImageUrl() != null) {
-                imageBySection.putIfAbsent(seat.getSectionLabel(), seat.getSectionImageUrl());
-            }
+        return sectionsByCategory(List.of(categoryId)).getOrDefault(categoryId, List.of());
+    }
+
+    /**
+     * Per-category section layout (label, seat count, image), in creation
+     * order, from ONE grouped query — no seat row is loaded. A category with
+     * no seats is absent from the map. Counting here is what makes the public
+     * listing's cost independent of how many seats an event has; it used to
+     * load every one of them (up to 500,000 per category) to count them.
+     */
+    private Map<UUID, List<SectionSeatConfigDTO>> sectionsByCategory(List<UUID> categoryIds) {
+        Map<UUID, List<SectionSeatConfigDTO>> sections = new LinkedHashMap<>();
+        if (categoryIds.isEmpty()) {
+            return sections;
         }
-        return bySection.entrySet().stream()
-                .map(entry -> {
-                    SectionSeatConfigDTO dto = new SectionSeatConfigDTO();
-                    dto.setSection(entry.getKey());
-                    dto.setSeatCount(entry.getValue());
-                    dto.setImageUrl(imageBySection.get(entry.getKey()));
-                    return dto;
-                })
-                .collect(Collectors.toList());
+        for (SeatRepository.SectionCount row : seatRepository.countSections(categoryIds)) {
+            SectionSeatConfigDTO dto = new SectionSeatConfigDTO();
+            dto.setSection(row.getSectionLabel());
+            dto.setSeatCount(row.getSeatCount() == null ? 0 : row.getSeatCount().intValue());
+            dto.setImageUrl(row.getImageUrl());
+            sections.computeIfAbsent(row.getCategoryId(), ignored -> new ArrayList<>()).add(dto);
+        }
+        return sections;
     }
 
     public List<CreateCategoryResponseDTO> getCategoriesByEvent(UUID eventId) {
@@ -324,37 +327,7 @@ public class SeatCategoryService {
                 .map(SeatCategory::getId)
                 .collect(Collectors.toList());
 
-        Map<UUID, List<SectionSeatConfigDTO>> sectionsByCategory = new LinkedHashMap<>();
-        if (!categoryIds.isEmpty()) {
-            Map<UUID, Map<String, Integer>> grouped = new LinkedHashMap<>();
-            // Parallel to `grouped`: per category, the section's image (same on
-            // every seat in the section; first non-null wins).
-            Map<UUID, Map<String, String>> imagesByCategory = new LinkedHashMap<>();
-            for (Seat seat : seatRepository.findByCategoryIdIn(categoryIds)) {
-                UUID categoryId = seat.getCategory().getId();
-                grouped.computeIfAbsent(categoryId, ignored -> new LinkedHashMap<>());
-                Map<String, Integer> sectionCounts = grouped.get(categoryId);
-                sectionCounts.put(seat.getSectionLabel(), sectionCounts.getOrDefault(seat.getSectionLabel(), 0) + 1);
-                if (seat.getSectionImageUrl() != null) {
-                    imagesByCategory.computeIfAbsent(categoryId, ignored -> new LinkedHashMap<>())
-                            .putIfAbsent(seat.getSectionLabel(), seat.getSectionImageUrl());
-                }
-            }
-
-            for (Map.Entry<UUID, Map<String, Integer>> entry : grouped.entrySet()) {
-                Map<String, String> images = imagesByCategory.getOrDefault(entry.getKey(), Map.of());
-                List<SectionSeatConfigDTO> sections = entry.getValue().entrySet().stream()
-                        .map(sectionEntry -> {
-                            SectionSeatConfigDTO dto = new SectionSeatConfigDTO();
-                            dto.setSection(sectionEntry.getKey());
-                            dto.setSeatCount(sectionEntry.getValue());
-                            dto.setImageUrl(images.get(sectionEntry.getKey()));
-                            return dto;
-                        })
-                        .collect(Collectors.toList());
-                sectionsByCategory.put(entry.getKey(), sections);
-            }
-        }
+        Map<UUID, List<SectionSeatConfigDTO>> sectionsByCategory = sectionsByCategory(categoryIds);
 
         // One booking-service round trip covers every category in the event;
         // null counts (booking-service down) → each category falls back to
