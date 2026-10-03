@@ -1208,6 +1208,18 @@ and blocks phones on `/device-security/ussd/**`; the call center works it from
   Blank in the committed cell files; set per host and cleared when the fixed build
   ships — the `_WAIVED` signal disappearing from `device_security_events.features`
   is the proof. Pinned by the three `waived*` cases in `RiskEngineTest`.
+- **The fixed test OTP reaches production only through an explicit opt-in.**
+  `DEVICE_SECURITY_TEST_OTP_*` (allow-listed numbers get a fixed 6-digit code and
+  no message; only that code verifies) is refused on a `DEVICE_SECURITY_PRODUCTION`
+  cell unless `DEVICE_SECURITY_TEST_OTP_PRODUCTION_ALLOWED=true` is also set. Its one
+  sanctioned production use is the Apple / Google app-review account, whose
+  reviewers sit outside Zimbabwe and can never receive our SMS/WhatsApp (asked for
+  2026-10-03). Listed numbers skip the OTP send ceilings (nothing is sent to them,
+  and a ceiling would only lock a reviewer out); the PIN at the core is still the
+  second factor, so a review number must be a dedicated account with no real money.
+  user-service WARNs at every boot while it is on, naming the masked numbers; clear
+  it when the review is done. Numbers are E.164 with the plus (`+263...`), the form
+  DTX stores. Pinned by `testNumbers_onProduction_needTheExplicitOptIn`.
 - **A trusted phone is never re-asked for a STANDING condition** (`RiskEngine.AMBIENT`:
   `APP_CHECK_ABSENT`, `INTEGRITY_UNAVAILABLE`, `OUTSIDE_KNOWN_PLACES`,
   `PIN_RECENTLY_ISSUED`, `TOO_MANY_DEVICES`, `LOCATION_REFUSED`). They are the same on

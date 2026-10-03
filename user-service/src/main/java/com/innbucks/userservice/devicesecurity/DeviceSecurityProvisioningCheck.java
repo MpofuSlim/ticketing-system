@@ -74,9 +74,16 @@ public class DeviceSecurityProvisioningCheck {
         }
         DeviceSecurityProperties.TestOtp t = properties.getTestOtp();
         if (t.isEnabled()) {
-            if (properties.isProduction()) {
+            if (properties.isProduction() && !t.isProductionAllowed()) {
                 log.error("DEVICE_SECURITY_TEST_OTP_ENABLED=true on a cell marked production: the fixed code is REFUSED "
-                        + "here. Remove it from this host's env.");
+                        + "here (set DEVICE_SECURITY_TEST_OTP_PRODUCTION_ALLOWED=true only for an app-review account). "
+                        + "Remove it from this host's env.");
+            } else if (properties.isProduction()) {
+                log.warn("Device security fixed test OTP is ACTIVE ON PRODUCTION for {} (DEVICE_SECURITY_TEST_OTP_"
+                                + "PRODUCTION_ALLOWED). Anyone holding one of these numbers' PINs signs in with the fixed "
+                                + "code: keep them review accounts with no real money, and clear this when the store "
+                                + "review is done.",
+                        t.getNumbers() == null ? List.of() : t.getNumbers().stream().map(DeviceIdentity::logMask).toList());
             } else {
                 log.warn("Device security fixed test OTP is ACTIVE for {} number(s). Never on production.",
                         t.getNumbers() == null ? 0 : t.getNumbers().size());

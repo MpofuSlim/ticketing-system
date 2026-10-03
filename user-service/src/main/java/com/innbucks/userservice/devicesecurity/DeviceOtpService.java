@@ -161,6 +161,10 @@ public class DeviceOtpService {
     }
 
     private void enforceCeilings(CustomerDevice device, String requestIp, LocalDateTime now) {
+        // The ceilings bound what we SEND (cost, SMS bombing). An allow-listed number is
+        // sent nothing and verifies only the fixed code, so they protect nothing there and
+        // would only lock a store reviewer out mid-review.
+        if (isTestNumber(device.getMsisdn())) return;
         DeviceSecurityProperties.Otp otp = properties.getOtp();
         LocalDateTime hourAgo = now.minusHours(1);
         LocalDateTime dayAgo = now.minusDays(1);
@@ -440,7 +444,7 @@ public class DeviceOtpService {
      */
     boolean isTestNumber(String msisdn) {
         DeviceSecurityProperties.TestOtp t = properties.getTestOtp();
-        return t.isEnabled() && !properties.isProduction()
+        return t.isEnabled() && (!properties.isProduction() || t.isProductionAllowed())
                 && t.getCode() != null && t.getCode().matches("\\d{6}")
                 && t.getNumbers() != null && t.getNumbers().contains(msisdn);
     }
