@@ -7,6 +7,13 @@ spring:
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
+        # Test profile only: UserAssociationFetchCountIT records the SQL each
+        # request issues (per thread, so async work from an earlier request never
+        # counts) and reads the collection-load counters, to pin how many queries
+        # each User read costs.
+        generate_statistics: true
+        session_factory:
+          statement_inspector: com.innbucks.userservice.testsupport.SqlRecorder
   flyway:
     enabled: true
     baseline-on-migrate: true

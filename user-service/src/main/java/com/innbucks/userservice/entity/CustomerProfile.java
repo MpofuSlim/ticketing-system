@@ -22,8 +22,24 @@ public class CustomerProfile {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @OneToOne
+    /*
+     * LAZY: no reader of a profile needs the account loaded with it. The FK
+     * (customer_profiles.user_id, NOT NULL) is on THIS side, so Hibernate can
+     * hand back a proxy without bytecode enhancement, and optional = false says
+     * the row always exists. Every caller that reads more than getUser().getId()
+     * does so inside a transaction, where the account is usually already in the
+     * persistence context and no query is issued at all. EAGER used to reload
+     * the account — and both its eager collections — for every profile read
+     * outside one (the support search's app section paid three queries for it).
+     *
+     * Excluded from toString/equals/hashCode: those would initialise the proxy,
+     * and outside a session (open-in-view is off) throw
+     * LazyInitializationException from a log line or a map key.
+     */
+    @OneToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "user_id", nullable = false, unique = true)
+    @ToString.Exclude
+    @EqualsAndHashCode.Exclude
     private User user;
 
     @Column(nullable = false)

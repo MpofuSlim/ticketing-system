@@ -116,14 +116,39 @@ public class User {
      * <p>{@link Role} survives as a constants holder for the built-ins so
      * code can keep saying {@code Role.SUPER_ADMIN} instead of a bare literal —
      * see {@link #hasRole(Role)}.
+     *
+     * <p><b>EAGER on purpose, with a {@code @BatchSize}.</b> Nearly every path
+     * that loads an account reads its roles, and many do it with no transaction
+     * open (open-in-view is off): the admin listings map them in the controller,
+     * {@code OrganizationController} hands the caller to
+     * {@code OrganizationService.isPlatformOwner}, and {@code JwtFilter}'s
+     * perms-less path passes the account to {@code StaffMintFilter.apply} — where
+     * a {@code LazyInitializationException} would be swallowed by the filter's
+     * catch-all and answered as a bare {@code 401 INVALID_TOKEN}. LAZY would buy
+     * nothing on those paths (the set is read anyway) and turn every missed one
+     * into an authorization failure. What EAGER did cost was one query per
+     * account on every LIST (Hibernate initialises an eager collection of a
+     * query result with a select per owner); the batch size makes that one
+     * {@code IN} query per 100 accounts. {@code UserAssociationFetchCountIT} pins
+     * the counts.
      */
     @ElementCollection(fetch = FetchType.EAGER)
+    @org.hibernate.annotations.BatchSize(size = 100)
     @CollectionTable(name = "user_roles", joinColumns = @JoinColumn(name = "user_id"))
     @Column(name = "role", nullable = false)
     @Builder.Default
     private Set<String> roles = new LinkedHashSet<>();
 
+    /**
+     * The service bundle names ({@code ticketing}, {@code loyalty}, …) — the
+     * token's {@code services} claim and {@code UserResponseDTO.defaultServices}.
+     *
+     * <p>EAGER with a {@code @BatchSize}, for the reasons {@link #roles} gives:
+     * the token mint and every admin listing read it, the listings outside a
+     * transaction. The batch size bounds a list to one query per 100 accounts.
+     */
     @ElementCollection(fetch = FetchType.EAGER)
+    @org.hibernate.annotations.BatchSize(size = 100)
     @CollectionTable(name = "user_default_services", joinColumns = @JoinColumn(name = "user_id"))
     @Column(name = "service", nullable = false)
     @Builder.Default
