@@ -1506,6 +1506,42 @@ query per category under every seat query.
   notices) 17 → 13; seat category listing 2 + one per category → 2. A new read
   path that renders an association belongs in that IT.
 
+## user-service fetch plan: what is lazy, what stays eager, and why
+
+Open-in-view is off, so a lazy relation touched outside a transaction throws
+`LazyInitializationException`. The account entities were decided with measured
+query counts, pinned by `UserAssociationFetchCountIT` (real Postgres, real
+sessions, statements recorded per thread by the `it`-profile `SqlRecorder`).
+
+- **`CustomerProfile.user` and `TenantProfile.user` are LAZY** (`optional =
+  false`). The FK is on the profile, so the proxy needs no bytecode enhancement.
+  The listings that batch-load profiles read only `getUser().getId()`, which a
+  proxy answers from the FK; every caller that reads more (`CustomerService`'s
+  tier 2–4) is `@Transactional`. EAGER reloaded each business account and both
+  its collections a second time: the internal tenant lookup was 20 statements
+  for six businesses and is now 4, and a customer `/auth/refresh` or support
+  search no longer reloads the account after reading its profile. Both relations are `@ToString.Exclude` /
+  `@EqualsAndHashCode.Exclude` so a log line or a map key can never initialise
+  the proxy.
+- **`User.roles` and `User.defaultServices` stay EAGER, with `@BatchSize(100)`.**
+  Almost every path that loads an account reads its roles, and many with no
+  transaction open: the admin listings map them in the controller,
+  `OrganizationController` hands the caller to `isPlatformOwner`, and
+  `JwtFilter`'s perms-less path passes the account to `StaffMintFilter.apply`,
+  where a `LazyInitializationException` would be swallowed by the filter's
+  catch-all and answered `401 INVALID_TOKEN`. LAZY would save nothing on those
+  paths and turn every missed one into an authorization failure. What EAGER
+  actually cost was one query per account per collection on every LIST; the
+  batch size makes that one `IN` query per 100 accounts (`GET /admin/users`:
+  2 + 2n + b → 4). **Don't make them LAZY without first moving every reader
+  inside a transaction or onto an entity graph** — and never `JOIN FETCH` a
+  collection in a paged query.
+- **`Role.permissions` stays EAGER** (its javadoc: every read of a role is a read
+  of what it grants). Nothing measured argued otherwise.
+- **`hibernate.default_batch_fetch_size` is NOT set in user-service** — the batch
+  sizes are explicit on the two collections, so they hold whatever the global
+  setting becomes.
+
 ## Timestamps — store everything in UTC
 
 The user/booking/seat/event services map timestamps as `LocalDateTime`
